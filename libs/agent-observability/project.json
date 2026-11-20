@@ -1,0 +1,32 @@
+{
+  "name": "agent-observability",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/agent-observability",
+  "projectType": "library",
+  "tags": ["scope:shared", "type:lib"],
+  "targets": {
+    "test:e2e:queue": {
+      "executor": "nx:noop",
+      "dependsOn": ["test:e2e"],
+      "metadata": {
+        "description": "The merge-queue e2e ratchet: the suites of this project that passed two consecutive e2e-nightly runs. ci.yml's e2e-queue lane runs each one as its own job in the merge queue whenever this project is affected, and e2e-nightly.yml leaves every suite listed here out of its matrix. A suite joins by being added to dependsOn (a target of this project) once green on two consecutive nightlies, and never moves back. Running this target runs them all."
+      }
+    },
+    "test:e2e": {
+      "command": "vitest run --config vitest.browser.config.ts",
+      "options": {
+        "cwd": "{projectRoot}"
+      },
+      "cache": false
+    },
+    "bundle-cloud-host-observer": {
+      "command": "esbuild src/cloud-host-observer.ts --bundle --minify --platform=node --format=esm --target=node24 --legal-comments=none --outfile=../../out/cloud-host-observer/cloud-host-observer.mjs",
+      "options": {
+        "cwd": "{projectRoot}"
+      },
+      "inputs": ["production", "^production"],
+      "outputs": ["{workspaceRoot}/out/cloud-host-observer"],
+      "cache": true
+    }
+  }
+}

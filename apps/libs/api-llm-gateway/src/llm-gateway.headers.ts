@@ -1,0 +1,238 @@
+import { BadRequestException, HttpStatus } from '@nestjs/common';
+import type { FastifyReply, FastifyRequest } from 'fastify';
+import { z } from 'zod';
+import type { ZodType } from 'zod';
+import { financialIdentitySchema } from '@taucad/billing';
+import { agentPlacements, kernelIds, turnGaps, turnSteps } from '@taucad/telemetry';
+import type { FinancialActivityKind } from '@taucad/billing';
+import { LlmGatewayError } from '#llm-gateway.error.js';
+import type { LlmGatewayErrorType } from '#llm-gateway.error.js';
+import { httpHeader } from '@taucad/api-core/constants/http-header';
+import type { HostLabels, TurnTelemetry } from '#model-invocation.types.js';
+import { gatewayModelRoutes } from '#providers/provider-gateway.js';
+
+const allowedAnthropicVersions = new Set(['2023-06-01']);
+const allowedAnthropicBetas = new Set([
+  'fine-grained-tool-streaming-2025-05-14',
+  'interleaved-thinking-2025-05-14',
+  // Admits an effort level carried as an empty `system`-role message in the transcript.
+  'mid-conversation-output-config-2026-07-01',
+  // Admits `thinking.block_binding` and the provider's report of the blocks it left out.
+  'thinking-binding-controls-2026-08-01',
+]);
+
+/** Rejects query inputs that are absent from the funded request identity. */
+export const assertNoQuery = (request: FastifyRequest): void => {
+  if (request.query === null || typeof request.query !== 'object' || Object.keys(request.query).length > 0) {
+    throw new BadRequestException('Query parameters are not supported');
+  }
+};
+
+/** Cancels provider work when either side of the caller transport closes prematurely. */
+export const invocationSignal = (request: FastifyRequest, reply: FastifyReply): AbortSignal => {
+  const controller = new AbortController();
+  request.raw.once('aborted', () => {
+    controller.abort(new DOMException('Request aborted', 'AbortError'));
+  });
+  reply.raw.once('close', () => {
+    if (!reply.raw.writableFinished) {
+      controller.abort(new DOMException('Response closed', 'AbortError'));
+    }
+  });
+  return controller.signal;
+};
+
+export const readSingleHeader = (
+  request: FastifyRequest,
+  name: string,
+  duplicateErrorType: LlmGatewayErrorType = 'INVALID_REQUEST',
+): string | undefined => {
+  const values: string[] = [];
+  const { rawHeaders } = request.raw;
+  for (let index = 0; index < rawHeaders.length; index += 2) {
+    if (rawHeaders[index]?.toLowerCase() === name) {
+      values.push(rawHeaders[index + 1] ?? '');
+    }
+  }
+  const normalized = request.headers[name];
+  if (values.length === 0) {
+    if (Array.isArray(normalized)) {
+      values.push(...normalized);
+    } else if (normalized !== undefined) {
+      values.push(normalized);
+    }
+  }
+  if (values.length > 1) {
+    throw new LlmGatewayError(HttpStatus.BAD_REQUEST, duplicateErrorType, `Duplicate ${name} headers are not allowed.`);
+  }
+  return values[0];
+};
+
+export const validateAnthropicHeaders = (input: {
+  readonly version?: string;
+  readonly beta?: string;
+}): { readonly version: string; readonly beta?: string } => {
+  const version = input.version?.trim() ?? '2023-06-01';
+  if (!allowedAnthropicVersions.has(version)) {
+    throw new LlmGatewayError(HttpStatus.BAD_REQUEST, 'INVALID_REQUEST', 'Unsupported anthropic-version header.');
+  }
+  if (input.beta === undefined || input.beta.trim() === '') {
+    return { version };
+  }
+  const betas = input.beta.split(',').map((value) => value.trim());
+  if (betas.some((value) => value === '') || new Set(betas).size !== betas.length) {
+    throw new LlmGatewayError(HttpStatus.BAD_REQUEST, 'INVALID_REQUEST', 'Invalid anthropic-beta header.');
+  }
+  if (betas.some((value) => !allowedAnthropicBetas.has(value))) {
+    throw new LlmGatewayError(HttpStatus.BAD_REQUEST, 'INVALID_REQUEST', 'Unsupported anthropic-beta header.');
+  }
+  return { version, beta: betas.join(',') };
+};
+
+/**
+ * Reads an optional header against its contract, keeping only a value that
+ * satisfies it. Unlike `validateAttemptId` this never refuses: the members it
+ * feeds are nullable at every layer, and a malformed one must not refuse a turn
+ * the caller is paying for. A *duplicated* header is still a 400 — that is
+ * `readSingleHeader`'s contract, shared with `x-tau-attempt-id`.
+ *
+ * @param value - The single header value, or undefined when it was not sent.
+ * @param contract - What the value must satisfy to be kept.
+ * @returns The parsed value, or undefined when it was absent or malformed.
+ */
+export const readOptionalHeader = <T>(value: string | undefined, contract: ZodType<T>): T | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = contract.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+};
+
+/**
+ * Best-effort attribution: the opaque owner-scoped id a project or chat hint
+ * carries, held to the same bound the ledger admits it under so a hint can never
+ * reach `admissionHistorySchema` as a 500.
+ *
+ * @param value - The header value, or undefined when it was not sent.
+ * @returns The id, or undefined when it was absent or not an admissible identity.
+ */
+export const readHint = (value: string | undefined): string | undefined =>
+  readOptionalHeader(value, financialIdentitySchema);
+
+/**
+ * The only activity kind a gateway client may assert about its own turn.
+ *
+ * Every other kind is either server-produced or changes how the turn is
+ * admitted. `title` and `commit` are the ones that matter: they are the `helper`
+ * capacity pool (`helperActivityKinds`, `credit-ledger.service.ts:79-90`), which
+ * `admitOperation` counts and limits *separately* from `primary`
+ * (`credit-ledger.service.ts:550-556`), so a caller that labelled its turns with
+ * them would admit past the primary pool's limit. `summary`, `completion` and
+ * `other` share the primary pool and so cost nothing to admit, but they are
+ * produced by surfaces a gateway client does not speak for, and asserting them
+ * would only misfile the receipt. `compaction` is the one kind a client alone
+ * knows and that shares `agent`'s pool, so honouring it changes what the receipt
+ * says and nothing the caller could profit from.
+ */
+const clientAssertableActivity = z.literal('compaction');
+
+/**
+ * The optional attribution every gateway route reads the same way, as members
+ * ready to spread into a relay input.
+ *
+ * @param request - The incoming gateway request.
+ * @returns What the caller asserted, each member present only when it parsed.
+ */
+export const readAttribution = (
+  request: FastifyRequest,
+): { readonly projectHint?: string; readonly chatHint?: string; readonly activity?: FinancialActivityKind } => {
+  const projectHint = readHint(readSingleHeader(request, httpHeader.xTauProjectId));
+  const chatHint = readHint(readSingleHeader(request, httpHeader.xTauChatId));
+  const activity = readOptionalHeader(readSingleHeader(request, httpHeader.xTauActivity), clientAssertableActivity);
+  return {
+    ...(projectHint === undefined ? {} : { projectHint }),
+    ...(chatHint === undefined ? {} : { chatHint }),
+    ...(activity === undefined ? {} : { activity }),
+  };
+};
+
+const assertableTurnStep = z.enum(turnSteps).exclude(['unknown']);
+const assertableTurnGap = z.enum(turnGaps).exclude(['unknown']);
+
+/**
+ * The turn-step telemetry labels the agent host asserts on a gateway step. Like the attribution
+ * hints these never refuse: a malformed value becomes `unknown`, and a request with neither header
+ * carries no turn labels at all. They feed metrics only (I4), never admission, price or digest.
+ *
+ * @param request - The incoming gateway request.
+ * @returns The asserted labels as a member ready to spread into a relay input.
+ */
+export const readTurnTelemetry = (request: FastifyRequest): { readonly turn?: TurnTelemetry } => {
+  const stepHeader = readSingleHeader(request, httpHeader.xTauTurnStep);
+  const gapHeader = readSingleHeader(request, httpHeader.xTauTurnGap);
+  if (stepHeader === undefined && gapHeader === undefined) {
+    return {};
+  }
+  return {
+    turn: {
+      step: readOptionalHeader(stepHeader, assertableTurnStep) ?? 'unknown',
+      gap: readOptionalHeader(gapHeader, assertableTurnGap) ?? 'unknown',
+    },
+  };
+};
+
+const assertableHostKind = z.enum(agentPlacements);
+const assertableKernel = z.enum(kernelIds);
+/* A release label as the hosts report one: a short or full commit, or a semver such as the CLI's `0.1.0-beta.9`. */
+const assertableBuild = z
+  .string()
+  .regex(/^(?:[\da-f]{7,40}|\d{1,6}\.\d{1,6}\.\d{1,6}(?:-(?=[\da-z.]{1,32}$)[\da-z]+(?:\.[\da-z]+)*)?)$/u);
+let catalogRouteIds: ReadonlySet<string> | undefined;
+const assertableModel = z.string().refine((value) => {
+  catalogRouteIds ??= new Set(gatewayModelRoutes().map((route) => route.routeId));
+  return catalogRouteIds.has(value);
+});
+
+/**
+ * The host labels the agent host asserts on a gateway step (LW17): host kind, host build, kernel and requested model.
+ * Like the turn labels these never refuse: each is checked against a closed vocabulary (the agent placements, a
+ * release label, the product kernel ids, this catalog's route ids) and becomes `unknown` outside it, and a header that
+ * was not sent leaves its label unset, so a helper or direct call carries none. They are client-asserted (LR13) and
+ * feed the provider fact only, never admission, price, routing or the request digest.
+ *
+ * @param request - The incoming gateway request.
+ * @returns The asserted labels as a member ready to spread into a relay input.
+ */
+export const readHostLabels = (request: FastifyRequest): { readonly hostLabels?: HostLabels } => {
+  const read = <T>(name: string, contract: ZodType<T>): { readonly value: T | 'unknown' } | undefined => {
+    const value = readSingleHeader(request, name);
+    return value === undefined ? undefined : { value: readOptionalHeader(value, contract) ?? 'unknown' };
+  };
+  const host = read(httpHeader.xTauHostKind, assertableHostKind);
+  const build = read(httpHeader.xTauHostBuild, assertableBuild);
+  const kernel = read(httpHeader.xTauKernel, assertableKernel);
+  const model = read(httpHeader.xTauModel, assertableModel);
+  if (host === undefined && build === undefined && kernel === undefined && model === undefined) {
+    return {};
+  }
+  return {
+    hostLabels: {
+      ...(host === undefined ? {} : { host: host.value }),
+      ...(build === undefined ? {} : { build: build.value }),
+      ...(kernel === undefined ? {} : { kernel: kernel.value }),
+      ...(model === undefined ? {} : { model: model.value }),
+    },
+  };
+};
+
+/** Validates the required opaque version-1 invocation identity. */
+export const validateAttemptId = (value: string | undefined): string => {
+  if (value === undefined || !/^[\u0021-\u007E]{1,128}$/u.test(value)) {
+    throw new LlmGatewayError(
+      HttpStatus.BAD_REQUEST,
+      'INVALID_REQUEST',
+      'A valid x-tau-attempt-id header is required.',
+    );
+  }
+  return value;
+};

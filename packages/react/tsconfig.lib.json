@@ -6,12 +6,8 @@
     "moduleResolution": "Bundler",
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "types": ["node"],
-    "target": "ESNext",
-    "jsx": "react-jsx",
-    "paths": {
-      "#*": ["./src/*"]
-    }
+    "target": "ESNext"
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"],
-  "exclude": ["src/**/*.spec.ts", "src/**/*.test.ts", "src/**/*.test.tsx"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.spec.ts", "src/**/*.test.ts"]
 }

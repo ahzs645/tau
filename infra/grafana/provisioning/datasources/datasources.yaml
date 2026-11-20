@@ -16,6 +16,15 @@ datasources:
     url: http://localhost:3100
     editable: true
 
+  # Hosted, this logical uid is Grafana Cloud's alert state history. Locally it points at the same Loki so
+  # alerting-rule-health provisions; no local stream carries from="state-history", so it reads no data.
+  - name: Alert state history
+    type: loki
+    uid: alert-state-history
+    access: proxy
+    url: http://localhost:3100
+    editable: true
+
   - name: Tempo
     type: tempo
     uid: tempo
@@ -40,18 +49,19 @@ datasources:
     url: http://localhost:4040
     editable: true
 
+  # Compose DNS. The host ports are loopback-only, so host.docker.internal cannot reach them.
   - name: Redis
     type: redis-datasource
     uid: redis
     access: proxy
-    url: redis://host.docker.internal:6379
+    url: redis://redis:6379
     editable: true
 
   - name: PostgreSQL
     type: grafana-postgresql-datasource
     uid: postgresql
     access: proxy
-    url: host.docker.internal:5432
+    url: postgres:5432
     editable: true
     jsonData:
       database: tau_dev

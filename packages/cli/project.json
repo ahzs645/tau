@@ -3,15 +3,66 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "sourceRoot": "packages/cli",
   "projectType": "library",
-  "tags": ["scope:shared", "type:lib"],
+  "tags": ["scope:shared", "type:package", "ci:standalone", "ci:native-hosts"],
   "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["^build", "stage-acp"],
+      "options": {
+        "command": "tsdown",
+        "cwd": "{projectRoot}"
+      }
+    },
+    "stage-acp": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["^build"],
+      "metadata": {
+        "description": "Stage the pinned ACP adapters and their runtime closure into dist-acp, without the vendor binaries their optional dependencies install, as the desktop app stages them."
+      },
+      "inputs": [
+        "{projectRoot}/scripts/stage-acp-adapters.mts",
+        "{workspaceRoot}/tools/nx/src/runtime-closure.ts",
+        "{workspaceRoot}/packages/host/src/acp/registry.ts",
+        "{workspaceRoot}/pnpm-lock.yaml",
+        "{workspaceRoot}/tools/pnpm/patches/**/*"
+      ],
+      "outputs": ["{projectRoot}/dist-acp"],
+      "options": {
+        "command": "node --import @oxc-node/core/register packages/cli/scripts/stage-acp-adapters.mts"
+      }
+    },
+    "dev-host": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx watch --clear-screen=false --include \"packages/cli/src/**/*.ts\" --include \"packages/host/src/**/*.ts\" packages/cli/src/bin.ts serve --trust-projects",
+        "env": {
+          "TAU_CONFIG_DIR": "out/tau-host-dev",
+          "TAU_HOST_RELAY_URL": "http://localhost:4000"
+        },
+        "forwardAllArgs": true
+      }
+    },
     "tau": {
       "executor": "nx:run-commands",
       "dependsOn": ["build"],
       "options": {
-        "command": "node --import @oxc-node/core/register packages/cli/dist/bin/taucad.js",
+        "command": "node --import @oxc-node/core/register packages/cli/dist/bin/tau.mjs",
         "forwardAllArgs": true
       }
+    },
+    "test": {
+      "dependsOn": [
+        "build",
+        "^copy-assets",
+        {
+          "projects": ["build123d"],
+          "target": "seed"
+        }
+      ],
+      "inputs": ["default", "^production", "serviceEnvironment", "reactEventLayer"]
+    },
+    "typecheck": {
+      "inputs": ["default", "^production", "reactEventLayer"]
     }
   }
 }

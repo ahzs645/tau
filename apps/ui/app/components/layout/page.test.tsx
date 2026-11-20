@@ -1,0 +1,695 @@
+// @vitest-environment jsdom
+import { fireEvent, render as renderWithProviders, screen, within } from '@testing-library/react';
+import { createContext, forwardRef, useContext, useEffect, useImperativeHandle } from 'react';
+import type { ReactNode } from 'react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ResolvedAuth } from '#hooks/use-resolved-auth.js';
+import type { PageChromeContext } from '#types/matches.types.js';
+import type * as TitlebarControlsModule from '#components/layout/desktop-titlebar-controls.js';
+import { TooltipProvider } from '@taucad/ui/components/tooltip';
+const render = (ui: ReactNode) => renderWithProviders(ui, { wrapper: TooltipProvider });
+
+const state = vi.hoisted(() => ({
+  authState: 'authed' as ResolvedAuth,
+  enablePageHeader: undefined as boolean | undefined,
+  enablePageWrapper: undefined as boolean | ((context: PageChromeContext) => boolean) | undefined,
+  hasBreadcrumb: false,
+  isMobile: false,
+  isFullscreen: false,
+  sidebarOpen: true,
+  allotmentResize: vi.fn(),
+  onPaneChange: undefined as ((sizes: number[]) => void) | undefined,
+  providers: [] as Array<{ handle: { providers: () => React.JSXElementConstructor<React.PropsWithChildren> } }>,
+  commandPalette: [] as Array<{ id: string; handle: { commandPalette: () => ReactNode } }>,
+  sidebarMounts: 0,
+  scroll: undefined as 'document' | 'contained' | undefined,
+  locationKey: 'default',
+  pathname: '/',
+  navigationType: 'POP' as 'POP' | 'PUSH' | 'REPLACE',
+  workspaceFrame: { drawn: false, pending: false, pathname: '/' },
+}));
+
+vi.mock('@taucad/ui/hooks/use-mobile', () => ({ useIsMobile: () => state.isMobile }));
+
+vi.mock('react-router', () => ({
+  Link: ({ children, to, ...properties }: { readonly children: ReactNode; readonly to: string }) => (
+    <a {...properties} href={to} rel='noreferrer'>
+      {children}
+    </a>
+  ),
+  Outlet: () => <div>Page content</div>,
+  useLocation: () => ({ key: state.locationKey, pathname: state.pathname, hash: '' }),
+  useParams: () => ({}),
+  NavigationType: { Pop: 'POP', Push: 'PUSH', Replace: 'REPLACE' },
+  useNavigationType: () => state.navigationType,
+}));
+vi.mock('allotment', () => {
+  const Pane = ({
+    children,
+    visible = true,
+    minSize,
+  }: React.PropsWithChildren<{ readonly visible?: boolean; readonly minSize?: number }>) => (
+    <div data-pane data-visible={visible} data-min-size={minSize}>
+      {children}
+    </div>
+  );
+  const Allotment = Object.assign(
+    forwardRef<
+      { readonly resize: (sizes: number[]) => void },
+      React.PropsWithChildren<{ readonly onChange?: (sizes: number[]) => void }>
+    >(({ children, onChange }, reference) => {
+      state.onPaneChange = onChange;
+      useImperativeHandle(reference, () => ({ resize: state.allotmentResize }));
+      return <div data-slot='application-allotment'>{children}</div>;
+    }),
+    { Pane },
+  );
+  return { Allotment, LayoutPriority: { Low: 0, High: 1 } };
+});
+vi.mock('#components/layout/use-workspace-frame-state.js', () => ({
+  useWorkspaceFrameState: () => state.workspaceFrame,
+}));
+vi.mock('#hooks/use-resolved-auth.js', () => ({ useResolvedAuth: () => state.authState }));
+vi.mock('#hooks/use-desktop-fullscreen.js', () => ({ useDesktopFullscreen: () => state.isFullscreen }));
+vi.mock('#flags/use-feature.js', () => ({ useFeatureFlags: () => ({}) }));
+vi.mock('#hooks/use-typed-matches.js', () => ({
+  useTypedMatches: (selector: (handles: Record<string, unknown[]>) => unknown) =>
+    selector({
+      breadcrumb: state.hasBreadcrumb
+        ? [{ id: 'breadcrumb', handle: { breadcrumb: () => <span>Projects</span> } }]
+        : [],
+      title: [],
+      actions: [],
+      commandPalette: state.commandPalette,
+      enablePageWrapper:
+        state.enablePageWrapper === undefined ? [] : [{ handle: { enablePageWrapper: state.enablePageWrapper } }],
+      enablePageHeader:
+        state.enablePageHeader === undefined ? [] : [{ handle: { enablePageHeader: state.enablePageHeader } }],
+      scroll: state.scroll === undefined ? [] : [{ handle: { scroll: state.scroll } }],
+      providers: state.providers,
+    }),
+}));
+vi.mock('#components/layout/app-sidebar.js', () => ({
+  AppSidebar: () => {
+    /* The probe is the sidebar's mount, because that is what a person loses
+     * when the shell is re-created below a new provider (Finding 5b). */
+    useEffect(() => {
+      state.sidebarMounts += 1;
+    }, []);
+    return <aside aria-label='Application sidebar'>Sidebar</aside>;
+  },
+}));
+vi.mock('#components/layout/desktop-titlebar-controls.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof TitlebarControlsModule>()),
+  DesktopTitlebarControls: () => <div data-slot='desktop-titlebar-controls' />,
+}));
+vi.mock('#components/ui/sidebar.js', () => ({
+  SidebarProvider: ({ children }: { readonly children: ReactNode }) => <div>{children}</div>,
+  SidebarInset: ({ children, className }: { readonly children: ReactNode; readonly className?: string }) => (
+    <main className={className}>{children}</main>
+  ),
+  SidebarTrigger: ({
+    onSidebarResize,
+    onKeyDown,
+    ...properties
+  }: React.ComponentProps<'button'> & {
+    readonly onSidebarResize?: (direction: 'narrower' | 'wider') => void;
+  }) => (
+    <button
+      type='button'
+      onKeyDown={(event) => {
+        onKeyDown?.(event);
+        if (event.key === 'ArrowLeft') {
+          onSidebarResize?.('narrower');
+        } else if (event.key === 'ArrowRight') {
+          onSidebarResize?.('wider');
+        }
+      }}
+      {...properties}
+    >
+      Toggle Sidebar
+    </button>
+  ),
+  useSidebar: () => ({ isMobile: state.isMobile, open: state.sidebarOpen }),
+}));
+vi.mock('@taucad/ui/components/breadcrumb', () => ({
+  Breadcrumb: ({ children }: { readonly children: ReactNode }) => <nav>{children}</nav>,
+  BreadcrumbItem: ({ children }: { readonly children: ReactNode }) => <span>{children}</span>,
+  BreadcrumbLink: ({ children }: { readonly children: ReactNode }) => <span>{children}</span>,
+  BreadcrumbList: ({ children }: { readonly children: ReactNode }) => <div>{children}</div>,
+  BreadcrumbSeparator: () => <span>/</span>,
+}));
+vi.mock('@taucad/ui/components/separator', () => ({ Separator: () => <span /> }));
+vi.mock('@taucad/ui-kit/icons/tau-wordmark', () => ({
+  TauWordmark: (properties: React.ComponentProps<'svg'>) => <svg {...properties} />,
+}));
+vi.mock('#components/settings/settings-dialog.js', () => ({
+  SettingsDialog: () => <span>Settings dialog</span>,
+}));
+
+const { Page } = await import('#components/layout/page.js');
+
+beforeEach(() => {
+  state.authState = 'authed';
+  state.enablePageHeader = undefined;
+  state.enablePageWrapper = undefined;
+  state.hasBreadcrumb = false;
+  state.isMobile = false;
+  state.sidebarOpen = true;
+  state.allotmentResize.mockReset();
+  state.isFullscreen = false;
+  state.providers = [];
+  state.commandPalette = [];
+  state.sidebarMounts = 0;
+  state.scroll = undefined;
+  state.locationKey = 'default';
+  state.pathname = '/';
+  state.navigationType = 'POP';
+  state.workspaceFrame = { drawn: false, pending: false, pathname: '/' };
+  sessionStorage.clear();
+  vi.unstubAllEnvs();
+});
+
+const RouteProviderContext = createContext(false);
+
+/** What a route handle contributes: a component wrapped around the page. */
+function RouteProvider({ children }: React.PropsWithChildren): React.JSX.Element {
+  return (
+    <RouteProviderContext.Provider value>
+      <div data-slot='route-provider'>{children}</div>
+    </RouteProviderContext.Provider>
+  );
+}
+
+/**
+ * Stands in for `ProjectCommandPaletteItems`: it needs its own route's context
+ * and renders nothing without it, which is how the project palette emptied
+ * silently once the shell moved above the composed providers.
+ */
+function RouteCommandPaletteProbe(): React.JSX.Element | undefined {
+  return useContext(RouteProviderContext) ? <span>Project commands</span> : undefined;
+}
+
+describe('Page application shell', () => {
+  it('renders stable sidebar and main Allotment panes', () => {
+    const { container } = render(<Page />);
+    const panes = container.querySelectorAll('[data-pane]');
+
+    expect(container.querySelector('[data-slot=application-allotment]')).toBeInTheDocument();
+    expect(panes).toHaveLength(2);
+    expect(panes[0]).toHaveAttribute('data-visible', 'true');
+    expect(screen.getByRole('main')).toContainElement(screen.getByText('Page content'));
+  });
+
+  it('controls sidebar pane visibility without removing main content', () => {
+    const { container, rerender } = render(<Page />);
+    const routeContent = screen.getByText('Page content');
+    const sidebarTrigger = within(container.querySelector<HTMLElement>('[data-slot=web-titlebar-controls]')!).getByRole(
+      'button',
+      { name: 'Toggle Sidebar' },
+    );
+
+    state.sidebarOpen = false;
+    rerender(<Page />);
+    const panes = container.querySelectorAll('[data-pane]');
+
+    expect(panes[0]).toHaveAttribute('data-visible', 'false');
+    expect(screen.getByText('Page content')).toBe(routeContent);
+    expect(
+      within(container.querySelector<HTMLElement>('[data-slot=web-titlebar-controls]')!).getByRole('button', {
+        name: 'Toggle Sidebar',
+      }),
+    ).toBe(sidebarTrigger);
+  });
+
+  it('should keep the sidebar mounted when the matched routes start contributing providers', () => {
+    const { rerender } = render(<Page />);
+    expect(state.sidebarMounts).toBe(1);
+
+    /* Home → project: the project route contributes one provider, so the
+     * composed list grows. The shell must not be re-created below it. */
+    state.providers = [{ handle: { providers: () => RouteProvider } }];
+    rerender(<Page />);
+
+    expect(screen.getByText('Page content').closest('[data-slot=route-provider]')).not.toBeNull();
+    expect(state.sidebarMounts).toBe(1);
+  });
+
+  it("should render a route's command palette items inside that route's providers", () => {
+    state.providers = [{ handle: { providers: () => RouteProvider } }];
+    state.commandPalette = [{ id: 'project', handle: { commandPalette: () => <RouteCommandPaletteProbe /> } }];
+
+    render(<Page />);
+
+    expect(screen.getByText('Project commands').closest('[data-slot=route-provider]')).not.toBeNull();
+  });
+
+  it('should render the settings dialog outside the matched routes providers, so a waiting route still opens it', () => {
+    state.providers = [{ handle: { providers: () => RouteProvider } }];
+
+    render(<Page />);
+
+    expect(screen.getByText('Settings dialog').closest('[data-slot=route-provider]')).toBeNull();
+  });
+
+  it('hides the outer sidebar pane on mobile while keeping main content mounted', () => {
+    state.isMobile = true;
+    const { container } = render(<Page />);
+    const panes = container.querySelectorAll('[data-pane]');
+
+    expect(panes[0]).toHaveAttribute('data-visible', 'false');
+    expect(screen.getByText('Page content')).toBeInTheDocument();
+  });
+
+  it('shows only browser toggle and wordmark, and only the toggle while closed', () => {
+    const view = render(<Page />);
+    const { container } = view;
+    const controls = container.querySelector<HTMLElement>('[data-slot=web-titlebar-controls]');
+    expect(controls).not.toBeNull();
+    const controlRegion = controls!;
+
+    expect(
+      [...controlRegion.children].map((element) => element.getAttribute('aria-label') ?? element.textContent),
+    ).toEqual(['Toggle Sidebar', 'Home']);
+    expect(controlRegion).toHaveClass('pl-2', 'pr-1', 'gap-1');
+    const shell = container.querySelector<HTMLElement>('[data-slot=application-shell]');
+    expect(shell?.style.getPropertyValue('--titlebar-controls-width')).toBe('calc(var(--sidebar-panel-width) - 1px)');
+    state.sidebarOpen = false;
+    view.rerender(<Page />);
+    expect(within(controlRegion).queryByRole('link', { name: 'Home' })).not.toBeInTheDocument();
+    expect(
+      [...controlRegion.children].map((element) => element.getAttribute('aria-label') ?? element.textContent),
+    ).toEqual(['Toggle Sidebar']);
+    expect(shell?.style.getPropertyValue('--titlebar-controls-width')).toBe('calc(var(--spacing) * 10)');
+  });
+
+  it('resizes the sidebar by 16px and clamps to the pane bounds', () => {
+    const { container } = render(<Page />);
+    const shell = container.querySelector<HTMLElement>('[data-slot=application-shell]');
+    const controls = container.querySelector<HTMLElement>('[data-slot=web-titlebar-controls]');
+    expect(controls).not.toBeNull();
+    const trigger = within(controls!).getByRole('button', { name: 'Toggle Sidebar' });
+    Object.defineProperty(shell, 'clientWidth', { value: 1024 });
+    trigger.focus();
+
+    fireEvent.keyDown(trigger, { key: 'ArrowLeft' });
+    fireEvent.keyDown(trigger, { key: 'ArrowLeft' });
+    fireEvent.keyDown(trigger, { key: 'ArrowLeft' });
+
+    expect(state.allotmentResize).toHaveBeenNthCalledWith(1, [208, 816]);
+    expect(state.allotmentResize).toHaveBeenNthCalledWith(2, [192, 832]);
+    expect(state.allotmentResize).toHaveBeenCalledTimes(2);
+
+    for (let index = 0; index < 19; index += 1) {
+      fireEvent.keyDown(trigger, { key: 'ArrowRight' });
+    }
+
+    expect(state.allotmentResize).toHaveBeenLastCalledWith([480, 544]);
+    state.onPaneChange?.([320, 704]);
+    expect(shell?.style.getPropertyValue('--sidebar-panel-width')).toBe('320px');
+    expect(state.allotmentResize).toHaveBeenCalledTimes(20);
+  });
+});
+
+describe('Page header contract', () => {
+  it("should serve an untitled route's phone bar, hidden from md up, with navigation kept", () => {
+    const { container } = render(<Page />);
+    // The bar is placed by CSS, so the server paints it on a phone and a wide page leaves it out.
+    expect(container.querySelector('header')).toHaveClass('md:hidden');
+    expect(container.querySelector('main')).toHaveClass(
+      '[--header-height:calc(var(--spacing)*12)]',
+      'md:[--header-height:0px]',
+    );
+    expect(container.querySelector('section')).toHaveClass('max-md:mt-(--header-height)');
+    expect(container.querySelector('section')).not.toHaveClass('mt-(--header-height)');
+    expect(
+      within(container.querySelector('header')!).getByRole('button', { name: 'Toggle Sidebar' }),
+    ).toBeInTheDocument();
+  });
+
+  it('should not move an untitled route when the viewport turns out to be a phone', () => {
+    // The server has no viewport and renders `isMobile` false; a phone then hydrates with it true.
+    const served = render(<Page />);
+    const layout = (container: HTMLElement): string[] =>
+      ['header', 'main', 'section'].map((selector) => container.querySelector(selector)?.className ?? 'absent');
+    const servedLayout = layout(served.container);
+    served.unmount();
+    state.isMobile = true;
+    const { container } = render(<Page />);
+    expect(layout(container)).toEqual(servedLayout);
+  });
+
+  it('removes route header DOM and offset while retaining application controls', () => {
+    state.enablePageHeader = false;
+    const { container } = render(<Page />);
+
+    expect(container.querySelector('header')).not.toBeInTheDocument();
+    expect(container.querySelector('main')).toHaveClass('[--header-height:0px]');
+    expect(container.querySelector('section')).not.toHaveClass('mt-(--header-height)');
+    expect(container.querySelector('[data-slot=web-titlebar-controls]')).toBeInTheDocument();
+  });
+
+  it('keeps a continuous desktop header surface when a route supplies chrome', () => {
+    state.hasBreadcrumb = true;
+    vi.stubEnv('TAU_TARGET', 'desktop');
+    const { container } = render(<Page />);
+
+    expect(container.querySelector('[data-slot=desktop-titlebar-controls]')).toBeInTheDocument();
+    expect(container.querySelector('[data-slot=web-titlebar-controls]')).not.toBeInTheDocument();
+    expect(container.querySelector('main')).toHaveClass('[--header-height:calc(var(--spacing)*9)]');
+    expect(container.querySelector('header')).toHaveClass('h-(--header-height)', 'border-b', 'bg-sidebar');
+    expect(
+      container
+        .querySelector<HTMLElement>('[data-slot=application-shell]')
+        ?.style.getPropertyValue('--titlebar-controls-width'),
+    ).toBe('calc(var(--sidebar-panel-width) - 1px)');
+    expect(container.querySelector('header > div')).toHaveClass('md:sidebar-closed:ml-(--titlebar-controls-width)');
+  });
+
+  it('should update occupied header width and traffic-light inset on native fullscreen transitions', () => {
+    vi.stubEnv('TAU_TARGET', 'desktop');
+    const view = render(<Page />);
+    const shell = view.container.querySelector<HTMLElement>('[data-slot=application-shell]');
+    expect(view.container.querySelector('[data-pane]')).toHaveAttribute('data-min-size', '192');
+    state.isFullscreen = true;
+    view.rerender(<Page />);
+    expect(shell?.style.getPropertyValue('--titlebar-controls-width')).toBe('calc(var(--sidebar-panel-width) - 1px)');
+    expect(shell?.style.getPropertyValue('--desktop-titlebar-inset')).toBe('calc(var(--spacing) * 2)');
+    expect(view.container.querySelector('[data-pane]')).toHaveAttribute('data-min-size', '192');
+    state.isFullscreen = false;
+    view.rerender(<Page />);
+    expect(shell?.style.getPropertyValue('--titlebar-controls-width')).toBe('calc(var(--sidebar-panel-width) - 1px)');
+    expect(shell?.style.getPropertyValue('--desktop-titlebar-inset')).toBe('');
+    state.sidebarOpen = false;
+    view.rerender(<Page />);
+    expect(shell?.style.getPropertyValue('--titlebar-controls-width')).toBe('calc(var(--spacing) * 44)');
+    state.isFullscreen = true;
+    view.rerender(<Page />);
+    expect(shell?.style.getPropertyValue('--titlebar-controls-width')).toBe('calc(var(--spacing) * 26)');
+  });
+});
+
+describe('Desktop window drag band', () => {
+  it('should confine dragging to the occupied titlebar island and leave route chrome clickable', () => {
+    state.hasBreadcrumb = true;
+    vi.stubEnv('TAU_TARGET', 'desktop');
+    const { container } = render(<Page />);
+
+    expect(container.querySelector('[data-slot=desktop-drag-band]')).toHaveClass(
+      'fixed',
+      'w-(--titlebar-controls-width)',
+      'top-0',
+      'h-9',
+      '[app-region:drag]',
+    );
+    for (const chrome of container.querySelectorAll('header > div')) {
+      expect(chrome).toHaveClass('[app-region:no-drag]');
+    }
+  });
+
+  it('survives the routes that opt out of the application shell', () => {
+    state.enablePageWrapper = false;
+    vi.stubEnv('TAU_TARGET', 'desktop');
+    const { container } = render(<Page />);
+
+    expect(container.querySelector('[data-slot=application-shell]')).not.toBeInTheDocument();
+    expect(container.querySelector('[data-slot=desktop-drag-band]')).toBeInTheDocument();
+  });
+
+  it('stays out of the browser build, which keeps its own title bar', () => {
+    const { container } = render(<Page />);
+
+    expect(container.querySelector('[data-slot=desktop-drag-band]')).not.toBeInTheDocument();
+    // Only the phone bar is left, and only below md.
+    expect(container.querySelector('header')).toHaveClass('md:hidden');
+  });
+});
+
+describe('Page auth-aware wrapper contract', () => {
+  it.each([
+    ['authed', true],
+    ['anonymous', false],
+    ['indeterminate', true],
+  ] as const)('passes %s auth through without collapsing it to a boolean', (authState, shouldRenderSidebar) => {
+    state.authState = authState;
+    state.enablePageWrapper = ({ authState: resolvedAuth }) => resolvedAuth !== 'anonymous';
+
+    render(<Page />);
+
+    if (shouldRenderSidebar) {
+      expect(screen.getByText('Sidebar')).toBeInTheDocument();
+    } else {
+      expect(screen.queryByText('Sidebar')).not.toBeInTheDocument();
+    }
+  });
+});
+
+/* T-A1.1 (D4.1): every route scrolls at the shell, wrapped or wrapperless, unless it declares `scroll: 'contained'`. */
+describe('Page scroll contract', () => {
+  const scroller = (): HTMLElement | undefined =>
+    screen.getByText('Page content').closest<HTMLElement>('.overflow-y-auto') ?? undefined;
+
+  it.each([
+    ['inside the application shell', undefined],
+    ['without the application shell', false],
+  ] as const)('should scroll a route with no scroll handle %s on both axes', (_label, enablePageWrapper) => {
+    state.enablePageWrapper = enablePageWrapper;
+    render(<Page />);
+
+    expect(scroller()).toBeDefined();
+    expect(scroller()).toHaveClass('overflow-x-auto');
+  });
+
+  it.each([
+    ['inside the application shell', undefined],
+    ['without the application shell', false],
+  ] as const)(
+    "should leave the scrolling to a route that declares scroll 'contained' %s",
+    (_label, enablePageWrapper) => {
+      state.enablePageWrapper = enablePageWrapper;
+      state.scroll = 'contained';
+      render(<Page />);
+
+      expect(scroller()).toBeUndefined();
+    },
+  );
+});
+
+describe('Page scroll restoration', () => {
+  /* `html, body { overflow: hidden }` makes the shell's inner scroller the page's
+   * scroller, which React Router's `ScrollRestoration` never sees (lane C P4). */
+  const scroller = (): HTMLElement => screen.getByText('Page content').closest<HTMLElement>('.overflow-y-auto')!;
+  const scrollTo = (top: number): void => {
+    scroller().scrollTop = top;
+    fireEvent.scroll(scroller());
+  };
+
+  it.each([
+    ['inside the application shell', undefined],
+    ['without the application shell', false],
+  ] as const)('should restore the saved offset when Back returns to an entry %s', (_label, enablePageWrapper) => {
+    state.enablePageWrapper = enablePageWrapper;
+    state.locationKey = 'community';
+    state.pathname = '/community';
+    const { rerender } = render(<Page />);
+    scrollTo(1400);
+
+    state.locationKey = 'example';
+    state.pathname = '/s/builtin~replicad.bench-vise';
+    state.navigationType = 'PUSH';
+    rerender(<Page />);
+    expect(scroller().scrollTop).toBe(0);
+    scrollTo(200);
+
+    state.locationKey = 'community';
+    state.pathname = '/community';
+    state.navigationType = 'POP';
+    rerender(<Page />);
+    expect(scroller().scrollTop).toBe(1400);
+  });
+
+  it('should hold the restored offset while the returning page settles, until the person scrolls', () => {
+    const resizeCallbacks: Array<() => void> = [];
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        public constructor(callback: () => void) {
+          resizeCallbacks.push(callback);
+        }
+        public observe(): void {
+          // Resizes are driven by the test.
+        }
+        public disconnect(): void {
+          resizeCallbacks.length = 0;
+        }
+      },
+    );
+    try {
+      state.locationKey = 'community';
+      state.pathname = '/community';
+      const { rerender } = render(<Page />);
+      scrollTo(900);
+      state.locationKey = 'example';
+      state.pathname = '/s/builtin~replicad.spur-gearbox';
+      state.navigationType = 'PUSH';
+      rerender(<Page />);
+
+      state.locationKey = 'community';
+      state.pathname = '/community';
+      state.navigationType = 'POP';
+      rerender(<Page />);
+      // The shell's panes settle and scroll anchoring moves the offset.
+      scrollTo(816);
+      for (const callback of resizeCallbacks) {
+        callback();
+      }
+      expect(scroller().scrollTop).toBe(900);
+      expect(sessionStorage.getItem('tau.page-scroll.community')).toBe('900');
+
+      fireEvent.wheel(scroller());
+      scrollTo(1200);
+      expect(resizeCallbacks).toHaveLength(0);
+      expect(sessionStorage.getItem('tau.page-scroll.community')).toBe('1200');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  /* Review round 2 (A15b2): the route content sits in the shell's frame host, a `display: contents` box, so the hold
+   * watches the content inside it, not the host. */
+  it("should watch the route content's own box through the shell's frame host", () => {
+    const observed: Element[] = [];
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        public observe(element: Element): void {
+          observed.push(element);
+        }
+        public disconnect(): void {
+          // Nothing to release.
+        }
+      },
+    );
+    const style = document.createElement('style');
+    style.textContent = '.contents { display: contents; }';
+    document.head.append(style);
+    try {
+      state.locationKey = 'community';
+      state.pathname = '/community';
+      const { rerender } = render(<Page />);
+      scrollTo(900);
+      state.locationKey = 'example';
+      state.navigationType = 'PUSH';
+      rerender(<Page />);
+      state.locationKey = 'community';
+      state.navigationType = 'POP';
+      rerender(<Page />);
+
+      expect(observed).toContain(screen.getByText('Page content'));
+      expect(observed.some((element) => element.classList.contains('contents'))).toBe(false);
+    } finally {
+      style.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('should keep the offset when a filter or dialog replaces the entry on the same page', () => {
+    state.locationKey = 'community';
+    state.pathname = '/community';
+    const { rerender } = render(<Page />);
+    scrollTo(700);
+
+    state.locationKey = 'community-filtered';
+    state.navigationType = 'REPLACE';
+    rerender(<Page />);
+    expect(scroller().scrollTop).toBe(700);
+
+    state.locationKey = 'example';
+    state.pathname = '/s/builtin~replicad.bench-vise';
+    state.navigationType = 'PUSH';
+    rerender(<Page />);
+    state.locationKey = 'community-filtered';
+    state.pathname = '/community';
+    state.navigationType = 'POP';
+    rerender(<Page />);
+    expect(scroller().scrollTop).toBe(700);
+  });
+
+  it('should start a new entry at the top when the store is blocked', () => {
+    state.locationKey = 'community';
+    const { rerender } = render(<Page />);
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('blocked', 'SecurityError');
+    });
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('blocked', 'SecurityError');
+    });
+    try {
+      scrollTo(900);
+      state.locationKey = 'projects';
+      state.pathname = '/projects';
+      state.navigationType = 'PUSH';
+      rerender(<Page />);
+
+      expect(scroller().scrollTop).toBe(0);
+    } finally {
+      getItem.mockRestore();
+      setItem.mockRestore();
+    }
+  });
+
+  it('should leave a route that does not scroll the shell untouched', () => {
+    state.scroll = 'contained';
+    state.locationKey = 'workspace';
+    const { container } = render(<Page />);
+
+    expect(container.querySelector('section')).not.toHaveClass('overflow-y-auto');
+    expect(sessionStorage).toHaveLength(0);
+  });
+});
+
+/*
+ * A15b2 (F11): drawn ahead of the route, the frame is laid out as the project route lays it out, so the route's
+ * commit moves nothing: no page header and no page scroller (the page being left may be scrolled away), and the frame
+ * reads the destination's hint, as the router has not pushed its URL yet.
+ */
+describe('Page workspace frame ahead of the route', () => {
+  it("should lay the pending frame out as the project route does, at the destination's path", () => {
+    state.hasBreadcrumb = true;
+    state.workspaceFrame = { drawn: true, pending: true, pathname: '/w/home/gearbox' };
+    const { container } = render(<Page />);
+    const frame = container.querySelector('[data-slot=workspace-frame]');
+
+    expect(frame).toHaveAttribute('data-workspace-pending');
+    expect(frame).toHaveTextContent('Page content');
+    expect(container.querySelector('header')).not.toBeInTheDocument();
+    expect(container.querySelector('main')).toHaveClass('[--header-height:0px]');
+    expect(container.querySelector('section')).not.toHaveClass('overflow-y-auto');
+  });
+
+  it('should keep the page content in one node from the page being left, through the pending frame, to the route', () => {
+    state.hasBreadcrumb = true;
+    const { container, rerender } = render(<Page />);
+    const content = screen.getByText('Page content');
+    expect(container.querySelector('header')).toBeInTheDocument();
+
+    state.workspaceFrame = { drawn: true, pending: true, pathname: '/w/home/gearbox' };
+    rerender(<Page />);
+    expect(screen.getByText('Page content')).toBe(content);
+    const frame = container.querySelector('[data-slot=workspace-frame]');
+    const lanes = container.querySelector('[data-slot=workspace-frame-lanes]');
+
+    /* The route commits: the same frame and lanes, no longer pending. */
+    state.workspaceFrame = { drawn: true, pending: false, pathname: '/w/home/gearbox' };
+    rerender(<Page />);
+    expect(container.querySelector('[data-slot=workspace-frame]')).toBe(frame);
+    expect(container.querySelector('[data-slot=workspace-frame-lanes]')).toBe(lanes);
+    expect(frame).not.toHaveAttribute('data-workspace-pending');
+    expect(screen.getByText('Page content')).toBe(content);
+
+    state.workspaceFrame = { drawn: false, pending: false, pathname: '/' };
+    rerender(<Page />);
+    expect(screen.getByText('Page content')).toBe(content);
+    expect(container.querySelector('header')).toBeInTheDocument();
+  });
+});

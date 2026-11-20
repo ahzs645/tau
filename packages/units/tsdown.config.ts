@@ -1,8 +1,8 @@
 import { defineConfig } from 'tsdown';
-import type { Options } from 'tsdown';
+import type { UserConfig } from 'tsdown';
 
-const baseConfig: Options = {
-  entry: ['src/types/index.ts', 'src/constants/index.ts', 'src/converter/index.ts', 'src/parser/index.ts'],
+const baseConfig: UserConfig = {
+  entry: ['src/index.ts', 'src/input.ts', 'src/quantity.ts', 'src/unit.ts'],
   sourcemap: false,
   clean: true,
   dts: true,
@@ -11,17 +11,10 @@ const baseConfig: Options = {
   unbundle: true,
 };
 
-const cjsConfig: Options = {
-  ...baseConfig,
-  format: 'cjs',
-  outDir: 'dist/cjs',
-  dts: false,
-};
-
-const esmConfig: Options = {
+const packageConfig: UserConfig = {
   ...baseConfig,
   format: 'esm',
-  outDir: 'dist/esm',
+  outDir: 'dist',
 };
 
-export default defineConfig([esmConfig, cjsConfig]);
+export default defineConfig(packageConfig);

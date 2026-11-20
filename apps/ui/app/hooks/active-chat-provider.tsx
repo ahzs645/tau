@@ -1,20 +1,24 @@
 /**
  * Chat composer context — unified contract
  *
- * `<ChatComposerProvider>` and `<ActiveChatProvider chatId>` both populate
+ * Composer-only, Home, and active-chat providers all populate
  * the SAME `ChatComposerContextValue` shape. Consumers read one
  * `useChatComposer()` hook and never branch on which provider is in scope —
  * the runtime branch collapses to the two provider constructors.
  *
- * - **`<ChatComposerProvider>`** — composer-only (marketing CTA, library
- *   empty state). Cookie-only model/kernel; `status: 'ready'`; `stop` is a
- *   no-op; `contextUsage` and `session` are `undefined`. Owns a throwaway
- *   draft actor with no-op persistence.
+ * - **`<ChatComposerProvider surface>`** — composer-only (the
+ *   library empty state). Cookie-only model/kernel; `status: 'ready'`; `stop`
+ *   is a no-op; `contextUsage` and `session` are `undefined`. Its draft keeps
+ *   no record, but stores attachments in the surface's own directory.
+ *
+ * - **`<HomeNewProjectComposerProvider>`** — the durable Home pre-project
+ *   composer, bound to its composer record. Interactive from the first frame;
+ *   the record hydrates whatever the user has not touched.
  *
  * - **`<ActiveChatProvider chatId>`** — session-backed (project route).
  *   Chat-row-preferred model/kernel with cookie fallback and dual-write on
- *   set; live `status` from the AI SDK `Chat`; `stop` dispatches
- *   `stopRequest`; `contextUsage` is the most-recent `data-context-usage`
+ *   set; live `status` from the AI SDK `Chat`; `stop` sends a keyed host cancel;
+ *   `contextUsage` is the most-recent `data-context-usage`
  *   part on any message; `session` carries the live triple.
  *
  * `useActiveChatSession()` remains the strict entry point for genuine
@@ -27,25 +31,66 @@
  */
 
 import { useActorRef, useSelector } from '@xstate/react';
-import { createContext, useCallback, useContext, useMemo } from 'react';
-import type { Chat } from '@ai-sdk/react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
+import type { ChatView } from '#services/deferred-chat.js';
+import { isResumableRun } from '@taucad/agent-host';
+import type { ForeignRun } from '@taucad/agent-host';
+import { createAsyncLogic } from 'xstate';
+import { waitUnlessGone } from '@taucad/ui-core/lib/xstate.lib';
 import type { ActorRefFrom } from 'xstate';
-import type { ContextUsageData, MyUIMessage } from '@taucad/chat';
-import type { KernelEntry, KernelId } from '@taucad/types/constants';
+import type { CadAgentExecution, ContextUsageData, MyUIMessage, TauAgentHostId } from '@taucad/chat';
+import type { KernelEntry, KernelId, KernelPreference } from '@taucad/types/constants';
 import { isKernelId, resolveKernel } from '@taucad/types/constants';
-import { fromSafeAsync } from '#lib/xstate.lib.js';
-import { draftMachine } from '#hooks/draft.machine.js';
-import { resizeImageActor } from '#hooks/resize-image.actor.js';
-import { useDraftImageErrorToast } from '#hooks/use-draft-image-error-toast.js';
+import { isKernelAvailable } from '#constants/available-kernel-configurations.js';
+import { chatKernelPreference } from '#hooks/chat-kernel-preference.js';
+import { useProjectKernelOwner } from '#hooks/use-project-kernel-owner.js';
+import { draftMachine } from '@taucad/chat-ui/hooks/draft.machine';
+import { resizeImageActor } from '#hooks/attachment-image.actor.js';
+import { useDraftImageErrorToast } from '@taucad/chat-ui/hooks/use-draft-image-error-toast';
 import { inspect } from '#machines/inspector.js';
 import { useChatSession, useChatSessionSnapshot } from '#hooks/use-chat-session.js';
-import type { ChatSession } from '#services/chat-session-store.js';
-import type { chatPersistenceMachine } from '#hooks/chat-persistence.machine.js';
+import { useChatSessionStore } from '#hooks/chat-session-store-provider.js';
+import type { ChatSession, StopOrigin } from '#services/chat-session-store.js';
+import { selectVisibleChatStatus } from '#services/chat-visible-status.js';
+import { selectCaughtUp, selectCurrentRun, selectRunElsewhere } from '#machines/chat-projection.logic.js';
+import { subscribeRunElsewhere } from '#hooks/run-elsewhere-clock.js';
+import type { chatPersistenceMachine } from '@taucad/chat-ui/hooks/chat-persistence.machine';
 import { useModels } from '#hooks/use-models.js';
+import { usePlaceableExecution } from '#hooks/use-placeable-execution.js';
 import type { ResolvedModel } from '#hooks/use-models.js';
 import { useKernel } from '#hooks/use-kernel.js';
+import { reportKernelOverride } from '#chat-clients/_internal/kernel-selection-telemetry.js';
+import { pageTelemetry } from '#telemetry/runtime-telemetry.js';
+import { withTauExecutionModel } from '@taucad/chat-ui/utils/chat-execution';
+import { useFileManager } from '#hooks/use-file-manager.js';
+import { composerRecordPaths, createComposerRecordStore } from '@taucad/chat-ui/db/composer-record-store';
+import {
+  draftHydrationOf,
+  draftPersistenceFor,
+  flushRecord,
+  storeAttachmentActorFor,
+  useComposerRecord,
+} from '@taucad/chat-ui/hooks/composer-record';
+import { useFlushOnClose } from '#hooks/use-flush-on-close.js';
+import type { ComposerRecordRef } from '@taucad/chat-ui/hooks/composer-record';
+import { createAttachmentStore } from '@taucad/chat-ui/db/attachment-store';
+import type { AttachmentStore } from '@taucad/chat-ui/db/attachment-store';
+import { attachmentUrl } from '@taucad/chat-ui/utils/attachment.utils';
+import type { ChatMode, ReasoningLevel } from '@taucad/chat/constants';
+import { effectiveEffort } from '#utils/model-reasoning.js';
+import { useComposerRecordToasts } from '@taucad/chat-ui/hooks/use-composer-record-toasts';
+import type { AutoResumePlan } from '#utils/run-auto-resume-plan.js';
 
-type ChatInstance = Chat<MyUIMessage>;
+type ChatInstance = ChatView;
 
 // ---------------------------------------------------------------------------
 // Public contract
@@ -59,7 +104,7 @@ type ChatInstance = Chat<MyUIMessage>;
 export type ActiveChatModel = {
   /**
    * Chat-scoped active model id. Under the session provider this prefers
-   * `Chat.activeModel`, falling back to the cookie default. Under the
+   * the model within `Chat.activeExecution`, falling back to the cookie default. Under the
    * composer provider this is the cookie default.
    */
   modelId: string;
@@ -71,7 +116,28 @@ export type ActiveChatModel = {
    * the composer provider writes the cookie only.
    */
   setActiveModel: (modelId: string) => void;
+  /**
+   * The reasoning level this chat runs its model at — its own choice clamped
+   * to what the model offers, else the model's default. `undefined` when the
+   * model offers no levels, which is what hides the control.
+   */
+  effort: ReasoningLevel | undefined;
+  /** Choose the reasoning level; remembered for new chats like the model. */
+  setActiveEffort: (effort: ReasoningLevel) => void;
 };
+
+/** Durable execution target for the active chat. */
+export type ActiveChatExecution = {
+  execution: CadAgentExecution;
+  setActiveExecution: (execution: CadAgentExecution) => void;
+  /**
+   * This device's placement for the chat that this tab cannot reach, so `execution` runs locally instead (XD2). The
+   * composer names it; it stays this device's placement for the tab that can reach it.
+   */
+  heldPlacement?: TauAgentHostId | undefined;
+};
+
+export type ChatAgentActivity = 'ready' | 'working' | 'approval-required' | 'stopping';
 
 /**
  * Resolved chat-scoped CAD kernel state. Same dual-strategy shape as
@@ -84,6 +150,27 @@ export type ActiveChatKernel = {
   kernelId: KernelId;
   kernel: KernelEntry;
   setActiveKernel: (kernelId: KernelId) => void;
+  /**
+   * The chat's kernel preference, what a turn sends (blueprint D2): Auto or one kernel.
+   */
+  preference: KernelPreference;
+  /**
+   * Choose Auto or a kernel. On Home it is remembered on the device; in a chat it changes that chat only and does not
+   * move the device default (E4).
+   */
+  setActivePreference: (preference: KernelPreference) => void;
+  /**
+   * The chat's own kernel when this runtime cannot execute it, such as a
+   * native kernel only Tau Desktop advertises, read on the web. `kernel` is
+   * the one used instead; the chat keeps its preference, so it returns
+   * wherever that kernel runs. Absent when the chat's kernel is the one used.
+   */
+  unavailableKernel?: KernelEntry;
+  /**
+   * The kernel the project's model is written in, once its entry binds (blueprint D8). The pill reads it to show
+   * `Auto · X` and to mark a manual pick that differs. Absent on Home and before the entry binds.
+   */
+  owner?: KernelId;
 };
 
 /**
@@ -93,9 +180,11 @@ export type ActiveChatKernel = {
  */
 export type ActiveChatSessionContextValue = {
   activeChatId: string;
-  chat: Chat<MyUIMessage>;
+  chat: ChatView;
   persistenceActorRef: ActorRefFrom<typeof chatPersistenceMachine>;
   draftActorRef: ActorRefFrom<typeof draftMachine>;
+  /** This chat's composer record on this device: whether it is read yet decides whether a painted draft hint is taken. */
+  composerRecordRef: ComposerRecordRef;
 };
 
 /**
@@ -111,6 +200,8 @@ export type ChatComposerContextValue = {
   draftActorRef: ActorRefFrom<typeof draftMachine>;
   /** Chat-scoped model resolver (composer-cookie vs session dual-write). */
   model: ActiveChatModel;
+  /** Chat-scoped execution target. */
+  execution: ActiveChatExecution;
   /** Chat-scoped kernel resolver (composer-cookie vs session dual-write). */
   kernel: ActiveChatKernel;
   /**
@@ -118,12 +209,20 @@ export type ChatComposerContextValue = {
    * stream); reflects the AI SDK `Chat.status` under the session provider.
    */
   status: ChatInstance['status'];
+  /** User-facing activity for the selected execution target. */
+  agentActivity: ChatAgentActivity;
   /**
    * Cancel-in-flight callback. No-op under the composer provider;
-   * dispatches `stopRequest` to the persistence machine under the session
-   * provider.
+   * sends one keyed host cancel through the session store under the session provider.
    */
-  stop: () => void;
+  stop: (origin: StopOrigin) => void;
+  /** Continue a failed host run while it can still be resumed. */
+  resume: (() => void) | undefined;
+  /**
+   * The run another device is running on this chat now (XD3): the host refuses a new run until it settles or goes
+   * stale, so the composer holds its send. Always `undefined` under the composer provider.
+   */
+  runElsewhere: ForeignRun | undefined;
   /**
    * Most-recent `data-context-usage` part across the chat's messages, or
    * `undefined` when no usage data has streamed. Always `undefined` under
@@ -136,6 +235,21 @@ export type ChatComposerContextValue = {
    * composer surface should leave this untouched.
    */
   session: ActiveChatSessionContextValue | undefined;
+  /** Whether this surface offers execution placement selection. */
+  canSelectExecution: boolean;
+  /**
+   * The directory a project created from this draft copies its attachments
+   * from. `undefined` means the Home composer's, as it does on a pending
+   * project operation.
+   */
+  attachmentSource: string | undefined;
+  /** Consume the current draft at its persistence owner. */
+  consumeDraft: () => Promise<void>;
+  /**
+   * Home's own composer record, which its draft persists to; a chat's is on `session`. Read for record-wins: an Enter
+   * on Home's painted draft waits for it and is sent only when it holds that text (ruling 2026-11-17T03:43Z).
+   */
+  homeRecordRef?: ComposerRecordRef;
 };
 
 const ChatComposerContext = createContext<ChatComposerContextValue | undefined>(undefined);
@@ -145,20 +259,45 @@ const ActiveChatSessionContext = createContext<ActiveChatSessionContextValue | u
 // Composer-only draft actor wiring
 // ---------------------------------------------------------------------------
 
-const noopPersistDraftActor = fromSafeAsync<void, { chatId: string; draft: MyUIMessage }>(async () => undefined);
-const noopPersistEditDraftActor = fromSafeAsync<void, { chatId: string; messageId: string; draft: MyUIMessage }>(
-  async () => undefined,
-);
-const noopClearMessageEditActor = fromSafeAsync<void, { chatId: string; messageId: string }>(async () => undefined);
-
-const composerDraftMachine = draftMachine.provide({
-  actors: {
-    persistDraftActor: noopPersistDraftActor,
-    persistEditDraftActor: noopPersistEditDraftActor,
-    clearMessageEditActor: noopClearMessageEditActor,
-    resizeImageActor,
-  },
+const noopPersistDraftActor = createAsyncLogic<void, { draft: MyUIMessage }>({ run: async () => undefined });
+const noopPersistEditDraftActor = createAsyncLogic<void, { messageId: string; draft: MyUIMessage }>({
+  run: async () => undefined,
 });
+const noopPersistSelectionActor = createAsyncLogic<void, { toolChoice?: string | string[]; mode?: ChatMode }>({
+  run: async () => undefined,
+});
+const noopClearMessageEditActor = createAsyncLogic<void, { messageId: string }>({ run: async () => undefined });
+
+/** A pre-project composer that keeps no record; each owns its draft-stage attachment directory. */
+export type ComposerSurface = Parameters<typeof composerRecordPaths.surfaceAttachments>[0];
+
+/**
+ * The composer-only draft keeps no record, but its attachments still need
+ * bytes on disk: a project created from it promotes them from this surface's
+ * own directory.
+ */
+function useSurfaceAttachments(surface: ComposerSurface): { directory: string; attachments: AttachmentStore } {
+  const { recordFiles } = useFileManager();
+  return useMemo(() => {
+    const directory = composerRecordPaths.surfaceAttachments(surface);
+    return { directory, attachments: createAttachmentStore(recordFiles, directory) };
+  }, [recordFiles, surface]);
+}
+
+function useComposerDraftMachine(attachments: AttachmentStore) {
+  return useMemo(() => {
+    return draftMachine.provide({
+      actors: {
+        persistDraftActor: noopPersistDraftActor,
+        persistEditDraftActor: noopPersistEditDraftActor,
+        persistSelectionActor: noopPersistSelectionActor,
+        clearMessageEditActor: noopClearMessageEditActor,
+        storeAttachmentActor: storeAttachmentActorFor(attachments),
+        resizeImageActor,
+      },
+    });
+  }, [attachments]);
+}
 
 // Stable no-op so the `stop` callback identity does not change across
 // composer-provider renders — consumers can safely include it in dep
@@ -174,60 +313,186 @@ const noopStop = (): void => undefined;
  * model/kernel resolvers, a throwaway draft actor, and no-session sentinel
  * values for `status`/`stop`/`contextUsage`/`session`.
  */
-export function ChatComposerProvider({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
-  const draftActorRef = useActorRef(composerDraftMachine, {
-    input: { chatId: undefined },
-    inspect,
-  });
+export function ChatComposerProvider({
+  children,
+  surface,
+}: {
+  readonly children: React.ReactNode;
+  readonly surface: ComposerSurface;
+}): React.JSX.Element {
+  const { directory, attachments } = useSurfaceAttachments(surface);
+  const draftActorRef = useActorRef(useComposerDraftMachine(attachments), { input: {}, inspect });
 
   useDraftImageErrorToast(draftActorRef);
 
-  const model = useCookieModel();
+  const execution = useCookieExecution();
+  const model = useExecutionModel(execution);
   const kernel = useCookieKernel();
+  const owner = useMemo(() => ({ attachments }), [attachments]);
+  const consumeDraft = useConsumeDraft(draftActorRef, owner);
 
   const value = useMemo<ChatComposerContextValue>(
     () => ({
       draftActorRef,
       model,
+      execution,
       kernel,
       status: 'ready',
+      agentActivity: 'ready',
       stop: noopStop,
+      resume: undefined,
+      runElsewhere: undefined,
       contextUsage: undefined,
       session: undefined,
+      canSelectExecution: false,
+      attachmentSource: directory,
+      consumeDraft,
     }),
-    [draftActorRef, model, kernel],
+    [draftActorRef, model, execution, kernel, directory, consumeDraft],
   );
 
   return <ChatComposerContext.Provider value={value}>{children}</ChatComposerContext.Provider>;
 }
 
 /**
- * Session-backed provider. Acquires the live `ChatSession` for `chatId`
- * from the app-shell `ChatSessionStore`, then populates the unified
- * composer contract from chat-row + cookie sources. Mounting this provider
- * implies a session must be acquirable; consumers below it can call
+ * Home-workspace provider for the durable pre-project composer.
+ *
+ * The composer is interactive from the first frame: the record is read by its
+ * own machine, and `recordLoaded` hydrates whatever the user has not touched
+ * yet (D7). There is no loading state to render.
+ */
+export function HomeNewProjectComposerProvider({
+  children,
+}: {
+  readonly children: React.ReactNode;
+}): React.JSX.Element {
+  const { recordFiles } = useFileManager();
+  const store = useMemo(() => createComposerRecordStore(recordFiles, composerRecordPaths.newProject), [recordFiles]);
+  /* Declared before both actors: effect cleanups run in declaration order, so the debounced keystroke
+   * reaches the record while the draft and the record are still running (R9). */
+  const flushDraftOnUnmount = useRef<() => void>(undefined);
+  useEffect(
+    () => () => {
+      flushDraftOnUnmount.current?.();
+    },
+    [],
+  );
+  const recordRef = useComposerRecord(store);
+  useComposerRecordToasts(recordRef);
+  const homeDraftMachine = useMemo(
+    () => draftMachine.provide({ actors: { ...draftPersistenceFor(recordRef, store), resizeImageActor } }),
+    [recordRef, store],
+  );
+  const draftActorRef = useActorRef(homeDraftMachine, { input: {}, inspect });
+  useDraftImageErrorToast(draftActorRef);
+  useEffect(() => {
+    flushDraftOnUnmount.current = () => {
+      draftActorRef.send({ type: 'flushNow' });
+    };
+  }, [draftActorRef]);
+  useFlushOnClose(
+    async () => {
+      draftActorRef.send({ type: 'flushNow' });
+      await waitUnlessGone(draftActorRef, (state) => state.matches({ inputSaving: 'idle' }));
+      await flushRecord(recordRef);
+    },
+    { stage: 'producer' },
+  );
+
+  useEffect(() => {
+    // R2: Home keeps the selectors it renders (tool choice, mode) as a chat record does.
+    const subscription = recordRef.on('recordLoaded', ({ record }) => {
+      draftActorRef.send({ type: 'hydrateDraft', ...draftHydrationOf(record) });
+    });
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [draftActorRef, recordRef]);
+
+  const execution = useHomeExecution(recordRef);
+  const model = useExecutionModel(execution);
+  const kernel = useCookieKernel();
+  const owner = useMemo(() => ({ recordRef, attachments: store.attachments }), [recordRef, store]);
+  const consumeDraft = useConsumeDraft(draftActorRef, owner);
+  const value = useMemo<ChatComposerContextValue>(
+    () => ({
+      draftActorRef,
+      model,
+      execution,
+      kernel,
+      status: 'ready',
+      agentActivity: 'ready',
+      stop: noopStop,
+      resume: undefined,
+      runElsewhere: undefined,
+      contextUsage: undefined,
+      session: undefined,
+      canSelectExecution: true,
+      attachmentSource: undefined,
+      consumeDraft,
+      homeRecordRef: recordRef,
+    }),
+    [consumeDraft, draftActorRef, execution, kernel, model, recordRef],
+  );
+  return <ChatComposerContext.Provider value={value}>{children}</ChatComposerContext.Provider>;
+}
+
+/**
+ * Session-backed provider. Acquires the live `ChatSession` for `chatId` in its
+ * own project from the app-shell `ChatSessionStore`, then populates the unified
+ * composer contract from chat-row + cookie sources. Cold starts wait for acquisition;
+ * same-project switches keep the previous session until the destination is prepared, so panes
+ * stay mounted and consumers below it can call
  * {@link useActiveChatSession} freely.
  */
 export function ActiveChatProvider({
   children,
   chatId,
+  projectId,
 }: {
   readonly children: React.ReactNode;
   readonly chatId: string;
-}): React.JSX.Element {
-  const session = useChatSession(chatId);
+  readonly projectId: string;
+}): React.JSX.Element | undefined {
+  const session = useChatSession(chatId, projectId);
+  if (session === undefined) {
+    return undefined;
+  }
+  return (
+    <ActiveChatSessionProvider chatId={session.chatId} session={session}>
+      <div className='contents' inert={session.chatId !== chatId}>
+        {children}
+      </div>
+    </ActiveChatSessionProvider>
+  );
+}
 
+function ActiveChatSessionProvider({
+  children,
+  chatId,
+  session,
+}: {
+  readonly children: React.ReactNode;
+  readonly chatId: string;
+  readonly session: ChatSession;
+}): React.JSX.Element {
   // Single global toast site for image-resize failures across the chat
   // surface. Mounted at the provider so the 12 image entry points never
   // need their own try/catch around the resize step. See
   // `useDraftImageErrorToast` JSDoc.
   useDraftImageErrorToast(session.draftActorRef);
+  useComposerRecordToasts(session.composerRecordRef);
 
-  const model = useSessionModel(session);
+  const execution = useSessionExecution(session);
+  const model = useExecutionModel(execution);
   const kernel = useSessionKernel(session);
   const status = useSessionStatus(chatId);
+  const agentActivity = useSessionAgentActivity(session);
   const stop = useSessionStop(session);
+  const resume = useSessionResume(session, chatId);
+  const runElsewhere = useSessionRunElsewhere(chatId);
   const contextUsage = useSessionContextUsage(chatId);
+  const consumeDraft = useConsumeDraft(session.draftActorRef);
 
   const sessionValue = useMemo<ActiveChatSessionContextValue>(
     () => ({
@@ -235,21 +500,42 @@ export function ActiveChatProvider({
       chat: session.chat,
       persistenceActorRef: session.persistenceActorRef,
       draftActorRef: session.draftActorRef,
+      composerRecordRef: session.composerRecordRef,
     }),
-    [chatId, session.chat, session.persistenceActorRef, session.draftActorRef],
+    [chatId, session.chat, session.persistenceActorRef, session.draftActorRef, session.composerRecordRef],
   );
 
   const composerValue = useMemo<ChatComposerContextValue>(
     () => ({
       draftActorRef: session.draftActorRef,
       model,
+      execution,
       kernel,
       status,
+      agentActivity,
       stop,
+      resume,
+      runElsewhere,
       contextUsage,
       session: sessionValue,
+      canSelectExecution: true,
+      attachmentSource: undefined,
+      consumeDraft,
     }),
-    [session.draftActorRef, model, kernel, status, stop, contextUsage, sessionValue],
+    [
+      session.draftActorRef,
+      model,
+      execution,
+      kernel,
+      status,
+      agentActivity,
+      stop,
+      resume,
+      runElsewhere,
+      contextUsage,
+      sessionValue,
+      consumeDraft,
+    ],
   );
 
   return (
@@ -300,31 +586,31 @@ export function useActiveChatSession(): ActiveChatSessionContextValue {
 // ---------------------------------------------------------------------------
 
 /**
- * Cookie-only model resolver. Used by `<ChatComposerProvider>` to populate
- * `ChatComposerContextValue.model` without a chat session in scope. Setters
- * write only to the cookie default — there is no chat row to patch.
+ * Cookie-only execution resolver for ephemeral composer surfaces. Those
+ * surfaces do not offer execution selection, so the remembered model and
+ * level on the browser host are the complete contract.
  */
-function useCookieModel(): ActiveChatModel {
-  const { selectedModelId, selectedModel, setSelectedModelId } = useModels();
-  const setActiveModel = useCallback(
-    (next: string) => {
-      setSelectedModelId(next);
-    },
-    [setSelectedModelId],
-  );
-  return useMemo<ActiveChatModel>(
-    () => ({ modelId: selectedModelId, model: selectedModel, setActiveModel }),
-    [selectedModelId, selectedModel, setActiveModel],
+function useCookieExecution(): ActiveChatExecution {
+  const { defaultExecution, rememberExecution } = useModels();
+  return useMemo(
+    () => ({ execution: defaultExecution, setActiveExecution: rememberExecution }),
+    [defaultExecution, rememberExecution],
   );
 }
 
 /**
- * Cookie-only kernel resolver. Same role as {@link useCookieModel} for the
+ * Cookie-only kernel resolver. Same role as {@link useCookieExecution} for the
  * CAD kernel. The cookie boundary is already healed by `useKernel` itself,
  * so the resolved `kernel` is a definite `KernelConfiguration`.
  */
 function useCookieKernel(): ActiveChatKernel {
-  const { kernel: cookieKernel, setKernel: setCookieKernel, selectedKernel: kernel } = useKernel();
+  const {
+    kernel: cookieKernel,
+    setKernel: setCookieKernel,
+    selectedKernel: kernel,
+    preference,
+    setPreference,
+  } = useKernel();
   const setActiveKernel = useCallback(
     (next: KernelId) => {
       setCookieKernel(next);
@@ -332,8 +618,8 @@ function useCookieKernel(): ActiveChatKernel {
     [setCookieKernel],
   );
   return useMemo<ActiveChatKernel>(
-    () => ({ kernelId: cookieKernel, kernel, setActiveKernel }),
-    [cookieKernel, kernel, setActiveKernel],
+    () => ({ kernelId: cookieKernel, kernel, setActiveKernel, preference, setActivePreference: setPreference }),
+    [cookieKernel, kernel, setActiveKernel, preference, setPreference],
   );
 }
 
@@ -342,7 +628,7 @@ function useCookieKernel(): ActiveChatKernel {
 // ---------------------------------------------------------------------------
 
 /**
- * Session-backed model resolver. Prefers `Chat.activeModel` from the
+ * Session-backed model resolver. Prefers the Tau model in `Chat.activeExecution` from the
  * persistence machine; falls back to the cookie default. `setActiveModel`
  * dual-writes (cookie + chat row) so reload preserves the chat-local
  * value and future new chats inherit the most recent choice.
@@ -351,22 +637,109 @@ function useCookieKernel(): ActiveChatKernel {
  * deleted) but is provider-internal: external consumers read
  * `useChatComposer().model` instead.
  */
-function useSessionModel(session: ChatSession): ActiveChatModel {
-  const chatActiveModel = useSelector(session.persistenceActorRef, (state) => state.context.activeModel);
-  const { selectedModelId, selectedModel, setSelectedModelId, resolveModel } = useModels();
-  const modelId = chatActiveModel ?? selectedModelId;
+function useExecutionModel(activeExecution: ActiveChatExecution): ActiveChatModel {
+  const { selectedModelId, selectedModel, resolveModel } = useModels();
+  const modelId = activeExecution.execution.kind === 'tau' ? activeExecution.execution.model : selectedModelId;
   const model = useMemo<ResolvedModel>(
     () => (modelId === selectedModelId ? selectedModel : resolveModel(modelId)),
     [modelId, selectedModel, selectedModelId, resolveModel],
   );
   const setActiveModel = useCallback(
     (next: string) => {
-      setSelectedModelId(next);
-      session.persistenceActorRef.send({ type: 'setActiveModel', model: next });
+      activeExecution.setActiveExecution(withTauExecutionModel(activeExecution.execution, next));
     },
-    [session.persistenceActorRef, setSelectedModelId],
+    [activeExecution],
   );
-  return useMemo<ActiveChatModel>(() => ({ modelId, model, setActiveModel }), [modelId, model, setActiveModel]);
+  /* The chosen level stays on the execution across model changes and is
+   * clamped where it is read, so a detour through a model with fewer levels
+   * does not lose it. */
+  const chosenEffort = activeExecution.execution.kind === 'tau' ? activeExecution.execution.effort : undefined;
+  const effort = effectiveEffort(model.model, chosenEffort);
+  const setActiveEffort = useCallback(
+    (next: ReasoningLevel) => {
+      if (activeExecution.execution.kind === 'tau') {
+        activeExecution.setActiveExecution({ ...activeExecution.execution, effort: next });
+      }
+    },
+    [activeExecution],
+  );
+  return useMemo<ActiveChatModel>(
+    () => ({ modelId, model, setActiveModel, effort, setActiveEffort }),
+    [modelId, model, setActiveModel, effort, setActiveEffort],
+  );
+}
+
+/**
+ * Home execution: the user's choice this mount, else the record's as read,
+ * else the cookie model. A late read never replaces a choice already made.
+ * The record is this device's, so a loopback daemon another tab was handed
+ * is dropped and the new chat runs here.
+ */
+function useHomeExecution(recordRef: ComposerRecordRef): ActiveChatExecution {
+  const { defaultExecution, rememberExecution } = useModels();
+  const stored = useSelector(recordRef, (snapshot) => snapshot.context.record?.execution);
+  const [chosen, setChosen] = useState<CadAgentExecution>();
+  const execution = usePlaceableExecution(chosen ?? stored ?? defaultExecution);
+  const setActiveExecution = useCallback(
+    (next: CadAgentExecution) => {
+      setChosen(next);
+      rememberExecution(next);
+      recordRef.send({ type: 'patch', fields: { execution: next } });
+    },
+    [recordRef, rememberExecution],
+  );
+  return useMemo(() => ({ execution, setActiveExecution }), [execution, setActiveExecution]);
+}
+
+function useConsumeDraft(
+  draftActorRef: ActorRefFrom<typeof draftMachine>,
+  owner?: { readonly attachments: AttachmentStore; readonly recordRef?: ComposerRecordRef },
+): () => Promise<void> {
+  return useCallback(async () => {
+    draftActorRef.send({ type: 'clearDraft' });
+    await waitUnlessGone(draftActorRef, (snapshot) => snapshot.matches({ inputSaving: 'idle' }));
+    if (!owner) {
+      return;
+    }
+    // The hand-off above only queued the patch; wait for the write itself so
+    // the navigation that follows cannot strand it. A failed write keeps
+    // retrying and is reported by the record's toasts.
+    if (owner.recordRef) {
+      await waitUnlessGone(owner.recordRef, (snapshot) => !snapshot.matches({ writes: 'persisting' }));
+    }
+    // Project creation has already copied the draft's bytes into the new chat;
+    // keep only what the draft references now.
+    try {
+      await owner.attachments.retainOnly(draftActorRef.getSnapshot().context.draftAttachments.map(attachmentUrl));
+    } catch (error) {
+      // Ponytail: orphaned draft-stage bytes are reclaimed by the next consume.
+      console.warn('Failed to release draft attachments:', error);
+    }
+  }, [draftActorRef, owner]);
+}
+
+/**
+ * Session execution: the one this device runs the chat on — the chat record's intent with this device's placement
+ * for it — else the device default. A choice goes whole to the device default and to the session, whose persistence
+ * splits it: the portable execution to `chat.json`, a device-relative placement to this device's placements record
+ * (XD2). A placement this tab cannot reach is held, and the chat runs locally.
+ */
+function useSessionExecution(session: ChatSession): ActiveChatExecution {
+  const persisted = useSelector(session.persistenceActorRef, (state) => state.context.activeExecution);
+  const heldPlacement = useSelector(session.persistenceActorRef, (state) => state.context.heldPlacement);
+  const { defaultExecution, rememberExecution } = useModels();
+  const execution = persisted ?? defaultExecution;
+  const setActiveExecution = useCallback(
+    (next: CadAgentExecution) => {
+      rememberExecution(next);
+      session.persistenceActorRef.send({ type: 'setActiveExecution', execution: next });
+    },
+    [session.persistenceActorRef, rememberExecution],
+  );
+  return useMemo(
+    () => ({ execution, setActiveExecution, heldPlacement }),
+    [execution, setActiveExecution, heldPlacement],
+  );
 }
 
 /**
@@ -374,41 +747,203 @@ function useSessionModel(session: ChatSession): ActiveChatModel {
  * The chat-row id is re-validated via {@link isKernelId} so a stale id
  * (e.g. a kernel that was retired from `kernelConfigurations` after the
  * row was persisted) heals to the cookie default instead of resurrecting
- * into the UI.
+ * into the UI. A known kernel this runtime cannot execute also runs the
+ * cookie default, but stays on the chat row and is named as
+ * `unavailableKernel`, so the composer can say which kernel runs and why
+ * (cross-device chat handoff, XD5).
  */
 function useSessionKernel(session: ChatSession): ActiveChatKernel {
   const chatActiveKernel = useSelector(session.persistenceActorRef, (state) => state.context.activeKernel);
-  const { kernel: cookieKernel, setKernel: setCookieKernel } = useKernel();
-  const sessionKernel = isKernelId(chatActiveKernel) ? chatActiveKernel : undefined;
+  const storedPreference = useSelector(session.persistenceActorRef, (state) => state.context.kernelPreference);
+  const { kernel: cookieKernel } = useKernel();
+  const owner = useProjectKernelOwner();
+  const store = useChatSessionStore();
+  /* The row's preference decides, under the legacy-row rule; Auto runs the owner when there is one. */
+  const preference: KernelPreference = chatKernelPreference({
+    stored: storedPreference,
+    legacyKernel: chatActiveKernel,
+    ownerKernel: owner?.kernel,
+  });
+  const chosenKernel = preference === 'auto' ? owner?.kernel : preference;
+  const sessionKernel = chosenKernel !== undefined && isKernelAvailable(chosenKernel) ? chosenKernel : undefined;
   const kernelId: KernelId = sessionKernel ?? cookieKernel;
   const kernel = resolveKernel(kernelId);
+  const unavailableKernelId = sessionKernel === undefined ? chosenKernel : undefined;
+  const ownerKernel = owner?.kernel;
   const setActiveKernel = useCallback(
     (next: KernelId) => {
-      setCookieKernel(next);
       session.persistenceActorRef.send({ type: 'setActiveKernel', kernel: next });
+      session.persistenceActorRef.send({ type: 'setKernelPreference', preference: next });
     },
-    [session.persistenceActorRef, setCookieKernel],
+    [session.persistenceActorRef],
   );
-  return useMemo<ActiveChatKernel>(() => ({ kernelId, kernel, setActiveKernel }), [kernelId, kernel, setActiveKernel]);
+  const setActivePreference = useCallback(
+    (next: KernelPreference) => {
+      if (next === 'auto') {
+        session.persistenceActorRef.send({ type: 'setKernelPreference', preference: 'auto' });
+        return;
+      }
+      /* Override after Auto (blueprint D10): which kernel Auto had bound, which one the person picked. */
+      if (preference === 'auto') {
+        const runs = store.getProjection(session.chatId)?.ledger.runs;
+        reportKernelOverride({
+          resolved: ownerKernel,
+          manual: next,
+          turnsSince: runs === undefined ? 0 : Object.keys(runs).length,
+          /* The page's resolved consent under the one rule (AR-W6-02); no page composition reads as `unknown`. */
+          consent: pageTelemetry()?.consent() ?? 'unknown',
+        });
+      }
+      setActiveKernel(next);
+    },
+    [session.persistenceActorRef, session.chatId, setActiveKernel, preference, ownerKernel, store],
+  );
+  return useMemo<ActiveChatKernel>(
+    () => ({
+      kernelId,
+      kernel,
+      setActiveKernel,
+      preference,
+      setActivePreference,
+      ...(unavailableKernelId === undefined ? {} : { unavailableKernel: resolveKernel(unavailableKernelId) }),
+      ...(ownerKernel === undefined ? {} : { owner: ownerKernel }),
+    }),
+    [kernelId, kernel, setActiveKernel, preference, setActivePreference, unavailableKernelId, ownerKernel],
+  );
 }
 
 /**
- * Live `chat.status` snapshot. Returns `'ready'` while the session is
- * mounting (and as a constant under the composer provider, which does
- * not call this helper).
+ * One visible status for both composer controls: host projection takes precedence when a reattached run outlives the
+ * SDK request. Returns `'ready'` while the session is mounting (and under the composer-only provider).
  */
 function useSessionStatus(chatId: string): ChatInstance['status'] {
-  return useChatSessionSnapshot(chatId, (s) => s?.chat.status ?? 'ready');
+  const sdkStatus = useChatSessionSnapshot(chatId, (s) => s?.chat.status ?? 'ready');
+  const store = useChatSessionStore();
+  const subscribe = useCallback((listener: () => void) => store.subscribeProjection(chatId, listener), [chatId, store]);
+  const snapshot = useCallback(() => store.getProjection(chatId), [chatId, store]);
+  const projection = useSyncExternalStore(subscribe, snapshot, snapshot);
+  return selectVisibleChatStatus(sdkStatus, projection);
 }
 
 /**
- * Stable `stop()` callback that dispatches `stopRequest` to the
- * persistence machine for the active session.
+ * What the chat's agent is doing, as the composer names it: a select over the chat's machine, whose run and approvals
+ * come from its log's projection (PV-S7, D12), and the request's stop. No transcript scan and no SDK status.
  */
-function useSessionStop(session: ChatSession): () => void {
-  return useCallback(() => {
-    session.persistenceActorRef.send({ type: 'stopRequest' });
-  }, [session.persistenceActorRef]);
+function useSessionAgentActivity(session: ChatSession): ChatAgentActivity {
+  const approvalRequired = useSelector(session.stateActorRef, (snapshot) => snapshot.context.pendingApprovalCount > 0);
+  /* A paused run waits for the person, so the composer is theirs. */
+  const working = useSelector(
+    session.stateActorRef,
+    (snapshot) =>
+      snapshot.matches({ run: 'queued' }) ||
+      (snapshot.matches({ run: 'running' }) && !snapshot.matches({ run: { running: 'waiting' } })),
+  );
+  const store = useChatSessionStore();
+  const subscribeStop = useCallback(
+    (listener: () => void) => store.subscribeChat(session.chatId, listener),
+    [session.chatId, store],
+  );
+  const readStop = useCallback(() => store.isStopping(session.chatId), [session.chatId, store]);
+  const stopping = useSyncExternalStore(subscribeStop, readStop, readStop);
+  if (approvalRequired) {
+    return 'approval-required';
+  }
+  if (stopping) {
+    return 'stopping';
+  }
+  return working ? 'working' : 'ready';
+}
+
+/**
+ * Stable `stop()` callback for the active session's projected host run.
+ */
+function useSessionStop(session: ChatSession): (origin: StopOrigin) => void {
+  const store = useChatSessionStore();
+  return useCallback(
+    (origin: StopOrigin) => {
+      store.stopRun(session.chatId, origin);
+    },
+    [session.chatId, store],
+  );
+}
+
+/** Offer Resume only for a settled, resumable host failure. */
+function useSessionResume(session: ChatSession, chatId: string): (() => void) | undefined {
+  const store = useChatSessionStore();
+  const subscribe = useCallback((listener: () => void) => store.subscribeProjection(chatId, listener), [chatId, store]);
+  const snapshot = useCallback(() => store.getProjection(chatId), [chatId, store]);
+  const projection = useSyncExternalStore(subscribe, snapshot, snapshot);
+  const turn = useSelector(session.stateActorRef, (state) => state.context.turn);
+  const persistence = useSelector(session.persistenceActorRef, (state) => state);
+  const canResume = (current = projection): boolean => {
+    const run = current !== undefined && selectCaughtUp(current) ? selectCurrentRun(current) : undefined;
+    return (
+      isResumableRun(run) &&
+      turn === undefined &&
+      persistence.matches({ requestLifecycle: 'idle', chatLoading: 'idle' }) &&
+      !persistence.context.isLoadingChat &&
+      session.chat.status !== 'submitted' &&
+      session.chat.status !== 'streaming'
+    );
+  };
+  const resume = useCallback(() => {
+    const current = store.getProjection(chatId);
+    const run = current !== undefined && selectCaughtUp(current) ? selectCurrentRun(current) : undefined;
+    if (
+      !isResumableRun(run) ||
+      session.stateActorRef.getSnapshot().context.turn !== undefined ||
+      !session.persistenceActorRef.getSnapshot().matches({ requestLifecycle: 'idle', chatLoading: 'idle' })
+    ) {
+      return;
+    }
+    void store.touchChatRecency(chatId, Date.now());
+    void store.requestTurn(chatId, { kind: 'continue' });
+  }, [chatId, session, store]);
+  return canResume() ? resume : undefined;
+}
+
+/**
+ * The run another device holds this chat with, kept current (XD3), by `subscribeRunElsewhere`'s clock.
+ */
+function useSessionRunElsewhere(chatId: string): ForeignRun | undefined {
+  const store = useChatSessionStore();
+  const subscribe = useCallback(
+    (listener: () => void) => subscribeRunElsewhere(store, chatId, listener),
+    [chatId, store],
+  );
+  /* Stable for one held run: the selector returns the run object the projection holds. */
+  const snapshot = useCallback(() => {
+    const projection = store.getProjection(chatId);
+    return projection === undefined ? undefined : selectRunElsewhere(projection, Date.now());
+  }, [chatId, store]);
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
+}
+
+/**
+ * The automatic resume the active chat's machine is waiting out (audit R5), for its failure card to show: the store
+ * offers it and the machine holds the wait, so the card only presents it.
+ *
+ * @returns The wait in hand, or `undefined`.
+ * @public
+ */
+export function useChatAutoResume(): AutoResumePlan | undefined {
+  const { activeChatId } = useActiveChatSession();
+  const store = useChatSessionStore();
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      const subscription = store.get(activeChatId)?.stateActorRef.subscribe(listener);
+      return () => {
+        subscription?.unsubscribe();
+      };
+    },
+    [activeChatId, store],
+  );
+  const snapshot = useCallback(() => {
+    const state = store.get(activeChatId)?.stateActorRef.getSnapshot();
+    // The plan is read only inside the region that holds it (MC-R26's intent, without per-state context).
+    return state === undefined || state.matches({ autoResume: 'idle' }) ? undefined : state.context.autoResume;
+  }, [activeChatId, store]);
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
 }
 
 /**

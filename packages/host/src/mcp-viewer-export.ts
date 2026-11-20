@@ -1,0 +1,349 @@
+/**
+ * The viewer page's Export pane, server half (agent plugin viewer parity blueprint V9).
+ *
+ * The page has no kernel: it exports through `export_model`, which writes under `.tau/artifacts`. This module answers
+ * the three things `export_model` does not: which formats the entry's kernel offers with their option and content
+ * schemas (the same capability routes the Tau app reads from its in-browser runtime), copying finished artifacts into
+ * the project's `exports/` folder so they are real deliverables, and reading an artifact's bytes in ranges for a
+ * browser download on the loopback page. Every path is checked against the project folder: artifacts are read only from
+ * `.tau/artifacts`, and deliverables are written only under `exports/`.
+ */
+
+import { copyFile, mkdir, stat } from 'node:fs/promises';
+import { dirname, isAbsolute, relative, resolve as resolvePath, sep } from 'node:path';
+
+import { z } from 'zod';
+
+import type { TauMcpViewerFailure } from '@taucad/mcp';
+import type { RuntimeContentInput } from '@taucad/runtime';
+import type { JSONSchema7 } from '@taucad/runtime/types';
+import { tauViewerReadEncodings, tauViewerReadLimit } from '@taucad/mcp/viewer-protocol';
+import type { TauViewerReadResult } from '@taucad/mcp/viewer-protocol';
+
+import { readModelRange } from '#mcp-viewer-read.js';
+
+/** Tool names the page calls; every one is app-only (`visibility: ['app']`). */
+export const viewerExportToolName = {
+  /** The entry's export formats and their option schemas. */
+  formats: 'app_export_formats',
+  /** Copy finished artifacts into the project's `exports/`. */
+  save: 'app_save_export',
+  /** Read a byte range of a finished artifact, for a download. */
+  readArtifact: 'app_read_artifact',
+} as const;
+
+/** The project folder deliverables go to. */
+const exportsFolder = 'exports';
+
+/** The folder `export_model` writes artifacts to. */
+const artifactsFolder = '.tau/artifacts';
+
+const modelIdSchema = z
+  .string()
+  .min(1)
+  .optional()
+  .describe('The shown model the page names; the server finds the project folder from it.');
+
+/** Input of `app_export_formats`. */
+export const viewerExportFormatsInputSchema = z
+  .object({
+    modelId: modelIdSchema,
+    targetFile: z.string().min(1).describe('Project-relative CAD source file.'),
+  })
+  .strict();
+
+/** Input of `app_save_export`. */
+export const viewerSaveExportInputSchema = z
+  .object({
+    modelId: modelIdSchema,
+    directory: z.string().min(1).describe('Project folder under exports/, such as exports or exports/stl.'),
+    files: z
+      .array(
+        z
+          .object({
+            artifactPath: z.string().min(1).describe('A file export_model wrote under .tau/artifacts/.'),
+            name: z.string().min(1).describe('The relative name export_model gave the file.'),
+          })
+          .strict(),
+      )
+      .min(1),
+  })
+  .strict();
+
+/** Input of `app_read_artifact`. */
+export const viewerReadArtifactInputSchema = z
+  .object({
+    modelId: modelIdSchema,
+    artifactPath: z.string().min(1).describe('A file export_model wrote under .tau/artifacts/.'),
+    offset: z.number().int().nonnegative(),
+    length: z.number().int().positive(),
+    encodings: z
+      .array(z.enum(tauViewerReadEncodings))
+      .max(4)
+      .optional()
+      .describe('Encodings the page can undo; the server uses one only when it makes the reply smaller.'),
+  })
+  .strict();
+
+/** One option schema and its defaults, as a route publishes them. */
+export type ViewerExportSchema = Readonly<{
+  schema: Readonly<Record<string, unknown>>;
+  defaults: Record<string, unknown>;
+}>;
+
+/** One format the entry's kernel offers, reduced to its best route. */
+export type ViewerExportFormat = Readonly<{
+  format: string;
+  fidelity: 'brep' | 'mesh';
+  /** Whether the kernel writes the format itself rather than through a transcoder. */
+  direct: boolean;
+  /** `kernel` or `kernel+transcoder`. */
+  provider: string;
+  /** Framework content the route can carry, such as `includeTopology`. `export_model` passes these as `content`. */
+  content?: ViewerExportSchema;
+  /** The route's own options, when it declares any. `export_model` passes these as `options`. */
+  exportOptions?: ViewerExportSchema;
+}>;
+
+/** Result of `app_export_formats`. */
+export type ViewerExportFormatsResult = Readonly<{
+  kernelId: string;
+  formats: ViewerExportFormat[];
+}>;
+
+/** Result of `app_save_export`. */
+export type ViewerSaveExportResult = Readonly<{
+  files: Array<Readonly<{ path: string; byteLength: number }>>;
+}>;
+
+/** One export route of the runtime's capability manifest, as far as listing needs it. */
+export type ViewerExportRoute = Readonly<{
+  targetFormat: string;
+  kernelId: string;
+  transcoderId?: string | undefined;
+  fidelity: 'brep' | 'mesh';
+  exportOptions: Readonly<{ schema: JSONSchema7; defaults: unknown }>;
+  /** The framework content the route can carry, such as `includeTopology`; absent when it carries none. */
+  content?: Readonly<{ schema: JSONSchema7 }> | undefined;
+}>;
+
+/** The part of the project runtime listing needs; the project's `RuntimeClient` satisfies it. */
+export type ViewerExportRuntime = Readonly<{
+  capabilities: Readonly<{ routes: readonly ViewerExportRoute[] }> | undefined;
+  /** The route the runtime takes for a format (`RuntimeClient.bestRouteFor`): BREP before mesh, direct before transcoded. */
+  bestRouteFor(
+    format: string,
+    options?: { kernelId?: string; content?: RuntimeContentInput },
+  ): ViewerExportRoute | undefined;
+  connect(): Promise<void>;
+  describe(input: {
+    source: { path: string };
+    signal?: AbortSignal;
+  }): Promise<Readonly<{ kernelId?: string | undefined }>>;
+}>;
+
+/** What {@link createMcpViewerExport} needs from the server. */
+export type McpViewerExportOptions = Readonly<{
+  /** The runtime the registry's `export_model` uses for this project folder. */
+  runtimeFor(root: string): Promise<ViewerExportRuntime>;
+}>;
+
+/** The page's export handlers, each given the project folder its call resolved to. */
+export type McpViewerExport = Readonly<{
+  formats(
+    root: string,
+    input: z.infer<typeof viewerExportFormatsInputSchema>,
+    signal?: AbortSignal,
+  ): Promise<ViewerExportFormatsResult | TauMcpViewerFailure>;
+  save(
+    root: string,
+    input: z.infer<typeof viewerSaveExportInputSchema>,
+  ): Promise<ViewerSaveExportResult | TauMcpViewerFailure>;
+  readArtifact(
+    root: string,
+    input: z.infer<typeof viewerReadArtifactInputSchema>,
+  ): Promise<TauViewerReadResult | TauMcpViewerFailure>;
+}>;
+
+const failure = (errorCode: string, message: string): TauMcpViewerFailure => ({
+  errorCode,
+  message,
+});
+
+/**
+ * An absolute path under `base`, or `undefined` when it leaves it.
+ *
+ * @param base - The absolute folder the path must stay in.
+ * @param path - Relative to `from`.
+ * @param options - Where the path is relative to (default `base`), and whether `base` itself is admitted.
+ * @returns The absolute path.
+ */
+const within = (
+  base: string,
+  path: string,
+  { from = base, orSelf = false }: Readonly<{ from?: string; orSelf?: boolean }> = {},
+): string | undefined => {
+  if (isAbsolute(path)) {
+    return undefined;
+  }
+  const absolute = resolvePath(from, path);
+  const fromBase = relative(base, absolute);
+  if (fromBase === '') {
+    return orSelf ? absolute : undefined;
+  }
+  return fromBase.startsWith('..') || isAbsolute(fromBase) ? undefined : absolute;
+};
+
+const posix = (path: string): string => path.split(sep).join('/');
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const schemaOf = (capability: Readonly<{ schema: JSONSchema7; defaults?: unknown }>): ViewerExportSchema => ({
+  schema: { ...capability.schema },
+  defaults: isRecord(capability.defaults) ? { ...capability.defaults } : {},
+});
+
+/**
+ * The formats one kernel offers, each on the route the runtime takes for it (`bestRouteFor`), sorted by format: the
+ * list the Tau app derives from the same manifest in the browser.
+ *
+ * @param runtime - The project's runtime.
+ * @param kernelId - The entry's kernel.
+ * @returns One entry per format the kernel reaches, sorted by format name.
+ */
+export const listKernelExportFormats = (
+  runtime: Pick<ViewerExportRuntime, 'capabilities' | 'bestRouteFor'>,
+  kernelId: string,
+): ViewerExportFormat[] => {
+  const formats = new Set(
+    (runtime.capabilities?.routes ?? [])
+      .filter((route) => route.kernelId === kernelId)
+      .map(({ targetFormat }) => targetFormat),
+  );
+  return [...formats]
+    .toSorted((left, right) => left.localeCompare(right))
+    .flatMap((format): ViewerExportFormat[] => {
+      const route = runtime.bestRouteFor(format, { kernelId });
+      if (route === undefined) {
+        return [];
+      }
+      const { transcoderId, exportOptions, content } = route;
+      return [
+        {
+          format,
+          fidelity: route.fidelity,
+          direct: transcoderId === undefined,
+          provider: transcoderId === undefined ? route.kernelId : `${route.kernelId}+${transcoderId}`,
+          ...(content === undefined ? {} : { content: schemaOf(content) }),
+          ...(Object.keys(exportOptions.schema).length > 0 ? { exportOptions: schemaOf(exportOptions) } : {}),
+        },
+      ];
+    });
+};
+
+/**
+ * The kernel the runtime resolves an entry to.
+ *
+ * @param runtime - The project's runtime.
+ * @param targetFile - Project-relative CAD source file.
+ * @param signal - Cancels the description.
+ * @returns The kernel, or `undefined` when no kernel takes the file.
+ */
+const kernelOf = async (
+  runtime: ViewerExportRuntime,
+  targetFile: string,
+  signal: AbortSignal | undefined,
+): Promise<string | undefined> => {
+  await runtime.connect();
+  const { kernelId } = await runtime.describe({
+    source: { path: targetFile },
+    ...(signal ? { signal } : {}),
+  });
+  return kernelId;
+};
+
+/**
+ * Create the page's export handlers.
+ *
+ * @param options - How to reach the project's runtime.
+ * @returns The handlers.
+ */
+export const createMcpViewerExport = (options: McpViewerExportOptions): McpViewerExport => ({
+  async formats(root, { targetFile }, signal) {
+    if (within(root, targetFile) === undefined) {
+      return failure('PATH_OUTSIDE_PROJECT', `${targetFile} is outside the project ${root}.`);
+    }
+    try {
+      const runtime = await options.runtimeFor(root);
+      const kernelId = await kernelOf(runtime, targetFile, signal);
+      if (kernelId === undefined) {
+        return failure('NO_KERNEL', `No kernel exports ${targetFile}.`);
+      }
+      return {
+        kernelId,
+        formats: listKernelExportFormats(runtime, kernelId),
+      };
+    } catch (error) {
+      return failure('FORMATS_UNAVAILABLE', error instanceof Error ? error.message : String(error));
+    }
+  },
+
+  async save(root, { directory, files }) {
+    const folder = within(resolvePath(root, exportsFolder), directory, {
+      from: root,
+      orSelf: true,
+    });
+    if (folder === undefined) {
+      return failure('PATH_OUTSIDE_EXPORTS', `${directory} is not under ${exportsFolder}/.`);
+    }
+    const copies: Array<{ from: string; to: string }> = [];
+    for (const { artifactPath, name } of files) {
+      const from = within(resolvePath(root, artifactsFolder), artifactPath, {
+        from: root,
+      });
+      if (from === undefined) {
+        return failure('NOT_AN_ARTIFACT', `${artifactPath} is not under ${artifactsFolder}/.`);
+      }
+      const to = within(folder, name);
+      if (to === undefined) {
+        return failure('PATH_OUTSIDE_EXPORTS', `${name} leaves ${directory}.`);
+      }
+      copies.push({ from, to });
+    }
+    const saved: Array<{ path: string; byteLength: number }> = [];
+    try {
+      for (const { from, to } of copies) {
+        // oxlint-disable-next-line no-await-in-loop -- one file at a time, so a failure names the file it stopped at.
+        await mkdir(dirname(to), { recursive: true });
+        // oxlint-disable-next-line no-await-in-loop -- as above.
+        await copyFile(from, to);
+        // oxlint-disable-next-line no-await-in-loop -- as above.
+        const { size } = await stat(to);
+        saved.push({ path: posix(relative(root, to)), byteLength: size });
+      }
+    } catch (error) {
+      return failure('SAVE_FAILED', error instanceof Error ? error.message : String(error));
+    }
+    return { files: saved };
+  },
+
+  async readArtifact(root, { artifactPath, offset, length, encodings }) {
+    const absolutePath = within(resolvePath(root, artifactsFolder), artifactPath, { from: root });
+    if (absolutePath === undefined) {
+      return failure('NOT_AN_ARTIFACT', `${artifactPath} is not under ${artifactsFolder}/.`);
+    }
+    const stats = await stat(absolutePath).catch(() => undefined);
+    if (stats?.isFile() !== true) {
+      return failure('NOT_FOUND', `${artifactPath} does not exist.`);
+    }
+    const result = await readModelRange({
+      absolutePath,
+      identity: { size: stats.size, mtimeMs: stats.mtimeMs, ino: stats.ino },
+      offset,
+      length: Math.min(length, tauViewerReadLimit),
+      encodings,
+    });
+    return 'refused' in result ? failure('ARTIFACT_CHANGED', `${artifactPath} changed while it was read.`) : result;
+  },
+});

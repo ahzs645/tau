@@ -1,15 +1,28 @@
 // @vitest-environment node
-/* eslint-disable @typescript-eslint/naming-convention -- test data uses filenames as object keys */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createActor, waitFor } from 'xstate';
 import { mock } from 'vitest-mock-extended';
-import type { RuntimeClientOptions } from '@taucad/runtime';
-import { createMockRuntimeClient } from '@taucad/runtime/testing';
-import { fromSafeAsync } from '#lib/xstate.lib.js';
-import { stopRootWithRehydration } from '#lib/xstate-test.utils.js';
+import { createMockRuntimeClient, createMockRuntimeDocument } from '@taucad/runtime-testing';
+import { fromSafeAsync } from '@taucad/ui-core/lib/xstate.lib';
+import { strictModeRemount } from '@taucad/ui-core/lib/xstate-test.utils';
 import { cadMachine } from '#machines/cad.machine.js';
 import { cadPreviewMachine } from '#machines/cad-preview.machine.js';
 import type { PrepareFilesInput } from '#machines/cad-preview.machine.js';
+import type { KernelOptionsFactory, LazyKernelOptionsFactory } from '#types/runtime-client.alias.js';
+
+const createMockAppRuntimeClient = () => {
+  const client = createMockRuntimeClient();
+  vi.mocked(client.open).mockReturnValue(createMockRuntimeDocument().document);
+  return client;
+};
+
+const createKernelOptionsFactory = (): LazyKernelOptionsFactory => async () => () =>
+  mock<ReturnType<KernelOptionsFactory>>({
+    config: {
+      tauApiUrl: 'https://api.test',
+      tauWebSocketUrl: 'wss://api.test',
+    },
+  });
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -20,8 +33,8 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     vi.restoreAllMocks();
   });
 
-  it('should send initializeModel to cadRef after prepareFiles completes', async () => {
-    const mockClient = createMockRuntimeClient();
+  it('should render the first frame with the initial parameters', async () => {
+    const mockClient = createMockAppRuntimeClient();
 
     const providedCadMachine = cadMachine.provide({
       actors: {
@@ -38,7 +51,8 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadRef = createActor(providedCadMachine, {
       input: {
         shouldInitializeKernelOnStart: false,
-        kernelOptionsFactory: async () => () => mock<RuntimeClientOptions>(),
+        fileSystemRoot: '/projects/test',
+        kernelOptionsFactory: createKernelOptionsFactory(),
       },
     });
 
@@ -70,18 +84,106 @@ describe('cadPreviewMachine + cadMachine integration', () => {
       setTimeout(resolve, 0);
     });
 
-    expect(mockClient.openFile).toHaveBeenCalledWith({
-      file: { path: '/projects/proj_test', filename: 'main.ts' },
+    expect(mockClient.open).toHaveBeenCalledWith({
+      source: { path: 'main.ts' },
+      watch: true,
       parameters: { width: 42 },
     });
-    expect(mockClient.updateParameters).toHaveBeenCalledWith({ width: 42 });
 
     cadRef.stop();
     previewRef.stop();
   });
 
-  it('should send initializeModel after Strict Mode stopRootWithRehydration cycle', async () => {
-    const mockClient = createMockRuntimeClient();
+  it('updates preview parameters on the same watched document without reopening', async () => {
+    const mockClient = createMockAppRuntimeClient();
+    const runtime = createMockRuntimeDocument();
+    vi.mocked(mockClient.open).mockReturnValue(runtime.document);
+    const cadRef = createActor(
+      cadMachine.provide({
+        actors: {
+          connectKernelActor: fromSafeAsync(
+            async () =>
+              ({
+                type: 'kernelConnected',
+                client: mockClient,
+                cleanups: [] as Array<() => void>,
+              }) as const,
+          ),
+        },
+      }),
+      {
+        input: {
+          shouldInitializeKernelOnStart: false,
+          fileSystemRoot: '/previews/test',
+          kernelOptionsFactory: createKernelOptionsFactory(),
+        },
+      },
+    );
+    const previewRef = createActor(
+      cadPreviewMachine.provide({ actors: { prepareFiles: fromSafeAsync(async () => undefined) } }),
+      { input: { cadRef, projectId: 'proj_test', mainFile: 'main.ts' } },
+    );
+    cadRef.start();
+    previewRef.start();
+    previewRef.send({ type: 'start' });
+    await waitFor(previewRef, (state) => state.value === 'active');
+    await vi.waitFor(() => {
+      expect(mockClient.open).toHaveBeenCalledOnce();
+    });
+    previewRef.send({ type: 'setParameters', parameters: { width: 42 } });
+    await vi.waitFor(() => {
+      expect(runtime.document.update).toHaveBeenCalledWith({ parameters: { width: 42 } });
+    });
+    expect(mockClient.open).toHaveBeenCalledOnce();
+    expect(previewRef.getSnapshot().context.parameters).toEqual({ width: 42 });
+    cadRef.stop();
+    previewRef.stop();
+  });
+
+  it('should forward the preview stage on the first render', async () => {
+    const mockClient = createMockAppRuntimeClient();
+    const cadRef = createActor(
+      cadMachine.provide({
+        actors: {
+          connectKernelActor: fromSafeAsync(async () => ({
+            type: 'kernelConnected',
+            client: mockClient,
+            cleanups: [] as Array<() => void>,
+          })),
+        },
+      }),
+      {
+        input: {
+          shouldInitializeKernelOnStart: false,
+          fileSystemRoot: '/previews/test',
+          kernelOptionsFactory: createKernelOptionsFactory(),
+        },
+      },
+    );
+    const stage = { 'main.ts': new Uint8Array([1, 2, 3]) };
+    const previewRef = createActor(
+      cadPreviewMachine.provide({ actors: { prepareFiles: fromSafeAsync(async () => undefined) } }),
+      { input: { cadRef, projectId: 'proj_test', mainFile: 'main.ts', stage } },
+    );
+
+    cadRef.start();
+    previewRef.start();
+    previewRef.send({ type: 'start' });
+
+    await vi.waitFor(() => {
+      expect(mockClient.open).toHaveBeenCalledWith({
+        source: { path: 'main.ts' },
+        watch: true,
+        stage,
+      });
+    });
+
+    cadRef.stop();
+    previewRef.stop();
+  });
+
+  it('should send initializeModel after a Strict Mode re-mount', async () => {
+    const mockClient = createMockAppRuntimeClient();
     let connectDelay = 50;
 
     const providedCadMachine = cadMachine.provide({
@@ -102,7 +204,8 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadRef = createActor(providedCadMachine, {
       input: {
         shouldInitializeKernelOnStart: false,
-        kernelOptionsFactory: async () => () => mock<RuntimeClientOptions>(),
+        fileSystemRoot: '/projects/test',
+        kernelOptionsFactory: createKernelOptionsFactory(),
       },
     });
 
@@ -135,8 +238,8 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     });
 
     // --- Strict Mode cleanup phase (same order as React useEffect cleanup) ---
-    stopRootWithRehydration(cadRef);
-    stopRootWithRehydration(previewRef);
+    strictModeRemount(cadRef);
+    strictModeRemount(previewRef);
 
     // --- Strict Mode re-mount phase ---
     connectDelay = 50; // Fresh connection delay for the restart
@@ -153,19 +256,19 @@ describe('cadPreviewMachine + cadMachine integration', () => {
 
     const cadSnapshot = cadRef.getSnapshot();
     expect(cadSnapshot.value).toBe('idle');
-    expect(cadSnapshot.context.file).toEqual({ path: '/projects/proj_test', filename: 'main.ts' });
-    expect(mockClient.openFile).toHaveBeenCalledWith({
-      file: { path: '/projects/proj_test', filename: 'main.ts' },
+    expect(cadSnapshot.context.entryPath).toBe('main.ts');
+    expect(mockClient.open).toHaveBeenCalledWith({
+      source: { path: 'main.ts' },
+      watch: true,
       parameters: { width: 42 },
     });
-    expect(mockClient.updateParameters).toHaveBeenCalledWith({ width: 42 });
 
     cadRef.stop();
     previewRef.stop();
   });
 
   it('should handle prepareFiles completing after cadRef connects', async () => {
-    const mockClient = createMockRuntimeClient();
+    const mockClient = createMockAppRuntimeClient();
 
     const providedCadMachine = cadMachine.provide({
       actors: {
@@ -182,7 +285,8 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadRef = createActor(providedCadMachine, {
       input: {
         shouldInitializeKernelOnStart: false,
-        kernelOptionsFactory: async () => () => mock<RuntimeClientOptions>(),
+        fileSystemRoot: '/projects/test',
+        kernelOptionsFactory: createKernelOptionsFactory(),
       },
     });
 
@@ -218,8 +322,8 @@ describe('cadPreviewMachine + cadMachine integration', () => {
       setTimeout(resolve, 10);
     });
 
-    stopRootWithRehydration(cadRef);
-    stopRootWithRehydration(previewRef);
+    strictModeRemount(cadRef);
+    strictModeRemount(previewRef);
 
     cadRef.start();
     previewRef.start();
@@ -227,16 +331,16 @@ describe('cadPreviewMachine + cadMachine integration', () => {
 
     // CadRef connects first (fast mock)
     await waitFor(cadRef, (s) => s.value === 'idle', { timeout: 5000 });
-    expect(cadRef.getSnapshot().context.file).toBeUndefined();
+    expect(cadRef.getSnapshot().context.entryPath).toBeUndefined();
 
     // Then prepareFiles completes
     resolvePrepareFiles();
     await waitFor(previewRef, (s) => s.value === 'active', { timeout: 5000 });
 
     // InitializeModel should have been sent to cadRef (now in idle)
-    expect(mockClient.openFile).toHaveBeenCalledWith({
-      file: { path: '/projects/proj_test', filename: 'main.ts' },
-      parameters: {},
+    expect(mockClient.open).toHaveBeenCalledWith({
+      source: { path: 'main.ts' },
+      watch: true,
     });
 
     cadRef.stop();
@@ -244,7 +348,7 @@ describe('cadPreviewMachine + cadMachine integration', () => {
   });
 
   it('should handle slow prepareFiles with abort during Strict Mode', async () => {
-    const mockClient = createMockRuntimeClient();
+    const mockClient = createMockAppRuntimeClient();
     let connectDelay = 100;
 
     const providedCadMachine = cadMachine.provide({
@@ -265,7 +369,8 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadRef = createActor(providedCadMachine, {
       input: {
         shouldInitializeKernelOnStart: false,
-        kernelOptionsFactory: async () => () => mock<RuntimeClientOptions>(),
+        fileSystemRoot: '/projects/test',
+        kernelOptionsFactory: createKernelOptionsFactory(),
       },
     });
 
@@ -309,8 +414,8 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     expect(previewRef.getSnapshot().value).toBe('preparingFiles');
 
     // --- Strict Mode cleanup (cadRef first, then previewRef — same as React) ---
-    stopRootWithRehydration(cadRef);
-    stopRootWithRehydration(previewRef);
+    strictModeRemount(cadRef);
+    strictModeRemount(previewRef);
 
     // --- Re-mount ---
     connectDelay = 100;
@@ -327,19 +432,19 @@ describe('cadPreviewMachine + cadMachine integration', () => {
 
     const cadSnapshot = cadRef.getSnapshot();
     expect(cadSnapshot.value).toBe('idle');
-    expect(cadSnapshot.context.file).toEqual({ path: '/projects/proj_test', filename: 'main.ts' });
-    expect(mockClient.openFile).toHaveBeenCalledWith({
-      file: { path: '/projects/proj_test', filename: 'main.ts' },
+    expect(cadSnapshot.context.entryPath).toBe('main.ts');
+    expect(mockClient.open).toHaveBeenCalledWith({
+      source: { path: 'main.ts' },
+      watch: true,
       parameters: { width: 42 },
     });
-    expect(mockClient.updateParameters).toHaveBeenCalledWith({ width: 42 });
 
     cadRef.stop();
     previewRef.stop();
   });
 
   it('should not fail with detached ArrayBuffer when zombie prepareFiles transfers file content', async () => {
-    const mockClient = createMockRuntimeClient();
+    const mockClient = createMockAppRuntimeClient();
     let connectDelay = 100;
 
     const providedCadMachine = cadMachine.provide({
@@ -360,7 +465,8 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadRef = createActor(providedCadMachine, {
       input: {
         shouldInitializeKernelOnStart: false,
-        kernelOptionsFactory: async () => () => mock<RuntimeClientOptions>(),
+        fileSystemRoot: '/projects/test',
+        kernelOptionsFactory: createKernelOptionsFactory(),
       },
     });
 
@@ -430,8 +536,8 @@ describe('cadPreviewMachine + cadMachine integration', () => {
 
     // --- Strict Mode cleanup ---
     // Signal is aborted, but P1 is still awaiting exists() (needs 30ms, only 10ms passed)
-    stopRootWithRehydration(cadRef);
-    stopRootWithRehydration(previewRef);
+    strictModeRemount(cadRef);
+    strictModeRemount(previewRef);
 
     // --- Re-mount ---
     connectDelay = 100;
@@ -457,19 +563,19 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     expect(previewRef.getSnapshot().context.initError).toBeUndefined();
 
     // CadRef should have the file and parameters sent directly to kernel
-    expect(cadRef.getSnapshot().context.file).toEqual({ path: '/projects/proj_test', filename: 'main.ts' });
-    expect(mockClient.openFile).toHaveBeenCalledWith({
-      file: { path: '/projects/proj_test', filename: 'main.ts' },
+    expect(cadRef.getSnapshot().context.entryPath).toBe('main.ts');
+    expect(mockClient.open).toHaveBeenCalledWith({
+      source: { path: 'main.ts' },
+      watch: true,
       parameters: { width: 42 },
     });
-    expect(mockClient.updateParameters).toHaveBeenCalledWith({ width: 42 });
 
     cadRef.stop();
     previewRef.stop();
   });
 
   it('should handle zombie prepareFiles natively with fromSafeAsync (no manual abort handling needed)', async () => {
-    const mockClient = createMockRuntimeClient();
+    const mockClient = createMockAppRuntimeClient();
 
     const providedCadMachine = cadMachine.provide({
       actors: {
@@ -486,7 +592,8 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadRef = createActor(providedCadMachine, {
       input: {
         shouldInitializeKernelOnStart: false,
-        kernelOptionsFactory: async () => () => mock<RuntimeClientOptions>(),
+        fileSystemRoot: '/projects/test',
+        kernelOptionsFactory: createKernelOptionsFactory(),
       },
     });
 
@@ -526,8 +633,8 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     });
 
     // --- Strict Mode cleanup ---
-    stopRootWithRehydration(cadRef);
-    stopRootWithRehydration(previewRef);
+    strictModeRemount(cadRef);
+    strictModeRemount(previewRef);
 
     // --- Re-mount ---
     cadRef.start();
@@ -549,7 +656,7 @@ describe('cadPreviewMachine + cadMachine integration', () => {
 
     // After Strict Mode, cadRef should have the file (from the re-mounted prepareFiles)
     await waitFor(previewRef, (s) => s.value === 'active', { timeout: 5000 });
-    expect(cadRef.getSnapshot().context.file).toEqual({ path: '/projects/proj_test', filename: 'main.ts' });
+    expect(cadRef.getSnapshot().context.entryPath).toBe('main.ts');
 
     cadRef.stop();
     previewRef.stop();

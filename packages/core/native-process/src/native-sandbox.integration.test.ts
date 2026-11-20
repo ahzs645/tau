@@ -1,0 +1,474 @@
+// @vitest-environment node
+/**
+ * The shared spawn seam against the real operating-system sandbox.
+ *
+ * A Node script stands in for a native worker so the proof needs no kernel payload:
+ * it answers one request with the outcome of each escape attempt. Runs only where the
+ * platform sandbox and its dependencies are present; the product itself fails closed
+ * on such a host, so a skip here never hides a broken boundary in a packaged build.
+ */
+import { spawnSync } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+
+import { SandboxManager } from '@anthropic-ai/sandbox-runtime';
+import { createMockLogger } from '@taucad/runtime-testing';
+import { describe, expect, it } from 'vitest';
+
+import {
+  installNativeWorkerLauncher,
+  launchInNativeSandbox,
+  NativeProcessSession,
+  nativeSandboxPolicy,
+  runInNativeSandbox,
+  startNativeWorker,
+} from '#index.js';
+import { linuxChildrenTree } from '@taucad/sandbox';
+
+const writeRuleBlocks = /\((allow|deny) file-write\*\n((?:\s+\((?:subpath|literal) "[^"]*"\)\n)+)/g;
+
+/**
+ * Decide one path's write access against the emitted macOS sandbox profile, the way the kernel does.
+ *
+ * SBPL is last-match-wins, so a rule block's position decides the outcome. Reading the input
+ * configuration back would prove nothing: the runtime unions its own broad defaults into what the
+ * kernel is finally handed.
+ *
+ * @param profile - SBPL text extracted from the launch vector.
+ * @param path - Absolute path to decide.
+ * @returns The effect of the last matching block, or `unmatched` when no block names the path.
+ */
+const emittedWriteVerdict = (profile: string, path: string): 'allow' | 'deny' | 'unmatched' => {
+  let verdict: 'allow' | 'deny' | 'unmatched' = 'unmatched';
+  for (const [, effect, entries] of profile.matchAll(writeRuleBlocks)) {
+    for (const [, subject] of entries!.matchAll(/"([^"]*)"/g)) {
+      if (path === subject || path.startsWith(`${subject!}/`)) {
+        verdict = effect as 'allow' | 'deny';
+      }
+    }
+  }
+  return verdict;
+};
+
+const sandboxAvailable =
+  (process.platform === 'darwin' || process.platform === 'linux') &&
+  SandboxManager.checkDependencies().errors.length === 0;
+
+type Outcomes = Record<
+  | 'home_read'
+  | 'temp_read'
+  | 'outside_write'
+  | 'home_write'
+  | 'shared_temp_write'
+  | 'debug_log_write'
+  | 'socket'
+  | 'child_read'
+  | 'artifact_write'
+  | 'home',
+  string
+>;
+const denied = ['EPERM', 'EACCES'];
+// On Linux the sandbox hides each read-denied root (user homes, /tmp) behind an empty tmpfs, so a
+// hidden file reads as ENOENT rather than a permission error. A write there lands in that
+// throwaway tmpfs, and a write to the read-only root fails with EROFS. Neither reaches the host,
+// which the existsSync checks below prove. macOS denies all of these with EPERM.
+const hiddenRead = process.platform === 'linux' ? [...denied, 'ENOENT'] : denied;
+const containedWrite = process.platform === 'linux' ? [...denied, 'ENOENT', 'EROFS', 'allowed'] : denied;
+
+const worker = (
+  paths: Record<
+    'homeCanary' | 'tempCanary' | 'outsideEscape' | 'homeEscape' | 'sharedTempEscape' | 'debugLogEscape',
+    string
+  >,
+): string => `
+const fs = require('node:fs');
+const net = require('node:net');
+const { spawnSync } = require('node:child_process');
+const probe = (action) => { try { action(); return 'allowed'; } catch (error) { return error.code ?? error.name; } };
+const connect = () => new Promise((resolve) => {
+  const socket = net.connect({ host: '1.1.1.1', port: 53, timeout: 5000 });
+  socket.once('connect', () => { socket.destroy(); resolve('allowed'); });
+  socket.once('error', (error) => resolve(error.code ?? error.name));
+  socket.once('timeout', () => { socket.destroy(); resolve('ETIMEDOUT'); });
+});
+const outcomes = async () => ({
+  home_read: probe(() => fs.readFileSync(${JSON.stringify(paths.homeCanary)})),
+  temp_read: probe(() => fs.readFileSync(${JSON.stringify(paths.tempCanary)})),
+  outside_write: probe(() => fs.writeFileSync(${JSON.stringify(paths.outsideEscape)}, 'escaped')),
+  home_write: probe(() => fs.writeFileSync(${JSON.stringify(paths.homeEscape)}, 'escaped')),
+  shared_temp_write: probe(() => fs.writeFileSync(${JSON.stringify(paths.sharedTempEscape)}, 'escaped')),
+  debug_log_write: probe(() => fs.writeFileSync(${JSON.stringify(paths.debugLogEscape)}, 'escaped')),
+  socket: await connect(),
+  child_read: 'exit:' + String(spawnSync('/bin/cat', [${JSON.stringify(paths.homeCanary)}]).status),
+  artifact_write: probe(() => fs.writeFileSync(process.env.TMPDIR + '/probe.txt', 'ok')),
+  home: process.env.HOME,
+});
+process.stdout.write('{"protocolVersion":1,"type":"ready"}\\n');
+process.stdin.once('data', async (line) => {
+  const request = JSON.parse(String(line));
+  const result = await outcomes();
+  process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, result }) + '\\n');
+});
+setInterval(() => {}, 1000);
+`;
+
+/** A worker that keeps `params.bytes` more touched memory on each `touch` request and answers every request. */
+const residentWorker = `
+const kept = [];
+process.stdout.write('{"protocolVersion":1,"type":"ready"}\\n');
+require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
+  const request = JSON.parse(line);
+  if (request.method === 'touch') {
+    kept.push(Buffer.alloc(request.params.bytes, 1));
+  }
+  process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, result: {} }) + '\\n');
+});
+setInterval(() => {}, 1000);
+`;
+
+// A runner that claims to be CI must actually have the sandbox; skipping there would hide a broken boundary.
+describe.skipIf(!sandboxAvailable && process.env['CI'] === undefined)('native sandbox seam', () => {
+  /* The daemon brokers its runtime children's launches through `startNativeWorker` (D37, North Star S2): a worker it
+   * starts must be contained exactly as one a session spawns itself. */
+  it.each([
+    { path: 'spawned by its own session', launcher: undefined },
+    { path: 'started through an installed launcher (the daemon broker)', launcher: startNativeWorker },
+  ])(
+    'should contain a worker $path to its runtime, workspace, and private artifact root',
+    async ({ launcher }) => {
+      installNativeWorkerLauncher(launcher);
+      const id = randomUUID();
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'tau-native-sandbox-')));
+      const workspacePath = join(root, 'workspace');
+      const artifactPath = join(root, 'artifacts');
+      mkdirSync(workspacePath);
+      mkdirSync(artifactPath);
+      const paths = {
+        homeCanary: join(homedir(), `.tau-sandbox-canary-${id}`),
+        tempCanary: join(tmpdir(), `tau-sandbox-canary-${id}`),
+        outsideEscape: `/tmp/tau-sandbox-escape-${id}`,
+        homeEscape: join(homedir(), `tau-sandbox-escape-${id}`),
+        // The sandbox runtime grants these two by default; they must be denied back off. Their parents
+        // are created here so a missing directory cannot pass the probe as ENOENT instead of EPERM.
+        sharedTempEscape: join('/tmp/claude', `tau-sandbox-escape-${id}`),
+        debugLogEscape: join(homedir(), '.claude/debug', `tau-sandbox-escape-${id}`),
+      };
+      mkdirSync(dirname(paths.sharedTempEscape), { recursive: true });
+      mkdirSync(dirname(paths.debugLogEscape), { recursive: true });
+      writeFileSync(paths.homeCanary, 'secret');
+      writeFileSync(paths.tempCanary, 'secret');
+      const workerPath = join(workspacePath, 'worker.cjs');
+      writeFileSync(workerPath, worker(paths));
+      const session = new NativeProcessSession<{ readonly message: string }>({
+        executablePath: process.execPath,
+        executableSha256: createHash('sha256').update(readFileSync(process.execPath)).digest('hex'),
+        arguments: [workerPath],
+        runtimePath: dirname(process.execPath),
+        workspacePath,
+        artifactPath,
+        resources: [],
+        protocolVersion: 1,
+        parseReady: () => undefined,
+        parseResponse: (value) => value as { readonly requestId: string; readonly result: unknown },
+        requestTimeout: 30_000,
+        maxArtifactBytes: 1024,
+        logger: createMockLogger(),
+        sessionName: 'Sandbox probe',
+        executableName: 'node',
+      });
+      try {
+        const outcome = await session.request<Outcomes>({
+          method: 'probe',
+          params: {},
+          parseResult: (value) => value as Outcomes,
+          signal: new AbortController().signal,
+        });
+        expect(hiddenRead, `home_read ${outcome.home_read}`).toContain(outcome.home_read);
+        expect(hiddenRead, `temp_read ${outcome.temp_read}`).toContain(outcome.temp_read);
+        expect(containedWrite, `outside_write ${outcome.outside_write}`).toContain(outcome.outside_write);
+        expect(containedWrite, `home_write ${outcome.home_write}`).toContain(outcome.home_write);
+        expect(containedWrite, `shared_temp_write ${outcome.shared_temp_write}`).toContain(outcome.shared_temp_write);
+        expect(containedWrite, `debug_log_write ${outcome.debug_log_write}`).toContain(outcome.debug_log_write);
+        expect(outcome.socket).not.toBe('allowed');
+        expect(outcome.child_read).not.toBe('exit:0');
+        expect(outcome.artifact_write).toBe('allowed');
+        expect(outcome.home).toBe(artifactPath);
+        expect(existsSync(join(artifactPath, 'probe.txt'))).toBe(true);
+        expect(existsSync(paths.outsideEscape)).toBe(false);
+        expect(existsSync(paths.homeEscape)).toBe(false);
+        expect(existsSync(paths.sharedTempEscape)).toBe(false);
+        expect(existsSync(paths.debugLogEscape)).toBe(false);
+      } finally {
+        installNativeWorkerLauncher(undefined);
+        await session.cleanup();
+        rmSync(root, { recursive: true, force: true });
+        for (const path of Object.values(paths)) {
+          rmSync(path, { force: true });
+        }
+      }
+    },
+    60_000,
+  );
+
+  /* PR-1c (T35): the observation-only resident sample reaches the worker through the real launch, about six levels below
+   * the wrapper, and measures what it touched. Linux only: macOS has no reader until it is verified on a macOS runner. */
+  it.runIf(process.platform === 'linux').each([
+    { path: 'spawned by its own session', launcher: undefined },
+    { path: 'started through an installed launcher (the daemon broker)', launcher: startNativeWorker },
+  ])(
+    "should sample the resident set of a contained worker $path, the worker's own process included",
+    async ({ launcher }) => {
+      installNativeWorkerLauncher(launcher);
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'tau-native-resident-')));
+      const workspacePath = join(root, 'workspace');
+      const artifactPath = join(root, 'artifacts');
+      mkdirSync(workspacePath);
+      mkdirSync(artifactPath);
+      const workerPath = join(workspacePath, 'resident-worker.cjs');
+      const touched = 96 * 1024 * 1024;
+      writeFileSync(workerPath, residentWorker);
+      const session = new NativeProcessSession<{ readonly message: string }>({
+        executablePath: process.execPath,
+        executableSha256: createHash('sha256').update(readFileSync(process.execPath)).digest('hex'),
+        arguments: [workerPath],
+        runtimePath: dirname(process.execPath),
+        workspacePath,
+        artifactPath,
+        resources: [],
+        protocolVersion: 1,
+        parseReady: () => undefined,
+        parseResponse: (value) => value as { readonly requestId: string; readonly result: unknown },
+        requestTimeout: 30_000,
+        maxArtifactBytes: 1024,
+        logger: createMockLogger(),
+        sessionName: 'Resident probe',
+        executableName: 'node',
+      });
+      const ask = async (method: string, params: Record<string, unknown> = {}): Promise<unknown> =>
+        session.request({ method, params, parseResult: (value) => value, signal: new AbortController().signal });
+      try {
+        await ask('idle');
+        const baseline = await session.sampleResident();
+        expect(baseline).toBeGreaterThan(0);
+
+        /* The worker's host pid: the process running this worker script, whose executable is the launch's. */
+        const worker = readdirSync('/proc')
+          .filter((name) => /^\d+$/u.test(name))
+          .map(Number)
+          .find((pid) => {
+            try {
+              return readFileSync(`/proc/${String(pid)}/cmdline`, 'utf8')
+                .split('\0')
+                .includes(workerPath);
+            } catch {
+              return false;
+            }
+          });
+        expect(worker, 'no host process runs the worker script').toBeDefined();
+        /* The same file, by inode: the link's spelling depends on the sandbox's mount namespace. */
+        const exe = statSync(`/proc/${String(worker)}/exe`);
+        const executable = statSync(process.execPath);
+        expect([exe.dev, exe.ino]).toEqual([executable.dev, executable.ino]);
+        /* Its ancestor that this process spawned is the wrapper the sample walks from. */
+        const parentOf = (pid: number): number => {
+          const stat = readFileSync(`/proc/${String(pid)}/stat`, 'utf8');
+          return Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
+        };
+        let wrapper = worker!;
+        const ancestry = [wrapper];
+        while (parentOf(wrapper) !== process.pid && parentOf(wrapper) > 1) {
+          wrapper = parentOf(wrapper);
+          ancestry.push(wrapper);
+        }
+        expect(parentOf(wrapper)).toBe(process.pid);
+        const tree = await linuxChildrenTree(wrapper, {
+          readFile: async (path) => readFile(path, 'utf8'),
+          table: async () => [],
+        });
+        expect(tree, `ancestry ${ancestry.join(' < ')}`).toContain(worker);
+
+        await ask('touch', { bytes: touched });
+        const sample = await session.sampleResident();
+        const expected = baseline! + touched;
+        expect(
+          Math.abs(sample! - expected),
+          `sample ${String(sample)}, expected ${String(expected)}`,
+        ).toBeLessThanOrEqual(expected * 0.25);
+      } finally {
+        installNativeWorkerLauncher(undefined);
+        await session.cleanup();
+        rmSync(root, { recursive: true, force: true });
+      }
+      await expect(session.sampleResident()).resolves.toBeUndefined();
+    },
+    60_000,
+  );
+
+  it('should run one command to completion inside the sandbox and report its exit and output', async () => {
+    const id = randomUUID();
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'tau-native-command-')));
+    const writablePath = join(root, 'writable');
+    mkdirSync(writablePath);
+    const homeCanary = join(homedir(), `.tau-command-canary-${id}`);
+    writeFileSync(homeCanary, 'secret');
+    const script = [
+      "const fs = require('node:fs');",
+      "fs.writeFileSync(process.env.TMPDIR + '/written.txt', 'ok');",
+      `let read = 'allowed'; try { fs.readFileSync(${JSON.stringify(homeCanary)}); } catch (error) { read = error.code; }`,
+      "process.stdout.write(read); process.stderr.write('to-stderr'); process.exit(7);",
+    ].join('\n');
+    try {
+      const result = await runInNativeSandbox({
+        executablePath: process.execPath,
+        arguments: ['-e', script],
+        readablePaths: [dirname(process.execPath)],
+        writablePath,
+        workingDirectory: writablePath,
+        commandId: `command#${id}`,
+      });
+      expect(result.exitCode, result.stderr).toBe(7);
+      expect(hiddenRead).toContain(result.stdout);
+      expect(result.stderr).toContain('to-stderr');
+      expect(readFileSync(join(writablePath, 'written.txt'), 'utf8')).toBe('ok');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(homeCanary, { force: true });
+    }
+  }, 60_000);
+
+  /* A worker writes inside a root the process that asked for it also reads and writes, and Node's permission model
+   * follows a symlink it finds there (I7). So no worker may create one, nor a hard link to a file it can only read. */
+  it('should refuse a worker every symbolic and hard link, so the host process never meets one', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'tau-native-links-')));
+    const writablePath = join(root, 'writable');
+    const readablePath = join(root, 'readable');
+    const elsewhere = join(root, 'elsewhere');
+    for (const path of [writablePath, readablePath, elsewhere]) {
+      mkdirSync(path);
+    }
+    writeFileSync(join(readablePath, 'sealed.txt'), 'sealed');
+    const script = [
+      "const fs = require('node:fs');",
+      "const probe = (action) => { try { action(); return 'allowed'; } catch (error) { return error.code ?? error.name; } };",
+      `const writable = ${JSON.stringify(writablePath)};`,
+      "fs.writeFileSync(writable + '/own.txt', 'own');",
+      'process.stdout.write(JSON.stringify({',
+      `  symlink: probe(() => fs.symlinkSync(${JSON.stringify(elsewhere)}, writable + '/planted')),`,
+      "  ownHardLink: probe(() => fs.linkSync(writable + '/own.txt', writable + '/own-hard')),",
+      `  readableHardLink: probe(() => fs.linkSync(${JSON.stringify(join(readablePath, 'sealed.txt'))}, writable + '/sealed-hard')),`,
+      "  regularFile: probe(() => fs.writeFileSync(writable + '/still-writes.txt', 'ok')),",
+      '}));',
+    ].join('\n');
+    /* What a runtime child does with a path under its grant: Node writes through a link it finds there. */
+    const writeUnderGrant = (path: string) =>
+      spawnSync(
+        process.execPath,
+        [
+          '--permission',
+          `--allow-fs-read=${root}`,
+          `--allow-fs-write=${writablePath}`,
+          '-e',
+          `require('node:fs').writeFileSync(${JSON.stringify(path)}, 'escaped')`,
+        ],
+        { encoding: 'utf8' },
+      );
+    try {
+      const result = await runInNativeSandbox({
+        executablePath: process.execPath,
+        arguments: ['-e', script],
+        readablePaths: [dirname(process.execPath), readablePath],
+        writablePath,
+        workingDirectory: writablePath,
+        commandId: 'links#1',
+      });
+      expect(result.exitCode, result.stderr).toBe(0);
+      const outcome = JSON.parse(result.stdout) as Record<string, string>;
+      expect(outcome['regularFile']).toBe('allowed');
+      for (const kind of ['symlink', 'ownHardLink', 'readableHardLink']) {
+        expect(denied, `${kind} ${outcome[kind]}`).toContain(outcome[kind]);
+      }
+      for (const name of ['planted', 'own-hard', 'sealed-hard']) {
+        expect(lstatSync(join(writablePath, name), { throwIfNoEntry: false }), name).toBeUndefined();
+      }
+
+      /* With no planted link, a write under the grant stays there; a link the host planted shows what one would do. */
+      expect(writeUnderGrant(join(writablePath, 'planted', 'escape.txt')).status).not.toBe(0);
+      expect(existsSync(join(elsewhere, 'escape.txt'))).toBe(false);
+      symlinkSync(elsewhere, join(writablePath, 'host-planted'));
+      expect(writeUnderGrant(join(writablePath, 'host-planted', 'escape.txt')).status).toBe(0);
+      expect(existsSync(join(elsewhere, 'escape.txt'))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  // The documented invariant is a property of the profile the kernel receives, not of the
+  // configuration Tau passes in: the runtime unions its own broad write defaults into the former.
+  it.runIf(process.platform === 'darwin')(
+    'should emit a profile whose only write grants are the launch root and the stdio devices',
+    async () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'tau-native-profile-')));
+      const workspacePath = join(root, 'workspace');
+      const artifactPath = join(root, 'artifacts');
+      mkdirSync(workspacePath);
+      mkdirSync(artifactPath);
+      try {
+        const argv = await launchInNativeSandbox({
+          executablePath: '/bin/echo',
+          arguments: ['probe'],
+          readablePaths: ['/opt/tau-runtime', workspacePath],
+          writablePath: artifactPath,
+          workingDirectory: workspacePath,
+          commandId: 'profile#1',
+        });
+        const profile = /sandbox-exec -p '([\S\s]*?)' \/bin\/sh -c/.exec(argv.join(' '))?.[1]?.replaceAll(`'"'"'`, "'");
+        expect(profile, `no sandbox-exec profile in ${argv.join(' ')}`).toBeDefined();
+
+        // Every default write root the runtime adds is denied back off after its own allow block.
+        // The runtime resolves each root before emitting it, so the probe follows the same symlinks.
+        const escapes = nativeSandboxPolicy().filesystem.denyWrite;
+        expect(escapes.length).toBeGreaterThan(0);
+        for (const root of escapes) {
+          const resolved = existsSync(root) ? realpathSync(root) : root;
+          expect(emittedWriteVerdict(profile!, join(resolved, 'escape.txt')), root).toBe('deny');
+        }
+        expect(emittedWriteVerdict(profile!, join(artifactPath, 'scene.tau-mesh'))).toBe('allow');
+        expect(emittedWriteVerdict(profile!, '/dev/stdout')).toBe('allow');
+        expect(emittedWriteVerdict(profile!, join(workspacePath, 'model.cs'))).not.toBe('allow');
+
+        // Nothing outside the artifact root survives as a write grant except the stdio devices.
+        const granted = [...profile!.matchAll(writeRuleBlocks)]
+          .filter(([, effect]) => effect === 'allow')
+          .flatMap((block) => [...block[2]!.matchAll(/"([^"]*)"/g)].map(([, subject]) => subject!))
+          .filter((subject) => !subject.startsWith('/dev/'))
+          .filter((subject) => emittedWriteVerdict(profile!, join(subject, 'escape.txt')) === 'allow');
+        expect(granted).toEqual([artifactPath]);
+
+        // Sockets are pinned to the runtime's loopback proxy; egress denial is the proxy's, not the
+        // kernel's, so this asserts the corrected claim rather than "network denied outright".
+        const outbound = [...profile!.matchAll(/\(allow network-outbound[^\n"]*"([^\n"]*)"/g)].map(([, host]) => host!);
+        expect(outbound.length).toBeGreaterThan(0);
+        expect(outbound.filter((host) => !/^localhost:\d+$/.test(host))).toEqual([]);
+        expect(profile).not.toContain('(allow network*)');
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
+});

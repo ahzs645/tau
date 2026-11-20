@@ -1,48 +1,48 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { setAbortContext, clearAbortContext, checkAbort } from '#framework/cooperative-abort.js';
-import { RenderAbortedError } from '#framework/runtime-worker-client.js';
-import { signalSlot } from '#types/runtime-protocol.types.js';
+import { beginDocumentAbort, documentAbortView, endDocumentAbort } from '#framework/document-abort-state.js';
+import { RenderAbortedError } from '#framework/runtime-operation-errors.js';
 import { signalBufferByteLength } from '#framework/runtime-framework.constants.js';
 
 describe('cooperative-abort', () => {
-  let sab: SharedArrayBuffer;
-  let view: Int32Array;
-
   beforeEach(() => {
     clearAbortContext();
-    sab = new SharedArrayBuffer(signalBufferByteLength);
-    view = new Int32Array(sab);
   });
 
-  it('should throw RenderAbortedError when abort generation changes', () => {
-    Atomics.store(view, signalSlot.abortGeneration, 1);
-    setAbortContext(view, 1);
-
-    Atomics.store(view, signalSlot.abortGeneration, 2);
-
-    expect(() => {
-      checkAbort();
-    }).toThrow(RenderAbortedError);
+  it('does not throw while the document native operation still owns its shared state', () => {
+    const view = documentAbortView(new SharedArrayBuffer(signalBufferByteLength));
+    if (!view) {
+      throw new Error('Expected the document signal view.');
+    }
+    const state = beginDocumentAbort(view, 1);
+    setAbortContext({ signal: new AbortController().signal, documentSignalView: view, documentSignalState: state });
+    expect(checkAbort).not.toThrow();
+    endDocumentAbort(view, 1);
   });
 
-  it('should not throw when generation matches', () => {
-    Atomics.store(view, signalSlot.abortGeneration, 5);
-    setAbortContext(view, 5);
-
-    expect(() => {
-      checkAbort();
-    }).not.toThrow();
+  it('throws when the document native operation loses its shared state', () => {
+    const view = documentAbortView(new SharedArrayBuffer(signalBufferByteLength));
+    if (!view) {
+      throw new Error('Expected the document signal view.');
+    }
+    const state = beginDocumentAbort(view, 1);
+    setAbortContext({ signal: new AbortController().signal, documentSignalView: view, documentSignalState: state });
+    endDocumentAbort(view, 1);
+    expect(checkAbort).toThrow(RenderAbortedError);
   });
 
-  it('should be a no-op after clearAbortContext', () => {
-    Atomics.store(view, signalSlot.abortGeneration, 1);
-    setAbortContext(view, 1);
-
-    Atomics.store(view, signalSlot.abortGeneration, 2);
+  it('is a no-op after clearAbortContext', () => {
+    const controller = new AbortController();
+    setAbortContext({ signal: controller.signal });
+    controller.abort(new RenderAbortedError());
     clearAbortContext();
+    expect(checkAbort).not.toThrow();
+  });
 
-    expect(() => {
-      checkAbort();
-    }).not.toThrow();
+  it('observes an operation-scoped AbortSignal without shared memory', () => {
+    const controller = new AbortController();
+    setAbortContext({ signal: controller.signal });
+    controller.abort(new RenderAbortedError());
+    expect(checkAbort).toThrow(RenderAbortedError);
   });
 });

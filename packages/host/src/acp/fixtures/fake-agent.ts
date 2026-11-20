@@ -1,0 +1,1370 @@
+/**
+ * A deterministic ACP agent, spoken by hand over newline-delimited JSON-RPC.
+ *
+ * Not built on `@agentclientprotocol/sdk` on purpose: it stands in for a vendor
+ * adapter this repo does not control, so an independent implementation proves
+ * the daemon's client half rather than proving the SDK talks to itself.
+ *
+ * Run as an adapter override (`TAU_ACP_ADAPTER_OVERRIDE=<this file>:codex`,
+ * honoured only under `NODE_ENV=test`). It is spawned with the same allowlisted
+ * environment a real adapter gets, so the *only* way to steer a turn is the
+ * prompt text — which is exactly how a real agent behaves:
+ *
+ * | Prompt contains | Behaviour |
+ * | --- | --- |
+ * | (always) | one text chunk echoing `{ cwd, env, model, turn }`, a `usage_update`, then a permission-gated `write_file` tool call; the reply carries `PromptResponse.usage` |
+ * | (turn 2 onward) | a second chunk naming the whole transcript, so a later turn provably recalls the earlier ones |
+ * | `mcp` | calls `test_model` through the `tau` MCP server and reports the evidence |
+ * | `mcp-arrange-workbench` | writes a model, then opens its named Front view through `arrange_workbench` |
+ * | `mcp-arrange-conflict` | opens the same Front view, then retries with a stale `basedOn` digest |
+ * | `mcp-screenshot` | writes a cube to `main.scad`, then first calls `screenshot` (`targetFile: main.scad`, `single`) through the same server, which saves the capture as a chat attachment; `mcp` then still runs |
+ * | `escape` | tries `fs/write_text_file` above `cwd` and reports the refusal |
+ * | `wrong-session` | tries `fs/write_text_file` under another ACP session id and reports the refusal |
+ * | `slow` | stops after the first chunk and waits to be cancelled |
+ * | `noask` | writes without the permission round trip (the auto-approving mode a real CLI config produces — SP-4 Result 3) |
+ * | `stop:<reason>` | ends the turn immediately with that ACP stop reason (`max_tokens`, `refusal`, …) |
+ * | `switch` | pushes `config_option_update` mid-turn, moving the session to the other model |
+ * | `updates` | emits the presentation-only updates: thought, plan, plan_update, plan_removed, available_commands_update, current_mode_update, session_info_update |
+ * | `login` | drives the URL (device-code) elicitation when the client advertised `elicitation.url`, then completes it |
+ * | `ask-form` | asks a Claude-shaped `AskUserQuestion` form elicitation when the client advertised `elicitation.form`, then reports the answer |
+ * | `unsafe` | with `login`, offers a `javascript:` url instead of a web page |
+ * | `late-auth` | drives the same elicitation *after* the prompt response, i.e. between turns |
+ * | `abandon` | asks for permission and exits without answering it, leaving the request outstanding on the host |
+ * | `tools` | emits a Codex-style `read`/`execute`/`think`/`fetch`/`edit` tool sequence with locations, diff and terminal content, each `pending → in_progress → completed` |
+ * | `clear-title` | clears the write call title on its terminal update, exercising ACP presence semantics |
+ * | `update-while-asking` | refines the write call with an `in_progress` update while its permission request is outstanding, then says a line before the call completes, as claude-agent-acp can |
+ * | `skills` / `skill-names` | reports complete native skill files, or only their names for packaged-host checks |
+ * | `fail:quota` / `fail:rate` / `fail:context` / `fail:model` | stops on that provider failure the way both pinned adapters do: a typed AIR `sessionFailure` on an `end_turn` response when the client advertised it, else the provider sentence as text and a `-32603` rejection; `model` is a service failure whose title is a raw provider JSON body, as Codex sends one |
+ * | `reset:soon` / `reset:lifted` / `reset:past` | reports Claude Code's `_claude/rateLimit` on `usage_update` before answering: rejected with a reset an hour out then a report no client can read, rejected then allowed again, or rejected with a reset that has already passed |
+ * | `reset:codex` | attaches Codex's own `_codex/rateLimit` snapshot beside the AIR failure, as the patched adapter does |
+ * | `crash` | writes a stack to stderr and rejects `-32603 Internal error`, whatever the client advertised |
+ * | `mcp-when:<path>` | with `mcp`, waits for that file to exist before calling the tool |
+ *
+ * Anything that has to be decided *before* a prompt exists is steered by
+ * `TAU_FAKE_AGENT_MODE`, which a test's own `AcpAdapter` literal supplies
+ * through `spawnEnv` (the environment allowlist drops every `TAU_*` name, so
+ * this is reachable from the host tier only, never from an e2e override):
+ *
+ * | Mode | Behaviour |
+ * | --- | --- |
+ * | `grouped` | `configOptions` offers the models as `SessionConfigSelectGroup[]` rather than a flat list |
+ * | `value-meta` | every mode value carries `_meta: { kind }`, as codex-acp 1.7.0 sends it |
+ * | `pushed-models` | `session/new` offers two models, then Grok's `_x.ai/models/update` lists four a moment later, as grok 1.0.52 does after starting on a renewable sign-in; every later answer offers all four |
+ * | `auth-required` | `initialize` advertises codex-acp 1.7.0's own methods (`api-key`, `chat-gpt`, and `chat-gpt-device-code` to a client that advertised `elicitation.url`), none with a terminal command, and `session/new` errors `-32000` |
+ * | `claude-terminal-auth` | `initialize` advertises claude-agent-acp 0.70.0's two methods to a client that sent `_meta['terminal-auth']`, each naming *this* process (`process.execPath` and `process.argv.slice(1)`) as its command, exactly as the real adapter does |
+ * | `restore-auth` | restoring an existing session errors `-32000` instead of silently starting fresh |
+ * | `prompt-auth` | no auth method is advertised and `session/prompt` errors `-32000`, as claude-agent-acp does for a logged-out `claude` |
+ * | `images` | `promptCapabilities.image` is advertised; withheld otherwise |
+ * | `protocol-2` | `initialize` answers a protocol version this client does not speak |
+ * | `silent` | `initialize` is never answered at all |
+ * | `no-http` | HTTP MCP support is absent |
+ * | `no-additional-directories` | additional-directory support is absent |
+ * | `stubborn` | SIGTERM is ignored, so only SIGKILL ends the process |
+ * | `grandchild` | a sleeping process is started in this process's group, as a shell tool would be |
+ * | `deaf` | `session/cancel` is ignored, so a cancelled prompt never answers |
+ *
+ * Modes combine, comma-separated. `TAU_FAKE_AGENT_PIDS` names a file each
+ * process (grandchild included) appends its pid to.
+ *
+ * Sessions are persisted under `cwd`, so a respawned fixture can resume or load
+ * one it created in an earlier process. `session/fork` and the compaction
+ * updates are deliberately absent: no gate reads them, and compaction may only
+ * be sent to a client that advertised the capability, which Tau does not.
+ */
+
+import { createHash, randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { connectMcpOverFetch } from '#acp/fixtures/mcp-fetch-client.js';
+
+type JsonRpcMessage = {
+  readonly jsonrpc: '2.0';
+  readonly id?: number | string;
+  readonly method?: string;
+  readonly params?: Record<string, unknown>;
+  readonly result?: unknown;
+  readonly error?: { readonly code: number; readonly message: string };
+};
+
+type McpServerEntry = { readonly name?: string; readonly url?: string; readonly headers?: readonly unknown[] };
+
+type SessionState = {
+  readonly cwd: string;
+  readonly mcpServers: readonly McpServerEntry[];
+  readonly additionalDirectories: readonly string[];
+  /** Every prompt this session has answered, oldest first. */
+  readonly prompts: string[];
+  /** Model id the client last selected through `session/set_config_option`. */
+  model: string;
+  config: Record<string, string | boolean>;
+  /**
+   * Ended by `session/close`. The record survives so `session/resume` and
+   * `session/load` restore it — what both real adapters do (V2: eviction is
+   * close, then resume) — while a prompt on it is an error, not a turn.
+   */
+  closed?: boolean;
+};
+
+/** Model ids this fixture offers; the first is the `codex` pin's own default. */
+const models = ['gpt-5.3-codex-spark', 'gpt-5.3-codex'];
+/** Models only `pushed-models` adds, in its `_x.ai/models/update`. */
+const pushedModels = ['pushed-model-a', 'pushed-model-b'];
+/** Whether `pushed-models` has sent its push, after which every answer lists the pushed models too. */
+let modelsPushed = false;
+
+const mode = process.env['TAU_FAKE_AGENT_MODE'] ?? '';
+/** One mode may combine several behaviours, comma-separated (`silent,stubborn`). */
+const modes = new Set(mode.split(','));
+const inMode = (name: string): boolean => modes.has(name);
+
+/**
+ * Every ACP field this fixture reads is a string; anything else is a caller bug.
+ *
+ * @param value - Raw JSON-RPC parameter.
+ * @param fallback - Value used when the parameter is absent or not a string.
+ * @returns `value` when it is a string, else `fallback`.
+ */
+const asString = (value: unknown, fallback = ''): string => (typeof value === 'string' ? value : fallback);
+
+/**
+ * One nested JSON-RPC object, or nothing.
+ *
+ * @param value - Raw JSON-RPC parameter.
+ * @returns The object, or `undefined` when the parameter is not one.
+ */
+const asRecord = (value: unknown): Record<string, unknown> | undefined =>
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- an ACP payload is JSON by construction of its transport.
+  typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+
+/** Whether the client advertised `elicitation.url`, read at `initialize`. */
+let urlElicitation = false;
+/** Whether the client advertised `elicitation.form`, read at `initialize`. */
+let formElicitation = false;
+
+/** Whether the client advertised `_meta['terminal-auth']`, read at `initialize`. */
+let metaTerminalAuth = false;
+
+/** Whether the client advertised the AIR `sessionFailure` extension, read at `initialize`. */
+let airSessionFailures = false;
+
+/**
+ * Whether one `initialize` request opted into AIR typed session failures.
+ *
+ * @param params - The `initialize` parameters as received.
+ * @returns `true` for `_meta.jetbrains.air` version 1 or later listing `sessionFailure`.
+ */
+const advertisesAirSessionFailures = (params: Record<string, unknown>): boolean => {
+  const air = asRecord(asRecord(asRecord(asRecord(params['clientCapabilities'])?.['_meta'])?.['jetbrains'])?.['air']);
+  const capabilities = air?.['capabilities'];
+  return (
+    typeof air?.['version'] === 'number' &&
+    air['version'] >= 1 &&
+    Array.isArray(capabilities) &&
+    capabilities.includes('sessionFailure')
+  );
+};
+
+/** The provider failures `fail:<kind>` stops on, as both adapters' policy tables classify them. */
+const providerFailures: Record<
+  string,
+  { readonly category: string; readonly title: string; readonly actions: readonly string[] }
+> = {
+  quota: {
+    category: 'limit',
+    title:
+      "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Sep 20th, 2026 4:07 PM.",
+    actions: [],
+  },
+  rate: { category: 'limit', title: 'Codex is temporarily rate limited.', actions: ['retry'] },
+  context: { category: 'limit', title: 'Codex ran out of room in its context window.', actions: ['new_session'] },
+  model: {
+    category: 'service',
+    title: JSON.stringify({
+      type: 'error',
+      status: 400,
+      error: { type: 'invalid_request_error', message: 'The requested model is not supported for this account.' },
+    }),
+    actions: ['retry'],
+  },
+};
+
+/**
+ * An epoch second offset from now, the unit both vendors report a reset in.
+ *
+ * @param seconds - How far from now, negative for a reset that has passed.
+ * @returns That instant in whole epoch seconds.
+ */
+const epochIn = (seconds: number): number => Math.floor(Date.now() / 1000) + seconds;
+
+/**
+ * The `_claude/rateLimit` reports one prompt asks the agent to send.
+ *
+ * Claude Code forwards the CLI's `rate_limit_event` verbatim on a
+ * `usage_update`, one per status change, which is where a reset reaches a
+ * client — the failure object itself never carries one.
+ *
+ * @param text - The prompt text, which steers the sequence.
+ * @returns The reports to send, in order, before the turn answers.
+ */
+const claudeRateLimits = (text: string): ReadonlyArray<Record<string, unknown>> => {
+  if (text.includes('reset:soon')) {
+    /* A readable reset, then a report no client can parse: the held reset has
+     * to survive the unreadable one rather than be cleared by it. */
+    return [
+      { status: 'rejected', resetsAt: epochIn(3600), rateLimitType: 'five_hour', utilization: 100 },
+      { status: 7, resetsAt: 'soon' },
+    ];
+  }
+  if (text.includes('reset:lifted')) {
+    return [
+      { status: 'rejected', resetsAt: epochIn(3600), rateLimitType: 'five_hour' },
+      { status: 'allowed', utilization: 12 },
+    ];
+  }
+  return text.includes('reset:past')
+    ? [{ status: 'rejected', resetsAt: epochIn(-60), rateLimitType: 'five_hour' }]
+    : [];
+};
+
+/**
+ * Whether one `initialize` request advertised URL elicitation.
+ *
+ * The real gate a real adapter applies: Codex offers its device-code login only
+ * to a client that said it can present one.
+ *
+ * @param params - The `initialize` parameters as received.
+ * @returns `true` when `clientCapabilities.elicitation.url` is present.
+ */
+const advertisesUrlElicitation = (params: Record<string, unknown>): boolean =>
+  asRecord(asRecord(params['clientCapabilities'])?.['elicitation'])?.['url'] !== undefined;
+
+const pause = async (ms: number): Promise<void> => {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+};
+
+/**
+ * Where sessions outlive this process.
+ *
+ * The daemon spawns one adapter per turn today and a resumed turn may land on a
+ * *new* fixture process, so a session that lived only in memory could never be
+ * resumed — the one thing `session/resume` exists to prove.
+ */
+/*
+ * Keyed by cwd so a respawned fixture in the same workspace resumes, but kept
+ * under the temp dir: the cwd is the user's project root now (V2), and a store
+ * written there would be captured into a revision (review 1-review S2).
+ */
+const storePath = join(
+  tmpdir(),
+  `tau-fake-agent-${createHash('sha1').update(process.cwd()).digest('hex').slice(0, 16)}.json`,
+);
+
+type SessionStore = { readonly nextOrdinal: number; readonly sessions: Record<string, SessionState> };
+
+const readStore = (): { nextOrdinal: number; sessions: Map<string, SessionState> } => {
+  try {
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- this process wrote the file it is reading.
+    const store = JSON.parse(readFileSync(storePath, 'utf8')) as SessionStore;
+    return { nextOrdinal: store.nextOrdinal, sessions: new Map(Object.entries(store.sessions)) };
+  } catch {
+    return { nextOrdinal: 0, sessions: new Map() };
+  }
+};
+
+const store = readStore();
+const { sessions } = store;
+
+const saveSessions = (): void => {
+  try {
+    const persisted: SessionStore = { nextOrdinal: store.nextOrdinal, sessions: Object.fromEntries(sessions) };
+    writeFileSync(storePath, JSON.stringify(persisted), 'utf8');
+  } catch {
+    /* A fixture whose branch is gone keeps serving from memory. */
+  }
+};
+
+/*
+ * A persisted ordinal, never `sessions.size + 1`: closing a low session while a
+ * higher one lives would otherwise hand a fresh `session/new` a live id and
+ * merge two chats' transcripts (review 1-review S1).
+ */
+const nextSessionId = (): string => {
+  /* The ordinal is for the reader; the uuid is what makes the id unique. Two
+   * fixture processes sharing this file still read-modify-write the ordinal
+   * without a lock, so it can repeat — and a repeated id merges two chats'
+   * transcripts (review 1-review S1, 3-review S7). */
+  store.nextOrdinal = Math.max(store.nextOrdinal, readStore().nextOrdinal) + 1;
+  saveSessions();
+  return `fake-session-${String(store.nextOrdinal)}-${randomUUID().slice(0, 8)}`;
+};
+
+/*
+ * Process-lifecycle modes, for the close ladder (W10 EA-S2): `stubborn` ignores
+ * SIGTERM, as an adapter mid-write can; `grandchild` starts a sleeper in this
+ * process's group, as a shell tool does; `TAU_FAKE_AGENT_PIDS` names a file
+ * each process appends its pid to, so a test can tell which are still alive.
+ */
+const pidFile = process.env['TAU_FAKE_AGENT_PIDS'];
+const recordPid = (pid: number | undefined): void => {
+  if (pidFile !== undefined && pid !== undefined) {
+    appendFileSync(pidFile, `${String(pid)}\n`, 'utf8');
+  }
+};
+if (inMode('stubborn')) {
+  process.on('SIGTERM', () => undefined);
+}
+/* After the handler: a recorded pid is a process that already ignores SIGTERM. */
+recordPid(process.pid);
+if (inMode('grandchild')) {
+  const sleeper = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 1000)'], { stdio: 'ignore' });
+  recordPid(sleeper.pid);
+}
+
+const pending = new Map<number, (message: JsonRpcMessage) => void>();
+const cancelled = new Set<string>();
+let nextId = 0;
+
+const send = (message: JsonRpcMessage): void => {
+  process.stdout.write(`${JSON.stringify(message)}\n`);
+};
+
+const request = async (method: string, params: Record<string, unknown>): Promise<JsonRpcMessage> => {
+  nextId += 1;
+  const id = nextId;
+  const answered = new Promise<JsonRpcMessage>((resolve) => {
+    pending.set(id, resolve);
+  });
+  send({ jsonrpc: '2.0', id, method, params });
+  return answered;
+};
+
+const update = async (sessionId: string, sessionUpdate: Record<string, unknown>): Promise<void> => {
+  send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: sessionUpdate } });
+  /* Yield so an update the client acts on lands before the next one is written;
+   * a real adapter's updates are separated by real work. */
+  await pause(1);
+};
+
+const textChunk = async (sessionId: string, text: string): Promise<void> =>
+  update(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
+
+const toolCall = async (
+  sessionId: string,
+  call: {
+    readonly toolCallId: string;
+    readonly title: string;
+    readonly kind?: string;
+    /** The emitter's programmatic tool name (ACP `ToolCall.name`, experimental). */
+    readonly name?: string;
+    readonly rawInput?: unknown;
+    readonly locations?: readonly unknown[];
+    readonly _meta?: Readonly<Record<string, unknown>>;
+  },
+): Promise<void> => update(sessionId, { sessionUpdate: 'tool_call', status: 'pending', kind: 'edit', ...call });
+
+const toolCallUpdate = async (
+  sessionId: string,
+  result: {
+    readonly toolCallId: string;
+    readonly status: 'in_progress' | 'completed' | 'failed';
+    readonly rawInput?: unknown;
+    readonly rawOutput?: unknown;
+    readonly content?: readonly unknown[];
+  },
+): Promise<void> => update(sessionId, { sessionUpdate: 'tool_call_update', ...result });
+
+const promptText = (blocks: readonly unknown[]): string =>
+  blocks
+    .map((block) =>
+      typeof block === 'object' && block !== null && 'text' in block ? String((block as { text: unknown }).text) : '',
+    )
+    .filter((text) => text !== '')
+    .join(' ');
+
+/**
+ * The session's configuration options, in the shape this fixture's mode names.
+ *
+ * `modelChoice` on the client side flattens both a flat option list and a
+ * grouped one; only one of those shapes can be exercised per process, so the
+ * grouped variant is a mode rather than a prompt keyword.
+ *
+ * @param session - Session whose current values these are.
+ * @returns The full option set, as `session/new` and friends must return it.
+ */
+/** The adapter's own mode names, as claude-agent-acp 0.70.0 `buildAvailableModes` spells them. */
+const modeNames: Readonly<Record<string, string>> = {
+  auto: 'Auto',
+  default: 'Manual',
+  acceptEdits: 'Accept Edits',
+  plan: 'Plan Mode',
+  bypassPermissions: 'Bypass Permissions',
+};
+
+/**
+ * Modes offered on a model, Claude-shaped: `auto` only on the first model, as
+ * claude-agent-acp offers it only where `supportsAutoMode` is true.
+ *
+ * @param model - The session's model.
+ * @returns The mode ids, in the adapter's order.
+ */
+const modesOf = (model: string): string[] => [
+  ...(model === models[0] ? ['auto'] : []),
+  'default',
+  'acceptEdits',
+  'plan',
+  'bypassPermissions',
+];
+
+const configOptionsOf = (session: SessionState): readonly unknown[] => {
+  const options = [...models, ...(modelsPushed ? pushedModels : [])].map((value) => ({ value, name: value }));
+  return [
+    {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: session.model,
+      options: inMode('grouped') ? [{ group: 'codex', name: 'Codex', options }] : options,
+    },
+    {
+      id: 'mode',
+      name: 'Mode',
+      category: 'mode',
+      type: 'select',
+      currentValue: String(session.config['mode']),
+      options: modesOf(session.model).map((value) => ({
+        value,
+        name: modeNames[value] ?? value,
+        ...(inMode('value-meta') ? { _meta: { kind: value } } : {}),
+      })),
+    },
+    {
+      id: 'thought_level',
+      name: 'Thinking',
+      category: 'thought_level',
+      type: 'select',
+      currentValue: String(session.config['thought_level']),
+      options: [
+        { value: 'low', name: 'Low' },
+        { value: 'medium', name: 'Medium' },
+        { value: 'high', name: 'High' },
+      ],
+    },
+    {
+      id: 'web_search',
+      name: 'Web search',
+      category: 'model_config',
+      type: 'boolean',
+      currentValue: Boolean(session.config['web_search']),
+    },
+  ];
+};
+
+// oxlint-disable-next-line eslint/max-params -- one call's identity, tool and arguments, as the adapter reports them.
+const callTauMcp = async (
+  sessionId: string,
+  servers: readonly McpServerEntry[],
+  tool = 'test_model',
+  args: Record<string, unknown> = {},
+  callId = 'mcp-1',
+): Promise<void> => {
+  const tau = servers.find((server) => server.name === 'tau');
+  if (!tau?.url) {
+    await textChunk(sessionId, 'mcp: no tau server was configured for this session');
+    return;
+  }
+  await toolCall(sessionId, {
+    toolCallId: callId,
+    title: `mcp.tau.${tool}`,
+    rawInput: { server: 'tau', tool, arguments: args },
+    _meta: {
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- MCP metadata retains its wire name.
+      is_mcp_tool_call: true,
+    },
+  });
+  try {
+    const headers = Object.fromEntries(
+      (tau.headers ?? []).flatMap((header) =>
+        typeof header === 'object' && header !== null && 'name' in header && 'value' in header
+          ? [[String((header as { name: unknown }).name), String((header as { value: unknown }).value)]]
+          : [],
+      ),
+    );
+    const client = await connectMcpOverFetch({ url: tau.url, headers });
+    const result = await client.callTool(tool, args);
+    await toolCallUpdate(sessionId, {
+      toolCallId: callId,
+      status: result.isError === true ? 'failed' : 'completed',
+      rawOutput: { result, error: null },
+    });
+  } catch (error) {
+    await toolCallUpdate(sessionId, {
+      toolCallId: callId,
+      status: 'failed',
+      rawOutput: { message: error instanceof Error ? error.message : String(error) },
+    });
+  }
+};
+
+const attemptEscape = async (sessionId: string, cwd: string): Promise<void> => {
+  const outside = join(cwd, '..', 'escaped.txt');
+  const answer = await request('fs/write_text_file', { sessionId, path: outside, content: 'escaped' });
+  await textChunk(sessionId, `escape: ${answer.error ? answer.error.message : 'accepted'}`);
+};
+
+const attemptWrongSession = async (sessionId: string): Promise<void> => {
+  const answer = await request('fs/write_text_file', {
+    sessionId: `${sessionId}-foreign`,
+    path: 'wrong-session.txt',
+    content: 'foreign',
+  });
+  await textChunk(sessionId, `wrong-session: ${answer.error ? answer.error.message : 'accepted'}`);
+};
+
+/**
+ * The `session/update` variants Tau projects as presentation, not history.
+ *
+ * Emitted together so one prompt proves the client stays indifferent to all of
+ * them at once. Compaction is excluded on purpose: an agent may only send it to
+ * a client that advertised the capability, and Tau's `initialize` does not.
+ *
+ * @param sessionId - Session receiving the updates.
+ */
+const emitPresentationUpdates = async (sessionId: string): Promise<void> => {
+  await update(sessionId, {
+    sessionUpdate: 'agent_thought_chunk',
+    content: { type: 'text', text: '**Confirming test completion and readiness**' },
+  });
+  await update(sessionId, {
+    sessionUpdate: 'agent_thought_chunk',
+    content: { type: 'text', text: '\n\nThe current tool results are ready to verify.' },
+  });
+  const entry = { content: 'write hello.txt', priority: 'high', status: 'in_progress' };
+  await update(sessionId, { sessionUpdate: 'plan', entries: [entry] });
+  await update(sessionId, {
+    sessionUpdate: 'plan_update',
+    plan: { type: 'items', planId: 'plan-1', entries: [{ ...entry, status: 'completed' }] },
+  });
+  await update(sessionId, { sessionUpdate: 'plan_removed', planId: 'plan-1' });
+  await update(sessionId, {
+    sessionUpdate: 'available_commands_update',
+    availableCommands: [{ name: 'compact', description: 'Compact the conversation' }],
+  });
+  await update(sessionId, { sessionUpdate: 'current_mode_update', currentModeId: 'default' });
+  await update(sessionId, { sessionUpdate: 'session_info_update', title: 'Fixture session' });
+};
+
+const reportNativeSkills = async (sessionId: string, session: SessionState, namesOnly: boolean): Promise<void> => {
+  if (namesOnly) {
+    const namesByRoot = await Promise.all(
+      session.additionalDirectories.map(async (root) => {
+        const paths = await readdir(join(root, '.agents', 'skills'), { recursive: true });
+        return paths.filter((path) => path.endsWith('/SKILL.md')).map((path) => path.slice(0, -'/SKILL.md'.length));
+      }),
+    );
+    const names = namesByRoot.flat();
+    await update(sessionId, {
+      sessionUpdate: 'available_commands_update',
+      availableCommands: names.map((name) => ({ name: `$${name}`, description: 'Native skill' })),
+    });
+    await textChunk(sessionId, `native-skill-names: ${JSON.stringify(names)}`);
+    return;
+  }
+  const skills = await Promise.all(
+    session.additionalDirectories.map(async (root) => {
+      const skillRoot = join(root, '.agents', 'skills');
+      const paths = await readdir(skillRoot, { recursive: true });
+      const files = await Promise.all(
+        paths.toSorted().map(async (path) => {
+          try {
+            return [path, await readFile(join(skillRoot, path), 'utf8')] as const;
+          } catch {
+            return undefined;
+          }
+        }),
+      );
+      return { root, files: Object.fromEntries(files.filter((file) => file !== undefined)) };
+    }),
+  );
+  await update(sessionId, {
+    sessionUpdate: 'available_commands_update',
+    availableCommands: skills.flatMap(({ files }) =>
+      Object.keys(files)
+        .filter((path) => path.endsWith('/SKILL.md'))
+        .map((path) => ({ name: `$${path.slice(0, -'/SKILL.md'.length)}`, description: 'Native skill' })),
+    ),
+  });
+  await textChunk(sessionId, `native-skills: ${JSON.stringify(skills)}`);
+};
+
+/**
+ * A Codex-shaped tool sequence: every `ToolKind` Tau renders, every content
+ * shape, and the `pending → in_progress → completed` order a long call takes.
+ *
+ * @param sessionId - Session receiving the calls.
+ * @param cwd - Session working directory, so the locations are absolute.
+ */
+const emitToolCalls = async (sessionId: string, cwd: string): Promise<void> => {
+  const calls = [
+    {
+      toolCallId: 'list-1',
+      name: 'listFiles',
+      kind: 'read',
+      title: 'List files',
+      rawInput: { path: '.' },
+      locations: [{ path: join(cwd, 'main.scad'), line: 1 }],
+      content: [{ type: 'content', content: { type: 'text', text: 'main.scad\nhello.txt' } }],
+    },
+    {
+      toolCallId: 'shell-1',
+      name: 'shell',
+      kind: 'execute',
+      title: 'Run the kernel',
+      rawInput: { command: 'openscad main.scad' },
+      content: [{ type: 'terminal', terminalId: 'terminal-1' }],
+    },
+    {
+      toolCallId: 'think-1',
+      name: 'think',
+      kind: 'think',
+      title: 'Consider the fillet radius',
+      content: [{ type: 'content', content: { type: 'text', text: '2mm clears the boss' } }],
+    },
+    {
+      toolCallId: 'fetch-1',
+      name: 'webFetch',
+      kind: 'fetch',
+      title: 'Read the datasheet',
+      rawInput: { url: 'https://example.invalid/datasheet' },
+      content: [{ type: 'content', content: { type: 'text', text: 'M3 clearance 3.4mm' } }],
+    },
+    {
+      toolCallId: 'edit-1',
+      name: 'applyPatch',
+      kind: 'edit',
+      title: 'Edit main.scad',
+      locations: [{ path: join(cwd, 'main.scad') }],
+      content: [{ type: 'diff', path: join(cwd, 'main.scad'), oldText: 'cube(10);\n', newText: 'cube(12);\n' }],
+    },
+  ];
+  for (const { content, ...call } of calls) {
+    // oxlint-disable-next-line no-await-in-loop -- the call order is what this sequence exists to prove.
+    await toolCall(sessionId, call);
+    // oxlint-disable-next-line no-await-in-loop -- same.
+    await toolCallUpdate(sessionId, { toolCallId: call.toolCallId, status: 'in_progress', content });
+    // oxlint-disable-next-line no-await-in-loop -- same.
+    await toolCallUpdate(sessionId, {
+      toolCallId: call.toolCallId,
+      status: 'completed',
+      content,
+      rawOutput: { kind: call.kind },
+    });
+  }
+};
+
+/**
+ * The URL (device-code) login Codex only offers to a client that can present it.
+ *
+ * The whole point of the flow, in three frames: a request carrying the
+ * verification URL and the code, the client's answer, and the notification that
+ * says the user finished. The code rides `_meta`, where a real agent puts it.
+ *
+ * @param sessionId - Session the login belongs to.
+ * @param url - Where the fixture says the user should sign in.
+ */
+const driveUrlLogin = async (sessionId: string, url = 'https://example.invalid/device'): Promise<void> => {
+  if (!urlElicitation) {
+    await textChunk(sessionId, 'login: this client cannot present a url elicitation');
+    return;
+  }
+  const elicitationId = 'login-1';
+  const answer = await request('elicitation/create', {
+    sessionId,
+    mode: 'url',
+    elicitationId,
+    url,
+    message: 'Open the verification page and enter FAKE-CODE.',
+    _meta: { code: 'FAKE-CODE' },
+  });
+  send({ jsonrpc: '2.0', method: 'elicitation/complete', params: { elicitationId } });
+  await pause(1);
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- the elicitation response shape is fixed by ACP.
+  const action = (answer.result as { action?: string } | undefined)?.action ?? 'none';
+  await textChunk(sessionId, `login: ${action}`);
+};
+
+/**
+ * The question Claude's `AskUserQuestion` bridge sends, answered by the person on Tau's card.
+ *
+ * @param sessionId - Session asking.
+ */
+const askForm = async (sessionId: string): Promise<void> => {
+  if (!formElicitation) {
+    await textChunk(sessionId, 'ask-form: this client cannot present a form elicitation');
+    return;
+  }
+  const answer = await request('elicitation/create', {
+    sessionId,
+    toolCallId: 'ask-1',
+    mode: 'form',
+    message: 'Print the enclosure in PETG or PLA?',
+    requestedSchema: {
+      type: 'object',
+      properties: {
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- claude-agent-acp's wire field name
+        question_0: {
+          type: 'string',
+          title: 'Material',
+          oneOf: [
+            { const: 'PETG (Recommended)', title: 'PETG (Recommended)', description: 'Tougher; slower.' },
+            { const: 'PLA', title: 'PLA', description: 'Faster; softens near 60 °C.' },
+          ],
+        },
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- claude-agent-acp's wire field name
+        question_0_custom: {
+          type: 'string',
+          title: 'Other',
+          _meta: { _askUserQuestionCustomAnswer: { questionId: 'question_0', isCustomAnswer: true } },
+        },
+      },
+    },
+  });
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- the elicitation response shape is fixed by ACP.
+  const result = answer.result as { action?: string; content?: unknown } | undefined;
+  await textChunk(sessionId, `ask-form: ${result?.action ?? 'none'} ${JSON.stringify(result?.content ?? null)}`);
+};
+
+/** Request a secret-marked form across the actual wire; it must never become a project record. */
+const askSecretForm = async (sessionId: string): Promise<void> => {
+  const answer = await request('elicitation/create', {
+    sessionId,
+    mode: 'form',
+    message: 'PRIVATE_FIELD_CANARY',
+    requestedSchema: {
+      type: 'object',
+      required: ['secret'],
+      properties: { secret: { type: 'string', writeOnly: true } },
+    },
+    // oxlint-disable-next-line tau-lint/no-time-unit-suffix -- codex-acp wire spelling; prevents the pre-fix fixture from hanging.
+    _meta: { codex: { autoResolutionMs: 0 } },
+  });
+  await textChunk(sessionId, `ask-secret-form: ${JSON.stringify(answer.result)}`);
+};
+
+/**
+ * The permission-gated write every turn ends with.
+ *
+ * @param sessionId - Session performing the write.
+ * @param session - That session's state.
+ * @param text - Prompt text, which is also the file's content.
+ * @returns `true` when the write happened, `false` when it was refused.
+ */
+const writeGatedFile = async (sessionId: string, session: SessionState, text: string): Promise<boolean> => {
+  await toolCall(sessionId, { toolCallId: 'write-1', title: 'write hello.txt', rawInput: { path: 'hello.txt' } });
+  /* SP-4 Result 3: a real adapter under the user's own `approval_policy =
+   * "never"` writes without asking at all, so the fixture models that too. */
+  const asked = text.includes('noask')
+    ? Promise.resolve({ result: { outcome: { outcome: 'selected', optionId: 'allow' } } })
+    : request('session/request_permission', {
+        sessionId,
+        toolCall: { toolCallId: 'write-1', title: 'write hello.txt', _meta: { token: 'permission-metadata-canary' } },
+        options: [
+          { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+          { optionId: 'allow-session', name: 'Allow for this session', kind: 'allow_always' },
+          {
+            optionId: 'allow-always',
+            name: 'Always allow',
+            kind: 'allow_always',
+            _meta: { token: 'permission-metadata-canary' },
+          },
+          { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
+        ],
+      });
+  if (text.includes('update-while-asking')) {
+    /* Long enough for the host to record the request durably before the refinement lands. */
+    await pause(250);
+    await toolCallUpdate(sessionId, { toolCallId: 'write-1', status: 'in_progress', rawInput: { path: 'hello.txt' } });
+  }
+  const permission = await asked;
+  if (text.includes('update-while-asking')) {
+    await textChunk(sessionId, 'Writing hello.txt now.');
+    /* Past the host's idle flush, so the line is its own durable message before the call completes. */
+    await pause(400);
+  }
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- the permission response shape is fixed by ACP.
+  const outcome = (permission.result as { outcome?: { outcome?: string; optionId?: string } } | undefined)?.outcome;
+  if (outcome?.outcome !== 'selected' || !outcome.optionId?.startsWith('allow')) {
+    await toolCallUpdate(sessionId, {
+      toolCallId: 'write-1',
+      status: 'failed',
+      /* The id is echoed, not just the outcome: a client that names one option
+       * out of several has to be able to prove which one reached the agent. */
+      rawOutput: { outcome: outcome?.outcome ?? 'unknown', optionId: outcome?.optionId ?? 'none' },
+    });
+    return false;
+  }
+  await writeFile(join(session.cwd, 'hello.txt'), text, 'utf8');
+  await toolCallUpdate(sessionId, {
+    toolCallId: 'write-1',
+    ...(text.includes('clear-title') ? { title: '' } : {}),
+    status: 'completed',
+    /* Echoed on success too, so a named option is provable either way. */
+    rawOutput: { path: 'hello.txt', bytes: Buffer.byteLength(text), optionId: outcome.optionId },
+  });
+  return true;
+};
+
+// oxlint-disable-next-line eslint/max-lines-per-function -- one prompt is one keyword table; splitting it would hide the order the updates arrive in.
+const runPrompt = async (sessionId: string, blocks: readonly unknown[]): Promise<string> => {
+  const session = sessions.get(sessionId);
+  if (!session) {
+    return 'refusal';
+  }
+  const text = promptText(blocks);
+  session.prompts.push(text);
+  saveSessions();
+  await textChunk(
+    sessionId,
+    JSON.stringify({
+      cwd: session.cwd,
+      env: Object.keys(process.env).toSorted((a, b) => a.localeCompare(b)),
+      model: session.model,
+      turn: session.prompts.length,
+    }),
+  );
+  await update(sessionId, {
+    sessionUpdate: 'usage_update',
+    used: 1200 * session.prompts.length,
+    size: 200_000,
+    cost: { amount: 0.01 * session.prompts.length, currency: 'USD' },
+  });
+  if (session.prompts.length > 1) {
+    await textChunk(sessionId, `transcript: ${session.prompts.join(' | ')}`);
+  }
+  /* An agent that hits its own token ceiling, refuses, or is told to stop still
+   * answers the prompt request — with a stop reason, not an error. */
+  const forced = /stop:([a-z_]+)/u.exec(text)?.[1];
+  if (forced !== undefined) {
+    return forced;
+  }
+  if (text.includes('updates')) {
+    await emitPresentationUpdates(sessionId);
+  }
+  if (text.includes('skills') || text.includes('skill-names')) {
+    await reportNativeSkills(sessionId, session, text.includes('skill-names'));
+  }
+  if (text.includes('switch')) {
+    session.model = models.find((candidate) => candidate !== session.model) ?? session.model;
+    saveSessions();
+    await update(sessionId, { sessionUpdate: 'config_option_update', configOptions: configOptionsOf(session) });
+    await textChunk(sessionId, `model: ${session.model}`);
+  }
+  if (text.includes('slow')) {
+    for (let waited = 0; waited < 300 && !cancelled.has(sessionId); waited += 1) {
+      // oxlint-disable-next-line no-await-in-loop -- polling for a cancel notification is ordered by construction.
+      await pause(100);
+    }
+    return cancelled.has(sessionId) ? 'cancelled' : 'end_turn';
+  }
+  if (text.includes('fs-inflight')) {
+    void request('fs/write_text_file', { sessionId, path: 'admitted.txt', content: 'admitted write' });
+    await pause(250);
+    return 'end_turn';
+  }
+  if (text.includes('ask-secret-form')) {
+    await askSecretForm(sessionId);
+  }
+  if (text.includes('ask-form')) {
+    await askForm(sessionId);
+  }
+  if (text.includes('login')) {
+    /* `unsafe` makes the agent name a scheme no browser should follow, which is
+     * the one thing the client has to drop before any surface renders it. */
+    // oxlint-disable-next-line eslint/no-script-url -- naming the scheme the client must drop is this branch's whole purpose.
+    await driveUrlLogin(sessionId, text.includes('unsafe') ? 'javascript:fetch("/steal")' : undefined);
+  }
+  if (text.includes('escape')) {
+    await attemptEscape(sessionId, session.cwd);
+  }
+  if (text.includes('wrong-session')) {
+    await attemptWrongSession(sessionId);
+  }
+  if (text.includes('abandon')) {
+    /* Asked and then gone: the request is sent, never answered, and this process
+     * dies with it outstanding — what an OOM, a crash or a dropped connection
+     * looks like to a host holding a permission the user was going to answer. */
+    void request('session/request_permission', {
+      sessionId,
+      toolCall: { toolCallId: 'write-1', title: 'write hello.txt' },
+      options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+    });
+    /* Long enough for the request to leave this process's stdout pipe and for
+     * the host to record it durably; `process.exit` discards what is still
+     * queued. */
+    await pause(250);
+    // oxlint-disable-next-line unicorn/no-process-exit -- dying mid-permission is this branch's whole purpose.
+    process.exit(1);
+  }
+  if (text.includes('tools')) {
+    await emitToolCalls(sessionId, session.cwd);
+  }
+  if (!(await writeGatedFile(sessionId, session, text))) {
+    return 'refusal';
+  }
+  if (text.includes('mcp-screenshot')) {
+    /* A new project's `main.scad` is empty, and an empty model has nothing to frame. */
+    await request('fs/write_text_file', { sessionId, path: 'main.scad', content: 'cube(10);\n' });
+    await callTauMcp(sessionId, session.mcpServers, 'screenshot', { targetFile: 'main.scad', mode: 'single' }, 'mcp-2');
+  }
+  if (text.includes('mcp-arrange-conflict') || text.includes('mcp-arrange-workbench')) {
+    await request('fs/write_text_file', { sessionId, path: 'main.scad', content: 'cube(10);\n' });
+    await callTauMcp(
+      sessionId,
+      session.mcpServers,
+      'arrange_workbench',
+      {
+        views: [{ id: 'front', name: 'Front', entryPath: 'main.scad', camera: { kind: 'preset', preset: 'front' } }],
+      },
+      'mcp-arrange-1',
+    );
+    if (text.includes('mcp-arrange-conflict')) {
+      await callTauMcp(
+        sessionId,
+        session.mcpServers,
+        'arrange_workbench',
+        {
+          basedOn: 'missing',
+          open: [{ kind: 'pane', pane: 'parameters' }],
+        },
+        'mcp-arrange-conflict-2',
+      );
+    }
+    return cancelled.has(sessionId) ? 'cancelled' : 'end_turn';
+  }
+  if (text.includes('mcp')) {
+    /* `mcp-when:<path>`: hold the call until the test creates that file, so a
+     * test can move the endpoint's clock while this prompt is in flight. */
+    const gate = /mcp-when:(\S+)/u.exec(text)?.[1];
+    if (gate !== undefined) {
+      for (let waited = 0; waited < 300 && !existsSync(gate); waited += 1) {
+        // oxlint-disable-next-line no-await-in-loop -- polling for the test's gate file is ordered by construction.
+        await pause(100);
+      }
+    }
+    await callTauMcp(sessionId, session.mcpServers);
+  }
+  return cancelled.has(sessionId) ? 'cancelled' : 'end_turn';
+};
+
+/**
+ * Register (or recover) one session for `session/new`, `resume` and `load`.
+ *
+ * @param sessionId - Session to open.
+ * @param params - Request parameters carrying `cwd` and the MCP servers.
+ * @returns The session's state.
+ */
+const openSession = (sessionId: string, params: Record<string, unknown>): SessionState => {
+  const existing = sessions.get(sessionId);
+  if (existing) {
+    existing.closed = false;
+  }
+  const session: SessionState = existing ?? {
+    cwd: asString(params['cwd'], process.cwd()),
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- the session MCP server list is fixed by ACP.
+    mcpServers: (params['mcpServers'] ?? []) as readonly McpServerEntry[],
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- the additional-directory list is fixed by ACP.
+    additionalDirectories: (params['additionalDirectories'] ?? []) as readonly string[],
+    prompts: [],
+    model: models[0] ?? '',
+    config: {
+      mode: 'default',
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- ACP configuration retains its wire id.
+      thought_level: 'medium',
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- ACP configuration retains its wire id.
+      web_search: false,
+    },
+  };
+  sessions.set(sessionId, session);
+  cancelled.delete(sessionId);
+  saveSessions();
+  return session;
+};
+
+/**
+ * The methods `getCodexAuthMethods` in codex-acp 1.7.0 lists: none carries a terminal command, so
+ * the only paste-ready command a surface can show is the profile's own login.
+ *
+ * @returns The methods, in the adapter's order.
+ */
+const codexAuthMethods = (): Array<Record<string, unknown>> => [
+  {
+    id: 'api-key',
+    name: 'API Key',
+    description: 'Use an API key to authenticate',
+    _meta: { 'api-key': { provider: 'openai' } },
+  },
+  { id: 'chat-gpt', name: 'ChatGPT', description: 'Use ChatGPT to authenticate' },
+  ...(urlElicitation
+    ? [
+        {
+          id: 'chat-gpt-device-code',
+          name: 'ChatGPT (device code)',
+          description: 'Sign in to ChatGPT by opening a verification page and entering a one-time code',
+        },
+      ]
+    : []),
+];
+
+/**
+ * The local login methods of claude-agent-acp 0.70.0. Its `terminal-auth` command is
+ * the adapter's *own* invocation, so a host that runs it with its own runtime
+ * is handed that runtime and the adapter module as the "login command".
+ *
+ * @returns The methods, in the adapter's order.
+ */
+const claudeAuthMethods = (): Array<Record<string, unknown>> => {
+  const method = ({
+    id,
+    name,
+    description,
+    label,
+    flag,
+  }: Readonly<Record<'id' | 'name' | 'description' | 'label' | 'flag', string>>): Record<string, unknown> => ({
+    description,
+    name,
+    id,
+    type: 'terminal',
+    args: ['--cli', 'auth', 'login', flag],
+    ...(metaTerminalAuth
+      ? {
+          _meta: {
+            'terminal-auth': {
+              command: process.execPath,
+              args: [...process.argv.slice(1), '--cli', 'auth', 'login', flag],
+              label,
+            },
+          },
+        }
+      : {}),
+  });
+  return [
+    method({
+      id: 'claude-ai-login',
+      name: 'Claude Subscription',
+      description: 'Use Claude subscription ',
+      label: 'Claude Login',
+      flag: '--claudeai',
+    }),
+    method({
+      id: 'console-login',
+      name: 'Anthropic Console',
+      description: 'Use Anthropic Console (API usage billing)',
+      label: 'Anthropic Console Login',
+      flag: '--console',
+    }),
+  ];
+};
+
+/**
+ * What `initialize` advertises, which the auth mode changes.
+ *
+ * @returns The `InitializeResponse` body.
+ */
+const initializeResult = (): Record<string, unknown> => ({
+  protocolVersion: inMode('protocol-2') ? 2 : 1,
+  agentCapabilities: {
+    loadSession: true,
+    sessionCapabilities: {
+      ...(inMode('grok-load') ? {} : { resume: {} }),
+      close: {},
+      ...(inMode('no-additional-directories') || [...modes].some((entry) => entry.startsWith('grok'))
+        ? {}
+        : { additionalDirectories: {} }),
+    },
+    ...(inMode('no-http') ? {} : { mcpCapabilities: { http: true } }),
+    /* Both real pins advertise `image` too; the fixture withholds it unless the
+     * `images` mode names it, so the refusal path has something to refuse. */
+    promptCapabilities: { image: inMode('images'), embeddedContext: !inMode('text-only') },
+  },
+  ...([...modes].some((entry) => entry.startsWith('grok')) ? { _meta: { 'x.ai/pluginDirs': true } } : {}),
+  authMethods: inMode('auth-required')
+    ? codexAuthMethods()
+    : inMode('claude-terminal-auth')
+      ? claudeAuthMethods()
+      : inMode('grok-auth')
+        ? [{ id: 'grok.com', name: 'Grok' }]
+        : [],
+});
+
+/**
+ * Answer one `session/prompt`: run the turn, then report its usage.
+ *
+ * @param sessionId - Session being prompted.
+ * @param blocks - The prompt's content blocks.
+ * @returns The `PromptResponse` body.
+ */
+const promptResult = async (sessionId: string, blocks: readonly unknown[]): Promise<Record<string, unknown>> => {
+  const stopReason = await runPrompt(sessionId, blocks);
+  if (promptText(blocks).includes('late-auth')) {
+    /* An agent that asks *after* its turn ended — the window the host's own
+     * "only while a turn is in flight" invariant covers.
+     * async-iife: bootstrap -- the point of the keyword is work this response
+     * must not wait for; the fixture exits when its stream closes. */
+    void (async () => {
+      /* Long enough for the client to have finished flushing the turn it just
+       * answered; the point of the keyword is the window *after* that. */
+      await pause(250);
+      await driveUrlLogin(sessionId);
+    })();
+  }
+  if (promptText(blocks).includes('late-state')) {
+    // async-iife: bootstrap -- fixture notification deliberately arrives after the prompt response.
+    void (async () => {
+      await pause(250);
+      await update(sessionId, {
+        sessionUpdate: 'available_commands_update',
+        availableCommands: [{ name: 'late-command', description: 'Reported between turns' }],
+      });
+    })();
+  }
+  const turns = sessions.get(sessionId)?.prompts.length ?? 1;
+  return {
+    stopReason,
+    usage: { totalTokens: 1500 * turns, inputTokens: 1200 * turns, outputTokens: 300 * turns, thoughtTokens: 0 },
+  };
+};
+
+// oxlint-disable-next-line eslint/max-lines-per-function -- the method table is the fixture's whole contract.
+const handle = async (message: JsonRpcMessage): Promise<void> => {
+  if (message.id !== undefined && message.method === undefined) {
+    pending.get(Number(message.id))?.(message);
+    pending.delete(Number(message.id));
+    return;
+  }
+  const params = message.params ?? {};
+  const reply = (result: unknown): void => {
+    if (message.id !== undefined) {
+      send({ jsonrpc: '2.0', id: message.id, result });
+    }
+  };
+  const fail = (code: number, text: string): void => {
+    if (message.id !== undefined) {
+      send({ jsonrpc: '2.0', id: message.id, error: { code, message: text } });
+    }
+  };
+  switch (message.method) {
+    case 'initialize': {
+      urlElicitation = advertisesUrlElicitation(params);
+      formElicitation = asRecord(asRecord(params['clientCapabilities'])?.['elicitation'])?.['form'] !== undefined;
+      metaTerminalAuth = asRecord(asRecord(params['clientCapabilities'])?.['_meta'])?.['terminal-auth'] === true;
+      airSessionFailures = advertisesAirSessionFailures(params);
+      if (inMode('silent')) {
+        /* The adapter that never answers: the client's own timeout is the only
+         * thing that can end this turn. */
+        return;
+      }
+      reply(initializeResult());
+      return;
+    }
+    case 'session/new': {
+      if (inMode('auth-required') || inMode('grok-auth')) {
+        fail(-32_000, 'Authentication required');
+        return;
+      }
+      const sessionId = nextSessionId();
+      const session = openSession(sessionId, params);
+      reply({ sessionId, configOptions: configOptionsOf(session) });
+      if (inMode('pushed-models')) {
+        /* Grok's push carries no session id and arrives after the answer (69-157 ms on a real CLI). */
+        setTimeout(() => {
+          modelsPushed = true;
+          send({
+            jsonrpc: '2.0',
+            method: '_x.ai/models/update',
+            params: {
+              currentModelId: session.model,
+              availableModels: [...models, ...pushedModels].map((modelId) => ({ modelId, name: modelId })),
+            },
+          });
+        }, 100);
+      }
+      return;
+    }
+    case 'session/resume': {
+      if (inMode('restore-auth')) {
+        fail(-32_000, 'Authentication required');
+        return;
+      }
+      /* Resume restores nothing to the client by contract — the caller keeps
+       * the transcript it already has. */
+      reply({ configOptions: configOptionsOf(openSession(asString(params['sessionId']), params)) });
+      return;
+    }
+    case 'session/load': {
+      if (inMode('restore-auth')) {
+        fail(-32_000, 'Authentication required');
+        return;
+      }
+      const sessionId = asString(params['sessionId']);
+      const session = openSession(sessionId, params);
+      /* Load replays: one chunk per stored prompt, before the reply, which is
+       * the only wire-visible difference from `resume`. */
+      for (const prompt of session.prompts) {
+        // oxlint-disable-next-line no-await-in-loop -- replay is ordered by construction.
+        await textChunk(sessionId, `replay: ${prompt}`);
+      }
+      reply({ configOptions: configOptionsOf(session) });
+      return;
+    }
+    case 'session/set_config_option': {
+      const session = sessions.get(asString(params['sessionId']));
+      if (!session) {
+        fail(-32_602, 'Unknown session');
+        return;
+      }
+      const configId = asString(params['configId']);
+      if (configId === 'model') {
+        session.model = asString(params['value'], session.model);
+        /* A model without the current mode clamps it to `default`, as claude-agent-acp does. */
+        if (!modesOf(session.model).includes(String(session.config['mode']))) {
+          session.config['mode'] = 'default';
+        }
+        saveSessions();
+      } else if (
+        configId in session.config &&
+        (typeof params['value'] === 'string' || typeof params['value'] === 'boolean')
+      ) {
+        session.config[configId] = params['value'];
+        saveSessions();
+      }
+      reply({ configOptions: configOptionsOf(session) });
+      return;
+    }
+    case 'session/close': {
+      const session = sessions.get(asString(params['sessionId']));
+      if (session) {
+        session.closed = true;
+      }
+      saveSessions();
+      reply({});
+      return;
+    }
+    case 'session/cancel': {
+      if (!inMode('deaf')) {
+        cancelled.add(asString(params['sessionId']));
+      }
+      return;
+    }
+    case 'session/prompt': {
+      /* A cancel belongs to the prompt in flight; a later prompt starts uncancelled (W10-F1). */
+      cancelled.delete(asString(params['sessionId']));
+      const promptSession = sessions.get(asString(params['sessionId']));
+      /* A real agent errors here; a stop reason would make "the session is
+       * gone" indistinguishable from "the model refused" (review 1-review S5). */
+      if (!promptSession || promptSession.closed) {
+        fail(-32_602, 'Unknown session');
+        return;
+      }
+      if (inMode('prompt-auth')) {
+        fail(-32_000, 'Authentication required');
+        return;
+      }
+      const promptSessionId = asString(params['sessionId']);
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- the prompt block list is fixed by ACP.
+      const text = promptText((params['prompt'] ?? []) as readonly unknown[]);
+      const limit = providerFailures[/fail:([a-z]+)/u.exec(text)?.[1] ?? ''];
+      for (const rateLimit of claudeRateLimits(text)) {
+        // oxlint-disable-next-line no-await-in-loop -- one status change per update, in the order the CLI reports them.
+        await update(promptSessionId, {
+          sessionUpdate: 'usage_update',
+          used: 1200,
+          size: 200_000,
+          _meta: { '_claude/rateLimit': rateLimit },
+        });
+      }
+      if (limit && airSessionFailures) {
+        reply({
+          stopReason: 'end_turn',
+          _meta: {
+            ...(text.includes('reset:codex')
+              ? { '_codex/rateLimit': { resetsAt: epochIn(3600), windowMinutes: 300 } }
+              : {}),
+            jetbrains: {
+              air: {
+                version: 1,
+                sessionFailure: {
+                  id: `${promptSessionId}:error`,
+                  revision: 1,
+                  category: limit.category,
+                  severity: 'error',
+                  title: limit.title,
+                  actions: limit.actions,
+                },
+              },
+            },
+          },
+        });
+        return;
+      }
+      if (limit !== undefined || text.includes('crash')) {
+        if (limit !== undefined) {
+          await textChunk(promptSessionId, `${limit.title}\n\n`);
+        }
+        /* Flushed, and a beat given, before the rejection: the client reads stderr and stdout on separate pipes. */
+        await new Promise<void>((resolve) => {
+          process.stderr.write(
+            `[SYSTEM_ERROR] Prompt for session ${promptSessionId} failed: RequestError: Internal error\n    at fake-agent\n`,
+            () => {
+              setTimeout(resolve, 20);
+            },
+          );
+        });
+        fail(-32_603, 'Internal error');
+        return;
+      }
+      reply(
+        await promptResult(
+          asString(params['sessionId']),
+          // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- the prompt block list is fixed by ACP.
+          (params['prompt'] ?? []) as readonly unknown[],
+        ),
+      );
+      return;
+    }
+    default: {
+      fail(-32_601, `Unknown method ${asString(message.method, '(none)')}`);
+    }
+  }
+};
+
+let buffer = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk: string) => {
+  buffer += chunk;
+  const lines = buffer.split('\n');
+  buffer = lines.pop() ?? '';
+  for (const line of lines) {
+    if (line.trim() === '') {
+      continue;
+    }
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- inbound frames are JSON-RPC by construction of the stream.
+    const message = JSON.parse(line) as JsonRpcMessage;
+    /* async-iife: bootstrap. Concurrently, never chained: a chain would queue
+     * the permission *response* behind the `session/prompt` request that is
+     * waiting for it, and a `session/cancel` behind the turn it should stop. */
+    const dispatch = async (): Promise<void> => {
+      try {
+        await handle(message);
+      } catch {
+        /* A fixture that cannot answer one frame keeps serving the rest. */
+      }
+    };
+    void dispatch();
+  }
+});

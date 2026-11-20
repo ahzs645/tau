@@ -1,0 +1,534 @@
+import { readFileSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm, writeFile, appendFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createNodeEventLog } from '@taucad/agent-host/node';
+import type { BindingKernelRow } from '@taucad/chat/prompts';
+import type { HostRunSnapshot, ToolRegistry } from '@taucad/agent-host';
+import { kernelRoutingDevelopmentCases, kernelRoutingRoutingCases } from '#testing/live/kernel-routing.cases.js';
+import type { KernelRoutingCase } from '#testing/live/kernel-routing.cases.js';
+import {
+  gradeKernelRoutingCase,
+  kernelRoutingDevelopmentThresholds,
+  stratumOf,
+  summarizeKernelRoutingGate,
+  summarizeKernelRoutingRun,
+} from '#testing/live/kernel-routing.grader.js';
+import { selectKernelRoutingCases } from '#testing/live/kernel-routing.heldout.js';
+import type { KernelRoutingObservation } from '#testing/live/kernel-routing.grader.js';
+import {
+  buildFixture,
+  checkpointKey,
+  checkpointedRuns,
+  comparePersonArm,
+  createRoutingToolHandler,
+  exampleRoutingCase,
+  formatSpendProgress,
+  isPersonProfileArm,
+  kernelTextFor,
+  observePromptOnly,
+  observeRun,
+  personFor,
+  personProfileArms,
+  perturbedProfile,
+  projectReminder,
+  promptOnlySystemPrompt,
+  spendProgress,
+  summarizeExampleRuns,
+  withKernelText,
+} from '#testing/live/kernel-routing.runner.js';
+import type { ExampleSuggestion, KernelRoutingArm, RoutingRunResult } from '#testing/live/kernel-routing.runner.js';
+import { runUsage, textOf } from '#testing/live/live-assertions.js';
+import {
+  createLiveSession,
+  createLiveToolRegistry,
+  hasLiveCredential,
+  liveCadSystemPrompt,
+  liveCredentialName,
+  liveSessionModel,
+  runWithRateLimitRetry,
+  startLiveGateway,
+} from '#testing/live/live-gateway.harness.js';
+import type { LiveGateway } from '#testing/live/live-gateway.harness.js';
+import { loadWorkspaceKernelRows } from '#testing/live/workspace-modules.js';
+
+/**
+ * AKS-S1, the kernel routing spike (blueprint Appendix E). Runs the development corpus through the production CAD
+ * prompt and toolbelt on Tau's own gateway, with the per-turn kernel text each arm sends, and writes one JSONL row per
+ * case plus a summary against the development thresholds to `TAU_KR_OUT`. The run records; it asserts only that every
+ * case produced an observation, because AKS-S1's thresholds decide a design ruling (D1), not a build.
+ *
+ * Credential: `ANTHROPIC_API_KEY` in `apps/api/.env`, or `TAU_TEST_ANTHROPIC_API_KEY` in a cloud agent session (`vitest.live.config.ts`).
+ *
+ * Environment:
+ * - `TAU_KR_MODELS`: comma-separated catalog ids (default Sonnet 5.5, Opus 5.5 and Haiku 5.5).
+ * - `TAU_KR_ARMS`: `in-turn,pointer,template,prompt-only` (the default; the pointer arm runs on Sonnet only), and by
+ *   name only: `person-printing,person-mechanical,person-electronics,person-art`, the in-turn arm with that setup
+ *   profile's `<person>` block on the development set (never the held-out set), and `examples`. When the in-turn arm and
+ *   a person-profile arm have rows for a model in `TAU_KR_OUT`, from this run or an earlier one, the run writes
+ *   `person.<model>.comparison.json`, each profile against the no-block in-turn arm.
+ * - `TAU_KR_EXAMPLES`: a JSON array of Home suggestions (`id`, `prompt`, `goals`, `needs`) for the `examples` arm, which
+ *   sends each under Auto on the web host; its summary carries each suggestion's verdict.
+ * - `TAU_KR_LIMIT`: run only the first N cases of each arm (the 10-case smoke sets the caps).
+ * - `TAU_KR_CASES`: comma-separated case ids to run.
+ * - `TAU_KR_CONCURRENCY`: parallel turns (default 4). `TAU_KR_MAX_USD`: stop scheduling past this spend.
+ * - `TAU_KR_OUT`: output directory (default `<tmpdir>/tau-kernel-routing-runs/<time>`).
+ * - `KERNEL_ROUTING_SET=heldout`: the in-turn arm runs the held-out set (AKS-3d) instead of the development set. This is
+ *   the AKS-11 gate run, and its summary is checked against D9's gate (`summarizeKernelRoutingGate`).
+ * - `TAU_KR_REPEATS`: runs of each case (default 1; the gate uses 3, a case passing when at least two do).
+ */
+
+const gateModel = 'anthropic-claude-sonnet-5.5';
+const models = (process.env['TAU_KR_MODELS'] ?? `${gateModel},anthropic-claude-opus-5.5,anthropic-claude-haiku-5.5`)
+  .split(',')
+  .map((id) => id.trim())
+  .filter(Boolean);
+const defaultArms: readonly KernelRoutingArm[] = ['in-turn', 'pointer', 'template', 'prompt-only'];
+const supportedArms: readonly KernelRoutingArm[] = [...defaultArms, ...personProfileArms, 'examples'];
+const isArm = (arm: string): arm is KernelRoutingArm => (supportedArms as readonly string[]).includes(arm);
+const requestedArms = (process.env['TAU_KR_ARMS'] ?? defaultArms.join(','))
+  .split(',')
+  .map((arm) => arm.trim())
+  .filter(Boolean);
+const unknownArms = requestedArms.filter((arm) => !isArm(arm));
+if (unknownArms.length > 0) {
+  throw new Error(`TAU_KR_ARMS names unknown arms ${unknownArms.join(', ')}; use ${supportedArms.join(', ')}.`);
+}
+const arms = requestedArms.filter((arm) => isArm(arm));
+const limit = Number(process.env['TAU_KR_LIMIT'] ?? '0');
+const onlyCases = new Set(
+  (process.env['TAU_KR_CASES'] ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean),
+);
+const concurrency = Math.max(1, Number(process.env['TAU_KR_CONCURRENCY'] ?? '4'));
+const repeats = Math.max(1, Number(process.env['TAU_KR_REPEATS'] ?? '1'));
+/** The in-turn arm's cases: the development set, or the held-out set by name at the gate. */
+const inTurnCases = selectKernelRoutingCases();
+const gateRun = inTurnCases !== kernelRoutingDevelopmentCases;
+const maxUsd = Number(process.env['TAU_KR_MAX_USD'] ?? 'Infinity');
+/** Graded runs already in an arm's JSONL file are kept and not sent again, unless `TAU_KR_FRESH=1` starts over. */
+const fresh = process.env['TAU_KR_FRESH'] === '1';
+/** Milliseconds. */
+const caseTimeout = Number(process.env['TAU_KR_CASE_TIMEOUT_MS'] ?? '360000');
+/** This process's run, stamped on every row so a comparison can tell rows from an earlier run in `TAU_KR_OUT`. */
+const runId = new Date().toISOString();
+const outDirectory = resolve(
+  process.env['TAU_KR_OUT'] ?? join(tmpdir(), 'tau-kernel-routing-runs', new Date().toISOString()),
+);
+
+/** The Home suggestions the examples arm sends, read from `TAU_KR_EXAMPLES`. */
+const examplesFile = process.env['TAU_KR_EXAMPLES'];
+if (arms.includes('examples') && examplesFile === undefined) {
+  throw new Error('The examples arm reads its suggestions from TAU_KR_EXAMPLES; set it to a JSON file.');
+}
+// Read only when the arm runs, so other arms never depend on the file.
+const exampleCases: readonly KernelRoutingCase[] =
+  examplesFile === undefined || !arms.includes('examples')
+    ? []
+    : (JSON.parse(readFileSync(examplesFile, 'utf8')) as readonly ExampleSuggestion[]).map((example) =>
+        exampleRoutingCase(example),
+      );
+
+/** Twenty routing cases spread over the families, for the pointer subset. */
+const pointerCases = kernelRoutingRoutingCases.filter((_, index) => index % 5 < 2);
+/** The routing cases replicad cannot serve: the fallback-template arm. */
+const templateCases = kernelRoutingRoutingCases.filter((testCase) => stratumOf(testCase) === 'N');
+/** Creation-time cases: the prompt-only alternative names a kernel before any project exists. */
+const promptOnlyCases = kernelRoutingDevelopmentCases.filter(
+  (testCase) => testCase.fixture.kind === 'entry-less' && testCase.preference === 'auto',
+);
+
+const baseCasesFor = (arm: KernelRoutingArm): readonly KernelRoutingCase[] =>
+  isPersonProfileArm(arm)
+    ? kernelRoutingDevelopmentCases
+    : arm === 'examples'
+      ? exampleCases
+      : arm === 'pointer'
+        ? pointerCases
+        : arm === 'template'
+          ? templateCases
+          : arm === 'prompt-only'
+            ? promptOnlyCases
+            : inTurnCases;
+
+/** An explicit `TAU_KR_CASES` id that no selected arm runs is a typo, not an empty run. */
+const unmatchedCases = [...onlyCases].filter((id) => !arms.some((arm) => baseCasesFor(arm).some((c) => c.id === id)));
+if (unmatchedCases.length > 0) {
+  throw new Error(`TAU_KR_CASES names ${unmatchedCases.join(', ')}, which no selected arm runs.`);
+}
+
+const casesFor = (arm: KernelRoutingArm): readonly KernelRoutingCase[] => {
+  const base = baseCasesFor(arm);
+  const selected = onlyCases.size > 0 ? base.filter(({ id }) => onlyCases.has(id)) : base;
+  return limit > 0 ? selected.slice(0, limit) : selected;
+};
+
+type CaseRow = RoutingRunResult & {
+  readonly runId: string;
+  readonly arm: KernelRoutingArm;
+  readonly modelId: string;
+  readonly repeat: number;
+  readonly pass: boolean;
+  readonly reason: string;
+  readonly preferredHit?: boolean;
+  readonly costUsd: number;
+  readonly outputTokens: number;
+  readonly steps: number;
+  readonly ms: number;
+};
+
+const pool = async <T>(items: readonly T[], width: number, work: (item: T) => Promise<void>): Promise<void> => {
+  let next = 0;
+  const lane = async (): Promise<void> => {
+    while (next < items.length) {
+      const item = items[next++] as T;
+      // oxlint-disable-next-line no-await-in-loop -- each lane runs its cases one after another
+      await work(item);
+    }
+  };
+  // Let every lane settle before reporting, so one failed case cannot leave other lanes writing after the test ends.
+  const settled = await Promise.allSettled(Array.from({ length: Math.min(width, items.length) }, async () => lane()));
+  const rejected = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (rejected) {
+    throw rejected.reason instanceof Error ? rejected.reason : new Error(String(rejected.reason));
+  }
+};
+
+const personOption = (arm: KernelRoutingArm) => {
+  const person = personFor(arm);
+  return person === undefined ? {} : { person };
+};
+
+/** Each case's graded observations from an arm's JSONL rows; failed runs with no write are infrastructure misses. */
+type ArmObservations = Readonly<{ byCase: Map<string, KernelRoutingObservation[]>; runIds: readonly string[] }>;
+
+/** An arm's rows from an earlier process; a line cut off when that process stopped is ignored. */
+const readRows = async (file: string): Promise<readonly CaseRow[]> => {
+  const text = await readFile(file, 'utf8').catch(() => '');
+  return text
+    .split('\n')
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line) as CaseRow];
+      } catch {
+        return [];
+      }
+    });
+};
+
+const readObservations = async (file: string): Promise<ArmObservations | undefined> => {
+  const text = await readFile(file, 'utf8').catch(() => undefined);
+  if (text === undefined || text.trim() === '') {
+    return undefined;
+  }
+  const byCase = new Map<string, KernelRoutingObservation[]>();
+  const runIds = new Set<string>();
+  for (const line of text.split('\n').filter(Boolean)) {
+    const row = JSON.parse(line) as Partial<Pick<CaseRow, 'runId'>> & Omit<CaseRow, 'runId'>;
+    runIds.add(row.runId ?? 'unrecorded');
+    if (row.state === 'failed' && row.bindingKind === undefined) {
+      continue;
+    }
+    byCase.set(row.observation.caseId, [...(byCase.get(row.observation.caseId) ?? []), row.observation]);
+  }
+  return { byCase, runIds: [...runIds] };
+};
+
+const emptyRegistry: ToolRegistry = {
+  list: () => [],
+  invoke: async () => ({
+    content: { errorCode: 'NO_TOOLS', message: 'No tools in this call.' },
+    isError: true,
+  }),
+};
+
+/**
+ * Only `vitest.live.config.ts` sets `TAU_LIVE_TEST_DEFAULTED`. Under any other config (the integration config's glob
+ * also matches this file) `.env.test` placeholders would read as credentials and the spike would fire real turns.
+ */
+const underLiveConfig = process.env['TAU_LIVE_TEST_DEFAULTED'] !== undefined;
+const runnable = underLiveConfig ? models.filter((modelId) => hasLiveCredential(modelId)) : [];
+
+describe.skipIf(runnable.length === 0)(
+  `kernel routing spike AKS-S1 (set ${liveCredentialName(gateModel)} in apps/api/.env to run)`,
+  () => {
+    let gateway: LiveGateway;
+    let root: string;
+    let kernels: readonly BindingKernelRow[];
+    const spend = { usd: 0 };
+
+    beforeAll(async () => {
+      gateway = await startLiveGateway();
+      root = await mkdtemp(join(tmpdir(), 'tau-api-live-kernel-routing-'));
+      kernels = await loadWorkspaceKernelRows();
+      await mkdir(outDirectory, { recursive: true });
+    });
+
+    afterAll(async () => {
+      await gateway.close();
+      await rm(root, { recursive: true, force: true });
+    });
+
+    const inTurn = async (testCase: KernelRoutingCase, arm: KernelRoutingArm, modelId: string) => {
+      let record: ReturnType<typeof createRoutingToolHandler>['record'] | undefined;
+      const snapshot = await runWithRateLimitRetry(async () => {
+        const chatId = `kr-${testCase.id}-${Math.random().toString(36).slice(2, 8)}`;
+        const project = buildFixture(testCase, arm);
+        let stop = (): void => undefined;
+        const handler = createRoutingToolHandler({
+          project,
+          kernels,
+          profile: perturbedProfile(testCase),
+          stop: () => {
+            stop();
+          },
+        });
+        record = handler.record;
+        const session = await createLiveSession({
+          gateway,
+          chatId,
+          runId: `${chatId}-run-1`,
+          leaderEpoch: `${chatId}-epoch-1`,
+          systemPrompt: withKernelText(
+            liveCadSystemPrompt({ chatId, modelId, kernel: 'replicad', ...personOption(arm) }),
+            kernelTextFor(testCase, arm),
+          ),
+          model: liveSessionModel(modelId),
+          toolRegistry: createLiveToolRegistry({ results: handler.handle }),
+          eventLog: await createNodeEventLog({
+            filePath: join(root, chatId, 'events.jsonl'),
+            access: 'write',
+          }),
+        });
+        // Abort after the tool result is recorded, so the stop costs no further model call.
+        stop = () => {
+          setTimeout(() => {
+            session.abort();
+          }, 50);
+        };
+        const timer = setTimeout(() => {
+          session.abort();
+        }, caseTimeout);
+        try {
+          await session.prompt({
+            id: `${chatId}-user-1`,
+            role: 'user',
+            content: `${projectReminder(project)}${testCase.prompt}`,
+          });
+          return await session.snapshot();
+        } finally {
+          clearTimeout(timer);
+          await session.close();
+        }
+      });
+      if (!record) {
+        throw new Error(`No run record for ${testCase.id}.`);
+      }
+      return {
+        result: observeRun({ caseId: testCase.id, record, snapshot }),
+        snapshot,
+      };
+    };
+
+    const promptOnly = async (testCase: KernelRoutingCase, modelId: string) => {
+      const snapshot: HostRunSnapshot = await runWithRateLimitRetry(async () => {
+        const chatId = `kr-po-${testCase.id}-${Math.random().toString(36).slice(2, 8)}`;
+        const session = await createLiveSession({
+          gateway,
+          chatId,
+          runId: `${chatId}-run-1`,
+          leaderEpoch: `${chatId}-epoch-1`,
+          systemPrompt: promptOnlySystemPrompt(testCase),
+          model: liveSessionModel(modelId),
+          toolRegistry: emptyRegistry,
+          eventLog: await createNodeEventLog({
+            filePath: join(root, chatId, 'events.jsonl'),
+            access: 'write',
+          }),
+        });
+        try {
+          await session.prompt({
+            id: `${chatId}-user-1`,
+            role: 'user',
+            content: testCase.prompt,
+          });
+          return await session.snapshot();
+        } finally {
+          await session.close();
+        }
+      });
+      const text = snapshot.messages
+        .filter((message) => message.role === 'assistant')
+        .map((message) => textOf(message))
+        .join('\n');
+      const observation = observePromptOnly(testCase.id, text);
+      const result: RoutingRunResult = {
+        observation,
+        askedInText: observation.asked,
+        finalText: text,
+        tools: [],
+        state: snapshot.state,
+        ...(snapshot.failure === undefined ? {} : { failure: JSON.stringify(snapshot.failure) }),
+      };
+      return { result, snapshot };
+    };
+
+    for (const modelId of runnable) {
+      for (const arm of arms) {
+        if (arm === 'pointer' && modelId !== gateModel) {
+          continue;
+        }
+        const cases = casesFor(arm);
+        it(`${arm} on ${modelId} (${cases.length} cases)`, { timeout: 0 }, async () => {
+          const file = join(outDirectory, `${arm}.${modelId}.jsonl`);
+          const runs = cases.flatMap((testCase) =>
+            Array.from({ length: repeats }, (_, repeat) => ({ testCase, repeat: repeat + 1 })),
+          );
+          // Resume: keep every graded run already on disk and send only the rest, so a cut-off or repeated run never
+          // pays for the same turn twice. Rows outside this selection stay in the file but out of this summary.
+          const previous = fresh ? new Map<string, CaseRow>() : checkpointedRuns(await readRows(file));
+          await writeFile(file, [...previous.values()].map((row) => `${JSON.stringify(row)}\n`).join(''));
+          const wanted = new Set(runs.map(({ testCase, repeat }) => checkpointKey(testCase.id, repeat)));
+          const rows: CaseRow[] = [...previous.entries()].filter(([key]) => wanted.has(key)).map(([, row]) => row);
+          const pending = runs.filter(({ testCase, repeat }) => !previous.has(checkpointKey(testCase.id, repeat)));
+          const earlierCosts = rows.map(({ costUsd }) => costUsd);
+          const currentCosts: number[] = [];
+          const progress = () =>
+            spendProgress({
+              earlier: earlierCosts,
+              current: currentCosts,
+              remainingRuns: pending.length - currentCosts.length,
+            });
+          console.log(
+            `[kernel-routing] ${arm} ${modelId}: ${rows.length} of ${runs.length} runs already graded; ${formatSpendProgress(progress())}`,
+          );
+          const skipped: string[] = [];
+          await pool(pending, arm === 'prompt-only' ? concurrency * 2 : concurrency, async ({ testCase, repeat }) => {
+            if (spend.usd >= maxUsd) {
+              skipped.push(testCase.id);
+              return;
+            }
+            const started = Date.now();
+            const { result, snapshot } =
+              arm === 'prompt-only' ? await promptOnly(testCase, modelId) : await inTurn(testCase, arm, modelId);
+            const usage = runUsage(snapshot);
+            spend.usd += usage.costUsd;
+            currentCosts.push(usage.costUsd);
+            const grade = gradeKernelRoutingCase(testCase, result.observation);
+            const row: CaseRow = {
+              ...result,
+              runId,
+              arm,
+              modelId,
+              repeat,
+              pass: grade.pass,
+              reason: grade.reason,
+              ...(grade.preferredHit === undefined ? {} : { preferredHit: grade.preferredHit }),
+              costUsd: usage.costUsd,
+              outputTokens: usage.outputTokens,
+              steps: usage.steps,
+              ms: Date.now() - started,
+            };
+            rows.push(row);
+            await appendFile(file, `${JSON.stringify(row)}\n`);
+            console.log(
+              `[kernel-routing] ${arm} ${modelId} ${testCase.id}#${repeat}: ${grade.pass ? 'pass' : 'FAIL'} (${grade.reason}) $${usage.costUsd.toFixed(3)} ${Math.round(row.ms / 1000)}s; ${formatSpendProgress(progress())}`,
+            );
+          });
+          const covered = cases.filter(({ id }) =>
+            // A run the provider failed before any write is an infrastructure miss, listed in failedRuns, not a grade.
+            rows.some(
+              (row) => row.observation.caseId === id && (row.state !== 'failed' || row.bindingKind !== undefined),
+            ),
+          );
+          const graded = rows.filter((row) => row.state !== 'failed' || row.bindingKind !== undefined);
+          const observations: KernelRoutingObservation[] = covered.map(
+            ({ id }) => graded.find((row) => row.observation.caseId === id)!.observation,
+          );
+          const byCase = new Map(
+            covered.map(({ id }) => [
+              id,
+              graded.filter((row) => row.observation.caseId === id).map(({ observation }) => observation),
+            ]),
+          );
+          const durations = rows.map(({ ms }) => ms).sort((left, right) => left - right);
+          const summary = {
+            arm,
+            modelId,
+            set: gateRun && arm === 'in-turn' ? 'heldout' : 'development',
+            repeats,
+            cases: cases.length,
+            run: rows.length,
+            skipped,
+            passed: rows.filter(({ pass }) => pass).length,
+            costUsd: rows.reduce((total, { costUsd }) => total + costUsd, 0),
+            spend: progress(),
+            p50Duration: durations[Math.floor(durations.length / 2)] ?? 0,
+            p95Duration: durations[Math.min(durations.length - 1, Math.floor(durations.length * 0.95))] ?? 0,
+            failedRuns: rows
+              .filter(({ state }) => state === 'failed')
+              .map(({ observation, failure }) => ({
+                caseId: observation.caseId,
+                failure,
+              })),
+            ...(arm === 'examples' ? { examples: summarizeExampleRuns(cases, byCase, repeats) } : {}),
+            ...(gateRun && arm === 'in-turn'
+              ? summarizeKernelRoutingGate(covered, byCase)
+              : repeats > 1
+                ? summarizeKernelRoutingGate(covered, byCase, kernelRoutingDevelopmentThresholds)
+                : summarizeKernelRoutingRun(covered, observations)),
+          };
+          await writeFile(
+            join(outDirectory, `${arm}.${modelId}.summary.json`),
+            `${JSON.stringify(summary, undefined, 2)}\n`,
+          );
+          console.log(`[kernel-routing] summary ${JSON.stringify(summary)}`);
+          expect(rows.length + skipped.length).toBe(runs.length);
+        });
+      }
+      if (!gateRun && arms.some((arm) => arm === 'in-turn' || isPersonProfileArm(arm))) {
+        it(`person-profile comparison on ${modelId}`, async () => {
+          const baseline = await readObservations(join(outDirectory, `in-turn.${modelId}.jsonl`));
+          const comparisons: Record<string, unknown> = {};
+          for (const arm of personProfileArms) {
+            // oxlint-disable-next-line no-await-in-loop -- four small files, read in order
+            const profile = await readObservations(join(outDirectory, `${arm}.${modelId}.jsonl`));
+            if (baseline !== undefined && profile !== undefined) {
+              // Every case this run selects for the arm must be graded on both sides, or the comparison measured a
+              // subset and says nothing about the whole set.
+              const intended = casesFor(arm);
+              const missing = intended
+                .filter(({ id }) => !baseline.byCase.has(id) || !profile.byCase.has(id))
+                .map(({ id }) => id);
+              // Rows from another run may differ in prompt, corpus or repeats: the comparison is labelled, not refused,
+              // since the baseline and an arm are often run separately into one TAU_KR_OUT.
+              const provenance = {
+                runs: { baseline: baseline.runIds, profile: profile.runIds },
+                crossRun: new Set([...baseline.runIds, ...profile.runIds]).size > 1,
+              };
+              comparisons[arm] =
+                missing.length === 0
+                  ? {
+                      cases: intended.length,
+                      ...provenance,
+                      ...comparePersonArm(intended, baseline.byCase, profile.byCase),
+                    }
+                  : { cases: intended.length - missing.length, ...provenance, inconclusive: true, missing, met: false };
+            }
+          }
+          if (Object.keys(comparisons).length > 0) {
+            await writeFile(
+              join(outDirectory, `person.${modelId}.comparison.json`),
+              `${JSON.stringify(comparisons, undefined, 2)}\n`,
+            );
+            console.log(`[kernel-routing] person comparison ${JSON.stringify(comparisons)}`);
+          }
+        });
+      }
+    }
+  },
+);

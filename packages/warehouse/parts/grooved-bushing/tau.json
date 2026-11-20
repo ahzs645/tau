@@ -1,0 +1,17 @@
+{
+  "$schema": "https://tau.new/schemas/tau-v1.json",
+  "name": "Lubricated bushing",
+  "description": "Sleeve with an internal oil-distribution groove and radial oil port.",
+  "tags": [
+    "Shafts and bushings",
+    "parametric",
+    "replicad",
+    "warehouse"
+  ],
+  "assets": {
+    "main": {
+      "entryPath": "main.ts",
+      "thumbnail": "thumbnail.webp"
+    }
+  }
+}

@@ -1,0 +1,736 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import { CacheCorruptionError, CacheRequiredError } from '#errors.js';
+import { createComputeReuseService } from '#compute-reuse.js';
+import { contentDigest, digestAction, digestContent } from '#digest.js';
+import { createMemoryActionStore, createMemoryContentStore } from '#memory-store.js';
+import { unsupportedCacheMaintenance } from '#store.js';
+import type { CacheCodec, CacheRetention, ComputeAction, ComputePublicationTask, EncodedContent } from '#types.js';
+import type { ActionStore, ContentStore } from '#store.js';
+
+const textCodec: CacheCodec<string> = {
+  id: 'text/plain',
+  version: '1',
+  mediaType: 'text/plain;charset=utf-8',
+  encode: async ({ value }) => new TextEncoder().encode(value),
+  decode: async ({ bytes }) => new TextDecoder().decode(bytes),
+};
+
+const action: ComputeAction = {
+  schemaVersion: 1,
+  namespace: 'test.kernel',
+  producer: { id: 'test', version: '1', implementationAssets: [] },
+  operation: 'solve',
+  inputs: [],
+  arguments: { parameter: 2 },
+  environment: null,
+  codec: { id: textCodec.id, version: textCodec.version },
+};
+
+/** Test-only authorized retention owner; production owners are minted by the runtime. */
+const retention = { name: 'test-job' } as unknown as CacheRetention;
+const promote = vi.fn(async () => ({ status: 'promoted' }) as const);
+
+const createService = () => {
+  const contentStore = createMemoryContentStore({ maxBytes: 4096 });
+  const actionStore = createMemoryActionStore({ maxBytes: 4096 });
+  return { contentStore, actionStore, service: createComputeReuseService({ contentStore, actionStore, promote }) };
+};
+
+describe('ComputeReuseService', () => {
+  it('publishes content before the action and reuses the completed result', async () => {
+    const { actionStore, contentStore, service } = createService();
+    const compute = vi.fn(async () => 'solved');
+    const first = await service.evaluate({ action, codec: textCodec, policy: 'required', retention, compute });
+    const second = await service.evaluate({ action, codec: textCodec, policy: 'required', retention, compute });
+
+    expect(first).toMatchObject({ source: 'computed', publication: { status: 'stored' } });
+    expect(second).toMatchObject({ source: 'cache', value: 'solved' });
+    expect(compute).toHaveBeenCalledTimes(1);
+    const actionStatistics = await actionStore.maintenance.inspect({});
+    const contentStatistics = await contentStore.maintenance.inspect({});
+    expect(actionStatistics.status).toBe('supported');
+    expect(contentStatistics.status).toBe('supported');
+  });
+
+  it('reuses a deterministic BRep meshing prefix and recomputes only affected descendants', async () => {
+    const { service } = createService();
+    const source = contentDigest({ value: `sha256:${'4'.repeat(64)}` });
+    const invocations = { repair: 0, tessellate: 0, package: 0 };
+    const evaluatePipeline = async (options: { readonly linearTolerance: number }) => {
+      const repair = await service.evaluate({
+        action: {
+          schemaVersion: 1,
+          namespace: 'test.brep-mesher',
+          producer: { id: 'test-mesher', version: '1', implementationAssets: [] },
+          operation: 'repair',
+          inputs: [{ kind: 'content', role: 'brep', digest: source }],
+          arguments: { tolerance: 0.001 },
+          environment: null,
+          codec: { id: textCodec.id, version: textCodec.version },
+        },
+        codec: textCodec,
+        policy: 'required',
+        retention,
+        compute: async () => {
+          invocations.repair += 1;
+          return 'repaired-brep';
+        },
+      });
+      const tessellation = await service.evaluate({
+        action: {
+          schemaVersion: 1,
+          namespace: 'test.brep-mesher',
+          producer: { id: 'test-mesher', version: '1', implementationAssets: [] },
+          operation: 'tessellate',
+          inputs: [{ kind: 'action', role: 'repaired-brep', digest: repair.actionDigest }],
+          arguments: { linearTolerance: options.linearTolerance, angularTolerance: 0.1 },
+          environment: null,
+          codec: { id: textCodec.id, version: textCodec.version },
+        },
+        codec: textCodec,
+        policy: 'required',
+        retention,
+        compute: async () => {
+          invocations.tessellate += 1;
+          return `${repair.value}:mesh:${String(options.linearTolerance)}`;
+        },
+      });
+      const packaged = await service.evaluate({
+        action: {
+          schemaVersion: 1,
+          namespace: 'test.brep-mesher',
+          producer: { id: 'test-mesher', version: '1', implementationAssets: [] },
+          operation: 'package-glb',
+          inputs: [{ kind: 'action', role: 'mesh', digest: tessellation.actionDigest }],
+          arguments: { format: 'glb', version: 2 },
+          environment: null,
+          codec: { id: textCodec.id, version: textCodec.version },
+        },
+        codec: textCodec,
+        policy: 'required',
+        retention,
+        compute: async () => {
+          invocations.package += 1;
+          return `${tessellation.value}:glb-v2`;
+        },
+      });
+      return { repair, tessellation, packaged };
+    };
+
+    const cold = await evaluatePipeline({ linearTolerance: 0.2 });
+    const edited = await evaluatePipeline({ linearTolerance: 0.05 });
+    const warm = await evaluatePipeline({ linearTolerance: 0.05 });
+
+    expect([cold.repair.source, cold.tessellation.source, cold.packaged.source]).toEqual([
+      'computed',
+      'computed',
+      'computed',
+    ]);
+    expect([edited.repair.source, edited.tessellation.source, edited.packaged.source]).toEqual([
+      'cache',
+      'computed',
+      'computed',
+    ]);
+    expect([warm.repair.source, warm.tessellation.source, warm.packaged.source]).toEqual(['cache', 'cache', 'cache']);
+    expect(invocations).toEqual({ repair: 1, tessellate: 2, package: 2 });
+    expect(edited.repair.actionDigest).toBe(cold.repair.actionDigest);
+    expect(edited.tessellation.actionDigest).not.toBe(cold.tessellation.actionDigest);
+    expect(edited.packaged.value).toBe('repaired-brep:mesh:0.05:glb-v2');
+    expect(warm.packaged.value).toBe(edited.packaged.value);
+    if (
+      warm.packaged.source !== 'cache' ||
+      edited.packaged.source !== 'computed' ||
+      edited.packaged.publication.status !== 'stored'
+    ) {
+      expect.fail('The edited terminal stage must publish and the warm run must restore it.');
+    }
+    expect(warm.packaged.contentDigest).toBe(edited.packaged.publication.contentDigest);
+  });
+
+  it('never publishes an action when content publication fails', async () => {
+    const published = vi.fn();
+    const contentStore: ContentStore = {
+      read: async () => ({ status: 'miss' }),
+      write: async () => {
+        throw new Error('disk full');
+      },
+      maintenance: unsupportedCacheMaintenance,
+    };
+    const actionStore: ActionStore = {
+      read: async () => ({ status: 'miss' }),
+      publish: async ({ record }) => {
+        published(record);
+        return { status: 'published' };
+      },
+      maintenance: unsupportedCacheMaintenance,
+    };
+    const service = createComputeReuseService({ contentStore, actionStore });
+
+    await expect(
+      service.evaluate({ action, codec: textCodec, policy: 'best-effort', compute: async () => 'ok' }),
+    ).resolves.toMatchObject({ source: 'computed', publication: { status: 'skipped' } });
+    expect(published).not.toHaveBeenCalled();
+
+    await expect(
+      service.evaluate({ action, codec: textCodec, policy: 'required', retention, compute: async () => 'ok' }),
+    ).rejects.toBeInstanceOf(CacheRequiredError);
+    expect(published).not.toHaveBeenCalled();
+  });
+
+  it('does not write any cache state when computation fails', async () => {
+    const contentWrite = vi.fn();
+    const actionPublish = vi.fn();
+    const contentStore: ContentStore = {
+      read: async () => ({ status: 'miss' }),
+      write: async (input) => {
+        contentWrite(input);
+        return { status: 'stored' };
+      },
+      maintenance: unsupportedCacheMaintenance,
+    };
+    const actionStore: ActionStore = {
+      read: async () => ({ status: 'miss' }),
+      publish: async (input) => {
+        actionPublish(input);
+        return { status: 'published' };
+      },
+      maintenance: unsupportedCacheMaintenance,
+    };
+    const service = createComputeReuseService({ contentStore, actionStore });
+
+    await expect(
+      service.evaluate({
+        action,
+        codec: textCodec,
+        policy: 'required',
+        retention,
+        compute: async () => {
+          throw new Error('solve failed');
+        },
+      }),
+    ).rejects.toThrow('solve failed');
+    expect(contentWrite).not.toHaveBeenCalled();
+    expect(actionPublish).not.toHaveBeenCalled();
+  });
+
+  it('treats corrupted content as a miss in best-effort mode and an error in required mode', async () => {
+    const actionKey = await digestAction({ action });
+    const expectedBytes = new TextEncoder().encode('expected');
+    const expectedDigest = await digestContent({ bytes: expectedBytes });
+    const record = {
+      schemaVersion: 1,
+      actionDigest: actionKey,
+      codec: { id: textCodec.id, version: textCodec.version },
+      output: { digest: expectedDigest, size: expectedBytes.byteLength, mediaType: textCodec.mediaType },
+      dependencies: [],
+    } as const;
+    const actionStore: ActionStore = {
+      read: async () => ({ status: 'hit', record }),
+      publish: async () => ({ status: 'existing' }),
+      maintenance: unsupportedCacheMaintenance,
+    };
+    const contentStore: ContentStore = {
+      read: async () => ({ status: 'hit', bytes: new TextEncoder().encode('poison') }),
+      write: async () => ({ status: 'stored' }),
+      maintenance: unsupportedCacheMaintenance,
+    };
+    const service = createComputeReuseService({ contentStore, actionStore });
+    const compute = vi.fn(async () => 'recomputed');
+
+    await expect(service.evaluate({ action, codec: textCodec, policy: 'best-effort', compute })).resolves.toMatchObject(
+      { source: 'computed', value: 'recomputed' },
+    );
+    expect(compute).toHaveBeenCalledOnce();
+
+    await expect(
+      service.evaluate({ action, codec: textCodec, policy: 'required', retention, compute }),
+    ).rejects.toBeInstanceOf(CacheCorruptionError);
+    expect(compute).toHaveBeenCalledOnce();
+  });
+
+  it('singleflights concurrent evaluations and lets one waiter cancel independently', async () => {
+    const { service } = createService();
+    let release!: (value: string) => void;
+    const work = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    const compute = vi.fn(async () => work);
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const first = service.evaluate({
+      action,
+      codec: textCodec,
+      policy: 'required',
+      retention,
+      signal: firstController.signal,
+      compute,
+    });
+    const second = service.evaluate({
+      action,
+      codec: textCodec,
+      policy: 'required',
+      retention,
+      signal: secondController.signal,
+      compute,
+    });
+    firstController.abort(new DOMException('cancelled', 'AbortError'));
+    release('shared');
+
+    await expect(first).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(second).resolves.toMatchObject({ value: 'shared' });
+    expect(compute).toHaveBeenCalledOnce();
+  });
+
+  it('should promote each surviving required owner after one shared computation', async () => {
+    const owners = [
+      { name: 'same-name' } as unknown as CacheRetention,
+      { name: 'same-name' } as unknown as CacheRetention,
+    ];
+    const promoted: CacheRetention[] = [];
+    const service = createComputeReuseService({
+      contentStore: createMemoryContentStore({ maxBytes: 4096 }),
+      actionStore: createMemoryActionStore({ maxBytes: 4096 }),
+      promote: async ({ retention: owner }) => {
+        promoted.push(owner);
+        return { status: 'promoted' };
+      },
+    });
+    let release!: (value: string) => void;
+    const work = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    const compute = vi.fn(async () => work);
+    const first = service.evaluate({ action, codec: textCodec, policy: 'required', retention: owners[0]!, compute });
+    const second = service.evaluate({ action, codec: textCodec, policy: 'required', retention: owners[1]!, compute });
+    release('shared');
+
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(compute).toHaveBeenCalledOnce();
+    expect(promoted).toEqual(owners);
+    expect(
+      firstResult.source === 'computed' && firstResult.publication.status === 'stored'
+        ? firstResult.publication.retention
+        : undefined,
+    ).toBe(owners[0]);
+    expect(
+      secondResult.source === 'computed' && secondResult.publication.status === 'stored'
+        ? secondResult.publication.retention
+        : undefined,
+    ).toBe(owners[1]);
+  });
+
+  it('should refuse only the owner whose durability barrier declines', async () => {
+    const firstOwner = { name: 'first' } as unknown as CacheRetention;
+    const secondOwner = { name: 'second' } as unknown as CacheRetention;
+    const compute = vi.fn(async () => 'shared');
+    const service = createComputeReuseService({
+      contentStore: createMemoryContentStore({ maxBytes: 4096 }),
+      actionStore: createMemoryActionStore({ maxBytes: 4096 }),
+      promote: async ({ retention: owner }) =>
+        owner === firstOwner ? { status: 'promoted' } : { status: 'no-durable-storage' },
+    });
+
+    const [first, second] = await Promise.allSettled([
+      service.evaluate({ action, codec: textCodec, policy: 'required', retention: firstOwner, compute }),
+      service.evaluate({ action, codec: textCodec, policy: 'required', retention: secondOwner, compute }),
+    ]);
+    expect(compute).toHaveBeenCalledOnce();
+    expect(first.status).toBe('fulfilled');
+    expect(second.status).toBe('rejected');
+    if (first.status !== 'fulfilled' || second.status !== 'rejected') {
+      return;
+    }
+    expect(
+      first.value.source === 'computed' && first.value.publication.status === 'stored'
+        ? first.value.publication.retention
+        : undefined,
+    ).toBe(firstOwner);
+    expect(second.reason).toBeInstanceOf(CacheRequiredError);
+  });
+
+  it('should not promote a canceled first owner when another owner survives', async () => {
+    const firstOwner = { name: 'first' } as unknown as CacheRetention;
+    const secondOwner = { name: 'second' } as unknown as CacheRetention;
+    const promoted: CacheRetention[] = [];
+    const service = createComputeReuseService({
+      contentStore: createMemoryContentStore({ maxBytes: 4096 }),
+      actionStore: createMemoryActionStore({ maxBytes: 4096 }),
+      promote: async ({ retention: owner }) => {
+        promoted.push(owner);
+        return { status: 'promoted' };
+      },
+    });
+    let release!: (value: string) => void;
+    const work = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    const compute = vi.fn(async () => work);
+    const firstController = new AbortController();
+    const first = service.evaluate({
+      action,
+      codec: textCodec,
+      policy: 'required',
+      retention: firstOwner,
+      signal: firstController.signal,
+      compute,
+    });
+    const second = service.evaluate({ action, codec: textCodec, policy: 'required', retention: secondOwner, compute });
+    firstController.abort();
+    await expect(first).rejects.toMatchObject({ name: 'AbortError' });
+    release('shared');
+    const result = await second;
+    expect(compute).toHaveBeenCalledOnce();
+    expect(promoted).toEqual([secondOwner]);
+    expect(
+      result.source === 'computed' && result.publication.status === 'stored' ? result.publication.retention : undefined,
+    ).toBe(secondOwner);
+  });
+
+  it('should reject an owner canceled during promotion without failing another owner', async () => {
+    const firstOwner = { name: 'first' } as unknown as CacheRetention;
+    const secondOwner = { name: 'second' } as unknown as CacheRetention;
+    let startPromotion!: () => void;
+    let finishPromotion!: () => void;
+    const promotionStarted = new Promise<void>((resolve) => {
+      startPromotion = resolve;
+    });
+    const promotionGate = new Promise<void>((resolve) => {
+      finishPromotion = resolve;
+    });
+    const service = createComputeReuseService({
+      contentStore: createMemoryContentStore({ maxBytes: 4096 }),
+      actionStore: createMemoryActionStore({ maxBytes: 4096 }),
+      promote: async ({ retention: owner }) => {
+        if (owner === firstOwner) {
+          startPromotion();
+          await promotionGate;
+        }
+        return { status: 'promoted' };
+      },
+    });
+    const controller = new AbortController();
+    const compute = vi.fn(async () => 'shared');
+    const first = service.evaluate({
+      action,
+      codec: textCodec,
+      policy: 'required',
+      retention: firstOwner,
+      signal: controller.signal,
+      compute,
+    });
+    const second = service.evaluate({ action, codec: textCodec, policy: 'required', retention: secondOwner, compute });
+    await promotionStarted;
+    controller.abort();
+    await expect(first).rejects.toMatchObject({ name: 'AbortError' });
+    const survivor = await second;
+    finishPromotion();
+    expect(compute).toHaveBeenCalledOnce();
+    expect(
+      survivor.source === 'computed' && survivor.publication.status === 'stored'
+        ? survivor.publication.retention
+        : undefined,
+    ).toBe(secondOwner);
+  });
+
+  it('should start a fresh same-action flight after every waiter cancels', async () => {
+    const { service } = createService();
+    let start!: () => void;
+    const started = new Promise<void>((resolve) => {
+      start = resolve;
+    });
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const staleCompute = vi.fn(async () => {
+      start();
+      return new Promise<string>(() => {
+        // The canceled producer ignores its signal and never settles.
+      });
+    });
+    const first = service.evaluate({
+      action,
+      codec: textCodec,
+      policy: 'required',
+      retention,
+      signal: firstController.signal,
+      compute: staleCompute,
+    });
+    const second = service.evaluate({
+      action,
+      codec: textCodec,
+      policy: 'required',
+      retention,
+      signal: secondController.signal,
+      compute: staleCompute,
+    });
+    await started;
+    firstController.abort();
+    secondController.abort();
+    await expect(first).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(second).rejects.toMatchObject({ name: 'AbortError' });
+    const freshCompute = vi.fn(async () => 'fresh');
+    await expect(
+      service.evaluate({ action, codec: textCodec, policy: 'required', retention, compute: freshCompute }),
+    ).resolves.toMatchObject({ value: 'fresh', publication: { status: 'stored', retention } });
+    expect(staleCompute).toHaveBeenCalledOnce();
+    expect(freshCompute).toHaveBeenCalledOnce();
+  });
+
+  it('aborts shared work only after every waiter cancels', async () => {
+    const { service } = createService();
+    let producerSignal: AbortSignal | undefined;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const compute = vi.fn(
+      async ({ signal }: { signal: AbortSignal }) =>
+        new Promise<string>((_resolve, reject) => {
+          producerSignal = signal;
+          markStarted();
+          signal.addEventListener(
+            'abort',
+            () => {
+              reject(signal.reason instanceof Error ? signal.reason : new Error('Aborted'));
+            },
+            { once: true },
+          );
+        }),
+    );
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const first = service.evaluate({
+      action,
+      codec: textCodec,
+      policy: 'required',
+      retention,
+      signal: firstController.signal,
+      compute,
+    });
+    const second = service.evaluate({
+      action,
+      codec: textCodec,
+      policy: 'required',
+      retention,
+      signal: secondController.signal,
+      compute,
+    });
+
+    await started;
+    expect(compute).toHaveBeenCalledOnce();
+    firstController.abort();
+    await expect(first).rejects.toMatchObject({ name: 'AbortError' });
+    expect(producerSignal?.aborted).toBe(false);
+    secondController.abort();
+    await expect(second).rejects.toMatchObject({ name: 'AbortError' });
+    expect(producerSignal?.aborted).toBe(true);
+    expect(compute).toHaveBeenCalledOnce();
+  });
+
+  it('refuses required durability when the store has no durable barrier', async () => {
+    const contentStore = createMemoryContentStore({ maxBytes: 4096 });
+    const actionStore = createMemoryActionStore({ maxBytes: 4096 });
+    const service = createComputeReuseService({ contentStore, actionStore });
+    await expect(
+      service.evaluate({ action, codec: textCodec, policy: 'required', retention, compute: async () => 'solved' }),
+    ).rejects.toBeInstanceOf(CacheRequiredError);
+  });
+
+  it('promotes a required hit past the durable barrier, not only a required miss', async () => {
+    const { service } = createService();
+    promote.mockClear();
+    await service.evaluate({ action, codec: textCodec, policy: 'required', retention, compute: async () => 'solved' });
+    const laterOwner = { name: 'later-job' } as unknown as CacheRetention;
+    const hit = await service.evaluate({
+      action,
+      codec: textCodec,
+      policy: 'required',
+      retention: laterOwner,
+      compute: async () => 'solved',
+    });
+    expect(hit).toMatchObject({ source: 'cache', retention: laterOwner });
+    expect(promote, 'the hit path pins and awaits the barrier too').toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses a required caller when the backend declines the barrier', async () => {
+    const contentStore = createMemoryContentStore({ maxBytes: 4096 });
+    const actionStore = createMemoryActionStore({ maxBytes: 4096 });
+    const service = createComputeReuseService({
+      contentStore,
+      actionStore,
+      promote: async () => ({ status: 'no-durable-storage' }),
+    });
+    await expect(
+      service.evaluate({ action, codec: textCodec, policy: 'required', retention, compute: async () => 'solved' }),
+    ).rejects.toBeInstanceOf(CacheRequiredError);
+  });
+
+  describe('deferred publication', () => {
+    const createDeferred = () => {
+      const contentStore = createMemoryContentStore({ maxBytes: 1024 * 1024 });
+      const actionStore = createMemoryActionStore({ maxBytes: 1024 * 1024 });
+      const tasks: ComputePublicationTask[] = [];
+      const service = createComputeReuseService({
+        contentStore,
+        actionStore,
+        promote,
+        schedulePublication: (task) => {
+          tasks.push(task);
+        },
+      });
+      return { contentStore, actionStore, service, tasks };
+    };
+
+    it('should return a best-effort miss before anything is published, then publish when the task runs', async () => {
+      const { actionStore, service, tasks } = createDeferred();
+      const publish = vi.spyOn(actionStore, 'publish');
+      const encode = vi.fn(textCodec.encode);
+      const codec = { ...textCodec, encode };
+
+      const first = await service.evaluate({ action, codec, policy: 'best-effort', compute: async () => 'solved' });
+
+      expect(first).toMatchObject({ source: 'computed', value: 'solved', publication: { status: 'deferred' } });
+      expect(encode).not.toHaveBeenCalled();
+      expect(publish).not.toHaveBeenCalled();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0]!.actionDigest).toBe(await digestAction({ action }));
+
+      await expect(tasks[0]!.run({ signal: new AbortController().signal })).resolves.toMatchObject({
+        status: 'stored',
+      });
+      const compute = vi.fn(async () => 'unused');
+      await expect(service.evaluate({ action, codec, policy: 'best-effort', compute })).resolves.toMatchObject({
+        source: 'cache',
+        value: 'solved',
+      });
+      expect(compute).not.toHaveBeenCalled();
+    });
+
+    it('should publish nothing and reject when its task is aborted, so the scheduler can retry it', async () => {
+      const { actionStore, service, tasks } = createDeferred();
+      const publish = vi.spyOn(actionStore, 'publish');
+      await service.evaluate({ action, codec: textCodec, policy: 'best-effort', compute: async () => 'solved' });
+      const controller = new AbortController();
+      controller.abort(new Error('superseded'));
+
+      await expect(tasks[0]!.run({ signal: controller.signal })).rejects.toThrow('superseded');
+      expect(publish).not.toHaveBeenCalled();
+      await expect(tasks[0]!.run({ signal: new AbortController().signal })).resolves.toMatchObject({
+        status: 'stored',
+      });
+    });
+
+    it('should reuse its encoding when an interrupted task runs again, so a snapshot is taken once', async () => {
+      const { contentStore, actionStore, service, tasks } = createDeferred();
+      const publish = vi.spyOn(actionStore, 'publish');
+      const encode = vi.fn(textCodec.encode);
+      await service.evaluate({
+        action,
+        codec: { ...textCodec, encode },
+        policy: 'best-effort',
+        compute: async () => 'solved',
+      });
+      const interrupt = new AbortController();
+      const write = vi.spyOn(contentStore, 'write').mockImplementationOnce(async () => {
+        // A newly admitted operation interrupts the task after it encoded.
+        interrupt.abort(new Error('interrupted'));
+        return { status: 'stored' };
+      });
+
+      await expect(tasks[0]!.run({ signal: interrupt.signal })).rejects.toThrow('interrupted');
+      expect(publish).not.toHaveBeenCalled();
+      write.mockRestore();
+      // An interrupt during the encode itself does not abort it either.
+      expect(encode.mock.calls[0]![0].signal.aborted).toBe(false);
+      await expect(tasks[0]!.run({ signal: new AbortController().signal })).resolves.toMatchObject({
+        status: 'stored',
+      });
+      expect(encode).toHaveBeenCalledOnce();
+    });
+
+    it('should report a failed encode as a skipped publication instead of throwing', async () => {
+      const { service, tasks } = createDeferred();
+      const codec: CacheCodec<string> = {
+        ...textCodec,
+        encode: () => {
+          throw new Error('snapshot unavailable');
+        },
+      };
+      await service.evaluate({ action, codec, policy: 'best-effort', compute: async () => 'solved' });
+
+      await expect(tasks[0]!.run({ signal: new AbortController().signal })).resolves.toEqual({
+        status: 'skipped',
+        reason: 'encode-failed',
+      });
+    });
+
+    it('should keep publishing a required miss inline before it resolves', async () => {
+      const { service, tasks } = createDeferred();
+
+      await expect(
+        service.evaluate({ action, codec: textCodec, policy: 'required', retention, compute: async () => 'solved' }),
+      ).resolves.toMatchObject({ source: 'computed', publication: { status: 'stored' } });
+      expect(tasks).toHaveLength(0);
+    });
+  });
+
+  it('should hash each codec-attested leaf once, at the producer, before publication', async () => {
+    const leafBytes = new Uint8Array(4096).fill(7);
+    const leafDigest = await digestContent({ bytes: leafBytes });
+    const leafCodec: CacheCodec<string> = {
+      ...textCodec,
+      id: 'test/leaf',
+      encode: (): EncodedContent => ({
+        bytes: new TextEncoder().encode(leafDigest),
+        content: [leafBytes],
+        digests: [leafDigest],
+      }),
+      decode: async ({ bytes }) => new TextDecoder().decode(bytes),
+    };
+    const leafAction = { ...action, codec: { id: leafCodec.id, version: leafCodec.version } };
+    const written: unknown[] = [];
+    const stored = new Map<unknown, Uint8Array<ArrayBuffer>>();
+    const contentStore: ContentStore = {
+      read: async ({ digest }) => {
+        const bytes = stored.get(digest);
+        return bytes ? { status: 'hit', bytes } : { status: 'miss' };
+      },
+      write: async ({ digest, bytes }) => {
+        written.push(digest);
+        stored.set(digest, bytes);
+        return { status: 'stored' };
+      },
+      maintenance: unsupportedCacheMaintenance,
+    };
+    const actionStore: ActionStore = {
+      read: async () => ({ status: 'miss' }),
+      publish: async () => ({ status: 'published' }),
+      maintenance: unsupportedCacheMaintenance,
+    };
+    const digest = vi.spyOn(globalThis.crypto.subtle, 'digest');
+    try {
+      const service = createComputeReuseService({ contentStore, actionStore });
+      await expect(
+        service.evaluate({ action: leafAction, codec: leafCodec, policy: 'best-effort', compute: async () => 'x' }),
+      ).resolves.toMatchObject({ publication: { status: 'stored' } });
+      const leafHashes = digest.mock.calls.filter(([, data]) => (data as ArrayBufferView).byteLength === 4096);
+      expect(leafHashes).toHaveLength(0);
+      expect(written).toContain(leafDigest);
+    } finally {
+      digest.mockRestore();
+    }
+  });
+
+  it('rejects a codec whose identity differs from the action key', async () => {
+    const { service } = createService();
+
+    await expect(
+      service.evaluate({
+        action,
+        codec: { ...textCodec, version: '2' },
+        policy: 'best-effort',
+        compute: async () => 'unused',
+      }),
+    ).rejects.toThrow('codec');
+  });
+});

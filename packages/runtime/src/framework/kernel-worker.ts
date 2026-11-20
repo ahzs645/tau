@@ -1,21 +1,29 @@
+/* eslint-disable @typescript-eslint/member-ordering -- operation entrypoints stay adjacent to their private lane implementations in this stateful worker. */
+/* oxlint-disable unicorn/prefer-math-trunc, no-bitwise -- cancellation generations require ECMAScript ToUint32 wrap semantics. */
 import deepmerge from 'deepmerge';
 import { logLevels, lookupExportFidelity } from '@taucad/types/constants';
-import { joinPath } from '@taucad/utils/path';
+import { randomUuid } from '@taucad/utils/id';
+import { assertRootedPath, joinRelativePath } from '@taucad/utils/path';
 import { named, preserveMethodNames } from '#framework/named.js';
-import type { FileExtension, GeometryFile, OnWorkerLog } from '@taucad/types';
-import type { JSONSchema7 } from '@taucad/json-schema';
-import { SharedPool } from '@taucad/memory';
+import { admitKernelOptions } from '#framework/kernel-option-admission.js';
+import { buildReportOf } from '#framework/kernel-build-report.js';
+import { tessellationSpanAttributes } from '#framework/tessellation-span-attributes.js';
+import { getIsolationStatus } from '#cross-origin-isolation/headers.js';
+import type { FileExtension, FileStat, MediaType, OnWorkerLog } from '@taucad/types';
+import type { JSONSchema7, JSONSchema7Definition } from '@taucad/json-schema';
+import type { MessagePortLike } from '@taucad/rpc';
 import type {
-  HashedGeometryResult,
   CreateGeometryResult,
   ExportGeometryResult,
+  GetParameterDeclarationsResult,
   GetParametersResult,
   KernelIssue,
-  MiddlewareRegistrations,
-  BundlerRegistration,
   CapabilitiesManifest,
   ExportRoute,
+  RuntimeCapabilityRegistration,
+  SourceRevision,
 } from '#types/runtime.types.js';
+import type { ComputeBinding, KernelComputeCapability } from '#types/runtime-compute.types.js';
 import type {
   KernelFileSystem,
   RuntimeFileSystemBase,
@@ -23,24 +31,31 @@ import type {
   RuntimeLogger,
   InitializeInput,
   GetParametersInput,
-  CreateGeometryInput,
   GetDependenciesInput,
-  GetDependenciesResult,
   ExportGeometryInput,
+  ExportGeometryRequest,
+  KernelExportGeometryInput,
+  RuntimeImplementationAsset,
+  KernelExecuteOptions,
 } from '#types/runtime-kernel.types.js';
+import type { RuntimeFileLocator } from '#types/runtime-file.types.js';
+import type { RuntimeDocumentProtocol } from '#types/runtime-document-protocol.types.js';
 import type {
-  KernelMiddlewareRuntime,
-  CreateGeometryHandler,
-  ExportGeometryHandler,
-  GetParametersHandler,
-} from '#types/runtime-middleware.types.js';
+  Description,
+  Evaluation,
+  ExportOffer,
+  ExportResult,
+  Rendering,
+  ViewOffer,
+} from '#client/runtime-document.types.js';
+import type { KernelMiddlewareRuntime } from '#types/runtime-middleware.types.js';
+import type { BundlerDefinition } from '#types/runtime-bundler.types.js';
 import type {
   KernelBundler,
   BuiltinModule,
   BundleResult,
   ExecuteResult,
-  BundlerDefinition,
-} from '#types/runtime-bundler.types.js';
+} from '#types/runtime-bundler-service.types.js';
 import type {
   Dependency,
   FileDependency,
@@ -48,50 +63,472 @@ import type {
   FrameworkDependency,
   OptionDependency,
   ParameterDependency,
+  RenderOptionsDependency,
+  ContentDependency,
+  KernelDependency,
+  ExportDependency,
   AssetDependency,
+  BundleDependency,
+  GetDependenciesResult,
 } from '#types/runtime-dependency.types.js';
-import type { TelemetryEntry, RenderPhase, WorkerState, TranscoderModuleEntry } from '#types/runtime-protocol.types.js';
-import { signalSlot, abortReason as abortReasonEnum } from '#types/runtime-protocol.types.js';
-import type { TranscoderDefinition, TranscoderEdge, TranscoderRuntime } from '#types/runtime-transcoder.types.js';
-import { isRenderAbortedError, RenderAbortedError } from '#framework/runtime-worker-client.js';
+import type { RuntimeSourceSnapshotArgs, RuntimeTranscodeArgs } from '#types/runtime-wire.types.js';
+import type {
+  RuntimeSourceSnapshotFileRole,
+  RuntimeSourceSnapshotResult,
+} from '#types/runtime-source-snapshot.types.js';
+import { abortReason as abortReasonEnum } from '#types/runtime-wire.types.js';
+import type {
+  ImplementationAssetLoader,
+  TranscodeResult,
+  TranscoderDefinition,
+  TranscoderEdge,
+  TranscoderRuntime,
+} from '#types/runtime-transcoder.types.js';
 import { setAbortContext, clearAbortContext } from '#framework/cooperative-abort.js';
-import type { FileSystemProxy } from '#transport/_internal/runtime-filesystem-bridge.js';
-import { createBridgeProxy, wrapWorkerFilesystemBridgePort } from '#transport/_internal/runtime-filesystem-bridge.js';
+import {
+  beginDocumentAbort,
+  documentAbortGeneration,
+  documentAbortView,
+  endDocumentAbort,
+  nextDocumentAbortSequence,
+} from '#framework/document-abort-state.js';
 import { createRuntimeFileSystem } from '#filesystem/create-runtime-filesystem.js';
-import { toJSONSchema } from 'zod';
-import type { z } from 'zod';
+import { createComputeCapabilityHost } from '#cache/kernel-compute-runtime.js';
+import type { ComputeCapabilityHost } from '#cache/kernel-compute-runtime.js';
+import { toJSONSchema, z } from 'zod';
+import { runtimeIssueSchema } from '#types/runtime-wire-common.schemas.js';
+import { toKernelIssueCode } from '#types/kernel-issue-codes.js';
 import { createKernelError } from '#kernels/kernel-helpers.js';
-import { cooperativeYield } from '#framework/async-polyfills.js';
-import { parameterDebounce, fileChangeDebounce } from '#framework/runtime-framework.constants.js';
-import { hashBytes, hashString } from '#utils/hash.utils.js';
+import { fileChangeDebounce } from '#framework/runtime-framework.constants.js';
+import { canonicalJson, sha256Bytes, sha256String } from '@taucad/utils/hash';
+import { contentDigest } from '@taucad/cache-core';
+import type { ActionDigest, ContentDigest } from '@taucad/cache-core';
 import { RuntimeTracer } from '#framework/runtime-tracer.js';
+import type { SpanHandle } from '#types/runtime-tracer.types.js';
 import { WorkerTelemetryCollector } from '#framework/worker-telemetry.js';
-import type { KernelMiddleware } from '#middleware/runtime-middleware.js';
+import type { WorkerTelemetryFlush } from '#framework/worker-telemetry.js';
+import { WorkerOperationObserver } from '#framework/worker-operation-observer.js';
+import type { ObservedKernelHeap, OperationFactsNotify } from '#framework/worker-operation-observer.js';
+import type { RuntimeObservationMode, RuntimeRealm } from '#types/runtime-observation.types.js';
+import { operationRootName, settledWithReply, settleOperation } from '#framework/operation-root.js';
+import type { OperationRecord, OperationRootRequest, SettledOperation } from '#framework/operation-root.js';
 import { createMiddlewareRuntime } from '#middleware/runtime-middleware.js';
-import { clearExecuteCache } from '#bundler/esbuild-core.js';
-const tauVersion = '0.1.0';
+import type {
+  EvaluateRequest,
+  KernelMiddlewareV2,
+  MiddlewareContent,
+  MiddlewareDependency as MiddlewareFileDependency,
+  RenderRequest,
+  ExportRequest,
+} from '#types/runtime-middleware-v2.types.js';
+import { nonemptyExportFiles } from '#types/runtime-kernel-v2.types.js';
+import { asKnownArtifact } from '#types/runtime-artifact.js';
+import type {
+  DescribeInput,
+  DescribeResult,
+  EvaluateResult,
+  KernelOffers,
+  RenderResult,
+  KernelExportResult,
+} from '#types/runtime-kernel-v2.types.js';
+import type { BundlerPlugin, KernelPlugin, MiddlewarePlugin, TranscoderPlugin } from '#plugins/plugin-types.js';
+import { resolveRuntimePluginDefinition } from '#plugins/plugin-runtime-definition.js';
+import type { RuntimePluginDefinitionCarrier } from '#plugins/plugin-runtime-definition.js';
+import { createWorkerFileSystemProxy } from '#transport/_internal/worker-filesystem-proxy.js';
+import type { WorkerFileSystemProxy } from '#transport/_internal/worker-filesystem-proxy.js';
+import type { WatchEvent } from '@taucad/filesystem';
+import {
+  contentDefault,
+  normalizeRuntimeContent,
+  RuntimeContentUnsupportedError,
+} from '#types/runtime-content.types.js';
+import type { RuntimeContentInput, RuntimeContentKey } from '#types/runtime-content.types.js';
+import { packageVersion } from '#utils/package-info.js';
+import {
+  admitParameterManifest,
+  compileParameterManifest,
+  ParameterAdmissionError,
+  resolveParameterBinding,
+  resolveParameterInputValues,
+} from '@taucad/parameters';
+import type {
+  ParameterAdmissionExpectation,
+  ParameterDeclaration,
+  ParameterManifest,
+  ParameterResolutionOptions,
+} from '@taucad/parameters';
+import { validateJsonSchemaValue } from '@taucad/parameters/schema';
+import type {
+  DependencyResolutionContext,
+  EvaluationSlot,
+  CommonDependencySet,
+  MiddlewareDependencySet,
+  KernelBinding,
+  MaterializedRender,
+  MaterializedRenderResult,
+  NativeHandleSlot,
+  NativeBuildInput,
+  NativeBuildInputCarrier,
+  OperationOwner,
+  RenderIdentity,
+  SerializedNativeHandleSlot,
+} from '#framework/render-artifact.js';
+import { createNativeHandleIdentityKey, nativeBuildInputSymbol } from '#framework/render-artifact.js';
+import { finalizeExportArtifactSet } from '#framework/export-artifact-finalizer.js';
+import { isNotFoundError } from '#filesystem/filesystem-errors.js';
+import { loadWasmBinary } from '#framework/wasm-loader.js';
+import { realmResources } from '#framework/realm-resources.js';
+import { portableKernelModuleCode, releaseKernelModuleScope } from '#kernels/kernel-module-helpers.js';
+
+type FileSystemProxy = WorkerFileSystemProxy;
+
+type ObservedFileRevision = {
+  readonly hash: string;
+  readonly content?: Uint8Array<ArrayBuffer>;
+  readonly expectedPrior?: Readonly<{ hash: string | undefined }>;
+};
+
+/** The paths one settled dependency set was resolved from, and whether they feed parameter extraction. */
+type DependencyPaths = {
+  readonly paths: ReadonlySet<string>;
+  readonly affectsParameters: boolean;
+};
+
+type DocumentInput = RuntimeDocumentProtocol['notifies']['open']['args'];
+type DocumentUpdateInput = RuntimeDocumentProtocol['notifies']['update']['args'];
+type ViewOpenInput = RuntimeDocumentProtocol['notifies']['openView']['args'];
+type ViewUpdateInput = RuntimeDocumentProtocol['notifies']['updateView']['args'];
+type DocumentRecord = {
+  readonly id: string;
+  file: RuntimeFileLocator;
+  intent: number;
+  parameters: Record<string, unknown>;
+  evaluateOptions: Record<string, unknown>;
+  committedParameters: Record<string, unknown>;
+  committedEvaluateOptions: Record<string, unknown>;
+  watch: boolean;
+  closed: boolean;
+  current?: DocumentEvaluation;
+  committed?: DocumentEvaluation;
+  pendingCommitted?: CommittedAdmission;
+  evaluationController?: AbortController;
+  readonly views: Map<string, ViewRecord>;
+  readonly operations: Set<AbortController>;
+  watchPaths: Set<string>;
+};
+type CommittedAdmission = {
+  readonly intent: number;
+  readonly completion: PromiseWithResolvers<DocumentEvaluation>;
+  pins: number;
+  evaluation?: DocumentEvaluation;
+};
+type DocumentEvaluation = {
+  readonly id: string;
+  readonly intent: number;
+  readonly transient: boolean;
+  readonly result: Evaluation;
+  readonly artifact?: MaterializedRender;
+  /** The latest projection of each offered view, instance and content, whatever options rendered it. */
+  projections?: Map<string, { readonly hash: string; readonly result: RenderResult }>;
+};
+/**
+ * What the compute cache made of one mesh phase, so its projection can let go of the bytes once
+ * the cache holds them. Only the first evaluation counts: it is the outermost whole-mesh reuse.
+ */
+type ProjectionRelease = {
+  first?: 'pending' | 'held' | 'unheld' | { readonly deferred: ActionDigest };
+  /** The projection that keeps the bytes until the deferred publication settles. */
+  bound?: {
+    readonly projections: Map<string, { readonly hash: string; readonly result: RenderResult }>;
+    readonly slot: string;
+    readonly projection: { readonly hash: string; readonly result: RenderResult };
+  };
+};
+type ViewRecord = {
+  readonly document: DocumentRecord;
+  readonly id: string;
+  requestId: string;
+  view?: string;
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- Null explicitly clears an instance on view update.
+  instance?: string | null;
+  options: Record<string, unknown>;
+  content?: RuntimeContentInput;
+  readonly operations: Set<AbortController>;
+};
+
+/** Preserve a missing optional dependency as a wire revision token. @internal */
+export const sourceRevisionFileDigest = (contentHash: string, path: string): ContentDigest | 'missing' =>
+  contentHash === 'missing'
+    ? 'missing'
+    : contentDigest({
+        value: `sha256:${contentHash}`,
+        name: `document evaluation ${path}`,
+      });
+
+const sourceRevisionForArtifact = (artifact: MaterializedRender, fallback?: SourceRevision): SourceRevision => {
+  const entry = assertRootedPath(joinRelativePath(artifact.identity.file.path, artifact.identity.file.filename));
+  const files = Object.fromEntries<ContentDigest | 'missing'>([
+    ...Object.entries(fallback?.files ?? {}),
+    ...artifact.identity.dependencies.flatMap((dependency) =>
+      dependency.type === 'file'
+        ? [[dependency.path, sourceRevisionFileDigest(dependency.contentHash, dependency.path)] as const]
+        : [],
+    ),
+  ]);
+  return { entry, files };
+};
+
+const neverAbortedSignal = new AbortController().signal;
+/** Mesh phases followed for an early projection release; the compute queue keeps at most 4 tasks. */
+const maxProjectionReleases = 16;
+const carriedKernelIssueSchema = runtimeIssueSchema.extend({
+  code: z.unknown().optional().transform(toKernelIssueCode),
+});
+// A row that is not a kernel issue parses to `undefined`, so it never fails its siblings.
+const carriedKernelIssuesSchema = z.array(z.union([carriedKernelIssueSchema, z.unknown().transform(() => undefined)]));
+
+/**
+ * Read the kernel issues a thrown value carries on `.issues` (a `KernelError`, a `KERNEL_REALM_CONFLICT` refusal).
+ *
+ * Each row is validated to the runtime wire's issue envelope (a `message` and a `severity`) rather than
+ * duck-typed: other errors carry an `issues` array too (`ZodError`, `WireValidationError`), and a row the wire
+ * would refuse is dropped by the receiving channel rather than reported. Rows are kept one by one, so a foreign
+ * row never discards a valid one; an unknown or missing `code` becomes `'UNKNOWN'`, and a row without a
+ * `message` or `severity` is dropped. Optional fields the envelope does not list (`type`, `location`, `stack`)
+ * pass through unchecked, as on the wire. Structural, so duplicate runtime copies in one realm agree.
+ *
+ * @param error - The thrown value.
+ * @returns The carried issues, or `undefined` when no row is a kernel issue.
+ * @internal
+ */
+export const carriedKernelIssues = (error: unknown): [KernelIssue, ...KernelIssue[]] | undefined => {
+  if (error === null || typeof error !== 'object' || !('issues' in error)) {
+    return undefined;
+  }
+  const parsed = carriedKernelIssuesSchema.safeParse(error.issues);
+  const [first, ...rest] = parsed.success ? parsed.data.filter((issue) => issue !== undefined) : [];
+  return first ? [first, ...rest] : undefined;
+};
+
+/** Joined issue messages for a terminal state's `detail`, or nothing to say. */
+const issueDetail = (issues: readonly KernelIssue[]): string | undefined =>
+  issues.map((issue) => issue.message).join('; ') || undefined;
+
+const mergeParameterDefaults = (
+  defaults: Record<string, unknown>,
+  parameters: Record<string, unknown>,
+  schema?: JSONSchema7,
+): Record<string, unknown> =>
+  deepmerge(
+    defaults,
+    // Admission drops an empty `properties` map and refuses `patternProperties`, so a closed schema without
+    // `properties` declares no keys at all.
+    schema?.additionalProperties === false
+      ? Object.fromEntries(Object.entries(parameters).filter(([key]) => Object.hasOwn(schema.properties ?? {}, key)))
+      : parameters,
+    {
+      arrayMerge: (_target: unknown[], source: unknown[]) => source,
+    },
+  );
+
+const unitBearingTextPattern = /^\s*[+-]?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|\d+\s*\/\s*\d+)\s*[^\d\s.,].*$/u;
+
+const schemaObject = (definition: JSONSchema7Definition | undefined): JSONSchema7 | undefined =>
+  typeof definition === 'object' ? definition : undefined;
+
+const schemaIsNumeric = (schema: JSONSchema7 | undefined): boolean => {
+  if (!schema) {
+    return false;
+  }
+  const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+  return (
+    types.includes('number') ||
+    types.includes('integer') ||
+    [...(schema.allOf ?? []), ...(schema.anyOf ?? []), ...(schema.oneOf ?? [])].some((branch) =>
+      schemaIsNumeric(schemaObject(branch)),
+    )
+  );
+};
+
+const childSchema = (schema: JSONSchema7 | undefined, key: string, arrayItem: boolean): JSONSchema7 | undefined => {
+  if (!schema) {
+    return undefined;
+  }
+  const direct = arrayItem
+    ? Array.isArray(schema.items)
+      ? schemaObject(schema.items[Number(key)])
+      : schemaObject(schema.items)
+    : schemaObject(schema.properties?.[key]);
+  if (direct) {
+    return direct;
+  }
+  for (const branch of [...(schema.allOf ?? []), ...(schema.anyOf ?? []), ...(schema.oneOf ?? [])]) {
+    const child = childSchema(schemaObject(branch), key, arrayItem);
+    if (child) {
+      return child;
+    }
+  }
+  return undefined;
+};
+
+const unitlessTextParameter = (
+  manifest: ParameterManifest,
+  schema: JSONSchema7,
+  values: Readonly<Record<string, unknown>>,
+): { pointer: string; text: string } | undefined => {
+  const visit = (
+    value: unknown,
+    node: JSONSchema7 | undefined,
+    pointer: string,
+  ): { pointer: string; text: string } | undefined => {
+    if (typeof value === 'string') {
+      if (node && validateJsonSchemaValue(node, value)) {
+        return undefined;
+      }
+      return schemaIsNumeric(node) &&
+        resolveParameterBinding(manifest, pointer)?.unit === undefined &&
+        unitBearingTextPattern.test(value)
+        ? { pointer, text: value }
+        : undefined;
+    }
+    if (typeof value !== 'object' || value === null) {
+      return undefined;
+    }
+    const arrayItem = Array.isArray(value);
+    for (const [key, child] of Object.entries(value)) {
+      const escaped = key.replaceAll('~', '~0').replaceAll('/', '~1');
+      const found = visit(child, childSchema(node, key, arrayItem), `${pointer}/${escaped}`);
+      if (found) {
+        return found;
+      }
+    }
+    return undefined;
+  };
+  return visit(values, schema, '');
+};
+
+type TranscoderPluginEntry = TranscoderPlugin<Record<string, unknown>> &
+  RuntimePluginDefinitionCarrier<TranscoderDefinition>;
+
+/** Runtime plugins and host services available to one worker. */
+export type KernelWorkerOptions = {
+  readonly kernels?: ReadonlyArray<KernelPlugin<Record<string, unknown>, unknown>>;
+  readonly middleware?: readonly MiddlewarePlugin[];
+  readonly bundlers?: readonly BundlerPlugin[];
+  readonly transcoders?: readonly TranscoderPluginEntry[];
+};
+
+/**
+ * Check implementation asset declarations without fetching them: ids are unique and digests are SHA-256 hex.
+ *
+ * @param pluginId - Stable plugin identifier used in diagnostics.
+ * @param assets - Declared assets and their expected SHA-256 digests.
+ * @throws {Error} When an id repeats or a digest is malformed.
+ */
+const validateImplementationAssetDeclarations = (
+  pluginId: string,
+  assets: readonly RuntimeImplementationAsset[],
+): void => {
+  const ids = new Set<string>();
+  for (const asset of assets) {
+    if (ids.has(asset.id)) {
+      throw new Error(`Duplicate implementation asset id for ${pluginId}: ${asset.id}`);
+    }
+    ids.add(asset.id);
+    if (!/^[0-9a-f]{64}$/u.test(asset.sha256)) {
+      throw new Error(`Invalid SHA-256 digest for ${pluginId}:${asset.id}`);
+    }
+  }
+};
+
+/**
+ * Fetch one implementation asset and check it against its declared digest.
+ *
+ * @param pluginId - Stable plugin identifier used in diagnostics.
+ * @param asset - The declared asset.
+ * @returns The verified bytes.
+ * @throws {Error} When the fetch fails or the digest does not match.
+ */
+const fetchVerifiedImplementationAsset = async (
+  pluginId: string,
+  asset: RuntimeImplementationAsset,
+): Promise<Uint8Array<ArrayBuffer>> => {
+  let bytes: Uint8Array<ArrayBuffer>;
+  try {
+    bytes = new Uint8Array(await loadWasmBinary(asset.url));
+  } catch (error) {
+    throw new Error(
+      `Failed to load implementation asset ${pluginId}:${asset.id}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+  const actual = await sha256Bytes(bytes);
+  if (actual !== asset.sha256) {
+    throw new Error(`Implementation asset digest mismatch for ${pluginId}:${asset.id}`);
+  }
+  return bytes;
+};
 
 type LoadedTranscoder = {
   id: string;
   definition: TranscoderDefinition;
   context: unknown;
+  initialized: boolean;
+  initialization?: Promise<unknown>;
   edges: readonly TranscoderEdge[];
+  options: Record<string, unknown>;
+  implementationAssets: readonly RuntimeImplementationAsset[];
 };
+
+/** Identity retained for the last settled render. */
+export type LastSettledRenderIdentity = RenderIdentity;
+
+type OwnerBoundExportRoute =
+  | {
+      kind: 'direct';
+      kernelId: string | undefined;
+      targetFormat: string;
+      exportId?: string;
+      options: Record<string, unknown>;
+      content: RuntimeContentInput;
+    }
+  | {
+      kind: 'transcoded';
+      kernelId: string;
+      sourceFormat: string;
+      targetFormat: string;
+      exportId?: string;
+      transcoderId: string;
+      sourceOptions: Record<string, unknown>;
+      edgeOptions: Record<string, unknown>;
+      content: RuntimeContentInput;
+    };
+
+type OwnerBoundExportPlan =
+  | {
+      success: true;
+      owner: OperationOwner;
+      input: ExportPipelineRequest;
+      route: OwnerBoundExportRoute;
+      dependency: ExportDependency;
+    }
+  | {
+      success: false;
+      result: ExportGeometryResult;
+    };
+
+type ExportPipelineRequest = ExportGeometryRequest & { readonly content?: RuntimeContentInput };
 
 /* TR16 fast-path adapter — wraps an inline `RuntimeFileSystemBase` as a
  * `FileSystemProxy` so the kernel-worker boundary remains uniform whether
  * the FS arrives via a `MessagePort` bridge or in-process. The `dispose`
  * is a no-op (the inline FS owns its own lifecycle, managed by the runner
- * that supplied it). When the inline FS lacks `watch`, we surface a
- * subscription that returns an immediate unsubscribe — kernels that watch
- * dependencies still function, they just receive no events. */
+ * that supplied it). Watch absence is preserved so explicit operations can
+ * use the watcherless freshness path. */
 function adaptInlineFileSystem(fs: RuntimeFileSystemBase): FileSystemProxy {
-  /* `noop` covers the absent-watch fallback (returns an unsubscribe that
-   * does nothing) and the FS-handle `dispose` (the inline FS owns its
-   * own lifecycle, managed by whoever supplied it to the runner). */
   // oxlint-disable-next-line eslint/no-empty-function -- intentional no-op for inline-FS lifecycle bookkeeping
   const noop = (): void => {};
-  return {
+  const fileSystem: FileSystemProxy = {
     id: fs.id,
     capabilities: fs.capabilities,
     readFile: fs.readFile.bind(fs),
@@ -104,9 +541,37 @@ function adaptInlineFileSystem(fs: RuntimeFileSystemBase): FileSystemProxy {
     stat: fs.stat.bind(fs),
     lstat: fs.lstat.bind(fs),
     exists: fs.exists.bind(fs),
-    watch: fs.watch ? fs.watch.bind(fs) : () => noop,
     dispose: noop,
   };
+  if (fs.hashFiles) {
+    fileSystem.hashFiles = fs.hashFiles.bind(fs);
+  }
+  if (fs.watch) {
+    fileSystem.watch = fs.watch.bind(fs);
+    /* A bridged inline filesystem registers its watch over a round trip and
+     * carries its own `watchReady`; only a same-isolate `fs.watch` (armed
+     * synchronously) may have its readiness synthesised. */
+    const suppliedWatchReady = (fs as Pick<Partial<FileSystemProxy>, 'watchReady'>).watchReady;
+    fileSystem.watchReady =
+      typeof suppliedWatchReady === 'function'
+        ? suppliedWatchReady.bind(fs)
+        : (request, handler) => {
+            let resolveClosed!: () => void;
+            const closed = new Promise<void>((resolve) => {
+              resolveClosed = resolve;
+            });
+            const unsubscribe = fs.watch!(request, handler);
+            return {
+              unsubscribe: () => {
+                unsubscribe();
+                resolveClosed();
+              },
+              ready: Promise.resolve(),
+              closed,
+            };
+          };
+  }
+  return fileSystem;
 }
 
 function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
@@ -120,28 +585,38 @@ function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
   }
   return true;
 }
+
 /**
  * A resolved middleware instance paired with its parsed options.
  * @public
  */
+type RuntimeMiddlewareDefinition = KernelMiddlewareV2<
+  z.ZodObject<z.ZodRawShape>,
+  z.ZodObject<z.ZodRawShape>,
+  MiddlewareContent | undefined
+>;
+
+/** A middleware definition paired with its admitted runtime options. */
 export type ResolvedMiddleware = {
-  middleware: KernelMiddleware;
+  middleware: RuntimeMiddlewareDefinition;
   options: Record<string, unknown>;
-  url: string;
+  id: string;
   enabled: boolean;
 };
+
+/**
+ * The publication hold of one transient frame: its results publish only if a commit adopts them.
+ * @param documentId - The document the frame belongs to.
+ * @param evaluationId - The frame's evaluation.
+ * @returns The hold token.
+ */
+const transientHold = (documentId: string, evaluationId: string): string => `${documentId}:${evaluationId}`;
 
 /**
  * Base class for kernel workers providing lifecycle, middleware, bundler, and caching infrastructure.
  * @public
  */
 export abstract class KernelWorker<Options extends Record<string, unknown> = Record<string, unknown>> {
-  /**
-   * The supported export formats for the worker.
-   * @deprecated Will be replaced by capabilities manifest discovery.
-   */
-  protected static readonly supportedExportFormats: string[] = [];
-
   /**
    * Extract the file extension from a filename.
    * Returns the extension without the leading dot, or empty string if no extension.
@@ -169,104 +644,105 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     return lastSlashIndex === -1 ? filename : filename.slice(lastSlashIndex + 1);
   }
 
-  /**
-   * Convert an absolute path to a path relative to the project root.
-   *
-   * @param absolutePath - The full absolute path (e.g., '/projects/myproject/src/main.scad')
-   * @param basePath - The project root path (e.g., '/projects/myproject')
-   * @returns The relative path (e.g., 'src/main.scad')
-   */
-  protected static resolveToRelative(absolutePath: string, basePath: string): string {
-    // Ensure basePath ends without a trailing slash for consistent behavior
-    const normalizedBase = basePath.endsWith('/') ? basePath.slice(0, -1) : basePath;
-
-    if (absolutePath.startsWith(`${normalizedBase}/`)) {
-      return absolutePath.slice(normalizedBase.length + 1);
-    }
-
-    // If the path doesn't start with the base, return as-is
-    return absolutePath;
-  }
-
-  /**
-   * Resolve a path relative to the project root to an absolute path.
-   *
-   * @param relativePath - Path relative to project root
-   * @param basePath - The project root path
-   * @returns Absolute path
-   */
-  protected static resolveFromRoot(relativePath: string, basePath: string): string {
-    return joinPath(basePath, relativePath);
-  }
-
-  /** Callback for pushing state changes to the dispatcher (postMessage fallback). */
-  public onStateChanged?: (state: WorkerState, detail?: string) => void;
-
-  /**
-   * Callback for pushing geometry results to the dispatcher. The `rgen`
-   * argument is the autonomous render generation that produced the
-   * result; downstream consumers gate frame application on `rgen >=
-   * lastApplied` to ignore frames from superseded renders.
-   */
-  public onGeometryComputed?: (result: HashedGeometryResult, rgen: number) => void;
-
-  /**
-   * Callback for pushing parameter results to the dispatcher. The
-   * `rgen` argument correlates the resolved schema with the originating
-   * render generation so the consumer can pair early-arriving parameter
-   * frames with the eventual `geometryComputed` for the same `rgen`.
-   */
-  public onParametersResolved?: (result: GetParametersResult, rgen: number) => void;
-
-  /**
-   * Callback for pushing progress updates to the dispatcher. The
-   * `rgen` argument lets the consumer discard progress frames from
-   * superseded renders.
-   */
-  public onProgressUpdate?: (phase: RenderPhase, rgen: number, detail?: Record<string, unknown>) => void;
-
-  /**
-   * Callback for pushing errors to the dispatcher. `rgen` is supplied
-   * for render-scoped failures and omitted for connection-scoped
-   * issues (e.g. handshake failure, transcoder load).
-   */
-  public onError?: (issues: KernelIssue[], rgen?: number) => void;
-
-  /** Callback for pushing active kernel changes to the dispatcher. */
-  public onActiveKernelChanged?: (kernelId: string | undefined) => void;
-
   /** Callback for pushing updated capabilities manifest to the dispatcher. */
   public onCapabilitiesUpdated?: (capabilities: CapabilitiesManifest) => void;
 
+  /** Document notifications are public values; the dispatcher owns binary encoding. */
+  public onDescribed?: (event: RuntimeDocumentProtocol['notifies']['described']['args']) => void;
+  public onEvaluating?: (event: RuntimeDocumentProtocol['notifies']['evaluating']['args']) => void;
+  public onEvaluated?: (event: RuntimeDocumentProtocol['notifies']['evaluated']['args']) => void;
+  public onRendering?: (event: RuntimeDocumentProtocol['notifies']['rendering']['args']) => void;
+  public onRendered?: (
+    event: {
+      readonly subscriptionId: string;
+      readonly intent: number;
+    } & Rendering,
+  ) => void;
+  public onDocumentProgressUpdate?: (event: RuntimeDocumentProtocol['notifies']['progress']['args']) => void;
+  public onDocumentError?: (event: RuntimeDocumentProtocol['notifies']['errorEvent']['args']) => void;
+  public onDocumentStateChanged?: (event: RuntimeDocumentProtocol['notifies']['stateChanged']['args']) => void;
+  /**
+   * Called once per client operation, after its root span ended, with how it settled. The dispatcher
+   * flushes the operation's spans once the terminal reply has been posted.
+   */
+  public onOperationSettled?: (settled: SettledOperation) => void;
+  /** Posts one operation's facts after its terminal reply, while a client observes. */
+  public onOperationFacts?: (notify: OperationFactsNotify) => void;
+
   /** Raw Zod schemas for runtime validation, keyed by kernel ID → format. Populated from kernel definitions. */
-  protected readonly kernelExportZodSchemasMap = new Map<string, Partial<Record<FileExtension, z.ZodType>>>();
+  protected readonly kernelExportZodSchemasMap = new Map<string, Partial<Record<string, z.ZodType>>>();
+  protected readonly kernelAmbiguousExportFormatsMap = new Map<string, Set<string>>();
 
   /** Raw Zod schema for render option validation, keyed by kernel ID. Populated from kernel definitions. */
   protected readonly kernelRenderZodSchemaMap = new Map<string, z.ZodType>();
+  protected get deferRenderOptionAdmission(): boolean {
+    return false;
+  }
+
+  /** Exact construction-option schemas keyed by kernel ID. */
+  protected readonly kernelCreateOptionsZodSchemaMap = new Map<string, z.ZodObject<z.ZodRawShape>>();
+
+  /** Native content declarations keyed by kernel ID and export format. */
+  protected readonly kernelExportContentMap = new Map<string, Partial<Record<string, readonly RuntimeContentKey[]>>>();
+  /** Export IDs and media types selected by the current client's extension route. */
+  protected readonly kernelExportMetadataMap = new Map<
+    string,
+    Readonly<Record<string, { id: string; mimeType: MediaType }>>
+  >();
+
+  /** Native render content declarations keyed by kernel ID. */
+  protected readonly kernelRenderContentMap = new Map<string, readonly RuntimeContentKey[]>();
+  /** Admission union before evaluation chooses the offered default view. */
+  protected readonly kernelAllViewContentMap = new Map<string, readonly RuntimeContentKey[]>();
+  /** Current client's selected default view media type for keyed middleware admission. */
+  protected readonly kernelRenderMimeTypeMap = new Map<string, MediaType>();
+  /** Cooperative cancellation support by kernel ID. */
+  protected readonly kernelCancellationMap = new Map<string, 'cooperative'>();
+
+  /** Validated init options and verified assets for selected-participant identity. */
+  protected readonly kernelInitOptionsMap = new Map<string, Record<string, unknown>>();
+  protected readonly kernelImplementationAssetsMap = new Map<string, readonly RuntimeImplementationAsset[]>();
+
+  protected pendingNativeHandle: unknown;
+
+  /** The evaluation currently entering its terminal kernel hook. */
+  private activeEvaluationSlot: EvaluationSlot | undefined;
+  /**
+   * How the terminal evaluate of the current document evaluation was answered: `retained` (the retained build) or
+   * `built` (the kernel's `evaluate` ran). Still `undefined` after a successful evaluation: a stored build answered.
+   * One record per evaluation, so its answer is read after the evaluation's awaits.
+   */
+  private buildRun: { outcome: 'retained' | 'built' | undefined } = { outcome: undefined };
+  private nextEvaluationId = 0;
+  /** Latest admitted evaluation, whether or not its display projection succeeded. */
+  private retainedEvaluation: EvaluationSlot | undefined;
+  /** Evaluations whose queued build publication reads their handle, per action, oldest first (R1). */
+  private readonly pendingBuildPublications = new Map<ActionDigest, EvaluationSlot[]>();
+  /** The transient frame the running operation computes for; its results never publish on their own (R4). */
+  private activeOperationHold: string | undefined;
 
   /**
-   * Framework-managed native geometry handle from the last successful createGeometry call.
-   * Opaque to the framework -- typed by each kernel subclass.
-   * Passed to exportGeometry so exports work regardless of cache state.
-   *
-   * The cache is opportunistic, not contractual: an export immediately
-   * following a render may skip the re-mesh, but the only contractual
-   * guarantee is that single-arg `client.export(format)` throws
-   * `NoRenderOutcomeError` when no prior render has settled.
+   * Live native handles this worker owns, mapped to the owner that can release
+   * them. A handle enters on creation (`createGeometry`, snapshot restore) and
+   * leaves when no worker field references it any more — see
+   * {@link disposeUnreachableNativeHandles}.
    */
-  protected nativeHandle: unknown;
-
-  /**
-   * Serialized form of nativeHandle from the last successful createGeometry call.
-   * Populated by kernel `serializeHandle` hooks or auto-detected for Tier 1 types.
-   * Used by `ensureNativeHandle` to restore the handle without re-running createGeometry.
-   *
-   * Same opportunistic-cache contract applies as `nativeHandle` above.
-   */
-  protected lastSerializedHandle: unknown;
+  private readonly ownedNativeHandles = new Map<number, { slot: EvaluationSlot; handle: unknown }>();
 
   /** Fully initialized bundlers keyed by file extension. Shared context across extensions of the same bundler. */
-  protected loadedBundlers = new Map<string, { definition: BundlerDefinition; ctx: unknown }>();
+  protected loadedBundlers = new Map<string, { definition: BundlerDefinition; ctx: unknown; id?: string }>();
+
+  /** Worker-owned runtime middleware plugins. */
+  protected middlewarePlugins: readonly MiddlewarePlugin[];
+
+  /** Worker-owned runtime bundler plugins. */
+  protected bundlerPlugins: readonly BundlerPlugin[];
+
+  /** Worker-owned runtime transcoder plugins. */
+  protected transcoderPlugins: readonly TranscoderPluginEntry[];
+
+  /** Plugin declarations surfaced in the capabilities manifest. */
+  private manifestKernelPlugins: ReadonlyArray<KernelPlugin<Record<string, unknown>, unknown>>;
 
   /**
    * Human-readable identifier for this worker, used in log output and error diagnostics
@@ -277,14 +753,16 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /**
    * Pending bundler definitions awaiting context initialization, keyed by extension.
    * Definitions are loaded eagerly (during ensureLoadedBundler) but context creation
-   * is deferred until first use, when the project path is known (after setBasePath).
+   * is deferred until first use, after the active file has been selected.
    */
   private readonly pendingBundlerInits = new Map<
     string,
     {
       definition: BundlerDefinition;
-      extensions: string[];
+      extensions: readonly string[];
       options?: Record<string, unknown>;
+      /** The registration's `BundlerPlugin.id`, carried to the `kernel.bundle` span as `bundler.id`. */
+      id?: string;
     }
   >();
 
@@ -301,15 +779,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   private onLog: OnWorkerLog;
 
   /**
-   * The base path for relative file operations.
-   * Set via setBasePath() before performing operations that need relative path resolution.
-   */
-  private basePath = '';
-
-  /**
    * The full relative path of the active file being processed.
    * Used for error locations to ensure FileLink can navigate correctly.
-   * Set via setBasePath() from the original file.filename.
+   * Set via setActiveFile() from the local RuntimeFileLocator path.
    */
   private activeFilePath = '';
 
@@ -326,6 +798,14 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Initialized via initialize() when fileSystemPort is provided.
    */
   private _filesystem: KernelFileSystem | undefined;
+  private computeHost: ComputeCapabilityHost | undefined;
+  /**
+   * Mesh phases awaiting a deferred publication, by compute operation. Bounded: a publication that
+   * never settles only costs the projection its early release.
+   */
+  private readonly projectionReleases = new Map<string, ProjectionRelease>();
+  /** Compute facet bound beside the filesystem; the library default is memory (EQ13). */
+  private computeBinding: ComputeBinding = { mode: 'memory' };
 
   /**
    * Internal logger instance.
@@ -339,20 +819,51 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    */
   private readonly assetHashCache = new Map<string, string>();
 
+  /**
+   * Verified bytes of implementation assets loaded on use, kept for the worker's life.
+   * Maps `<url>\0<sha256>` to the pending or settled load.
+   */
+  private readonly implementationAssetBytes = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
+
   private readonly fileHashCache = new Map<string, string>();
   private readonly fileContentCache = new Map<string, Uint8Array<ArrayBuffer> | string>();
+  /**
+   * Existence and stat answers for the current operation, for the bundler's view only.
+   *
+   * `detect` and `bundle` are two full traversals of the same import graph, and inside each one a
+   * module is probed once per edge that names it: a module imported by ten others was probed
+   * thirty times per cold open. Cleared at every operation boundary.
+   */
+  private readonly fileExistsCache = new Map<string, boolean>();
+  private readonly fileStatCache = new Map<string, FileStat>();
+  private bundlerFilesystemView: KernelFileSystem | undefined;
+  private readonly compiledWasmModules = new Map<string, WebAssembly.Module>();
+  private parameterResultCache:
+    | {
+        readonly key: string;
+        readonly result: Extract<GetParametersResult, { success: true }>;
+      }
+    | undefined;
+  /** The last effective manifest this worker admitted, keyed by its revision and trusted execution context. */
+  private admittedManifest: { readonly key: string; readonly manifest: ParameterManifest } | undefined;
+  private readonly commonDependencyCache = new Map<string, Promise<CommonDependencySet>>();
+  private readonly middlewareDependencyCache = new Map<string, Promise<MiddlewareDependencySet>>();
+  /** Paths each settled dependency set above was resolved from; a cached set absent here is still pending. */
+  private readonly settledDependencyPaths = new WeakMap<Promise<unknown>, DependencyPaths>();
+  /** Paths a read was refused `PENDING` on (a tree write's or fill's): watched, so a render follows them (STO-25). */
+  private readonly refusedReads = new Set<string>();
 
   /**
    * Dynamically loaded middleware instances with their resolved configs.
-   * Populated during initialize() and updated via configureMiddleware().
+   * Populated during initialize() from the worker-owned runtime definition.
    */
   private resolvedMiddleware: ResolvedMiddleware[] = [];
 
   /**
-   * Cache of already-imported middleware modules keyed by URL.
-   * Prevents redundant network requests when reconfiguring middleware.
+   * Cache of already-imported middleware modules keyed by plugin id.
+   * Prevents duplicate resolution across setup paths and test helpers.
    */
-  private readonly middlewareModuleCache = new Map<string, KernelMiddleware>();
+  private readonly middlewareModuleCache = new Map<string, RuntimeMiddlewareDefinition>();
 
   /**
    * Cached middleware loggers, keyed by middleware name.
@@ -360,36 +871,54 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    */
   private readonly middlewareLoggerCache = new Map<string, RuntimeLogger>();
 
-  /** Cached KernelRuntime instance -- invalidated on setBasePath */
-  private cachedRuntime: KernelRuntime | undefined;
-
-  /** Cached project root path -- invalidated on setBasePath */
-  private cachedProjectRoot: string | undefined;
-
   /** Cached log origin object -- recreated only when activeFilePath changes */
   private cachedLogOrigin: { component: string; file: string } | undefined;
   private cachedLogOriginFile = '';
 
-  /** Telemetry collector instance -- created on first use when setTelemetrySend is called */
+  /** Telemetry batcher instance -- created on first use when setTelemetrySend is called */
   private telemetryCollector?: WorkerTelemetryCollector;
 
   /** Span tracer for hierarchical telemetry with explicit parent-child IDs */
   private readonly tracer = new RuntimeTracer();
+  /** The client operation the serialized lane is running, if any. */
+  private activeOperation: OperationRecord | undefined;
+  /** Operation facts: off until a client asks, then computed only after each terminal reply. */
+  private readonly observer = new WorkerOperationObserver(
+    () => this.telemetryCollector,
+    () => this.observedKernelHeap(),
+  );
 
   /** Progress callback set during render, used by entry methods to emit phase transitions */
-  private onProgress?: (phase: RenderPhase) => void;
+  private onProgress?: (phase: string, detail?: Readonly<Record<string, unknown>>) => void;
 
-  /** Bundle result cache keyed by entry path. Selectively invalidated when dependencies change; fully cleared on reset/overflow events. */
+  /** Bundle result cache keyed by entry path. Selectively invalidated when dependencies change; fully cleared on reset. */
   private readonly bundleResultCache = new Map<string, BundleResult>();
 
-  /** Unresolved import paths from the most recent getDependencies call, merged into the watch set. */
-  private unresolvedDependencyPaths = new Set<string>();
+  /**
+   * File dependencies whose content a bundle dependency stands in for (R24). Only their paths enter
+   * the build key; identity membership means a dependency rebuilt elsewhere keeps its content hash,
+   * so the failure mode is a miss, never a false hit.
+   */
+  private readonly bundleCoveredFiles = new WeakSet<FileDependency>();
 
-  /** Per-render dependency computation cache. Cleared at the start of each render cycle. */
-  private renderDependencyCache?: { hash: string; dependencies: Dependency[] };
+  /** The output digest of each bundle result, hashed once per bundle. */
+  private readonly bundleCodeHashes = new WeakMap<BundleResult, Promise<string>>();
 
-  /** Middleware-registered watch paths with custom debounce tiers (path → debounce in ms). */
-  private readonly middlewareWatchPaths = new Map<string, number>();
+  /**
+   * The code of an invalidated bundle, per entry, whose executed module is kept until the entry is
+   * bundled again (N10). A comment-only or formatting-only edit prints the same code, and the next
+   * bundle then reuses that module instead of executing it again; different code releases it.
+   */
+  private readonly supersededBundleCode = new Map<string, string>();
+
+  /** Entries whose dependencies the bundler facade resolved, so a discovery can tell the kernel's resolve was the bundler's. */
+  private readonly bundlerResolvedEntries = new Set<string>();
+
+  /** The script globals each cached bundle was built with, by entry, as a canonical key. */
+  private readonly bundleGlobalsKeys = new Map<string, string>();
+
+  /** Every built-in module name registered with the bundlers, for the per-entry banner scope (`bundleModuleScope`). */
+  private readonly registeredModuleNames = new Set<string>();
 
   /** Currently watched dependency paths. Used for incremental watch-set diffing. */
   private watchedPaths = new Set<string>();
@@ -397,31 +926,51 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /** Unsubscribe function for the current watch subscription. */
   private watchUnsubscribe?: () => void;
 
-  /** SharedArrayBuffer signal channel for bidirectional abort/state signaling. */
-  private signalView: Int32Array | undefined;
+  /** One serialized lane for kernel/cache/watch/native state. */
+  private operationTail: Promise<void> = Promise.resolve();
+  /** Operations admitted to the lane, running or queued. Zero is the worker's idle (D3). */
+  private admittedOperations = 0;
+  private readonly documentTasks = new Set<Promise<void>>();
+  /** Serializes authoritative watch rereads before they enter the operation lane. */
+  private watchReconciliationTail: Promise<void> = Promise.resolve();
+  /** Holds same-path watch echoes until staged bytes and their cache revision publish together. */
+  private stagedWritePublication:
+    | {
+        readonly paths: ReadonlySet<string>;
+        readonly promise: Promise<void>;
+        readonly resolve: () => void;
+      }
+    | undefined;
+  private operationAdmissionOpen = true;
+  private cleanupPromise: Promise<void> | undefined;
 
-  private _geometryPoolBuffer: SharedArrayBuffer | undefined;
-  private _filePoolBuffer: SharedArrayBuffer | undefined;
-  private _geometryPool: SharedPool | undefined;
-  private _filePool: SharedPool | undefined;
+  private readonly documents = new Map<string, DocumentRecord>();
+  private readonly documentViews = new Map<string, ViewRecord>();
+  private readonly documentOperations = new Map<string, AbortController>();
+  private readonly committedAdmissions = new Set<CommittedAdmission>();
+  private readonly pinnedDocumentEvaluations = new Map<DocumentEvaluation, number>();
+  private documentEvaluationSequence = 0;
+  private operationSignal: AbortSignal | undefined;
+  private activeDocumentEvaluationController: AbortController | undefined;
+  private activeDocumentEvaluationSequence = 0;
+  private activeDocumentNativeOperation:
+    | {
+        controller: AbortController;
+        progress: (phase: 'render' | 'export', sequence: number, generation?: number) => void;
+      }
+    | undefined;
 
-  /** Shared memory pool for zero-IPC geometry data exchange. */
-  public get geometryPool(): SharedPool | undefined {
-    return this._geometryPool;
-  }
-
-  /** Shared memory pool for zero-IPC file content caching. */
-  public get filePool(): SharedPool | undefined {
-    return this._filePool;
-  }
+  /** SharedArrayBuffer signal channel for document cancellation. */
+  private documentSignalView: BigInt64Array | undefined;
 
   /** Loaded transcoder instances keyed by plugin id. */
   private readonly loadedTranscoders = new Map<string, LoadedTranscoder>();
 
   /** Capabilities manifest computed during initialization. */
   private _capabilitiesManifest: CapabilitiesManifest = {
+    registrations: [],
     routes: [],
-    renderSchemas: {},
+    renderCapabilities: {},
   };
 
   /**
@@ -432,52 +981,39 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     return this._capabilitiesManifest;
   }
 
-  /** Current render generation for abort detection. */
-  private renderGeneration = 0;
+  /** Last issued `KernelRuntime.operationId`. */
+  private operationSequence = 0;
 
-  /** Current file for autonomous render loop. */
-  private currentFile: GeometryFile | undefined;
-
-  /** Current parameters for autonomous render loop. */
-  private currentParameters: Record<string, unknown> = {};
-
-  /** Last merged parameters passed to createGeometry (defaults + user overrides). */
-  private lastRenderParameters: Record<string, unknown> = {};
-
-  /** Current render options for autonomous render loop. */
-  private currentRenderOptions: Record<string, unknown> | undefined;
-
-  /** Debounce timer for parameter change re-renders. */
-  private paramDebounceTimer: ReturnType<typeof setTimeout> | undefined;
-
-  /** Last state pushed via `pushState`, used to deduplicate repeated emissions. */
-  private lastPushedState?: WorkerState;
-
-  /**
-   * Whether a render is currently in progress. Exposed for export-during-render decisions.
-   *
-   * @returns True if a render is in progress, false otherwise.
-   */
-  public get isRendering(): boolean {
-    return this._renderInProgress;
-  }
-  private _renderInProgress = false;
-
-  /** Cached KernelBundler facade exposed via KernelRuntime */
-  private cachedBundlerFacade: KernelBundler | undefined;
+  /** `KernelRuntime.operationId` shared by every kernel call inside the running operation. */
+  private currentOperationId: number | undefined;
 
   /** Pending module registrations queued before the bundler is loaded */
   private readonly pendingModuleRegistrations = new Map<string, BuiltinModule>();
+  /** Scope of this worker's built-in modules in the realm's module registry. */
+  private readonly registryScope = randomUuid();
 
   /** In-flight bundler initializations to coalesce concurrent callers for the same extension */
-  private readonly bundlerInitInProgress = new Map<string, Promise<{ definition: BundlerDefinition; ctx: unknown }>>();
+  private readonly bundlerInitInProgress = new Map<
+    string,
+    Promise<{ definition: BundlerDefinition; ctx: unknown; id?: string }>
+  >();
+
+  public constructor(options: KernelWorkerOptions = {}) {
+    this.manifestKernelPlugins = options.kernels ?? [];
+    this.middlewarePlugins = options.middleware ?? [];
+    this.bundlerPlugins = options.bundlers ?? [];
+    this.transcoderPlugins = options.transcoders ?? [];
+    this.onLog = () => {
+      throw new Error('onLog must be initialized before use');
+    };
+  }
 
   /**
    * Unified filesystem interface for kernel workers.
    * Provides three path resolution contexts:
-   * - Relative to basePath (current file's directory)
+   * - Relative to the current file's project-local directory
    * - Relative to project root (for dependency resolution)
-   * - Absolute paths (for cache/middleware operations)
+   * - Canonical rooted paths (for cache/middleware operations)
    *
    * @returns the kernel filesystem interface
    * @throws Error if accessed before initialize() completes with fileSystemPort
@@ -488,6 +1024,3565 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     }
 
     return this._filesystem;
+  }
+
+  /**
+   * Entry point for initializing the worker. This is called once when the worker is created.
+   * Handles common initialization logic and then calls the protected initialize method.
+   *
+   * @param input - Initialization input containing callbacks and transport-owned transferables
+   * @param input.callbacks - Object containing callback functions (proxied)
+   * @param input.callbacks.onLog - The function to call when a log is emitted
+   * @param input.transferables - Object containing transferable resources like MessagePorts
+   * @param input.transferables.fileSystemPort - Optional port for direct communication with the
+   * file-manager worker. Typed structurally ({@link MessagePortLike}) so in-process and
+   * `node:worker_threads` hosts can supply their own port; worker transports transfer a `MessagePort`.
+   */
+  public async initialize(input: {
+    callbacks: { onLog: OnWorkerLog };
+    transferables: {
+      fileSystemPort?: MessagePortLike;
+      inlineFileSystem?: RuntimeFileSystemBase;
+    };
+    options?: Options;
+    config?: unknown;
+    /** The client's id for this initialize attempt, carried by the `kernel.bootstrap` root as `operation.id`. */
+    operationId?: string;
+  }): Promise<void> {
+    this.onLog = input.callbacks.onLog;
+    const defaultOptions: Record<string, unknown> = {};
+    this.options = (input.options ?? defaultOptions) as Options;
+
+    // Create logger (depends on onLog being set)
+    this._logger = this.createLogger();
+
+    /* One warn per initialize when this realm cannot host SharedArrayBuffer.
+     * Degradation is otherwise silent at every consumer. Structurally silent in
+     * the Electron utility topology — a Node process is never gated — so this
+     * is the browser web-worker signal; Electron's header defect is caught by
+     * the `installElectronRuntimeHeaders` regression test instead. */
+    const isolation = getIsolationStatus();
+    if (!isolation.crossOriginIsolated) {
+      this._logger.warn(
+        `Cross-origin isolation degraded (${isolation.reason}): geometry pool falls back to copy delivery, render abort to wire-notify, auto-selected OCCT kernels to single-threaded`,
+      );
+    }
+
+    /* Filesystem wiring — three precedence rules (TR16):
+     * 1. `inlineFileSystem` takes precedence: same V8 cluster fast-path,
+     *    no MessagePort serialization or bridge proxy.
+     * 2. `fileSystemPort` falls back to the generic bridge proxy (worker /
+     *    cross-process topologies).
+     * 3. Neither: filesystem stays undefined; kernel runs without FS. */
+    if (input.transferables.inlineFileSystem) {
+      input.transferables.fileSystemPort?.close();
+      this.fileSystem = adaptInlineFileSystem(input.transferables.inlineFileSystem);
+      this._filesystem = this.createFileSystem();
+    } else if (input.transferables.fileSystemPort) {
+      this.fileSystem = await createWorkerFileSystemProxy(input.transferables.fileSystemPort);
+      this._filesystem = this.createFileSystem();
+    }
+
+    const admitted = performance.now();
+    const observed =
+      input.operationId === undefined
+        ? undefined
+        : this.observer.begin({
+            operation: 'initialize',
+            operationId: input.operationId,
+            admitted,
+            observed: this.observer.observing,
+          });
+    const bootstrapSpan = this.tracer.startSpan(
+      'kernel.bootstrap',
+      input.operationId === undefined ? undefined : { 'operation.id': input.operationId },
+    );
+    let booted = false;
+    try {
+      await this.loadBundlers(this.bundlerPlugins);
+      await this.loadMiddleware(this.middlewarePlugins);
+      await this.loadTranscoders(this.transcoderPlugins);
+
+      const initSpan = this.tracer.startSpan('kernel.init', {
+        kernel: this.constructor.name,
+      });
+      try {
+        await this.onInitialize({ options: this.options }, this.createRuntime());
+      } finally {
+        initSpan.end();
+      }
+
+      this._capabilitiesManifest = this.buildCapabilitiesManifest();
+      booted = true;
+    } finally {
+      bootstrapSpan.end();
+      if (observed && booted) {
+        this.observer.settle(observed);
+      }
+      if (this.admittedOperations === 0) {
+        this.observer.idle();
+      }
+    }
+  }
+
+  /**
+   * Set whether this worker computes operation facts. `facts` takes effect for operations admitted after it; `off`
+   * stops them from the next operation.
+   *
+   * @param mode - The mode a client asked for.
+   */
+  public setObservation(mode: RuntimeObservationMode): void {
+    this.observer.setMode(mode);
+  }
+
+  /**
+   * Set the realm this worker runs in. Called by the worker host that started it, never inferred.
+   *
+   * @param realm - The realm.
+   */
+  public setRealm(realm: RuntimeRealm): void {
+    this.observer.setRealm(realm);
+  }
+
+  /**
+   * The after-reply step: post the operation's facts when it was observed, then flush its spans.
+   *
+   * Called once an operation's terminal reply has been posted, so the reply never waits for either.
+   *
+   * @param operationId - The operation whose reply was posted, when the caller knows it.
+   */
+  public afterTerminalReply(operationId?: string): void {
+    let end: number | undefined;
+    try {
+      end = this.observer.afterTerminalReply(operationId, (notify) => {
+        this.onOperationFacts?.(notify);
+      });
+    } catch {
+      end = undefined; // Observation must not change runtime outcomes.
+    }
+    this.telemetryCollector?.flush(end);
+  }
+
+  /**
+   * The heap sources of the kernel the current operation ran on, for observation only.
+   *
+   * @returns The kernel's hooks, or `undefined` when no kernel is selected.
+   */
+  protected observedKernelHeap(): ObservedKernelHeap | undefined {
+    return undefined;
+  }
+
+  /**
+   * Set the telemetry send callback. Called by the dispatcher to wire up
+   * telemetry before initialization.
+   *
+   * @param send - callback that transmits collected spans, and the count lost since the last flush, to the main thread
+   */
+  public setTelemetrySend(send: (flush: WorkerTelemetryFlush) => void): void {
+    this.telemetryCollector?.dispose();
+    this.telemetryCollector = new WorkerTelemetryCollector(send);
+    this.tracer.setEntrySink(
+      (entry) => this.telemetryCollector?.collect(entry),
+      () => this.telemetryCollector?.noteDropped(),
+    );
+  }
+
+  /** Enable the opt-in Performance Timeline mirror used by Chrome DevTools. */
+  public setDevtoolsTelemetryEnabled(enabled: boolean): void {
+    this.tracer.setDevtoolsTimelineEnabled(enabled);
+  }
+
+  /** Install host-compiled modules before kernel initialization. */
+  public setCompiledWasmModules(
+    modules: ReadonlyArray<{
+      readonly url: string;
+      readonly module: WebAssembly.Module;
+    }>,
+  ): void {
+    this.compiledWasmModules.clear();
+    for (const entry of modules) {
+      this.compiledWasmModules.set(entry.url, entry.module);
+    }
+  }
+
+  /**
+   * Resolve a host-compiled module, and say so when a supplied set misses (D20).
+   *
+   * A host and a kernel derive the same asset's URL through different bundles. When they disagree
+   * the supply silently does nothing — the kernel compiles its own copy and the host's is dead
+   * weight — so a miss against a non-empty set is reported with both sides of the disagreement.
+   *
+   * @param url - The asset URL the kernel resolved.
+   * @returns The host-compiled module, or undefined when the kernel must compile its own.
+   */
+  private getCompiledWasmModule(url: string): WebAssembly.Module | undefined {
+    const module = this.compiledWasmModules.get(url);
+    if (module === undefined && this.compiledWasmModules.size > 0) {
+      this.logger.warn(`No host-compiled WebAssembly module matches '${url}'; the kernel will compile its own.`, {
+        data: {
+          requested: url,
+          supplied: [...this.compiledWasmModules.keys()],
+        },
+      });
+    }
+    return module;
+  }
+
+  /** Flush any buffered telemetry entries to the main thread. */
+  public flushTelemetry(): void {
+    this.telemetryCollector?.flush();
+  }
+
+  /**
+   * Set the SharedArrayBuffer signal channel for bidirectional abort/state signaling.
+   * Called by the dispatcher during initialization if the main thread provides a signal buffer.
+   *
+   * @param buffer - SharedArrayBuffer for the signal channel.
+   */
+  public setSignalBuffer(buffer: SharedArrayBuffer): void {
+    this.documentSignalView = documentAbortView(buffer);
+  }
+
+  /** Admit one live document and start its first evaluation. */
+  public handleOpenDocument(input: DocumentInput): void {
+    if (this.documents.has(input.documentId)) {
+      throw new Error(`Document ${input.documentId} is already open.`);
+    }
+    const file = this.canonicalGeometryFile(input.file);
+    const record: DocumentRecord = {
+      id: input.documentId,
+      file,
+      intent: input.intent,
+      parameters: { ...input.parameters },
+      evaluateOptions: { ...input.evaluateOptions },
+      committedParameters: { ...input.parameters },
+      committedEvaluateOptions: { ...input.evaluateOptions },
+      watch: input.watch,
+      closed: false,
+      views: new Map(),
+      operations: new Set(),
+      watchPaths: new Set([assertRootedPath(joinRelativePath(file.path, file.filename))]),
+    };
+    this.documents.set(record.id, record);
+    this.scheduleDocumentEvaluation(record, input.intent, false, input.stage);
+  }
+
+  /** Update document inputs without changing any view request. */
+  public handleUpdateDocument(input: DocumentUpdateInput): void {
+    const record = this.documents.get(input.documentId);
+    if (!record || record.closed) {
+      return;
+    }
+    if (input.intent <= record.intent) {
+      return;
+    }
+    record.intent = input.intent;
+    const baseParameters = input.transient ? record.parameters : record.committedParameters;
+    const baseEvaluateOptions = input.transient ? record.evaluateOptions : record.committedEvaluateOptions;
+    record.parameters = { ...(input.parameters ?? baseParameters) };
+    record.evaluateOptions = {
+      ...(input.evaluateOptions ?? baseEvaluateOptions),
+    };
+    if (!input.transient) {
+      record.committedParameters = { ...record.parameters };
+      record.committedEvaluateOptions = { ...record.evaluateOptions };
+    }
+    this.scheduleDocumentEvaluation(record, input.intent, input.transient ?? false, input.stage);
+  }
+
+  /** Close one document and its subscriptions before any queued result can publish. */
+  public handleCloseDocument(input: { readonly documentId: string }): void {
+    const record = this.documents.get(input.documentId);
+    if (!record) {
+      return;
+    }
+    record.closed = true;
+    this.documents.delete(record.id);
+    for (const view of record.views.values()) {
+      this.documentViews.delete(view.id);
+    }
+    record.views.clear();
+    record.watchPaths.clear();
+    for (const controller of record.operations) {
+      controller.abort();
+    }
+    record.pendingCommitted?.completion.reject(new Error(`Document ${record.id} closed.`));
+    const pending = this.enqueueOperation(async () => {
+      await this.reconcileObservedPaths();
+      const closedSlotId =
+        record.current?.artifact?.evaluationSlot?.id ?? record.committed?.artifact?.evaluationSlot?.id;
+      if (
+        closedSlotId !== undefined &&
+        !this.isEvaluationSlotOpen(closedSlotId) &&
+        this.retainedEvaluation?.id === closedSlotId &&
+        // The worker keeps its latest build while the compute store holds or queues it: a reopen then
+        // reuses the live handle instead of a restored snapshot, and the queued snapshot can still read it.
+        this.retainedEvaluation.buildPublication === undefined
+      ) {
+        this.retainedEvaluation = undefined;
+      }
+      this.disposeUnreachableNativeHandles();
+    });
+    this.trackDocumentTask(pending, (error: unknown) => {
+      this.logger.warn('Failed to reconcile watched paths after document close', {
+        data: {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    });
+  }
+
+  /**
+   * Whether an open document or a pinned export still references an evaluation.
+   * @param slotId - The evaluation slot.
+   * @returns True while a document or pin can read it.
+   */
+  private isEvaluationSlotOpen(slotId: number): boolean {
+    return (
+      [...this.documents.values()].some(
+        (document) =>
+          document.current?.artifact?.evaluationSlot?.id === slotId ||
+          document.committed?.artifact?.evaluationSlot?.id === slotId,
+      ) ||
+      [...this.pinnedDocumentEvaluations.keys()].some(
+        (evaluation) => evaluation.artifact?.evaluationSlot?.id === slotId,
+      )
+    );
+  }
+
+  /**
+   * Follow the build publication an evaluate phase queues, so its handle outlives a document close
+   * until the snapshot is taken (R1), and so a later reuse of the live handle knows the store has it (R3).
+   * @param capability - The evaluate phase's compute facet.
+   * @param computedSlot - The evaluation that computed the value, once the kernel handler ran.
+   * @returns The facet, its evaluate observed.
+   */
+  private trackBuildPublication(
+    capability: KernelComputeCapability,
+    computedSlot: () => EvaluationSlot | undefined,
+  ): KernelComputeCapability {
+    if (capability.status === 'off') {
+      return capability;
+    }
+    const { evaluate } = capability;
+    return {
+      ...capability,
+      evaluate: async (evaluation) => {
+        const result = await evaluate(evaluation);
+        const slot = computedSlot();
+        if (result.source !== 'computed' || slot?.hasHandle !== true) {
+          return result;
+        }
+        if (result.publication.status === 'stored') {
+          slot.buildPublication = 'stored';
+        } else if (result.publication.status === 'deferred') {
+          slot.buildPublication ??= 'pending';
+          slot.pendingPublications = (slot.pendingPublications ?? 0) + 1;
+          const queued = this.pendingBuildPublications.get(result.actionDigest);
+          if (queued) {
+            queued.push(slot);
+          } else {
+            this.pendingBuildPublications.set(result.actionDigest, [slot]);
+          }
+        }
+        return result;
+      },
+    };
+  }
+
+  /**
+   * A queued publication settled: release a build publication's hold on its handle.
+   * @param actionDigest - The published action.
+   * @param stored - Whether the store now holds the action.
+   */
+  private settleBuildPublication(actionDigest: ActionDigest, stored: boolean): void {
+    const queued = this.pendingBuildPublications.get(actionDigest);
+    const slot = queued?.shift();
+    if (!slot) {
+      return;
+    }
+    if (queued?.length === 0) {
+      this.pendingBuildPublications.delete(actionDigest);
+    }
+    slot.pendingPublications = Math.max(0, (slot.pendingPublications ?? 1) - 1);
+    if (stored) {
+      slot.buildPublication = 'stored';
+    } else if (slot.buildPublication === 'pending' && slot.pendingPublications === 0) {
+      slot.buildPublication = undefined;
+      if (this.retainedEvaluation === slot && !this.isEvaluationSlotOpen(slot.id)) {
+        // Kept past its close only for the store; nothing will hold it there now.
+        this.retainedEvaluation = undefined;
+      }
+    }
+    if (this.admittedOperations === 0) {
+      this.disposeUnreachableNativeHandles();
+    }
+  }
+
+  /** Subscribe one view to the document's current and future evaluations. */
+  public handleOpenView(input: ViewOpenInput): void {
+    const document = this.documents.get(input.documentId);
+    if (!document || document.closed || this.documentViews.has(input.subscriptionId)) {
+      return;
+    }
+    const view: ViewRecord = {
+      document,
+      id: input.subscriptionId,
+      requestId: input.requestId,
+      view: input.view,
+      instance: input.instance,
+      options: { ...input.options },
+      content: input.content,
+      operations: new Set(),
+    };
+    document.views.set(view.id, view);
+    this.documentViews.set(view.id, view);
+    if (document.current) {
+      this.scheduleDocumentView(view, document.current);
+    }
+  }
+
+  /** Replace one view request without evaluating its document again. */
+  public handleUpdateView(input: ViewUpdateInput): void {
+    const view = this.documentViews.get(input.subscriptionId);
+    if (!view) {
+      return;
+    }
+    view.requestId = input.requestId;
+    if (input.instance !== undefined) {
+      view.instance = input.instance;
+    }
+    if (input.options !== undefined) {
+      view.options = { ...input.options };
+    }
+    if (input.content !== undefined) {
+      view.content = input.content;
+    }
+    if (view.document.current) {
+      this.scheduleDocumentView(view, view.document.current);
+    }
+  }
+
+  /** Stop one view's projections while leaving the document live. */
+  public handleCloseView(input: { readonly subscriptionId: string }): void {
+    const view = this.documentViews.get(input.subscriptionId);
+    if (!view) {
+      return;
+    }
+    this.documentViews.delete(view.id);
+    view.document.views.delete(view.id);
+    for (const controller of view.operations) {
+      controller.abort();
+    }
+  }
+
+  /** Abort one request-owned waiter or queued operation. */
+  public handleOperationAbort(input: { readonly operationId: string; readonly reason: number }): void {
+    this.documentOperations.get(input.operationId)?.abort(input.reason);
+  }
+
+  /** Describe a source without creating or retargeting a document. */
+  public async describe(
+    input: RuntimeDocumentProtocol['calls']['describe']['args'],
+    signal?: AbortSignal,
+  ): Promise<Description> {
+    return this.enqueueOperation(
+      async () => {
+        signal?.throwIfAborted();
+        if (input.stage) {
+          await this.writeFilesAndInvalidate(input.stage);
+        }
+        signal?.throwIfAborted();
+        await this.revalidateRetainedFiles();
+        const owner = await this.createOperationOwner(input.file, 'request');
+        const result = await this.getParametersInLane(input.file, {
+          owner,
+          resolution: input.resolution,
+        });
+        await this.reconcileObservedPaths();
+        return result.success
+          ? {
+              success: true,
+              kernelId: owner.binding?.kernelId,
+              parameters: result.data,
+              issues: result.issues,
+            }
+          : {
+              success: false,
+              kernelId: owner.binding?.kernelId,
+              issues: result.issues,
+            };
+      },
+      signal,
+      {
+        operation: 'describe',
+        operationId: input.operationId ?? `describe:${String(this.operationSequence + 1)}`,
+        attributes: { file: joinRelativePath(input.file.path, input.file.filename) },
+      },
+    );
+  }
+
+  /** Export from the committed evaluation selected when the request arrived. */
+  public async exportDocument(
+    input: RuntimeDocumentProtocol['calls']['export']['args'],
+    signal?: AbortSignal,
+  ): Promise<ExportResult> {
+    const document = this.documents.get(input.documentId);
+    if (!document || document.closed) {
+      throw new Error(`Document ${input.documentId} is closed.`);
+    }
+    const pending = document.pendingCommitted;
+    if (pending) {
+      pending.pins++;
+    }
+    const committedAtAdmission = document.committed;
+    const pinned = pending?.completion.promise ?? Promise.resolve(committedAtAdmission);
+    if (!pending && committedAtAdmission) {
+      this.pinnedDocumentEvaluations.set(
+        committedAtAdmission,
+        (this.pinnedDocumentEvaluations.get(committedAtAdmission) ?? 0) + 1,
+      );
+    }
+    const controller = new AbortController();
+    const abortFromCall = (): void => {
+      controller.abort(signal?.reason);
+    };
+    signal?.addEventListener('abort', abortFromCall, { once: true });
+    if (signal?.aborted) {
+      abortFromCall();
+    }
+    document.operations.add(controller);
+    this.documentOperations.set(input.operationId, controller);
+    try {
+      return await this.enqueueOperation(
+        async () => {
+          controller.signal.throwIfAborted();
+          const evaluation = await pinned;
+          controller.signal.throwIfAborted();
+          if (!evaluation) {
+            return {
+              success: false,
+              issues: [
+                {
+                  code: 'HANDLE_MISSING',
+                  message: 'Document has no committed evaluation.',
+                  severity: 'error',
+                  type: 'runtime',
+                },
+              ],
+            };
+          }
+          if (!evaluation.result.success || !evaluation.artifact) {
+            return {
+              success: false,
+              issues: evaluation.result.issues,
+              ...(evaluation.result.sourceRevision ? { sourceRevision: evaluation.result.sourceRevision } : {}),
+            };
+          }
+          const { artifact } = evaluation;
+          const target = this.resolveDocumentExportTarget(
+            artifact.owner,
+            artifact.evaluationSlot?.offers,
+            input.target,
+          );
+          if (!target.success) {
+            return {
+              success: false,
+              issues: target.issues,
+              ...(evaluation.result.sourceRevision ? { sourceRevision: evaluation.result.sourceRevision } : {}),
+            };
+          }
+          const plan = this.createExportRequestPlan(artifact.owner, {
+            format: target.format,
+            options: input.options,
+            content: input.content,
+            exportId: target.exportId,
+          });
+          if (!plan.success) {
+            return {
+              success: false,
+              issues: plan.result.issues,
+              ...(evaluation.result.sourceRevision ? { sourceRevision: evaluation.result.sourceRevision } : {}),
+            };
+          }
+          // A pinned evaluation stays fixed, while export-only dependencies must use bytes current at this export.
+          await this.revalidateRetainedFiles();
+          controller.signal.throwIfAborted();
+          this.onDocumentProgressUpdate?.({
+            documentId: document.id,
+            intent: evaluation.intent,
+            evaluationId: evaluation.id,
+            operationId: input.operationId,
+            phase: 'exporting',
+          });
+          const activeMiddleware = this.getOuterExportExecutionList(plan);
+          this.activeDocumentNativeOperation = {
+            controller,
+            progress: (phase, sequence, generation) => {
+              this.onDocumentProgressUpdate?.({
+                documentId: document.id,
+                intent: evaluation.intent,
+                evaluationId: evaluation.id,
+                operationId: input.operationId,
+                phase,
+                detail: {
+                  abortSequence: sequence,
+                  ...(generation === undefined ? {} : { abortGeneration: generation }),
+                },
+              });
+            },
+          };
+          let result: ExportGeometryResult;
+          try {
+            result = finalizeExportArtifactSet(
+              activeMiddleware.length === 0
+                ? await this.executeExportRequest(plan, artifact, evaluation.result.sourceRevision)
+                : await this.runExportMiddlewarePipeline({
+                    plan,
+                    renderIdentity: artifact.identity,
+                    renderArtifact: artifact,
+                    activeMiddleware,
+                    pinnedSourceRevision: evaluation.result.sourceRevision,
+                  }),
+            );
+          } finally {
+            this.activeDocumentNativeOperation = undefined;
+          }
+          controller.signal.throwIfAborted();
+          if (!result.success) {
+            return {
+              success: false,
+              issues: result.issues,
+              ...(evaluation.result.sourceRevision ? { sourceRevision: evaluation.result.sourceRevision } : {}),
+            };
+          }
+          const files = nonemptyExportFiles(result.data);
+          return {
+            success: true,
+            exportId: target.exportId,
+            evaluationId: evaluation.id,
+            files,
+            issues: result.issues,
+            ...(evaluation.result.sourceRevision ? { sourceRevision: evaluation.result.sourceRevision } : {}),
+          };
+        },
+        controller.signal,
+        { operation: 'export', operationId: input.operationId, attributes: { format: input.target } },
+      );
+    } catch (error) {
+      if (controller.signal.aborted && controller.signal.reason === abortReasonEnum.timeout) {
+        this.onDocumentError?.({
+          scope: 'operation',
+          documentId: document.id,
+          intent: document.intent,
+          operationId: input.operationId,
+          code: 'OPERATION_TIMEOUT',
+          phase: 'export',
+          message: 'Document export timed out.',
+        });
+      }
+      throw error;
+    } finally {
+      signal?.removeEventListener('abort', abortFromCall);
+      if (pending) {
+        pending.pins--;
+      }
+      if (pending?.pins === 0) {
+        this.committedAdmissions.delete(pending);
+      }
+      if (!pending && committedAtAdmission) {
+        const remaining = (this.pinnedDocumentEvaluations.get(committedAtAdmission) ?? 1) - 1;
+        if (remaining > 0) {
+          this.pinnedDocumentEvaluations.set(committedAtAdmission, remaining);
+        } else {
+          this.pinnedDocumentEvaluations.delete(committedAtAdmission);
+        }
+      }
+      document.operations.delete(controller);
+      if (this.documentOperations.get(input.operationId) === controller) {
+        this.documentOperations.delete(input.operationId);
+      }
+    }
+  }
+
+  /** Resolve an export ID before direct extension before transcode route. */
+  protected resolveDocumentExportTarget(
+    _owner: OperationOwner,
+    _offers: KernelOffers | undefined,
+    target: string,
+  ): { success: true; format: string; exportId: string } | { success: false; issues: KernelIssue[] } {
+    return { success: true, format: target, exportId: target };
+  }
+
+  /** Return the exact declaration for an explicitly selected export ID. */
+  protected getDocumentExportDeclaration(
+    _owner: OperationOwner,
+    _exportId: string,
+  ):
+    | {
+        extension: string;
+        mimeType: string;
+        schema?: z.ZodType;
+        content: readonly RuntimeContentKey[];
+      }
+    | undefined {
+    return undefined;
+  }
+
+  private async pinnedSourceStillMatches(revision: SourceRevision): Promise<boolean> {
+    for (const [path, expected] of Object.entries(revision.files)) {
+      try {
+        // oxlint-disable-next-line no-await-in-loop -- one committed source closure is checked in path order.
+        const bytes = await this.filesystem.readFile(path);
+        // oxlint-disable-next-line no-await-in-loop -- hash each path before making a source-correct write.
+        if (`sha256:${await this.hashContent(bytes)}` !== expected) {
+          return false;
+        }
+      } catch (error) {
+        if (expected !== 'missing' || !isNotFoundError(error)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  private sourceSnapshotChangedResult(): ExportGeometryResult {
+    return createKernelError([
+      {
+        code: 'SOURCE_SNAPSHOT_CHANGED',
+        message: 'The committed source changed before its native export handle could be rebuilt.',
+        type: 'runtime',
+        severity: 'error',
+      },
+    ]);
+  }
+
+  // oxlint-disable-next-line max-params -- A document admission carries its intent, transient flag and optional staged files.
+  private scheduleDocumentEvaluation(
+    document: DocumentRecord,
+    intent: number,
+    transient: boolean,
+    stage?: Readonly<Record<string, Uint8Array<ArrayBuffer>>>,
+  ): void {
+    // Preserve an export-pinned committed admission, but stop any superseded
+    // unpinned native build before the next evaluation enters the serial lane.
+    if (document.pendingCommitted?.pins === 0 || document.pendingCommitted === undefined) {
+      document.evaluationController?.abort(abortReasonEnum.superseded);
+    }
+    this.documentEvaluationSequence = nextDocumentAbortSequence(this.documentEvaluationSequence);
+    const evaluationId = String(this.documentEvaluationSequence);
+    const operationId = `evaluate:${document.id}:${evaluationId}`;
+    const admissionAlias = `${document.id}:${intent}`;
+    const controller = new AbortController();
+    document.evaluationController = controller;
+    this.documentOperations.set(operationId, controller);
+    this.documentOperations.set(admissionAlias, controller);
+    document.operations.add(controller);
+    const pendingCommitted: CommittedAdmission | undefined = transient
+      ? undefined
+      : {
+          intent,
+          completion: Promise.withResolvers<DocumentEvaluation>(),
+          pins: 0,
+        };
+    // Observe a committed admission even if no export pins it before supersession.
+    if (pendingCommitted) {
+      this.trackDocumentTask(pendingCommitted.completion.promise, () => undefined);
+    }
+    if (pendingCommitted) {
+      document.pendingCommitted = pendingCommitted;
+      this.committedAdmissions.add(pendingCommitted);
+    }
+    const parameters = { ...document.parameters };
+    const evaluateOptions = { ...document.evaluateOptions };
+    const { file } = document;
+    this.onEvaluating?.({
+      documentId: document.id,
+      intent,
+      evaluationId,
+      transient,
+    });
+    this.onDocumentProgressUpdate?.({
+      documentId: document.id,
+      intent,
+      evaluationId,
+      operationId,
+      phase: 'queued',
+    });
+    this.onDocumentStateChanged?.({ state: 'busy' });
+    let initialWatchRefusal: { error: unknown } | undefined;
+    const pending = this.enqueueOperation(
+      async () => {
+        // Build elapsed: queue wait excluded, the parameter description included.
+        const buildStarted = performance.now();
+        const previousProgress = this.onProgress;
+        this.activeDocumentEvaluationController = controller;
+        this.activeDocumentEvaluationSequence = Number(evaluationId) >>> 0;
+        this.activeOperationHold = transient ? transientHold(document.id, evaluationId) : undefined;
+        this.onProgress = (phase, detail) => {
+          this.onDocumentProgressUpdate?.({
+            documentId: document.id,
+            intent,
+            evaluationId,
+            operationId,
+            phase,
+            ...(detail ? { detail } : {}),
+          });
+        };
+        try {
+          if (!this.shouldContinueDocumentEvaluation(document, controller, intent, pendingCommitted)) {
+            this.abandonDocumentEvaluation(pendingCommitted);
+            return;
+          }
+          if (stage) {
+            await this.writeFilesAndInvalidate(stage, document.id);
+          }
+          await this.revalidateRetainedFiles(document.id);
+          if (document.watch) {
+            try {
+              await this.reconcileObservedPaths();
+            } catch (error) {
+              initialWatchRefusal = { error };
+            }
+            // The arm routes this document's own moved paths to a successor; nothing else retires it.
+            if (!this.shouldContinueDocumentEvaluation(document, controller, intent, pendingCommitted)) {
+              this.abandonDocumentEvaluation(pendingCommitted);
+              return;
+            }
+          }
+          const dependencyContext: DependencyResolutionContext = {};
+          const owner = await this.createOperationOwner(file, 'request');
+          const described = await this.getParametersInLane(file, {
+            dependencyContext,
+            owner,
+          });
+          const description: Description = described.success
+            ? {
+                success: true,
+                kernelId: owner.binding?.kernelId,
+                parameters: described.data,
+                issues: described.issues,
+              }
+            : {
+                success: false,
+                kernelId: owner.binding?.kernelId,
+                issues: described.issues,
+              };
+          if (!this.shouldContinueDocumentEvaluation(document, controller, intent, pendingCommitted)) {
+            this.abandonDocumentEvaluation(pendingCommitted);
+            return;
+          }
+          this.onDescribed?.({
+            documentId: document.id,
+            intent,
+            evaluationId,
+            ...description,
+          });
+          let evaluation: DocumentEvaluation;
+          const legacyProjection = described.success ? described.data.legacyProjection : undefined;
+          if (!described.success || legacyProjection?.status !== 'usable') {
+            const issues = described.success
+              ? ([
+                  {
+                    code: 'RUNTIME',
+                    message: 'Parameter schema cannot be represented by the active Draft-7 execution path',
+                    type: 'kernel',
+                    severity: 'error',
+                  },
+                ] as KernelIssue[])
+              : described.issues;
+            evaluation = {
+              id: evaluationId,
+              intent,
+              transient,
+              result: {
+                success: false,
+                id: evaluationId,
+                transient,
+                issues,
+                sourceRevision: described.sourceRevision,
+              },
+            };
+          } else {
+            const manifest = described.data;
+            const parametersWithDefaults = mergeParameterDefaults({}, parameters, legacyProjection.schema);
+            const buildRun: { outcome: 'retained' | 'built' | undefined } = { outcome: undefined };
+            this.buildRun = buildRun;
+            const { artifact } = await this.materializeRender(
+              {
+                file,
+                parameters: parametersWithDefaults,
+                parameterDefaults: manifest.defaults,
+                parameterManifest: manifest,
+                parameterSchema: legacyProjection.schema,
+                options: evaluateOptions,
+              },
+              { dependencyContext, owner },
+            );
+            const { result } = artifact;
+            const build = buildReportOf(
+              buildRun.outcome === 'built',
+              artifact.evaluationSlot?.kernelBuild,
+              performance.now() - buildStarted,
+            );
+            evaluation = result.success
+              ? {
+                  id: evaluationId,
+                  intent,
+                  transient,
+                  artifact,
+                  result: {
+                    success: true,
+                    id: evaluationId,
+                    transient,
+                    views: this.getDocumentViewOffers(owner, artifact.evaluationSlot?.offers),
+                    exports: this.getDocumentExportOffers(owner, artifact.evaluationSlot?.offers),
+                    ...this.getDocumentEvaluateOptionsOffer(owner),
+                    issues: result.issues,
+                    sourceRevision: sourceRevisionForArtifact(artifact, described.sourceRevision),
+                    build,
+                  },
+                }
+              : {
+                  id: evaluationId,
+                  intent,
+                  transient,
+                  result: {
+                    success: false,
+                    id: evaluationId,
+                    transient,
+                    issues: result.issues,
+                    sourceRevision: sourceRevisionForArtifact(artifact, described.sourceRevision),
+                  },
+                };
+          }
+          /* A host persists a committed edit before its update stages the same bytes, so the watch
+           * can evaluate that write first and publish under the intent the client has already left.
+           * The update then reuses that build; it reuses its meshes too, because each projection is
+           * keyed by every input it was made from and the build is the same native handle. */
+          const priorEvaluation = document.current;
+          const evaluationSlot = evaluation.artifact?.evaluationSlot;
+          if (evaluationSlot !== undefined && priorEvaluation?.artifact?.evaluationSlot === evaluationSlot) {
+            priorEvaluation.projections ??= new Map();
+            evaluation.projections = priorEvaluation.projections;
+            if (priorEvaluation.transient && !transient) {
+              // A committed state adopts the last frame's build and meshes: publish them once now (R4).
+              this.computeHost?.releaseHeld(transientHold(document.id, priorEvaluation.id));
+            }
+          }
+          if (initialWatchRefusal && evaluation.result.success) {
+            throw initialWatchRefusal.error;
+          }
+          if (document.watch && initialWatchRefusal === undefined) {
+            for (const [path, digest] of Object.entries(evaluation.result.sourceRevision?.files ?? {})) {
+              if (!this.fileHashCache.has(path)) {
+                this.fileHashCache.set(path, digest === 'missing' ? digest : digest.slice('sha256:'.length));
+              }
+            }
+            document.watchPaths = new Set([
+              assertRootedPath(joinRelativePath(document.file.path, document.file.filename)),
+              ...Object.keys(evaluation.result.sourceRevision?.files ?? {}),
+              ...(evaluation.artifact?.identity.dependencies.flatMap((dependency) =>
+                dependency.type === 'file' ? [dependency.path] : [],
+              ) ?? []),
+            ]);
+            await this.reconcileObservedPaths();
+            if (!this.shouldContinueDocumentEvaluation(document, controller, intent, pendingCommitted)) {
+              this.abandonDocumentEvaluation(pendingCommitted);
+              return;
+            }
+          }
+          if (pendingCommitted) {
+            pendingCommitted.evaluation = evaluation;
+            pendingCommitted.completion.resolve(evaluation);
+            if (pendingCommitted.pins === 0) {
+              this.committedAdmissions.delete(pendingCommitted);
+            }
+          }
+          if (!this.shouldPublishDocumentEvaluation(document, controller, intent)) {
+            return;
+          }
+          document.current = evaluation;
+          if (!transient) {
+            document.committed = evaluation;
+            if (document.pendingCommitted === pendingCommitted) {
+              document.pendingCommitted = undefined;
+            }
+          }
+          this.noteOperationResult(evaluation.result);
+          this.onEvaluated?.({
+            documentId: document.id,
+            intent,
+            ...evaluation.result,
+          });
+          this.onDocumentStateChanged?.({
+            state: evaluation.result.success ? 'idle' : 'error',
+          });
+          for (const view of document.views.values()) {
+            this.scheduleDocumentView(view, evaluation);
+          }
+          if (!document.watch) {
+            await this.reconcileObservedPaths();
+          }
+        } finally {
+          this.activeDocumentEvaluationController = undefined;
+          this.activeDocumentEvaluationSequence = 0;
+          this.activeOperationHold = undefined;
+          this.onProgress = previousProgress;
+        }
+      },
+      controller.signal,
+      {
+        operation: 'evaluate',
+        operationId,
+        attributes: { file: joinRelativePath(file.path, file.filename) },
+      },
+    );
+    this.trackDocumentTask(
+      pending,
+      async (error: unknown) => {
+        if (controller.signal.aborted && controller.signal.reason === abortReasonEnum.timeout) {
+          this.onDocumentError?.({
+            scope: 'operation',
+            documentId: document.id,
+            intent,
+            evaluationId,
+            operationId,
+            code: 'OPERATION_TIMEOUT',
+            phase: 'evaluate',
+            message: 'Document evaluation timed out.',
+          });
+        }
+        const issues = this.errorToRuntimeIssues(error);
+        const result: Evaluation = {
+          success: false,
+          id: evaluationId,
+          transient,
+          issues,
+        };
+        const evaluation: DocumentEvaluation = {
+          id: evaluationId,
+          intent,
+          transient,
+          result,
+        };
+        if (
+          document.watch &&
+          initialWatchRefusal === undefined &&
+          !controller.signal.aborted &&
+          !document.closed &&
+          document.intent === intent
+        ) {
+          document.watchPaths.add(assertRootedPath(joinRelativePath(document.file.path, document.file.filename)));
+          try {
+            await this.reconcileObservedPaths();
+          } catch (watchError) {
+            /* A dead filesystem bridge can reject the replacement watch after
+             * the evaluation itself failed. Its rearm error must not suppress
+             * the original evaluated and rendered failure notifications. */
+            this.logger.warn('Failed to reconcile watched paths after document evaluation error', {
+              data: { error: watchError instanceof Error ? watchError.message : String(watchError) },
+            });
+          }
+        }
+        if (pendingCommitted) {
+          if (controller.signal.aborted || document.closed) {
+            pendingCommitted.completion.reject(error);
+          } else {
+            pendingCommitted.evaluation = evaluation;
+            pendingCommitted.completion.resolve(evaluation);
+          }
+          if (pendingCommitted.pins === 0) {
+            this.committedAdmissions.delete(pendingCommitted);
+          }
+        }
+        if (!controller.signal.aborted && !document.closed && document.intent === intent) {
+          document.current = evaluation;
+          if (!transient) {
+            document.committed = evaluation;
+          }
+          this.onEvaluated?.({ documentId: document.id, intent, ...result });
+          this.onDocumentStateChanged?.({
+            state: 'error',
+            detail: issueDetail(issues),
+          });
+          for (const view of document.views.values()) {
+            this.scheduleDocumentView(view, evaluation);
+          }
+        }
+      },
+      () => {
+        if (document.evaluationController === controller) {
+          document.evaluationController = undefined;
+        }
+        if (this.documentOperations.get(operationId) === controller) {
+          this.documentOperations.delete(operationId);
+        }
+        if (this.documentOperations.get(admissionAlias) === controller) {
+          this.documentOperations.delete(admissionAlias);
+        }
+        document.operations.delete(controller);
+      },
+    );
+  }
+
+  /** The kernel's evaluate options as an evaluation offers them; none by default. */
+  protected getDocumentEvaluateOptionsOffer(_owner: OperationOwner): {
+    evaluateOptions?: { schema: JSONSchema7; defaults: Record<string, unknown> };
+  } {
+    return {};
+  }
+
+  /** Metadata for the selected kernel's offered views. */
+  protected getDocumentViewOffers(_owner: OperationOwner, _offers?: KernelOffers): readonly ViewOffer[] {
+    return [];
+  }
+
+  /** Metadata for the selected kernel's offered exports. */
+  protected getDocumentExportOffers(_owner: OperationOwner, _offers?: KernelOffers): readonly ExportOffer[] {
+    return [];
+  }
+
+  /** Select and validate an offered view, including its media type and instance. */
+  // oxlint-disable-next-line max-params -- The subclass hook selects an owner-bound offered view and optional instance.
+  protected selectDocumentView(
+    _owner: OperationOwner,
+    _offers: KernelOffers | undefined,
+    _view: string | undefined,
+    // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- The wire uses null to clear a selected instance.
+    _instance: string | null | undefined,
+  ):
+    | {
+        success: true;
+        selection: { view: string; mimeType: MediaType; instance?: string };
+      }
+    | { success: false; issues: KernelIssue[] } {
+    return createKernelError([
+      {
+        code: 'VIEW_UNAVAILABLE',
+        message: 'No view is available.',
+        type: 'kernel',
+        severity: 'error',
+      },
+    ]);
+  }
+
+  private scheduleDocumentView(view: ViewRecord, evaluation: DocumentEvaluation): void {
+    const { document } = view;
+    const { requestId } = view;
+    const operationId = `render:${view.id}:${evaluation.id}:${requestId}`;
+    const controller = new AbortController();
+    this.documentOperations.set(operationId, controller);
+    this.documentOperations.set(requestId, controller);
+    document.operations.add(controller);
+    view.operations.add(controller);
+    this.onRendering?.({
+      subscriptionId: view.id,
+      requestId,
+      evaluationId: evaluation.id,
+      intent: evaluation.intent,
+    });
+    this.onDocumentProgressUpdate?.({
+      documentId: document.id,
+      intent: evaluation.intent,
+      evaluationId: evaluation.id,
+      operationId,
+      requestId,
+      phase: 'queued',
+    });
+    const pending = this.enqueueOperation(
+      async () => {
+        if (
+          controller.signal.aborted ||
+          document.closed ||
+          document.current !== evaluation ||
+          view.requestId !== requestId
+        ) {
+          return;
+        }
+        const { artifact } = evaluation;
+        let result: Rendering;
+        if (!artifact || !evaluation.result.success) {
+          result = {
+            success: false,
+            requestId,
+            evaluationId: evaluation.id,
+            transient: evaluation.transient,
+            issues: [...evaluation.result.issues],
+            ...(evaluation.result.sourceRevision ? { sourceRevision: evaluation.result.sourceRevision } : {}),
+          };
+        } else {
+          const selected = this.selectDocumentView(
+            artifact.owner,
+            artifact.evaluationSlot?.offers,
+            view.view,
+            view.instance,
+          );
+          if (selected.success) {
+            const { selection } = selected;
+            const meshMiddleware = this.getMeshExecutionList(artifact.owner, view.content ?? {});
+            /* Key the content the mesh phase will run with (s15b): an omitted property and its
+             * operation default render the same bytes. An unsupported request keeps its raw form;
+             * the mesh phase refuses it. */
+            const effectiveContent = this.selectRenderContent(artifact.owner, selection, {
+              resolvedMiddleware: meshMiddleware,
+              requested: view.content,
+            });
+            const keyedContent = effectiveContent.success ? effectiveContent.content : (view.content ?? {});
+            const key = canonicalJson([selection, view.options, keyedContent]);
+            const dependencies = await this.computeDependencies({
+              operations: ['evaluate', 'render'],
+              parameters: artifact.identity.parameters,
+              renderOptions: view.options,
+              content: keyedContent,
+              resolvedMiddleware: this.mergeExecutionLists(
+                this.getCreateExecutionList(artifact.owner, artifact.identity.content, false),
+                meshMiddleware,
+              ),
+              owner: artifact.owner,
+            });
+            if (document.watch) {
+              const watched = new Set(document.watchPaths);
+              for (const dependency of dependencies) {
+                if (dependency.type === 'file') {
+                  watched.add(dependency.path);
+                }
+              }
+              if (watched.size !== document.watchPaths.size) {
+                document.watchPaths = watched;
+                await this.reconcileObservedPaths();
+              }
+            }
+            const projectionHash = await sha256String(
+              canonicalJson([await this.computeDependencyHash(dependencies), key]),
+            );
+            evaluation.projections ??= new Map();
+            const slot = canonicalJson([selection.view, selection.instance ?? null, view.content ?? null]);
+            const latest = evaluation.projections.get(slot);
+            let projected = latest?.hash === projectionHash ? latest.result : undefined;
+            let computeOperationId: string | undefined;
+            if (!projected) {
+              this.onDocumentProgressUpdate?.({
+                documentId: document.id,
+                intent: evaluation.intent,
+                evaluationId: evaluation.id,
+                operationId,
+                requestId,
+                phase: 'computingGeometry',
+              });
+              const identity = {
+                ...artifact.identity,
+                dependencies,
+                dependencyHash: projectionHash,
+              };
+              this.activeDocumentNativeOperation = {
+                controller,
+                progress: (phase, sequence, generation) => {
+                  this.onDocumentProgressUpdate?.({
+                    documentId: document.id,
+                    intent: evaluation.intent,
+                    evaluationId: evaluation.id,
+                    operationId,
+                    requestId,
+                    phase,
+                    detail: {
+                      abortSequence: sequence,
+                      ...(generation === undefined ? {} : { abortGeneration: generation }),
+                    },
+                  });
+                },
+              };
+              computeOperationId = randomUuid();
+              this.trackProjectionRelease(computeOperationId);
+              this.activeOperationHold = evaluation.transient ? transientHold(document.id, evaluation.id) : undefined;
+              try {
+                projected = await this.runMeshPhase({
+                  computeOperationId,
+                  owner: artifact.owner,
+                  identity,
+                  selection,
+                  renderOptions: view.options,
+                  requestedContent: view.content,
+                  resolvedMiddleware: meshMiddleware,
+                  createResult: {
+                    success: true,
+                    data: undefined,
+                    issues: [...evaluation.result.issues],
+                  },
+                  renderArtifact: artifact,
+                });
+              } finally {
+                this.activeDocumentNativeOperation = undefined;
+                this.activeOperationHold = undefined;
+              }
+              // Never cache what an aborted render made of its abort: the same options must render again.
+              controller.signal.throwIfAborted();
+              if (projected.success) {
+                try {
+                  projected = {
+                    ...projected,
+                    data: asKnownArtifact(projected.data) ?? projected.data,
+                  };
+                } catch (error) {
+                  projected = createKernelError([
+                    {
+                      code: selection.mimeType === 'image/svg+xml' ? 'SVG_DOCUMENT_INVALID' : 'GLTF_BYTES_INVALID',
+                      message: error instanceof Error ? error.message : String(error),
+                      type: 'runtime',
+                      severity: 'error',
+                    },
+                  ]);
+                }
+              }
+            }
+            // One projection per offered view: a scrubbed option set replaces the last one instead of accumulating.
+            const projection = { hash: projectionHash, result: projected };
+            evaluation.projections.set(slot, projection);
+            if (computeOperationId !== undefined) {
+              this.bindProjectionRelease(computeOperationId, { projections: evaluation.projections, slot, projection });
+            }
+            const heapBytes = projected.success ? this.kernelHeapBytesForOwner(artifact.owner) : undefined;
+            result = projected.success
+              ? {
+                  success: true,
+                  view: selection.view,
+                  artifact: projected.data,
+                  hash: projectionHash,
+                  requestId,
+                  evaluationId: evaluation.id,
+                  ...(selection.instance === undefined ? {} : { instance: selection.instance }),
+                  transient: evaluation.transient,
+                  issues: projected.issues,
+                  ...(evaluation.result.sourceRevision ? { sourceRevision: evaluation.result.sourceRevision } : {}),
+                  ...(heapBytes === undefined ? {} : { heapBytes }),
+                }
+              : {
+                  success: false,
+                  view: selection.view,
+                  requestId,
+                  evaluationId: evaluation.id,
+                  ...(selection.instance === undefined ? {} : { instance: selection.instance }),
+                  transient: evaluation.transient,
+                  issues: projected.issues,
+                  ...(evaluation.result.sourceRevision ? { sourceRevision: evaluation.result.sourceRevision } : {}),
+                };
+          } else {
+            result = {
+              success: false,
+              view: view.view,
+              requestId,
+              evaluationId: evaluation.id,
+              transient: evaluation.transient,
+              issues: selected.issues,
+              ...(evaluation.result.sourceRevision ? { sourceRevision: evaluation.result.sourceRevision } : {}),
+            };
+          }
+        }
+        if (this.isCurrentViewRequest(view, evaluation, requestId, controller)) {
+          this.noteOperationResult(result);
+          this.onRendered?.({
+            subscriptionId: view.id,
+            intent: evaluation.intent,
+            ...result,
+          });
+        }
+      },
+      controller.signal,
+      { operation: 'render', operationId },
+    );
+    this.trackDocumentTask(
+      pending,
+      (error: unknown) => {
+        if (controller.signal.aborted && controller.signal.reason === abortReasonEnum.timeout) {
+          this.onDocumentError?.({
+            scope: 'operation',
+            documentId: document.id,
+            intent: evaluation.intent,
+            evaluationId: evaluation.id,
+            subscriptionId: view.id,
+            requestId,
+            operationId,
+            code: 'OPERATION_TIMEOUT',
+            phase: 'render',
+            message: 'View rendering timed out.',
+          });
+        }
+        if (
+          !controller.signal.aborted &&
+          !document.closed &&
+          document.current === evaluation &&
+          view.requestId === requestId
+        ) {
+          const result: Rendering = {
+            success: false,
+            view: view.view,
+            requestId,
+            evaluationId: evaluation.id,
+            transient: evaluation.transient,
+            issues: this.errorToRuntimeIssues(error),
+            ...(evaluation.result.sourceRevision ? { sourceRevision: evaluation.result.sourceRevision } : {}),
+          };
+          this.onRendered?.({
+            subscriptionId: view.id,
+            intent: evaluation.intent,
+            ...result,
+          });
+        }
+      },
+      () => {
+        if (this.documentOperations.get(operationId) === controller) {
+          this.documentOperations.delete(operationId);
+        }
+        if (this.documentOperations.get(requestId) === controller) {
+          this.documentOperations.delete(requestId);
+        }
+        document.operations.delete(controller);
+        view.operations.delete(controller);
+      },
+    );
+  }
+
+  // oxlint-disable-next-line max-params -- The current controller, intent and export pin are checked together.
+  private shouldContinueDocumentEvaluation(
+    document: DocumentRecord,
+    controller: AbortController,
+    intent: number,
+    pendingCommitted?: CommittedAdmission,
+  ): boolean {
+    return (
+      !controller.signal.aborted && !document.closed && (document.intent === intent || Boolean(pendingCommitted?.pins))
+    );
+  }
+
+  private abandonDocumentEvaluation(pendingCommitted?: CommittedAdmission): void {
+    if (!pendingCommitted) {
+      return;
+    }
+    pendingCommitted.completion.reject(new Error('Document evaluation was superseded or closed.'));
+    if (pendingCommitted.pins === 0) {
+      this.committedAdmissions.delete(pendingCommitted);
+    }
+  }
+
+  private shouldPublishDocumentEvaluation(
+    document: DocumentRecord,
+    controller: AbortController,
+    intent: number,
+  ): boolean {
+    return !controller.signal.aborted && !document.closed && document.intent === intent;
+  }
+
+  // oxlint-disable-next-line max-params -- The four request identities must be compared atomically before publication.
+  private isCurrentViewRequest(
+    view: ViewRecord,
+    evaluation: DocumentEvaluation,
+    requestId: string,
+    controller: AbortController,
+  ): boolean {
+    return (
+      !controller.signal.aborted &&
+      !view.document.closed &&
+      view.document.views.get(view.id) === view &&
+      view.document.current === evaluation &&
+      view.requestId === requestId
+    );
+  }
+
+  private canonicalGeometryFile(file: RuntimeFileLocator): RuntimeFileLocator {
+    assertRootedPath(file.path);
+    if (file.filename.length === 0 || file.filename.includes('/') || file.filename.includes('\\')) {
+      throw new TypeError('Runtime geometry files require a rooted directory path and basename filename');
+    }
+    const filePath = assertRootedPath(joinRelativePath(file.path, file.filename));
+    const separator = filePath.lastIndexOf('/');
+    return {
+      path: separator === -1 ? '' : filePath.slice(0, separator),
+      filename: KernelWorker.getBasename(filePath),
+    };
+  }
+
+  private async enqueueOperation<T>(
+    operation: () => Promise<T>,
+    signal = neverAbortedSignal,
+    root?: OperationRootRequest,
+  ): Promise<T> {
+    if (!this.operationAdmissionOpen) {
+      throw new Error('Runtime worker is closing');
+    }
+    const previous = this.operationTail;
+    const next = Promise.withResolvers<void>();
+    this.operationTail = next.promise;
+    this.admittedOperations += 1;
+    // Observation is decided at admission, so a mode change never splits one operation.
+    const admitted = root === undefined ? 0 : performance.now();
+    const observedAtAdmission = root !== undefined && this.observer.observing;
+    // Background publication yields to every admitted operation at its next await.
+    this.computeHost?.interruptPublication();
+    let record: OperationRecord | undefined;
+    let rootSpan: SpanHandle | undefined;
+    let settlement: { thrown: boolean; error?: unknown; value?: unknown } = { thrown: false };
+    try {
+      await previous;
+      this.operationSignal = signal;
+      this.currentOperationId = ++this.operationSequence;
+      // One probe per path per operation (W22/D15): an operation is the coherence window the
+      // rest of the render already assumes, so a file appearing mid-operation is unobserved
+      // either way.
+      this.fileExistsCache.clear();
+      this.fileStatCache.clear();
+      if (root) {
+        /* The root opens at dequeue, so its duration is the operation's own work and every span
+         * the operation starts — including one started after an earlier sibling ended — nests
+         * under it. */
+        record = { operation: root.operation, operationId: root.operationId };
+        const observed = this.observer.begin({
+          operation: root.operation,
+          operationId: root.operationId,
+          admitted,
+          observed: observedAtAdmission,
+        });
+        if (observed) {
+          record.observed = observed;
+        }
+        rootSpan = this.tracer.startSpan(operationRootName(root.operation), {
+          ...root.attributes,
+          'operation.id': root.operationId,
+        });
+        this.activeOperation = record;
+      }
+      const value = await operation();
+      settlement = { thrown: false, value };
+      return value;
+    } catch (error) {
+      settlement = { thrown: true, error };
+      throw error;
+    } finally {
+      if (record) {
+        this.activeOperation = undefined;
+        const settled = settleOperation(record, { ...settlement, signal });
+        rootSpan?.end({
+          ...record.endAttributes,
+          'operation.outcome': settled.outcome,
+          ...(settled.errorType === undefined ? {} : { 'error.type': settled.errorType }),
+        });
+        if (record.observed && settledWithReply(settled)) {
+          this.observer.settle(record.observed);
+        }
+        try {
+          this.onOperationSettled?.(settled);
+        } catch {
+          // Telemetry is observational and must not change runtime outcomes.
+        }
+      }
+      this.operationSignal = undefined;
+      this.currentOperationId = undefined;
+      this.pendingNativeHandle = undefined;
+      // Operations are serialized, so an operation boundary is the one point
+      // where every surviving reference to a native handle lives in a worker
+      // field. Anything else the operation created is garbage.
+      this.disposeUnreachableNativeHandles();
+      this.admittedOperations -= 1;
+      next.resolve();
+      if (this.admittedOperations === 0) {
+        this.computeHost?.notifyIdle();
+        this.observer.idle();
+      }
+    }
+  }
+
+  /** Retain notification continuations until the serialized worker has drained. */
+  private trackDocumentTask(
+    pending: Promise<unknown>,
+    onError: (error: unknown) => void | Promise<void>,
+    onFinally?: () => void,
+  ): void {
+    const observe = async (): Promise<void> => {
+      try {
+        await pending;
+      } catch (error) {
+        try {
+          await onError(error);
+        } catch (reportingError) {
+          this.logger.warn('Failed to report a document operation error', {
+            data: {
+              error: reportingError instanceof Error ? reportingError.message : String(reportingError),
+            },
+          });
+        }
+      } finally {
+        try {
+          onFinally?.();
+        } catch (cleanupError) {
+          this.logger.warn('Failed to release a document operation', {
+            data: {
+              error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+            },
+          });
+        } finally {
+          this.documentTasks.delete(observed);
+        }
+      }
+    };
+    const observed = observe();
+    this.documentTasks.add(observed);
+  }
+
+  /**
+   * Normalise a thrown value into issues this runtime's own protocol accepts.
+   *
+   * A kernel that rejects with a `KernelError` carries its issues on `.issues`
+   * and they travel verbatim. Every *other* `.issues` bearer — `ZodError`,
+   * `WireValidationError` — carries rows of a different shape, and passing
+   * those through unvalidated produced an `errorEvent` that failed
+   * `kernelIssueSchema` at the receiving channel and was dropped silently,
+   * leaving the render to be settled by a detail-free `error` state (the live
+   * daemon's `'Runtime render failed'`, see
+   * `docs/research/agent-host-transports-and-offline.md` § "Addendum:
+   * FIX-DAEMON-RENDER"). Foreign rows now fold into the error's own message,
+   * which is the reason a reader actually needs.
+   *
+   * @param error - Whatever was thrown.
+   * @returns Issues that satisfy the runtime protocol.
+   */
+  private errorToRuntimeIssues(error: unknown): KernelIssue[] {
+    const carried = carriedKernelIssues(error);
+    if (carried) {
+      return carried;
+    }
+    return [
+      {
+        message: error instanceof Error ? error.message : String(error),
+        code: 'RUNTIME',
+        type: 'runtime',
+        severity: 'error',
+        ...(error instanceof Error && error.stack !== undefined ? { stack: error.stack } : {}),
+      },
+    ];
+  }
+
+  private createExportRenderIdentityMissingResult(): ExportGeometryResult {
+    return createKernelError([
+      {
+        message:
+          'Export cache lookup requires a settled render identity. Render the model first or use request-scoped export with file and parameters.',
+        code: 'HANDLE_MISSING',
+        type: 'runtime',
+        severity: 'error',
+      },
+    ]);
+  }
+
+  /**
+   * Every path a volatile cache is currently standing behind.
+   *
+   * The union with bundle results includes paths that have not yet entered
+   * `fileHashCache`; `revalidateRetainedFiles` skips those unobserved paths.
+   *
+   * @returns Retained rooted paths, deduplicated.
+   */
+  private retainedObservedPaths(): string[] {
+    const paths = new Set<string>(this.fileHashCache.keys());
+    for (const result of this.bundleResultCache.values()) {
+      for (const dependency of result.dependencies) {
+        paths.add(assertRootedPath(dependency));
+      }
+      for (const dependency of result.unresolvedPaths) {
+        paths.add(assertRootedPath(dependency));
+      }
+    }
+    return [...paths];
+  }
+
+  /**
+   * Prove the retained closure is current, and invalidate whatever is not (I1/I3).
+   *
+   * This is the freshness evidence a request-scoped operation answers from, and it is the
+   * same on every adapter (EQ7): a watch is an optimisation, never the
+   * thing correctness rides on. Before this, evaluation, parameter resolution,
+   * source snapshot and export kept whatever the first call read for as long as the
+   * filesystem merely *could* watch, so the agent's kernel answered every later tool call
+   * with the verdict for bytes the person had already replaced
+   * (`docs/research/agent-stale-kernel-result-elimination-blueprint.md`).
+   *
+   * Absence counts: a path retained as `'missing'` diverges by appearing.
+   *
+   * Bytes stay the evidence. Stamping `(size, mtimeMs)` beside each hash would let mtime
+   * granularity decide correctness — a rewrite of equal length inside one filesystem tick
+   * would read as unchanged, and answering for replaced bytes is the exact defect this
+   * method exists to close. What changed is where the bytes are digested: a filesystem
+   * that answers `hashFiles` digests them where they live and returns every digest, absent
+   * paths included, in one call with no bodies. Every first-party bridge host does
+   * (`withHostHashFiles` in `@taucad/fs-bridge`), so over the daemon bridge a 300-file
+   * closure is one round trip instead of 300 carrying every body.
+   *
+   * A filesystem without it (an older or third-party host, or an inline filesystem that
+   * offers none) keeps the body path: `readFiles` plus a digest here, and `exists` for
+   * paths retained as absent.
+   *
+   * A path found moved is recorded, so the watch event for the same edit dedupes against it.
+   * That event was the watched documents' cue to render the edit, so the documents watching a
+   * moved path are scheduled here instead, as `writeFilesAndInvalidate` does for a staged write.
+   *
+   * @param sourceDocumentId - The document whose own evaluation is revalidating; it already reads the current bytes.
+   */
+  private async revalidateRetainedFiles(sourceDocumentId?: string): Promise<void> {
+    /* CDN package artifacts are content-addressed and can be megabytes; `fileContentCache`
+     * already draws this boundary for the same reason. */
+    const retained = this.retainedObservedPaths().filter((path) => !path.startsWith('node_modules/'));
+    const expectedPresent: string[] = [];
+    const expectedMissing: string[] = [];
+    for (const path of retained) {
+      const expected = this.fileHashCache.get(path);
+      if (expected === 'missing') {
+        expectedMissing.push(path);
+      } else if (expected !== undefined) {
+        expectedPresent.push(path);
+      }
+    }
+    /* The revision each divergent path moved to, not merely the fact that it moved: the
+     * ledger has to keep saying which revision this worker last observed.
+     * `readChangedObservedRevisions` reads a path with no retained hash as one no render has
+     * looked at yet and records its event as a baseline, so dropping the entry here would
+     * spend the preview's next change event re-establishing that baseline and lose the edit
+     * behind it — this lane revalidates the whole retained closure, including paths it never
+     * re-reads itself. `reconcileWatchSet` records the revisions it validates the same way. */
+    const revisions = new Map<string, ObservedFileRevision>();
+    const noteIfMoved = (path: string, revision: ObservedFileRevision): void => {
+      if (revision.hash !== this.fileHashCache.get(path)) {
+        revisions.set(path, revision);
+      }
+    };
+    const { hashFiles } = this.filesystem;
+    if (hashFiles === undefined) {
+      await this.revalidateRetainedBodies(expectedPresent, expectedMissing, noteIfMoved);
+    } else {
+      const checked = [...expectedPresent, ...expectedMissing];
+      const digests = checked.length > 0 ? await hashFiles(checked) : {};
+      for (const path of checked) {
+        const digest = digests[path];
+        if (digest === undefined) {
+          throw new Error(`hashFiles answered without a digest for '${path}'`);
+        }
+        /* No body crossed, so none is retained: a moved path drops its cached content
+         * and the next read fetches the bytes this digest names. */
+        noteIfMoved(path, { hash: digest });
+      }
+    }
+    if (revisions.size === 0) {
+      return;
+    }
+    /* Record the new hash so a watch echo for the same edit is deduplicated.
+     * Explicit document operations and watched documents share this observer. */
+    const divergent = [...revisions.keys()];
+    this._applyObservedRevisions(divergent, revisions);
+    this.scheduleWatchedDocuments(divergent, sourceDocumentId);
+  }
+
+  /**
+   * The body path of {@link revalidateRetainedFiles}, for a filesystem without `hashFiles`.
+   *
+   * @param expectedPresent - Retained paths last observed with content.
+   * @param expectedMissing - Retained paths last observed as absent.
+   * @param noteIfMoved - Records a path whose current revision differs from the retained one.
+   */
+  private async revalidateRetainedBodies(
+    expectedPresent: readonly string[],
+    expectedMissing: readonly string[],
+    noteIfMoved: (path: string, revision: ObservedFileRevision) => void,
+  ): Promise<void> {
+    if (expectedPresent.length > 0) {
+      let contents: Record<string, Uint8Array<ArrayBuffer>> | undefined;
+      try {
+        contents = await this.filesystem.readFiles([...expectedPresent]);
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          throw error;
+        }
+        /* One of them is gone, and the batch cannot say which. */
+      }
+      const current = contents;
+      const observed = await Promise.all(
+        expectedPresent.map(async (path): Promise<ObservedFileRevision> => {
+          const bytes = current?.[path];
+          return bytes === undefined
+            ? this.readObservedRevision(path)
+            : { hash: await this.hashContent(bytes), content: bytes };
+        }),
+      );
+      for (const [index, path] of expectedPresent.entries()) {
+        noteIfMoved(path, observed[index]!);
+      }
+    }
+    if (expectedMissing.length > 0) {
+      const present = await Promise.all(expectedMissing.map(async (path) => this.filesystem.exists(path)));
+      const appeared = expectedMissing.filter((_, index) => present[index] === true);
+      const observed = await Promise.all(appeared.map(async (path) => this.readObservedRevision(path)));
+      for (const [index, path] of appeared.entries()) {
+        noteIfMoved(path, observed[index]!);
+      }
+    }
+  }
+
+  /**
+   * What is at one path now, absence included.
+   *
+   * @param path - The rooted path to observe.
+   * @returns The revision to record for it, `'missing'` when it is not there.
+   */
+  private async readObservedRevision(path: string): Promise<ObservedFileRevision> {
+    try {
+      const content = await this.filesystem.readFile(path);
+      return { hash: await this.hashContent(content), content };
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        throw error;
+      }
+      return { hash: 'missing' };
+    }
+  }
+
+  /** Stop admission, drain accepted work, and clean up exactly once. */
+  // oxlint-disable-next-line typescript/promise-function-async -- cleanup is idempotent and returns one shared promise identity.
+  public cleanup(): Promise<void> {
+    if (this.cleanupPromise) {
+      return this.cleanupPromise;
+    }
+    this.operationAdmissionOpen = false;
+    for (const document of this.documents.values()) {
+      document.closed = true;
+      for (const controller of document.operations) {
+        controller.abort();
+      }
+      document.pendingCommitted?.completion.reject(new Error(`Document ${document.id} closed.`));
+    }
+    this.cleanupPromise = this.drainAndCleanup();
+    return this.cleanupPromise;
+  }
+
+  private async drainAndCleanup(): Promise<void> {
+    await this.watchReconciliationTail;
+    await this.operationTail;
+    await Promise.allSettled(this.documentTasks);
+    // Delivered results publish within the drain budget while their native handles still live:
+    // a build's snapshot reads its handle, and cleanup releases every handle next.
+    await this.computeHost?.drain();
+    await this.performCleanup();
+  }
+
+  /** Clean up worker state, native handles, telemetry collector, and filesystem proxy. */
+  private async performCleanup(): Promise<void> {
+    this.documents.clear();
+    this.documentViews.clear();
+    this.documentOperations.clear();
+    this.committedAdmissions.clear();
+    this.pinnedDocumentEvaluations.clear();
+    this.watchUnsubscribe?.();
+    this.watchUnsubscribe = undefined;
+    this.assetHashCache.clear();
+    this.implementationAssetBytes.clear();
+    this.parameterResultCache = undefined;
+    this.commonDependencyCache.clear();
+    this.middlewareDependencyCache.clear();
+    this.compiledWasmModules.clear();
+    this.watchedPaths.clear();
+    this.pendingNativeHandle = undefined;
+    this.retainedEvaluation = undefined;
+    this.pendingBuildPublications.clear();
+    // Nothing references the handles now — release them before onCleanup tears
+    // down the kernel that owns their memory.
+    this.disposeUnreachableNativeHandles();
+    /* Recycling starts a new span epoch: a span still open now belongs to work that is gone, and if
+     * it ends later it is counted as dropped rather than parented to whatever runs next. */
+    this.tracer.reset();
+    this.telemetryCollector?.dispose();
+    this.telemetryCollector = undefined;
+    this.tracer.setEntrySink(undefined);
+    // Operations have drained, so no bundle imports a built-in again; drop the scope before any teardown step can throw.
+    releaseKernelModuleScope(this.registryScope);
+    await this.computeHost?.dispose();
+    this.computeHost = undefined;
+
+    // Each extension may point at the same initialized bundler. Dispose that
+    // context once, after accepted operations have drained.
+    for (const bundler of new Set(this.loadedBundlers.values())) {
+      try {
+        // oxlint-disable-next-line no-await-in-loop -- Release distinct bundlers in initialization order.
+        await bundler.definition.onDispose?.(bundler.ctx);
+      } catch (error) {
+        this.logger.warn('Bundler disposal failed', {
+          data: { error: String(error) },
+        });
+      }
+    }
+    this.loadedBundlers.clear();
+
+    for (const transcoder of this.loadedTranscoders.values()) {
+      if (!transcoder.initialized) {
+        continue;
+      }
+      try {
+        // oxlint-disable-next-line no-await-in-loop -- Sequential to preserve cleanup order
+        await transcoder.definition.onDispose?.(transcoder.context);
+      } catch (error) {
+        this.logger.warn('Transcoder disposal failed', {
+          data: { error: String(error) },
+        });
+      }
+    }
+    this.loadedTranscoders.clear();
+
+    await this.onCleanup();
+    this.fileSystem?.dispose();
+    this.fileSystem = undefined;
+  }
+
+  /**
+   * Entry point for extracting parameters from a file.
+   * Handles base path setup, timing, and middleware application using onion model.
+   *
+   * @param file - The geometry file to extract parameters from.
+   * @param resolution - Bounded manifest resolution settings.
+   * @param operation - Optional request-owned staging and abort state.
+   * @returns The extracted parameters.
+   */
+  public async getParameters(
+    file: RuntimeFileLocator,
+    resolution?: ParameterResolutionOptions,
+    operation?: Readonly<{
+      signal?: AbortSignal;
+      stage?: Record<string, Uint8Array<ArrayBuffer>>;
+    }>,
+  ): Promise<GetParametersResult> {
+    return this.enqueueOperation(async () => {
+      this.operationSignal?.throwIfAborted();
+      if (operation?.stage) {
+        await this.writeFilesAndInvalidate(operation.stage);
+        this.operationSignal?.throwIfAborted();
+      }
+      await this.revalidateRetainedFiles();
+      const result = await this.getParametersInLane(file, { resolution });
+      // I4: leave the watch covering whatever this operation retained.
+      await this.reconcileObservedPaths();
+      return result;
+    }, operation?.signal);
+  }
+
+  private async getParametersInLane(
+    file: RuntimeFileLocator,
+    options: Readonly<{
+      dependencyContext?: DependencyResolutionContext;
+      owner?: OperationOwner;
+      resolution?: ParameterResolutionOptions;
+    }> = {},
+  ): Promise<GetParametersResult> {
+    const { dependencyContext, owner, resolution = {} } = options;
+    const operationOwner = owner ?? (await this.createOperationOwner(file, 'request'));
+    const entryPath = assertRootedPath(joinRelativePath(operationOwner.file.path, operationOwner.file.filename));
+    const start = performance.now();
+
+    const input: GetParametersInput = {
+      entryPath,
+      resolution,
+    };
+
+    const resolvedArray = this.getMiddleware().filter(
+      ({ enabled, middleware }) => enabled && Boolean(middleware.wrapDescribe ?? middleware.resolve),
+    );
+
+    const depsSpan = this.tracer.startSpan('kernel.resolve-deps', {
+      phase: 'resolvingDeps',
+    });
+    const dependencies = await this.computeDependencies({
+      operations: ['describe'],
+      resolvedMiddleware: resolvedArray,
+      dependencyContext,
+      owner: operationOwner,
+    });
+    /* A description records each source file's digest (`identity.sourceFiles`, `sourceRevision`), so
+     * both its in-process and its durable key stay on the bytes, never on the bundle (R24). */
+    const dependencyHash = await this.computeDependencyHash(dependencies, 'source');
+    depsSpan.end();
+    const parameterMiddlewareKey = canonicalJson(
+      resolvedArray.map(({ id, middleware, options }) => ({
+        id,
+        version: middleware.version,
+        options,
+      })),
+    );
+    const kernelOptionsKey = canonicalJson(
+      operationOwner.binding?.kernelId ? (this.kernelInitOptionsMap.get(operationOwner.binding.kernelId) ?? {}) : {},
+    );
+    const parameterCacheKey = [
+      entryPath,
+      operationOwner.binding?.kernelId ?? '<no-kernel>',
+      operationOwner.binding?.kernelVersion ?? '<no-version>',
+      kernelOptionsKey,
+      parameterMiddlewareKey,
+      dependencyHash,
+      canonicalJson(resolution),
+    ].join('|');
+    const cached = this.parameterResultCache;
+    if (cached?.key === parameterCacheKey) {
+      // The manifest and source revision are frozen; only the issue list is the caller's to change.
+      return { ...cached.result, issues: [...cached.result.issues] };
+    }
+
+    // The manifest identity is hashed only for a result that has to be computed.
+    const parameterDependencyHash = await sha256String(canonicalJson({ dependencyHash, resolution }));
+    const parameterScope = {
+      kind: 'source',
+      authority: this.filesystem.id,
+      root: '',
+      entry: entryPath,
+    } as const;
+    const parameterSource = {
+      id: operationOwner.binding?.kernelId ?? 'unbound-kernel',
+      version: operationOwner.binding?.kernelVersion ?? '0',
+      revision: parameterDependencyHash,
+      capability: 'json-structure',
+    } as const;
+    const parameterSourceFiles: ParameterManifest['identity']['sourceFiles'] = Object.fromEntries(
+      dependencies.flatMap((dependency) =>
+        dependency.type === 'file'
+          ? ([
+              [
+                dependency.path,
+                dependency.contentHash === 'missing'
+                  ? 'missing'
+                  : contentDigest({
+                      value: `sha256:${dependency.contentHash}`,
+                      name: `parameter source ${dependency.path}`,
+                    }),
+              ],
+            ] as const)
+          : [],
+      ),
+    );
+    const parameterIdentity = {
+      dependency: contentDigest({
+        value: `sha256:${dependencyHash}`,
+        name: 'parameter dependency hash',
+      }),
+      middleware: contentDigest({
+        value: `sha256:${await sha256String(parameterMiddlewareKey)}`,
+        name: 'parameter middleware identity',
+      }),
+      resolution,
+      sourceFiles: parameterSourceFiles,
+    } as const;
+    const parameterSemanticHash = await sha256String(
+      canonicalJson({
+        dependency: parameterIdentity.dependency,
+        middleware: parameterIdentity.middleware,
+        resolution: parameterIdentity.resolution,
+      }),
+    );
+
+    const runtimes = new Map<string, KernelMiddlewareRuntime>();
+    for (const { middleware, options: middlewareOptions, enabled, id } of resolvedArray) {
+      if (enabled && middleware.wrapDescribe) {
+        runtimes.set(
+          id,
+          createMiddlewareRuntime({
+            signal: this.operationSignal ?? neverAbortedSignal,
+            tracer: this.tracer,
+            onLog: this.onLog,
+            middlewareName: middleware.name,
+            filesystem: this.filesystem,
+            compute: this.createComputeRuntime(this.operationSignal ?? neverAbortedSignal),
+            dependencies,
+            dependencyHash: parameterSemanticHash,
+            stateSchema: middleware.stateSchema,
+            options: middlewareOptions,
+            logger: this.getMiddlewareLogger(id, middleware.name),
+          }),
+        );
+      }
+    }
+
+    const { tracer } = this;
+    let producerDeclaration: ParameterDeclaration | undefined;
+    const kernelHandler = named(
+      'kernelHandler',
+      async (handlerInput: DescribeInput): Promise<DescribeResult<ParameterManifest>> => {
+        const parametersSpan = tracer.startSpan('kernel.extract-params', {
+          phase: 'extractingParams',
+        });
+        const result = await this.onGetParametersForOwner(operationOwner, handlerInput, this.createRuntime());
+        parametersSpan.end();
+        if (!result.success) {
+          return result;
+        }
+        try {
+          const manifest = await compileParameterManifest({
+            declaration: result.data,
+            scope: parameterScope,
+            source: parameterSource,
+            dependency: parameterIdentity.dependency,
+            middleware: parameterIdentity.middleware,
+            resolution: parameterIdentity.resolution,
+            sourceFiles: parameterIdentity.sourceFiles,
+          });
+          producerDeclaration = {
+            schema: manifest.schema,
+            resources: manifest.resources,
+            defaults: manifest.defaults,
+            bindings: manifest.bindingDeclarations,
+          };
+          return { ...result, data: { parameters: manifest } };
+        } catch (error) {
+          return createKernelError([
+            {
+              message: error instanceof Error ? error.message : 'Parameter declaration admission failed',
+              code: 'RUNTIME',
+              type: 'kernel',
+              severity: 'error',
+              details: error instanceof ParameterAdmissionError ? error.diagnostics : undefined,
+            },
+          ]);
+        }
+      },
+    );
+    let chain = kernelHandler;
+
+    for (let index = resolvedArray.length - 1; index >= 0; index--) {
+      const { middleware, enabled, id } = resolvedArray[index]!;
+      if (enabled && middleware.wrapDescribe) {
+        const inner = chain;
+        const runtime = runtimes.get(id)!;
+        const middlewareName = middleware.name;
+        const wrapHook = middleware.wrapDescribe;
+
+        chain = named(`middleware(${middlewareName})`, async (handlerInput: DescribeInput) => {
+          const span = tracer.startSpan(`middleware.wrap(${middlewareName})`, {
+            middleware: middlewareName,
+            phase: 'describe',
+          });
+          try {
+            const result = await wrapHook(handlerInput, inner, runtime);
+            span.end();
+            return result;
+          } catch (error) {
+            span.end();
+            // A superseded or closed operation is aborted, not failed: its caller drops it.
+            if (runtime.signal.aborted) {
+              throw error;
+            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            this.logger.error('Middleware failed', {
+              data: { name: middlewareName, error: errorMessage },
+            });
+            return createKernelError([
+              {
+                message: `Middleware error in ${middlewareName}: ${errorMessage}`,
+                code: 'MIDDLEWARE_FAILED',
+                type: 'kernel',
+                severity: 'error',
+              },
+            ]);
+          }
+        });
+      }
+    }
+
+    let chainedResult = await chain(input);
+    if (chainedResult.success && producerDeclaration === undefined) {
+      // A middleware cache hit bypasses the producer. Establish the current
+      // trusted declaration through the same handler before admitting the
+      // cached effective manifest; the cached manifest cannot be its own trust
+      // baseline.
+      const producerResult = await kernelHandler(input);
+      if (!producerResult.success) {
+        chainedResult = producerResult;
+      }
+    }
+    let result: GetParametersResult = chainedResult.success
+      ? { ...chainedResult, data: chainedResult.data.parameters }
+      : chainedResult;
+    if (chainedResult.success) {
+      try {
+        if (producerDeclaration === undefined) {
+          throw new Error('Middleware returned parameters without invoking the producer declaration');
+        }
+        result = {
+          ...chainedResult,
+          data: await this.admitEffectiveManifest(chainedResult.data.parameters, {
+            scope: parameterScope,
+            source: parameterSource,
+            identity: parameterIdentity,
+            producerDeclaration,
+          }),
+        };
+      } catch (error) {
+        result = createKernelError([
+          {
+            message: error instanceof Error ? error.message : 'Effective parameter manifest admission failed',
+            code: 'RUNTIME',
+            type: 'kernel',
+            severity: 'error',
+            details: error instanceof ParameterAdmissionError ? error.diagnostics : undefined,
+          },
+        ]);
+      }
+    }
+    /* Every computed description retains the source closure this lane already hashed,
+     * including failures so watched documents can recover when a dependency changes.
+     * Attach it before caching so a success replays the revision it was computed from. */
+    result = {
+      ...result,
+      sourceRevision: Object.freeze({
+        entry: entryPath,
+        files: Object.freeze(parameterSourceFiles),
+      }),
+    };
+    if (result.success) {
+      this.parameterResultCache = {
+        key: parameterCacheKey,
+        result: { ...result, issues: [...result.issues] },
+      };
+    }
+
+    this.logger.debug('getParameters completed', {
+      data: { ms: performance.now() - start },
+    });
+
+    return result;
+  }
+
+  /**
+   * Admit an effective manifest, reusing the last admission when the revision, context and
+   * producer declaration all match it.
+   *
+   * The revision digests the manifest's whole semantic content, so a match with the same
+   * trusted context and producer declaration is the manifest already admitted.
+   *
+   * @param candidate - Effective manifest returned through the middleware chain.
+   * @param expectation - Trusted scope, source, identity and producer declaration.
+   * @returns The admitted, deep-frozen manifest.
+   */
+  private async admitEffectiveManifest(
+    candidate: ParameterManifest,
+    expectation: ParameterAdmissionExpectation,
+  ): Promise<ParameterManifest> {
+    const key = canonicalJson({ revision: candidate.revision, expectation });
+    if (this.admittedManifest?.key === key) {
+      return this.admittedManifest.manifest;
+    }
+    const manifest = await admitParameterManifest(candidate, expectation);
+    this.admittedManifest = { key, manifest };
+    return manifest;
+  }
+
+  /**
+   * Collect the selected entry's coherent source closure without evaluating geometry.
+   *
+   * @param request - Entry, optional staged files, and explicitly approved extra paths.
+   * @param signal - Request-scoped cancellation signal.
+   * @returns Source files, hashes, roles, unresolved diagnostics, and selected kernel id.
+   */
+  public async snapshotSource(
+    request: RuntimeSourceSnapshotArgs,
+    signal?: AbortSignal,
+  ): Promise<RuntimeSourceSnapshotResult> {
+    return this.enqueueOperation(async () => {
+      const result = await this.snapshotSourceInLane(request);
+      // I4: leave the watch covering whatever this operation retained.
+      await this.reconcileObservedPaths();
+      return result;
+    }, signal);
+  }
+
+  private async snapshotSourceInLane(request: RuntimeSourceSnapshotArgs): Promise<RuntimeSourceSnapshotResult> {
+    const signal = this.operationSignal ?? neverAbortedSignal;
+    signal.throwIfAborted();
+    if (request.stage) {
+      await this.writeFilesAndInvalidate(request.stage);
+    }
+    await this.revalidateRetainedFiles();
+    const owner = await this.createOperationOwner(request.file, 'request');
+    const entryPath = assertRootedPath(joinRelativePath(owner.file.path, owner.file.filename));
+    const discover = async (): Promise<{
+      readonly kernelPaths: readonly string[];
+      readonly unresolvedPaths: readonly string[];
+      readonly middlewarePaths: readonly string[];
+    }> => {
+      const result = await this.onGetDependenciesForOwner(owner, { entryPath }, this.createRuntime());
+      const kernelPaths = [...new Set([entryPath, ...result.resolved].map((path) => assertRootedPath(path)))].sort();
+      const unresolvedPaths = [...new Set(result.unresolved.map((path) => assertRootedPath(path)))].sort();
+      const middlewarePaths = await this.discoverSnapshotMiddlewarePaths(owner);
+      return { kernelPaths, unresolvedPaths, middlewarePaths };
+    };
+    const initial = await discover();
+    signal.throwIfAborted();
+    const roles = new Map<string, RuntimeSourceSnapshotFileRole>();
+    const rolePriority: Record<RuntimeSourceSnapshotFileRole, number> = {
+      entry: 0,
+      'kernel-dependency': 1,
+      'middleware-dependency': 2,
+      additional: 3,
+    };
+    const addRole = (path: string, role: RuntimeSourceSnapshotFileRole): void => {
+      const canonical = assertRootedPath(path);
+      const existing = roles.get(canonical);
+      if (existing === undefined || rolePriority[role] < rolePriority[existing]) {
+        roles.set(canonical, role);
+      }
+    };
+    for (const path of initial.kernelPaths) {
+      addRole(path, path === entryPath ? 'entry' : 'kernel-dependency');
+    }
+    for (const path of initial.middlewarePaths) {
+      addRole(path, 'middleware-dependency');
+    }
+    const additionalRequired = new Set<string>();
+    for (const additional of request.additionalPaths ?? []) {
+      const path = assertRootedPath(additional.path);
+      addRole(path, 'additional');
+      if (additional.required) {
+        additionalRequired.add(path);
+      }
+    }
+
+    const selectedPaths = [...roles.keys()].sort();
+    const exists = await Promise.all(
+      selectedPaths.map(async (path) => [path, await this.filesystem.exists(path)] as const),
+    );
+    const missingPaths = exists.filter(([, present]) => !present).map(([path]) => path);
+    const missingRequired = missingPaths.filter((path) => additionalRequired.has(path) || path === entryPath);
+    if (missingRequired.length > 0) {
+      return createKernelError([
+        {
+          code: 'SOURCE_SNAPSHOT_INVALID',
+          message: 'A required source snapshot file is unavailable.',
+          severity: 'error',
+          type: 'runtime',
+          details: { paths: missingRequired },
+        },
+      ]);
+    }
+    const readablePaths = exists.filter(([, present]) => present).map(([path]) => path);
+    const contentByPath = await this.filesystem.readFiles(readablePaths);
+    signal.throwIfAborted();
+    const hashesByPath = new Map<string, string>();
+    const files = [];
+    for (const path of readablePaths) {
+      const content = contentByPath[path];
+      if (!content) {
+        return createKernelError([
+          {
+            code: 'SOURCE_SNAPSHOT_INVALID',
+            message: 'A selected source snapshot file could not be read.',
+            severity: 'error',
+            type: 'runtime',
+            details: { path },
+          },
+        ]);
+      }
+      // oxlint-disable-next-line no-await-in-loop -- file order and hash publication remain deterministic.
+      const sha256 = await this.hashContent(content);
+      hashesByPath.set(path, sha256);
+      files.push({
+        path,
+        content: new Uint8Array(content),
+        sha256,
+        role: roles.get(path)!,
+      });
+    }
+
+    const revalidated = await discover();
+    signal.throwIfAborted();
+    const initialGraph = new Set([...initial.kernelPaths, ...initial.middlewarePaths, ...initial.unresolvedPaths]);
+    const finalGraph = new Set([
+      ...revalidated.kernelPaths,
+      ...revalidated.middlewarePaths,
+      ...revalidated.unresolvedPaths,
+    ]);
+    if (!setsEqual(initialGraph, finalGraph)) {
+      return createKernelError([
+        {
+          code: 'SOURCE_SNAPSHOT_CHANGED',
+          message: 'The source dependency graph changed while the snapshot was being collected.',
+          severity: 'error',
+          type: 'runtime',
+        },
+      ]);
+    }
+
+    const verifiedExists = await Promise.all(
+      selectedPaths.map(async (path) => [path, await this.filesystem.exists(path)] as const),
+    );
+    if (verifiedExists.some(([path, present], index) => exists[index]![0] !== path || exists[index]![1] !== present)) {
+      return createKernelError([
+        {
+          code: 'SOURCE_SNAPSHOT_CHANGED',
+          message: 'The selected source files changed while the snapshot was being collected.',
+          severity: 'error',
+          type: 'runtime',
+        },
+      ]);
+    }
+    const verifiedContent = await this.filesystem.readFiles(readablePaths);
+    signal.throwIfAborted();
+    const changedPaths = await Promise.all(
+      readablePaths.map(async (path) => {
+        const content = verifiedContent[path];
+        return !content || (await this.hashContent(content)) !== hashesByPath.get(path) ? path : undefined;
+      }),
+    );
+    const changedPath = changedPaths.find((path) => path !== undefined);
+    if (changedPath) {
+      return createKernelError([
+        {
+          code: 'SOURCE_SNAPSHOT_CHANGED',
+          message: 'The selected source files changed while the snapshot was being collected.',
+          severity: 'error',
+          type: 'runtime',
+          details: { path: changedPath },
+        },
+      ]);
+    }
+
+    // Middleware dependencies may be absent (the normal compute path hashes them as 'missing').
+    // Keep them selected for existence/coherence checks; kernel dependencies still require bytes.
+    const missingDependencies = missingPaths.filter((path) => roles.get(path) === 'kernel-dependency');
+    const unresolvedPaths = [...new Set([...initial.unresolvedPaths, ...missingDependencies])].sort();
+    const issues: KernelIssue[] =
+      unresolvedPaths.length === 0
+        ? []
+        : [
+            {
+              code: 'SOURCE_SNAPSHOT_INVALID',
+              message: 'Some source dependencies are unresolved.',
+              severity: 'warning',
+              type: 'runtime',
+              details: { paths: unresolvedPaths },
+            },
+          ];
+    return {
+      success: true,
+      data: {
+        entryPath,
+        files,
+        unresolvedPaths,
+        kernelId: owner.binding?.kernelId ?? 'unknown',
+      },
+      issues,
+      /* R4/I5: this lane hashed the closure itself, so the revision is those hashes, in the same
+       * digest vocabulary the parameter manifest and the write tools use. */
+      sourceRevision: {
+        entry: entryPath,
+        files: Object.fromEntries<ContentDigest | 'missing'>([
+          ...[...hashesByPath].map(
+            ([path, sha256]) =>
+              [
+                path,
+                contentDigest({
+                  value: `sha256:${sha256}`,
+                  name: `source snapshot ${path}`,
+                }),
+              ] as const,
+          ),
+          ...unresolvedPaths.map((path) => [path, 'missing'] as const),
+        ]),
+      },
+    };
+  }
+
+  private async discoverSnapshotMiddlewarePaths(owner: OperationOwner): Promise<readonly string[]> {
+    const input: GetDependenciesInput = {
+      entryPath: assertRootedPath(joinRelativePath(owner.file.path, owner.file.filename)),
+    };
+    const paths: string[] = [];
+    for (const { middleware, options, enabled, id } of this.getMiddleware()) {
+      if (!enabled || !middleware.resolve) {
+        continue;
+      }
+      try {
+        // oxlint-disable-next-line no-await-in-loop -- middleware declaration order is part of runtime semantics.
+        const declarations = await middleware.resolve(input, {
+          signal: this.operationSignal ?? neverAbortedSignal,
+          logger: this.getMiddlewareLogger(id, middleware.name),
+          filesystem: this.filesystem,
+          options,
+        });
+        paths.push(...declarations.map(({ path }) => assertRootedPath(path)));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw Object.assign(new Error(`Middleware dependency error in ${middleware.name}: ${message}`), {
+          issues: [
+            {
+              message: `Middleware dependency error in ${middleware.name}: ${message}`,
+              code: 'MIDDLEWARE_FAILED',
+              type: 'kernel',
+              severity: 'error',
+            } satisfies KernelIssue,
+          ],
+        });
+      }
+    }
+    return [...new Set(paths)].sort();
+  }
+
+  /** Runs a registered transcoder directly, without a kernel render or filesystem. */
+  public async transcode(request: RuntimeTranscodeArgs, signal?: AbortSignal): Promise<TranscodeResult> {
+    return this.enqueueOperation(
+      async () => {
+        signal?.throwIfAborted();
+        return this.transcodeInLane(request);
+      },
+      signal,
+      {
+        operation: 'transcode',
+        operationId: request.operationId ?? `transcode:${String(this.operationSequence + 1)}`,
+        attributes: { from: request.from, to: request.to },
+      },
+    );
+  }
+
+  /**
+   * Add scalar attributes to the running operation's root span.
+   *
+   * @param attributes - Attributes the root ends with; later keys win.
+   */
+  /**
+   * Record the transcoder the running operation selected, for its facts.
+   *
+   * @param plugin - The transcoder's id.
+   */
+  private noteObservedPlugin(plugin: string): void {
+    const observed = this.activeOperation?.observed;
+    if (observed) {
+      observed.plugin = plugin;
+    }
+  }
+
+  private noteOperationAttributes(attributes: Record<string, string | number | boolean>): void {
+    const record = this.activeOperation;
+    if (record) {
+      record.endAttributes = { ...record.endAttributes, ...attributes };
+    }
+  }
+
+  /**
+   * Record the result the running operation publishes, for an operation that replies by notification.
+   *
+   * @param result - The published result's success flag and issues.
+   */
+  private noteOperationResult(result: Readonly<{ success: boolean; issues: readonly KernelIssue[] }>): void {
+    const record = this.activeOperation;
+    if (record) {
+      record.result = result;
+    }
+  }
+
+  private async transcodeInLane(request: RuntimeTranscodeArgs): Promise<TranscodeResult> {
+    const transcoder = [...this.loadedTranscoders.values()].find(({ edges }) =>
+      edges.some(({ from, to }) => from === request.from && to === request.to),
+    );
+    const edge = transcoder?.edges.find(({ from, to }) => from === request.from && to === request.to);
+    if (!transcoder || !edge) {
+      return createKernelError([
+        {
+          message: `No loaded transcoder for ${request.from} → ${request.to}.`,
+          code: 'TRANSCODER_CAPABILITY_MISSING',
+          type: 'runtime',
+          severity: 'error',
+        },
+      ]);
+    }
+
+    /* The operation root is this transcode's `kernel.transcode` span; it says which transcoder ran. */
+    this.noteOperationAttributes({ transcoder: transcoder.id });
+    this.noteObservedPlugin(transcoder.id);
+
+    const admittedOptions = admitKernelOptions(
+      edge.optionsSchema,
+      request.options,
+      `Transcoder ${request.from} → ${request.to}`,
+      'TRANSCODER_OPTIONS_INVALID',
+    );
+    if (!admittedOptions.success) {
+      this.noteOperationAttributes({ success: false });
+      return createKernelError(admittedOptions.issues);
+    }
+    const { options } = admittedOptions;
+
+    let context: unknown;
+    try {
+      context = await this.initializeTranscoder(transcoder);
+      this.operationSignal?.throwIfAborted();
+    } catch (error) {
+      this.noteOperationAttributes({ success: false });
+      this.operationSignal?.throwIfAborted();
+      return createKernelError([
+        {
+          message: `Transcoder "${transcoder.id}" initialization failed: ${error instanceof Error ? error.message : String(error)}`,
+          code: 'TRANSCODER_INITIALIZATION_FAILED',
+          type: 'runtime',
+          severity: 'error',
+        },
+      ]);
+    }
+
+    try {
+      const result = await transcoder.definition.transcode(
+        { ...request, options },
+        {
+          logger: this.logger,
+          tracer: this.tracer,
+          signal: this.operationSignal ?? neverAbortedSignal,
+        },
+        context,
+      );
+      this.operationSignal?.throwIfAborted();
+      const finalized = finalizeExportArtifactSet(result);
+      this.noteOperationAttributes({ success: finalized.success });
+      return finalized;
+    } catch (error) {
+      this.noteOperationAttributes({ success: false });
+      this.operationSignal?.throwIfAborted();
+      return createKernelError([
+        {
+          message: `Transcoder "${transcoder.id}" failed: ${error instanceof Error ? error.message : String(error)}`,
+          code: 'TRANSCODER_EXECUTION_FAILED',
+          type: 'runtime',
+          severity: 'error',
+        },
+      ]);
+    }
+  }
+
+  /**
+   * Get the resolved middleware array for this worker.
+   * Override in subclasses to customize middleware (e.g., for testing).
+   *
+   * @returns Array of resolved middleware with their configs
+   */
+  public getMiddleware(): ResolvedMiddleware[] {
+    return this.resolvedMiddleware;
+  }
+
+  /**
+   * Selectively invalidate file caches for changed paths.
+   * Called by the kernel machine before render operations when files have changed.
+   *
+   * @param changedPaths - Paths within the runtime filesystem that changed.
+   */
+  public async notifyFileChanged(changedPaths: readonly string[]): Promise<void> {
+    const paths = [...new Set(changedPaths.map((path) => assertRootedPath(path)))];
+    await this.enqueueOperation(async () => this.routeExactChangedPaths(paths));
+  }
+
+  /**
+   * Get the current set of watched file paths.
+   * Primarily for test assertions — production code should not depend on this.
+   * @returns A copy of the internal watched-path set.
+   */
+  public getWatchedPaths(): Set<string> {
+    return new Set(this.watchedPaths);
+  }
+
+  /**
+   * Arm the one shared watch over `desiredPaths` and record what it observes.
+   *
+   * The arm observes; it never judges an evaluation. Paths that moved while the candidate
+   * was armed enter the exact-path route, which re-evaluates only the documents that watch
+   * them. Whichever evaluation happened to invoke the arm learns it is stale only through
+   * its own controller, never from another document's admission or file.
+   *
+   * @param desiredPaths - The complete union of watched paths and their debounce.
+   */
+  private async reconcileWatchSet(desiredPaths: Map<string, number>): Promise<void> {
+    const desired = new Map(
+      [...desiredPaths].filter(([path]) => path !== '.tau/cache' && !path.startsWith('.tau/cache/')),
+    );
+    const desiredSet = new Set(desired.keys());
+    if (setsEqual(this.watchedPaths, desiredSet)) {
+      return;
+    }
+
+    if (!this.fileSystem?.watch || desired.size === 0) {
+      const previous = this.watchUnsubscribe;
+      this.watchedPaths = desiredSet;
+      this.watchUnsubscribe = undefined;
+      previous?.();
+      return;
+    }
+
+    const oldPaths = this.watchedPaths;
+    const addedPaths = [...desiredSet].filter((path) => !oldPaths.has(path));
+    const unknownPaths = addedPaths.filter((path) => !this.fileHashCache.has(path));
+    if (unknownPaths.length > 0) {
+      /* ponytail: the staged-write and raced fences can only trip against the out-of-lane
+       * reconcile after a failed evaluation; that reconcile arms the same paths, so this one
+       * skips instead of retrying. Serialize that caller into the lane if it ever stops arming them. */
+      const stagedWrite = this.stagedWritePublication;
+      if (stagedWrite && unknownPaths.some((path) => stagedWrite.paths.has(path))) {
+        return;
+      }
+      // Establish the entry's revision before a kernel can retain an operation-local mirror.
+      // A later watch echo is harmless only if it agrees with these already-observed bytes.
+      const baselines = await Promise.all(
+        unknownPaths.map(async (path) => ({ path, revision: await this.readObservedRevision(path) })),
+      );
+      if (
+        !this.operationAdmissionOpen ||
+        this.stagedWritePublication !== stagedWrite ||
+        unknownPaths.some((path) => this.fileHashCache.has(path))
+      ) {
+        return;
+      }
+      for (const { path, revision } of baselines) {
+        this.fileHashCache.set(path, revision.hash);
+        if (revision.content === undefined) {
+          this.fileContentCache.delete(path);
+        } else {
+          this.fileContentCache.set(path, revision.content);
+        }
+      }
+    }
+    const addedSet = new Set(addedPaths);
+    let armingRevision = 0;
+    const handler = (event: WatchEvent): void => {
+      if (event.type === 'reset' || this.exactWatchEventPaths(event).some((path) => addedSet.has(path))) {
+        armingRevision++;
+      }
+      void this.routeWatchEvent(event);
+    };
+    const replacement = this.fileSystem.watchReady
+      ? this.fileSystem.watchReady(
+          {
+            paths: [...desiredSet],
+            recursive: false,
+            excludes: ['.tau/cache/**'],
+          },
+          handler,
+        )
+      : {
+          unsubscribe: this.fileSystem.watch(
+            {
+              paths: [...desiredSet],
+              recursive: false,
+              excludes: ['.tau/cache/**'],
+            },
+            handler,
+          ),
+          ready: Promise.resolve(),
+        };
+
+    try {
+      await replacement.ready;
+      let validatedRevision: number;
+      do {
+        validatedRevision = armingRevision;
+        /* Close the subscribe-versus-read window: a path that moved between its baseline and
+         * this subscription has no event to report it. The handler's own route covers the
+         * paths watched before this arm; an event or reset touching the added paths reruns
+         * this read. */
+        // oxlint-disable-next-line no-await-in-loop -- an event during validation requires a fresh coherent snapshot
+        const moved = await this.readChangedObservedRevisions(addedPaths);
+        if (!this.operationAdmissionOpen) {
+          replacement.unsubscribe();
+          return;
+        }
+        if (moved.size > 0) {
+          // oxlint-disable-next-line no-await-in-loop -- the moved revision is recorded before the next comparison
+          await this.routeExactChangedPaths([...moved.keys()], moved);
+        }
+      } while (validatedRevision !== armingRevision);
+
+      const previous = this.watchUnsubscribe;
+      this.watchUnsubscribe = replacement.unsubscribe;
+      this.watchedPaths = desiredSet;
+      previous?.();
+    } catch (error) {
+      replacement.unsubscribe();
+      throw error;
+    }
+  }
+
+  /**
+   * Load the bundler definition from its worker-owned plugin implementation.
+   * Context initialization is deferred until first use via ensureBundlerContext(),
+   * because the active entry is not known until setActiveFile() runs.
+   *
+   * @param bundlerEntry - Bundler registration with extensions and options
+   * @param preloadedDefinition - Optional pre-loaded definition (bypasses dynamic import; used in tests)
+   */
+  public async ensureLoadedBundler(
+    bundlerEntry: BundlerPlugin,
+    preloadedDefinition?: BundlerDefinition,
+  ): Promise<void> {
+    const initSpan = this.tracer.startSpan('kernel.bundler-init');
+
+    try {
+      const definition =
+        preloadedDefinition ?? (await resolveRuntimePluginDefinition<BundlerDefinition>('bundler', bundlerEntry));
+
+      const { extensions } = bundlerEntry;
+      for (const extension of extensions) {
+        if (!this.loadedBundlers.has(extension) && !this.pendingBundlerInits.has(extension)) {
+          this.pendingBundlerInits.set(extension, {
+            definition,
+            extensions,
+            options: bundlerEntry.options,
+            id: bundlerEntry.id,
+          });
+        }
+      }
+    } finally {
+      initSpan.end();
+    }
+  }
+
+  protected async materializeRender(
+    entry: {
+      file: RuntimeFileLocator;
+      parameters: Record<string, unknown>;
+      parameterDefaults: Record<string, unknown>;
+      parameterManifest: ParameterManifest;
+      parameterSchema: JSONSchema7;
+      options?: Record<string, unknown>;
+      content?: RuntimeContentInput;
+      export?: {
+        format: string;
+        options: Record<string, unknown>;
+        dependency: ExportDependency;
+      };
+    },
+    options: {
+      dependencyContext?: DependencyResolutionContext;
+      owner?: OperationOwner;
+    },
+  ): Promise<{ artifact: MaterializedRender }> {
+    const owner = options.owner ?? (await this.createOperationOwner(entry.file, 'request'));
+    const ownerFilePath = assertRootedPath(joinRelativePath(owner.file.path, owner.file.filename));
+    const start = performance.now();
+
+    const renderOptionsResult = this.validateRenderOptions(entry.options, owner);
+    if (!renderOptionsResult.success) {
+      return {
+        artifact: {
+          identity: this.createRenderIdentity({
+            file: entry.file,
+            parameters: entry.parameters,
+            renderOptions: entry.options ?? {},
+            content: {},
+            dependencies: [],
+            dependencyHash: '',
+            owner,
+          }),
+          owner,
+          result: createKernelError(renderOptionsResult.issues),
+        },
+      };
+    }
+
+    const createOptionsResult = this.resolveCreateOptions(renderOptionsResult.options, entry.export?.options, owner);
+    if (!createOptionsResult.success) {
+      return {
+        artifact: {
+          identity: this.createRenderIdentity({
+            file: entry.file,
+            parameters: entry.parameters,
+            renderOptions: renderOptionsResult.options,
+            content: {},
+            dependencies: [],
+            dependencyHash: '',
+            owner,
+          }),
+          owner,
+          result: createKernelError(createOptionsResult.issues),
+        },
+      };
+    }
+
+    const renderContentResult:
+      | { success: true; content: RuntimeContentInput }
+      | { success: false; issues: KernelIssue[] } = entry.export
+      ? { success: true, content: entry.content ?? {} }
+      : this.validateRuntimeContent('render', this.getRenderContentKeys(owner), entry.content);
+    if (!renderContentResult.success) {
+      return {
+        artifact: {
+          identity: this.createRenderIdentity({
+            file: entry.file,
+            parameters: entry.parameters,
+            renderOptions: renderOptionsResult.options,
+            content: {},
+            dependencies: [],
+            dependencyHash: '',
+            owner,
+          }),
+          owner,
+          result: createKernelError(renderContentResult.issues),
+        },
+      };
+    }
+
+    const input: NativeBuildInput = {
+      entryPath: ownerFilePath,
+      parameters: entry.parameters,
+      ...createOptionsResult.input,
+    };
+
+    const createMiddleware = this.getCreateExecutionList(owner, renderContentResult.content, Boolean(entry.export));
+    const resolvedArray = createMiddleware;
+
+    const geoDepsSpan = this.tracer.startSpan('kernel.resolve-deps', {
+      phase: 'resolvingDeps',
+    });
+    const dependencies = await this.computeDependencies({
+      operations: ['evaluate', ...(entry.export ? (['export'] as const) : [])],
+      parameters: entry.parameters,
+      renderOptions: renderOptionsResult.options,
+      content: renderContentResult.content,
+      exportDependency: entry.export?.dependency,
+      resolvedMiddleware: resolvedArray,
+      dependencyContext: options.dependencyContext,
+      owner,
+    });
+    const dependencyHash = await this.computeDependencyHash(dependencies);
+    const nativeHandleDependencies = await this.computeDependencies({
+      operations: ['evaluate'],
+      parameters: entry.parameters,
+      resolvedMiddleware: createMiddleware,
+      dependencyContext: options.dependencyContext,
+      owner,
+    });
+    if ('options' in createOptionsResult.input) {
+      nativeHandleDependencies.push({
+        type: 'option',
+        key: 'native-build-options',
+        value: createOptionsResult.input.options,
+      });
+    }
+    const nativeHandleKey = await this.computeDependencyHash(nativeHandleDependencies);
+    geoDepsSpan.end();
+    const evaluationIdentityKey = createNativeHandleIdentityKey({
+      file: entry.file,
+      selectedKernelId: owner.binding?.kernelId,
+      selectedKernelVersion: owner.binding?.kernelVersion,
+      nativeHandleKey,
+    });
+    let evaluationSlot = this.createEvaluationSlot(owner, evaluationIdentityKey);
+    /* The worker still holds this build live: a store lookup could only return a restored copy, which
+     * meshes every occurrence instead of its shared prototypes and costs a snapshot on the request path. */
+    const live =
+      this.retainedEvaluation?.identityKey === evaluationIdentityKey && this.retainedEvaluation.hasHandle
+        ? this.retainedEvaluation
+        : undefined;
+    // Set by the terminal handler; middleware decides whether it runs.
+    const terminal = { ran: false };
+    /* No build action when it cannot store anything (the kernel has no snapshot serializer) or need not
+     * (the live build is already stored or queued): middleware then sees reuse off for this phase (R3). */
+    const buildCompute = (): KernelComputeCapability => {
+      if (!this.kernelStoresNativeHandleForOwner(owner) || live?.buildPublication !== undefined) {
+        return { status: 'off' };
+      }
+      return this.trackBuildPublication(this.createComputeRuntime(this.operationSignal ?? neverAbortedSignal), () =>
+        terminal.ran ? evaluationSlot : undefined,
+      );
+    };
+
+    const runtimes = new Map<string, KernelMiddlewareRuntime>();
+    for (const { middleware, options: middlewareOptions, enabled, id } of createMiddleware) {
+      if (enabled && middleware.wrapEvaluate) {
+        runtimes.set(
+          id,
+          createMiddlewareRuntime({
+            signal: this.operationSignal ?? neverAbortedSignal,
+            tracer: this.tracer,
+            onLog: this.onLog,
+            middlewareName: middleware.name,
+            filesystem: this.filesystem,
+            compute: buildCompute(),
+            dependencies: nativeHandleDependencies,
+            dependencyHash: nativeHandleKey,
+            stateSchema: middleware.stateSchema,
+            options: middlewareOptions,
+            logger: this.getMiddlewareLogger(id, middleware.name),
+          }),
+        );
+      }
+    }
+
+    const { tracer } = this;
+    let chain: (input: EvaluateRequest) => Promise<EvaluateResult> = named(
+      'kernelHandler',
+      async (handlerInput: EvaluateRequest) => {
+        terminal.ran = true;
+        const computeSpan = tracer.startSpan('kernel.compute');
+        const createSchema = owner.binding?.kernelId
+          ? this.kernelCreateOptionsZodSchemaMap.get(owner.binding.kernelId)
+          : undefined;
+        const chainParameters = mergeParameterDefaults({}, handlerInput.parameters, entry.parameterSchema);
+        const unitlessText = unitlessTextParameter(entry.parameterManifest, entry.parameterSchema, chainParameters);
+        if (unitlessText) {
+          computeSpan.end();
+          return createKernelError([
+            {
+              message: `Parameter ${unitlessText.pointer} received unit-bearing text "${unitlessText.text}", but the field declares no unit. Send a number in the field's declared scale or add a unit declaration.`,
+              code: 'SEMANTICS_UNRESOLVED',
+              type: 'kernel',
+              severity: 'error',
+            },
+          ]);
+        }
+        let resolvedParameters: Readonly<Record<string, unknown>>;
+        try {
+          resolvedParameters = resolveParameterInputValues(entry.parameterManifest, chainParameters);
+        } catch (error) {
+          computeSpan.end();
+          const diagnostic = error instanceof ParameterAdmissionError ? error.diagnostics[0] : undefined;
+          return createKernelError([
+            {
+              message: error instanceof Error ? error.message : String(error),
+              code: diagnostic?.code ?? 'INVALID_SCHEMA',
+              type: 'kernel',
+              severity: 'error',
+              ...(diagnostic ? { details: diagnostic } : {}),
+            },
+          ]);
+        }
+        const parameters = mergeParameterDefaults(
+          entry.parameterDefaults,
+          { ...resolvedParameters },
+          entry.parameterSchema,
+        );
+        const observed = this.activeOperation?.observed;
+        if (observed) {
+          // Retained only while a client observes; counted after the reply. The merged values are what the kernel
+          // receives, so a leaf the caller left out is its default rather than a difference from it.
+          observed.parameters = { manifest: entry.parameterManifest, resolved: parameters };
+        }
+        if (!validateJsonSchemaValue(entry.parameterSchema, parameters)) {
+          computeSpan.end();
+          return createKernelError([
+            {
+              message: 'Parameters do not satisfy the admitted execution schema',
+              code: 'RUNTIME',
+              type: 'kernel',
+              severity: 'error',
+            },
+          ]);
+        }
+        const kernelInput: NativeBuildInput = {
+          entryPath: handlerInput.entryPath,
+          // Persisted-parameter middleware may reintroduce values removed from the source schema.
+          parameters,
+          ...(createSchema
+            ? {
+                options:
+                  handlerInput.options ??
+                  ('options' in createOptionsResult.input ? createOptionsResult.input.options : {}),
+              }
+            : {}),
+        };
+        const retained = this.retainedEvaluation;
+        const sameBuild =
+          retained?.identityKey === evaluationIdentityKey &&
+          retained.nativeBuildInput !== undefined &&
+          canonicalJson(retained.nativeBuildInput) === canonicalJson(kernelInput);
+        if (sameBuild && retained.hasHandle) {
+          try {
+            if ((await this.isNativeHandleValidForOwner(owner, retained.handle, this.createRuntime())) === false) {
+              this.dropEvaluationHandle(retained);
+            }
+          } catch {
+            this.dropEvaluationHandle(retained);
+          }
+        }
+        if (sameBuild && (retained.hasHandle || retained.serializedNativeHandleSlot)) {
+          this.buildRun.outcome = 'retained';
+          evaluationSlot = retained;
+          this.activeEvaluationSlot = retained;
+          computeSpan.end();
+          return {
+            success: true,
+            data: retained.terminalOffers ?? {},
+            issues: retained.terminalIssues ?? [],
+            // A reused live build can still be published, for example once a slider frame is committed.
+            ...(retained.hasHandle && retained.serializeHandleSnapshot
+              ? { serializeHandleSnapshot: retained.serializeHandleSnapshot }
+              : {}),
+            [nativeBuildInputSymbol]: retained.nativeBuildInput,
+          };
+        }
+        evaluationSlot.nativeBuildInput = kernelInput;
+        const documentController = this.activeDocumentEvaluationController;
+        const documentSignalView = documentController ? this.documentSignalView : undefined;
+        const sequence = this.activeDocumentEvaluationSequence;
+        const documentState = documentSignalView ? beginDocumentAbort(documentSignalView, sequence) : undefined;
+        if (documentController) {
+          setAbortContext({
+            signal: documentController.signal,
+            ...(documentSignalView && documentState !== undefined
+              ? { documentSignalView, documentSignalState: documentState }
+              : {}),
+            onSharedAbort: (reason) => {
+              documentController.abort(reason);
+            },
+          });
+          this.onProgress?.(
+            'evaluate',
+            documentState === undefined ? undefined : { abortGeneration: documentAbortGeneration(documentState) },
+          );
+        }
+        let result: EvaluateResult;
+        this.buildRun.outcome = 'built';
+        try {
+          result = await this.onEvaluateForOwner(owner, kernelInput, this.createRuntime(), evaluationSlot);
+          if (result.success) {
+            evaluationSlot.terminalOffers = result.data;
+            evaluationSlot.terminalIssues = [...result.issues];
+            evaluationSlot.serializeHandleSnapshot = result.serializeHandleSnapshot;
+          }
+        } finally {
+          if (documentController) {
+            clearAbortContext();
+          }
+          if (documentSignalView) {
+            endDocumentAbort(documentSignalView, sequence);
+          }
+        }
+        computeSpan.end();
+        return { ...result, [nativeBuildInputSymbol]: kernelInput };
+      },
+    );
+
+    for (let index = createMiddleware.length - 1; index >= 0; index--) {
+      const { middleware, enabled, id } = createMiddleware[index]!;
+      if (enabled && middleware.wrapEvaluate) {
+        const inner = chain;
+        const runtime = runtimes.get(id)!;
+        const middlewareName = middleware.name;
+        const wrapHook = middleware.wrapEvaluate;
+
+        chain = named(`middleware(${middlewareName})`, async (handlerInput: EvaluateRequest) => {
+          const span = tracer.startSpan(`middleware.wrap(${middlewareName})`, {
+            middleware: middlewareName,
+            phase: 'evaluate',
+          });
+          try {
+            const result = await wrapHook(handlerInput, inner, runtime);
+            span.end();
+            return result;
+          } catch (error) {
+            span.end();
+            // A superseded or closed operation is aborted, not failed: its caller drops it.
+            if (runtime.signal.aborted) {
+              throw error;
+            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            this.logger.error('Middleware failed', {
+              data: { name: middlewareName, error: errorMessage },
+            });
+            return createKernelError([
+              {
+                message: `Middleware error in ${middlewareName}: ${errorMessage}`,
+                code: 'MIDDLEWARE_FAILED',
+                type: 'kernel',
+                severity: 'error',
+              },
+            ]);
+          }
+        });
+      }
+    }
+
+    this.pendingNativeHandle = undefined;
+    this.activeEvaluationSlot = evaluationSlot;
+    let evaluated: EvaluateResult;
+    try {
+      evaluated = await chain(input);
+    } finally {
+      this.activeEvaluationSlot = undefined;
+    }
+    if (
+      !terminal.ran &&
+      evaluated.success &&
+      live?.hasHandle === true &&
+      live.nativeBuildInput !== undefined &&
+      canonicalJson(live.nativeBuildInput) === canonicalJson(evaluated[nativeBuildInputSymbol])
+    ) {
+      // A store hit for the build this worker still holds: keep the live handle, not the restored copy (R3).
+      evaluationSlot = live;
+      live.buildPublication = 'stored';
+      const { serializedHandle: _restored, ...hit } = evaluated;
+      evaluated = hit;
+    }
+    evaluationSlot.offers = evaluated.success ? evaluated.data : undefined;
+    if (evaluated.success) {
+      evaluationSlot.issues = evaluated.issues;
+    }
+    if (evaluated.success && evaluationSlot.hasHandle && evaluationSlot.nativeBuildInput) {
+      // A finished evaluation remains reusable even if its view was superseded before projection.
+      this.retainedEvaluation = evaluationSlot;
+    }
+    this.operationSignal?.throwIfAborted();
+    if (evaluated.success && evaluationSlot.hasHandle) {
+      evaluationSlot.nativeBuildInput ??= evaluated[nativeBuildInputSymbol];
+    }
+    const internalResult: CreateGeometryResult & NativeBuildInputCarrier = evaluated.success
+      ? {
+          success: true,
+          data: undefined,
+          issues: evaluated.issues,
+          ...(evaluated.serializedHandle === undefined ? {} : { serializedNativeHandle: evaluated.serializedHandle }),
+          ...(evaluated.serializeHandleSnapshot === undefined
+            ? {}
+            : {
+                serializeNativeHandleSnapshot: evaluated.serializeHandleSnapshot,
+              }),
+          [nativeBuildInputSymbol]: evaluated[nativeBuildInputSymbol],
+        }
+      : evaluated;
+    const nativeBuildInput = evaluated[nativeBuildInputSymbol];
+    const identity = this.createRenderIdentity({
+      file: entry.file,
+      parameters: entry.parameters,
+      renderOptions: renderOptionsResult.options,
+      content: renderContentResult.content,
+      dependencies,
+      dependencyHash,
+      nativeHandleKey,
+      ...(nativeBuildInput ? { nativeBuildInput } : {}),
+      owner,
+    });
+
+    // Bind native-handle slots before the mesh phase so the mesh boundary can
+    // materialize the handle through the same live/serialized/reheat machinery
+    // exports use.
+    const serializedNativeHandle = internalResult.success ? internalResult.serializedNativeHandle : undefined;
+    const { liveNativeHandleSlot, serializedNativeHandleSlot } = this.bindNativeHandleSlots({
+      identity,
+      slot: evaluationSlot,
+      success: internalResult.success,
+      serializedNativeHandle,
+      serializeNativeHandleSnapshot: internalResult.success ? internalResult.serializeNativeHandleSnapshot : undefined,
+    });
+
+    // Evaluation retains the native handle and its snapshot for views and exports.
+    // Public view artifacts are produced by the separate render operation.
+    const result: MaterializedRenderResult = internalResult.success
+      ? { success: true, data: undefined, issues: internalResult.issues }
+      : internalResult;
+
+    const artifact: MaterializedRender = {
+      identity,
+      owner,
+      result,
+      evaluationSlot,
+      liveNativeHandleSlot,
+      serializedNativeHandleSlot,
+    };
+    this.logger.debug('Document evaluation completed', {
+      data: {
+        ms: performance.now() - start,
+        dependencyHash,
+      },
+    });
+
+    return { artifact };
+  }
+
+  /**
+   * Take ownership of the handle `createGeometry` just produced.
+   *
+   * Ownership is what makes the release deterministic: the worker frees the
+   * handle once no field references it, instead of dropping the reference and
+   * waiting for a finalizer the kernel may not have. Pass `owner` for kernels
+   * that implement `disposeNativeHandle` — an unowned handle is never released.
+   *
+   * @param nativeHandle - Opaque handle returned by the kernel.
+   * @param owner - Owner whose kernel binding can release the handle.
+   */
+  protected captureNativeHandle(nativeHandle: unknown, owner?: OperationOwner, evaluationSlot?: EvaluationSlot): void {
+    this.pendingNativeHandle = nativeHandle;
+    const slot = evaluationSlot ?? this.activeEvaluationSlot;
+    if (slot) {
+      slot.hasHandle = true;
+      slot.handle = nativeHandle;
+      this.ownNativeHandle(slot, owner);
+    }
+  }
+
+  /**
+   * Whether a native handle is still owned, and therefore still safe to read.
+   *
+   * `disposeUnreachableNativeHandles` deletes from the ownership registry before it disposes, so
+   * this is the precise liveness answer a deferred snapshot needs.
+   *
+   * @param nativeHandle - The handle to check.
+   * @returns True while the worker still owns it.
+   */
+  protected isNativeHandleLive(nativeHandle: unknown): boolean {
+    return [...this.ownedNativeHandles.values()].some((owned) => owned.handle === nativeHandle);
+  }
+
+  private ownNativeHandle(slot: EvaluationSlot, owner: OperationOwner | undefined): void {
+    if (owner === undefined || !slot.hasHandle) {
+      return;
+    }
+    const previous = this.ownedNativeHandles.get(slot.id);
+    if (previous && previous.handle !== slot.handle) {
+      this.releaseOwnedNativeHandle(previous);
+    }
+    this.ownedNativeHandles.set(slot.id, { slot, handle: slot.handle });
+  }
+
+  private releaseOwnedNativeHandle(owned: { slot: EvaluationSlot; handle: unknown }): void {
+    const sharedObject =
+      (typeof owned.handle === 'object' && owned.handle !== null) || typeof owned.handle === 'function';
+    if (
+      sharedObject &&
+      [...this.ownedNativeHandles.values()].some((other) => other !== owned && other.handle === owned.handle)
+    ) {
+      return;
+    }
+    try {
+      this.disposeNativeHandleForOwner(owned.slot.owner, owned.handle, this.createRuntime(), owned.slot);
+    } catch (error) {
+      this.logger.warn('Native-handle disposal failed', {
+        data: { error: error instanceof Error ? error.message : String(error) },
+      });
+    }
+  }
+
+  private dropEvaluationHandle(slot: EvaluationSlot): void {
+    slot.liveNativeHandleSlot = undefined;
+    slot.hasHandle = false;
+    slot.handle = undefined;
+    const owned = this.ownedNativeHandles.get(slot.id);
+    if (owned) {
+      this.ownedNativeHandles.delete(slot.id);
+      this.releaseOwnedNativeHandle(owned);
+    }
+  }
+
+  /**
+   * Release every owned native handle no worker field still references.
+   *
+   * A rebuild replaces the published handle with a new one; without this the
+   * replaced geometry stays allocated for the life of the worker, and a WASM
+   * heap never shrinks, so an agentic rebuild loop ratchets toward OOM. Handles
+   * are compared by identity, so a handle reused across builds (same object
+   * still published) is retained, and each replaced handle is released once.
+   */
+  private disposeUnreachableNativeHandles(): void {
+    if (this.ownedNativeHandles.size === 0) {
+      return;
+    }
+
+    const retained = new Set<number>(
+      [
+        this.activeEvaluationSlot?.id,
+        this.retainedEvaluation?.id,
+        ...[...this.documents.values()].flatMap((document) => [
+          document.current?.artifact?.evaluationSlot?.id,
+          document.committed?.artifact?.evaluationSlot?.id,
+        ]),
+        ...[...this.committedAdmissions].map((admission) => admission.evaluation?.artifact?.evaluationSlot?.id),
+        ...[...this.pinnedDocumentEvaluations.keys()].map((evaluation) => evaluation.artifact?.evaluationSlot?.id),
+        // A queued publication reads its snapshot from the live handle when it runs (R1).
+        ...[...this.pendingBuildPublications.values()].flat().map((slot) => slot.id),
+      ].filter((id): id is number => id !== undefined),
+    );
+
+    // Built on first release only: most operation boundaries drop nothing.
+    for (const [id, owned] of this.ownedNativeHandles) {
+      if (retained.has(id)) {
+        continue;
+      }
+
+      this.ownedNativeHandles.delete(id);
+      this.releaseOwnedNativeHandle(owned);
+    }
+  }
+
+  protected createRenderIdentity(input: {
+    file: RuntimeFileLocator;
+    parameters: Record<string, unknown>;
+    renderOptions: Record<string, unknown>;
+    content: RuntimeContentInput;
+    nativeBuildInput?: NativeBuildInput;
+    dependencies: Dependency[];
+    dependencyHash: string;
+    nativeHandleKey?: string;
+    owner: OperationOwner;
+  }): RenderIdentity {
+    return {
+      file: input.file,
+      selectedKernelId: input.owner.binding?.kernelId,
+      selectedKernelVersion: input.owner.binding?.kernelVersion,
+      parameters: input.parameters,
+      renderOptions: input.renderOptions,
+      content: input.content,
+      ...(input.nativeBuildInput ? { nativeBuildInput: input.nativeBuildInput } : {}),
+      dependencies: input.dependencies,
+      dependencyHash: input.dependencyHash,
+      nativeHandleKey: input.nativeHandleKey ?? input.dependencyHash,
+    };
+  }
+
+  protected bindNativeHandleSlots(input: {
+    readonly identity: RenderIdentity;
+    readonly slot: EvaluationSlot;
+    readonly success: boolean;
+    /** A snapshot already in hand — a cache hit decodes one. */
+    readonly serializedNativeHandle: unknown;
+    /** Or the means to make one on first read (D12). */
+    readonly serializeNativeHandleSnapshot?: (() => unknown) | undefined;
+  }): {
+    liveNativeHandleSlot?: NativeHandleSlot;
+    serializedNativeHandleSlot?: SerializedNativeHandleSlot;
+  } {
+    const { identity, slot, success, serializedNativeHandle, serializeNativeHandleSnapshot } = input;
+    const identityKey = createNativeHandleIdentityKey(identity);
+    this.pendingNativeHandle = undefined;
+
+    const liveNativeHandleSlot =
+      success && slot.hasHandle
+        ? {
+            evaluationId: slot.id,
+            identityKey,
+            kernelId: identity.selectedKernelId,
+            kernelVersion: identity.selectedKernelVersion,
+            handle: slot.handle,
+          }
+        : undefined;
+    slot.liveNativeHandleSlot = liveNativeHandleSlot;
+
+    const hasSnapshot = serializedNativeHandle !== undefined && serializedNativeHandle !== null;
+    if (!success || (!hasSnapshot && serializeNativeHandleSnapshot === undefined)) {
+      return {
+        liveNativeHandleSlot,
+        serializedNativeHandleSlot: slot.serializedNativeHandleSlot,
+      };
+    }
+
+    const serializedNativeHandleSlot: SerializedNativeHandleSlot = {
+      evaluationId: slot.id,
+      identityKey,
+      kernelId: identity.selectedKernelId,
+      kernelVersion: identity.selectedKernelVersion,
+      serializedNativeHandle,
+    };
+    if (hasSnapshot) {
+      slot.serializedNativeHandleSlot = serializedNativeHandleSlot;
+      return { liveNativeHandleSlot, serializedNativeHandleSlot };
+    }
+    /* Resolved on the first read and remembered, so an export and the reheat that follows it do not
+     * serialise the same shape twice — and so nothing pays on the display path that never reads. */
+    let resolved: { value: unknown } | undefined;
+    Object.defineProperty(serializedNativeHandleSlot, 'serializedNativeHandle', {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        resolved ??= {
+          value: this.isEvaluationSlotLive(slot) ? serializeNativeHandleSnapshot!() : undefined,
+        };
+        return resolved.value;
+      },
+      set: (value: unknown) => {
+        resolved = { value };
+      },
+    });
+
+    slot.serializedNativeHandleSlot = serializedNativeHandleSlot;
+    return { liveNativeHandleSlot, serializedNativeHandleSlot };
+  }
+
+  protected getNativeHandleSlotForIdentity(
+    identity: RenderIdentity,
+    artifact: MaterializedRender,
+  ): NativeHandleSlot | undefined {
+    const identityKey = createNativeHandleIdentityKey(identity);
+    const artifactSlot = artifact.liveNativeHandleSlot;
+    if (artifactSlot?.identityKey === identityKey) {
+      return artifactSlot;
+    }
+    return undefined;
+  }
+
+  protected getSerializedNativeHandleSlotForIdentity(
+    identity: RenderIdentity,
+    artifact: MaterializedRender,
+  ): SerializedNativeHandleSlot | undefined {
+    const identityKey = createNativeHandleIdentityKey(identity);
+    const artifactSlot = artifact.serializedNativeHandleSlot;
+    if (artifactSlot?.identityKey === identityKey) {
+      return artifactSlot;
+    }
+    return undefined;
+  }
+
+  protected clearLiveNativeHandleSlot(artifact: MaterializedRender, slot: NativeHandleSlot): void {
+    if (artifact.liveNativeHandleSlot === slot) {
+      artifact.liveNativeHandleSlot = undefined;
+    }
+    const evaluation = artifact.evaluationSlot;
+    if (evaluation?.liveNativeHandleSlot === slot) {
+      this.dropEvaluationHandle(evaluation);
+    }
+  }
+
+  protected clearSerializedNativeHandleSlot(artifact: MaterializedRender, slot: SerializedNativeHandleSlot): void {
+    if (artifact.serializedNativeHandleSlot === slot) {
+      artifact.serializedNativeHandleSlot = undefined;
+    }
+    if (artifact.evaluationSlot?.serializedNativeHandleSlot === slot) {
+      artifact.evaluationSlot.serializedNativeHandleSlot = undefined;
+    }
+  }
+
+  protected configureRuntimePlugins(options: KernelWorkerOptions): void {
+    this.assertUniquePluginIds('middleware', options.middleware ?? []);
+    this.assertUniquePluginIds('bundler', options.bundlers ?? []);
+    this.assertUniquePluginIds('transcoder', options.transcoders ?? []);
+    this.assertUniqueTranscoderEdges(options.transcoders ?? []);
+    this.manifestKernelPlugins = options.kernels ?? [];
+    this.middlewarePlugins = options.middleware ?? [];
+    this.bundlerPlugins = options.bundlers ?? [];
+    this.transcoderPlugins = options.transcoders ?? [];
+  }
+
+  protected assertUniquePluginIds(category: string, entries: ReadonlyArray<{ readonly id: string }>): void {
+    const ids = new Set<string>();
+    for (const entry of entries) {
+      if (ids.has(entry.id)) {
+        throw new Error(`Duplicate ${category} id: ${entry.id}`);
+      }
+      ids.add(entry.id);
+    }
+  }
+
+  private assertUniqueTranscoderEdges(entries: readonly TranscoderPluginEntry[]): void {
+    // Cross-plugin duplicates are legitimate (assimp shadows the dedicated
+    // gltf transcoder's gltf → glb, for example): the FIRST registration wins,
+    // matching the deterministic composition order the caller wrote and the
+    // insertion-order lookup the direct transcode RPC performs. A shadowed
+    // edge is surfaced as a warning; only a plugin duplicating its OWN edge is
+    // a hard authoring error.
+    const owners = new Map<string, string>();
+    for (const entry of entries) {
+      for (const edge of entry.edges ?? []) {
+        const key = `${edge.from}\0${edge.to}`;
+        const owner = owners.get(key);
+        if (owner === entry.id) {
+          throw new Error(`Duplicate transcoder edge ${edge.from} → ${edge.to} registered twice by "${entry.id}".`);
+        }
+        if (owner !== undefined) {
+          console.warn(
+            `[kernel-worker] transcoder edge ${edge.from} → ${edge.to} from "${entry.id}" is shadowed by "${owner}" (first registration wins).`,
+          );
+          continue;
+        }
+        owners.set(key, entry.id);
+      }
+    }
   }
 
   /**
@@ -506,931 +4601,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   }
 
   /**
-   * The constructor for the worker.
-   */
-  public constructor() {
-    this.onLog = () => {
-      throw new Error('onLog must be initialized before use');
-    };
-  }
-
-  /**
-   * Entry point for initializing the worker. This is called once when the worker is created.
-   * Handles common initialization logic and then calls the protected initialize method.
-   *
-   * @param input - Initialization input containing callbacks, transferables, options, and middleware entries
-   * @param input.callbacks - Object containing callback functions (proxied)
-   * @param input.callbacks.onLog - The function to call when a log is emitted
-   * @param input.transferables - Object containing transferable resources like MessagePorts
-   * @param input.transferables.fileSystemPort - Optional MessagePort for direct communication with file-manager worker
-   * @param input.options - The options passed to the worker, specific to the kernel provider
-   * @param input.middlewareEntries - Ordered array of middleware registrations to load dynamically
-   */
-  public async initialize(input: {
-    callbacks: { onLog: OnWorkerLog };
-    transferables: { fileSystemPort?: MessagePort; inlineFileSystem?: RuntimeFileSystemBase };
-    options: Options;
-    middlewareEntries: MiddlewareRegistrations;
-    transcoderModules?: TranscoderModuleEntry[];
-  }): Promise<void> {
-    this.onLog = input.callbacks.onLog;
-    this.options = input.options;
-
-    // Create logger (depends on onLog being set)
-    this._logger = this.createLogger();
-
-    if (this._geometryPoolBuffer) {
-      this._geometryPool = new SharedPool(this._geometryPoolBuffer);
-    }
-    if (this._filePoolBuffer) {
-      this._filePool = new SharedPool(this._filePoolBuffer);
-    }
-
-    /* Filesystem wiring — three precedence rules (TR16):
-     * 1. `inlineFileSystem` takes precedence: same V8 cluster fast-path,
-     *    no MessagePort serialization or bridge proxy.
-     * 2. `fileSystemPort` falls back to the generic bridge proxy (worker /
-     *    cross-process topologies).
-     * 3. Neither: filesystem stays undefined; kernel runs without FS. */
-    if (input.transferables.inlineFileSystem) {
-      this.fileSystem = adaptInlineFileSystem(input.transferables.inlineFileSystem);
-      this._filesystem = this.createFileSystem();
-    } else if (input.transferables.fileSystemPort) {
-      this.fileSystem = createBridgeProxy<RuntimeFileSystemBase>(
-        wrapWorkerFilesystemBridgePort(input.transferables.fileSystemPort),
-        {
-          filePool: this._filePool,
-        },
-      );
-      this._filesystem = this.createFileSystem();
-    }
-
-    const bootstrapSpan = this.tracer.startSpan('kernel.bootstrap');
-    try {
-      await this.loadMiddleware(input.middlewareEntries);
-
-      if (input.transcoderModules && input.transcoderModules.length > 0) {
-        await this.loadTranscoders(input.transcoderModules);
-      }
-
-      const initSpan = this.tracer.startSpan('kernel.init', {
-        kernel: this.constructor.name,
-      });
-      try {
-        await this.onInitialize({ options: this.options }, this.createRuntime());
-      } finally {
-        initSpan.end();
-      }
-
-      this._capabilitiesManifest = this.buildCapabilitiesManifest();
-    } finally {
-      bootstrapSpan.end();
-    }
-  }
-
-  /**
-   * Set the telemetry send callback. Called by the dispatcher to wire up
-   * telemetry before initialization. Creates the PerformanceObserver-based collector.
-   *
-   * @param send - callback that transmits collected performance entries to the main thread
-   */
-  public setTelemetrySend(send: (entries: TelemetryEntry[]) => void): void {
-    this.telemetryCollector?.dispose();
-    this.telemetryCollector = new WorkerTelemetryCollector(send);
-  }
-
-  /** Flush any buffered telemetry entries to the main thread. */
-  public flushTelemetry(): void {
-    this.telemetryCollector?.flush();
-  }
-
-  /**
-   * Set the SharedArrayBuffer signal channel for bidirectional abort/state signaling.
-   * Called by the dispatcher during initialization if the main thread provides a signal buffer.
-   *
-   * @param buffer - SharedArrayBuffer for the signal channel.
-   */
-  public setSignalBuffer(buffer: SharedArrayBuffer): void {
-    this.signalView = new Int32Array(buffer);
-  }
-
-  /**
-   * Wire-format cooperative abort entry-point used by SAB-less transports
-   * (e.g. {@link createWebSocketTransport}). The dispatcher invokes this
-   * for every `{ type: 'abort', reason }` message; we bump the local
-   * `renderGeneration` exactly as we would from an `Atomics`-driven SAB
-   * notification — and write the reason into the SAB when available so
-   * downstream `isAborted()` checks classify the abort correctly.
-   *
-   * @param reason - Abort reason carried inline by the wire command.
-   */
-  public handleWireAbort(reason: number): void {
-    if (this.signalView) {
-      Atomics.store(this.signalView, signalSlot.abortReason, reason);
-      this.renderGeneration = Atomics.add(this.signalView, signalSlot.abortGeneration, 1) + 1;
-      Atomics.notify(this.signalView, signalSlot.abortGeneration);
-    } else {
-      this.renderGeneration++;
-    }
-  }
-
-  /**
-   * Set the SharedArrayBuffer for the geometry pool.
-   * Called by the dispatcher during initialization.
-   *
-   * @param buffer - SharedArrayBuffer for the geometry pool.
-   */
-  public setGeometryPoolBuffer(buffer: SharedArrayBuffer): void {
-    this._geometryPoolBuffer = buffer;
-  }
-
-  /**
-   * Set the SharedArrayBuffer for the file pool.
-   * Called by the dispatcher during initialization.
-   *
-   * @param buffer - SharedArrayBuffer for the file pool.
-   */
-  public setFilePoolBuffer(buffer: SharedArrayBuffer): void {
-    this._filePoolBuffer = buffer;
-  }
-
-  /**
-   * Handle a setFile command from the main thread.
-   * Stores the file, parameters, render options, aborts any in-progress render,
-   * and starts an immediate render (no debounce for initial file set).
-   *
-   * @param file - The geometry file to render.
-   * @param parameters - Parameter overrides.
-   * @param options - Optional kernel-specific render options.
-   */
-  /**
-   * Stage byte payloads onto the worker-side {@link RuntimeFileSystem} and
-   * then dispatch the supplied entry through the same autonomous render
-   * flow as {@link KernelWorker.handleOpenFile}. Used by
-   * `RuntimeClient.openFile({ code })` to ship inline source code through
-   * the runtime without forcing consumers to wire up an inline-kind
-   * filesystem handle (TR7).
-   *
-   * @param request - Stage map plus the entry to open after staging completes.
-   */
-  public async handleStageAndOpenFile(request: {
-    stage: Record<string, Uint8Array<ArrayBuffer>>;
-    file: GeometryFile;
-    parameters?: Record<string, unknown>;
-    options?: Record<string, unknown>;
-  }): Promise<void> {
-    const entries = Object.entries(request.stage);
-
-    if (entries.length > 0) {
-      const fs = this.filesystem;
-      const writtenDirectories = new Set<string>();
-
-      for (const [absolutePath, bytes] of entries) {
-        const lastSlash = absolutePath.lastIndexOf('/');
-        if (lastSlash > 0) {
-          const directory = absolutePath.slice(0, lastSlash);
-          if (!writtenDirectories.has(directory)) {
-            writtenDirectories.add(directory);
-            // oxlint-disable-next-line no-await-in-loop -- Sequential mkdir to preserve parent-before-child order.
-            await fs.mkdir(directory, { recursive: true });
-          }
-        }
-        // oxlint-disable-next-line no-await-in-loop -- Writes must complete before render reads them.
-        await fs.writeFile(absolutePath, bytes);
-      }
-
-      // Invalidate every cache layer keyed on the staged paths so the
-      // next render reads the freshly written bytes. Without this,
-      // back-to-back `client.openFile({ code })` calls (e.g. an
-      // editor edit followed by a re-render) would resolve through
-      // the OLD `fileContentCache` entry and produce stale parameter
-      // extraction / dependency hashes — even though the underlying
-      // filesystem now holds the new content. Mirrors the
-      // `notifyFileChanged` invalidation path so the cache contract
-      // is identical regardless of who wrote the bytes.
-      this._invalidateCachesForPaths(entries.map(([absolutePath]) => absolutePath));
-    }
-
-    this.handleOpenFile(request.file, request.parameters, request.options);
-  }
-
-  /**
-   *
-   */
-  public handleOpenFile(
-    file: GeometryFile,
-    parameters?: Record<string, unknown>,
-    options?: Record<string, unknown>,
-  ): void {
-    this.currentFile = file;
-    this.currentParameters = parameters ?? {};
-    this.currentRenderOptions = options;
-
-    if (this.signalView) {
-      this.renderGeneration = Atomics.add(this.signalView, signalSlot.abortGeneration, 1) + 1;
-    } else {
-      this.renderGeneration++;
-    }
-
-    clearTimeout(this.paramDebounceTimer);
-    this.paramDebounceTimer = undefined;
-
-    // Watch the entry file immediately so edits during a long-running
-    // (or failing) first render are never missed.
-    this.setBasePath(file);
-    this.updateWatchSet([this.activeFileAbsolutePath]);
-
-    void this.executeRender();
-  }
-
-  /**
-   * Handle a setParameters command from the main thread.
-   * Stores the parameters, aborts any in-progress render, and schedules a
-   * render after the {@link parameterDebounce} window (configured in
-   * `runtime-framework.constants`).
-   *
-   * @param parameters - Parameter overrides.
-   */
-  public handleUpdateParameters(parameters: Record<string, unknown>): void {
-    this.currentParameters = parameters;
-
-    if (this.signalView) {
-      this.renderGeneration = Atomics.add(this.signalView, signalSlot.abortGeneration, 1) + 1;
-    } else {
-      this.renderGeneration++;
-    }
-
-    this.scheduleRender(parameterDebounce);
-  }
-
-  /**
-   * Handle a setOptions command from the main thread.
-   * Replaces the current per-render kernel options, aborts any in-progress
-   * render, and schedules an immediate re-render against the active file
-   * with the existing parameters.
-   *
-   * @param options - Replacement kernel-specific render options.
-   */
-  public handleSetOptions(options: Record<string, unknown>): void {
-    this.currentRenderOptions = options;
-
-    if (this.signalView) {
-      this.renderGeneration = Atomics.add(this.signalView, signalSlot.abortGeneration, 1) + 1;
-    } else {
-      this.renderGeneration++;
-    }
-
-    clearTimeout(this.paramDebounceTimer);
-    this.paramDebounceTimer = undefined;
-
-    if (this.currentFile) {
-      void this.executeRender();
-    }
-  }
-
-  /** Clean up worker state, native handles, telemetry collector, and filesystem proxy. */
-  public async cleanup(): Promise<void> {
-    clearTimeout(this.paramDebounceTimer);
-    this.paramDebounceTimer = undefined;
-    this.watchUnsubscribe?.();
-    this.watchUnsubscribe = undefined;
-    this.assetHashCache.clear();
-    this.middlewareWatchPaths.clear();
-    this.nativeHandle = undefined;
-    this.lastSerializedHandle = undefined;
-    this.lastRenderParameters = {};
-    this.currentFile = undefined;
-    this.telemetryCollector?.dispose();
-    this.telemetryCollector = undefined;
-    this.fileSystem?.dispose();
-    this.fileSystem = undefined;
-
-    for (const transcoder of this.loadedTranscoders.values()) {
-      try {
-        // oxlint-disable-next-line no-await-in-loop -- Sequential to preserve cleanup order
-        await transcoder.definition.cleanup(transcoder.context);
-      } catch {
-        // Best-effort cleanup
-      }
-    }
-    this.loadedTranscoders.clear();
-
-    await this.onCleanup();
-  }
-
-  /**
-   * Entry point for extracting parameters from a file.
-   * Handles base path setup, timing, and middleware application using onion model.
-   *
-   * @param file - The geometry file to extract parameters from.
-   * @returns The extracted parameters.
-   */
-  public async getParameters(file: GeometryFile): Promise<GetParametersResult> {
-    this.setBasePath(file);
-    const start = performance.now();
-
-    const input: GetParametersInput = {
-      filePath: this.activeFileAbsolutePath,
-      basePath: this.getProjectRootPath(),
-    };
-
-    const resolvedArray = this.getMiddleware();
-
-    this.onProgress?.('resolvingDeps');
-    const depsSpan = this.tracer.startSpan('kernel.resolve-deps', {
-      phase: 'resolvingDeps',
-    });
-    const dependencies = await this.computeDependencies({
-      resolvedMiddleware: resolvedArray,
-    });
-    const dependencyHash = this.computeDependencyHash(dependencies);
-    depsSpan.end();
-
-    const runtimes = new Map<string, KernelMiddlewareRuntime>();
-    for (const { middleware, options: middlewareOptions, enabled } of resolvedArray) {
-      if (enabled && middleware.wrapGetParameters) {
-        runtimes.set(
-          middleware.name,
-          createMiddlewareRuntime({
-            onLog: this.onLog,
-            middlewareName: middleware.name,
-            filesystem: this.filesystem,
-            dependencies,
-            dependencyHash,
-            stateSchema: middleware.stateSchema,
-            options: middlewareOptions,
-            logger: this.getMiddlewareLogger(middleware.name),
-            registerWatchPath: this.handleRegisterWatchPath,
-          }),
-        );
-      }
-    }
-
-    this.onProgress?.('extractingParams');
-    const { tracer } = this;
-    let chain: GetParametersHandler = named('kernelHandler', async (handlerInput: GetParametersInput) => {
-      const parametersSpan = tracer.startSpan('kernel.extract-params', {
-        phase: 'extractingParams',
-      });
-      const result = await this.onGetParameters(handlerInput, this.createRuntime());
-      parametersSpan.end();
-      return result;
-    });
-
-    for (let index = resolvedArray.length - 1; index >= 0; index--) {
-      const { middleware, enabled } = resolvedArray[index]!;
-      if (enabled && middleware.wrapGetParameters) {
-        const inner = chain;
-        const runtime = runtimes.get(middleware.name)!;
-        const middlewareName = middleware.name;
-        const wrapHook = middleware.wrapGetParameters;
-
-        chain = named(`middleware(${middlewareName})`, async (handlerInput: GetParametersInput) => {
-          const span = tracer.startSpan(`middleware.wrap(${middlewareName})`, {
-            middleware: middlewareName,
-          });
-          try {
-            const result = await wrapHook(handlerInput, inner, runtime);
-            span.end();
-            return result;
-          } catch (error) {
-            span.end();
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            this.logger.error('Middleware failed', {
-              data: { name: middlewareName, error: errorMessage },
-            });
-            return createKernelError([
-              {
-                message: `Middleware error in ${middlewareName}: ${errorMessage}`,
-                code: 'MIDDLEWARE_FAILED',
-                type: 'kernel',
-                severity: 'error',
-              },
-            ]);
-          }
-        });
-      }
-    }
-
-    const result = await chain(input);
-
-    this.logger.debug('getParameters completed', {
-      data: { ms: performance.now() - start },
-    });
-
-    return result;
-  }
-
-  /**
-   * Entry point for computing geometry from a file.
-   * Handles base path setup, timing, and middleware application using onion model.
-   *
-   * Middleware wraps around each other (onion model), so:
-   * - Code before handler() runs on the "request journey" (outside-in)
-   * - Code after handler() runs on the "response journey" (inside-out)
-   * - Short-circuited results still flow through upstream middleware post-processing
-   *
-   * @param entry - The geometry entry containing file, parameters, and optional render options
-   * @param entry.file - The geometry file to compute geometry from
-   * @param entry.parameters - The parameters to use when computing geometry
-   * @param entry.options - Optional kernel-specific render options
-   * @returns The computed geometry.
-   */
-  public async createGeometry(entry: {
-    file: GeometryFile;
-    parameters: Record<string, unknown>;
-    options?: Record<string, unknown>;
-  }): Promise<HashedGeometryResult> {
-    this.setBasePath(entry.file);
-    this.lastRenderParameters = entry.parameters;
-    const start = performance.now();
-
-    const renderOptionsResult = this.validateRenderOptions(entry.options);
-    if (!renderOptionsResult.success) {
-      return createKernelError(renderOptionsResult.issues);
-    }
-
-    const input: CreateGeometryInput = {
-      filePath: this.activeFileAbsolutePath,
-      basePath: this.getProjectRootPath(),
-      parameters: entry.parameters,
-      options: renderOptionsResult.options,
-    };
-
-    const resolvedArray = this.getMiddleware();
-
-    const geoDepsSpan = this.tracer.startSpan('kernel.resolve-deps', {
-      phase: 'resolvingDeps',
-    });
-    const dependencies = await this.computeDependencies({
-      parameters: entry.parameters,
-      resolvedMiddleware: resolvedArray,
-    });
-    const dependencyHash = this.computeDependencyHash(dependencies);
-    geoDepsSpan.end();
-
-    const runtimes = new Map<string, KernelMiddlewareRuntime>();
-    for (const { middleware, options: middlewareOptions, enabled } of resolvedArray) {
-      if (enabled && middleware.wrapCreateGeometry) {
-        runtimes.set(
-          middleware.name,
-          createMiddlewareRuntime({
-            onLog: this.onLog,
-            middlewareName: middleware.name,
-            filesystem: this.filesystem,
-            dependencies,
-            dependencyHash,
-            stateSchema: middleware.stateSchema,
-            options: middlewareOptions,
-            logger: this.getMiddlewareLogger(middleware.name),
-            registerWatchPath: this.handleRegisterWatchPath,
-          }),
-        );
-      }
-    }
-
-    this.onProgress?.('computingGeometry');
-    const { tracer } = this;
-    let chain: CreateGeometryHandler = named('kernelHandler', async (handlerInput: CreateGeometryInput) => {
-      const computeSpan = tracer.startSpan('kernel.compute');
-      const result = await this.onCreateGeometry(handlerInput, this.createRuntime());
-      computeSpan.end();
-      return result;
-    });
-
-    for (let index = resolvedArray.length - 1; index >= 0; index--) {
-      const { middleware, enabled } = resolvedArray[index]!;
-      if (enabled && middleware.wrapCreateGeometry) {
-        const inner = chain;
-        const runtime = runtimes.get(middleware.name)!;
-        const middlewareName = middleware.name;
-        const wrapHook = middleware.wrapCreateGeometry;
-
-        chain = named(`middleware(${middlewareName})`, async (handlerInput: CreateGeometryInput) => {
-          const span = tracer.startSpan(`middleware.wrap(${middlewareName})`, {
-            middleware: middlewareName,
-          });
-          try {
-            const result = await wrapHook(handlerInput, inner, runtime);
-            span.end();
-            return result;
-          } catch (error) {
-            span.end();
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            this.logger.error('Middleware failed', {
-              data: { name: middlewareName, error: errorMessage },
-            });
-            return createKernelError([
-              {
-                message: `Middleware error in ${middlewareName}: ${errorMessage}`,
-                code: 'MIDDLEWARE_FAILED',
-                type: 'kernel',
-                severity: 'error',
-              },
-            ]);
-          }
-        });
-      }
-    }
-
-    const internalResult = await chain(input);
-
-    if (internalResult.success && internalResult.serializedHandle !== undefined) {
-      this.lastSerializedHandle = internalResult.serializedHandle;
-    }
-
-    this.onProgress?.('postProcessing');
-    // Dependency hash + index is sufficient for unique React keys
-    const result: HashedGeometryResult = internalResult.success
-      ? {
-          ...internalResult,
-          data: internalResult.data.map((geometry, index) => ({
-            ...geometry,
-            hash: `${dependencyHash}-${index}`,
-          })),
-        }
-      : internalResult;
-
-    this.logger.debug('createGeometry completed', {
-      data: { ms: performance.now() - start },
-    });
-
-    return result;
-  }
-
-  /**
-   * Entry point for exporting geometry.
-   * Handles timing and middleware application using onion model.
-   *
-   * Middleware wraps around each other (onion model), so:
-   * - Code before handler() runs on the "request journey" (outside-in)
-   * - Code after handler() runs on the "response journey" (inside-out)
-   * - Short-circuited results still flow through upstream middleware post-processing
-   *
-   * @param format - The export format identifier (e.g. 'stl', 'step', 'glb').
-   * @param options - Format-specific export options. Validated against Zod schema when available.
-   * @returns The exported geometry.
-   */
-  public async exportGeometry(format: FileExtension, options?: Record<string, unknown>): Promise<ExportGeometryResult> {
-    const exportSpan = this.tracer.startSpan('kernel.export', {
-      format,
-    });
-
-    await this.ensureNativeHandle();
-
-    const activeKernelId = this.getActiveKernelId();
-    const zodSchemas = activeKernelId ? this.kernelExportZodSchemasMap.get(activeKernelId) : undefined;
-    const formatZodSchema = zodSchemas?.[format];
-    let validatedOptions: Record<string, unknown> = options ?? {};
-
-    if (formatZodSchema) {
-      const parseResult = formatZodSchema.safeParse(options ?? {});
-      if (!parseResult.success) {
-        exportSpan.end();
-        return {
-          success: false,
-          issues: parseResult.error.issues.map((issue) => ({
-            message: `Export option validation failed: ${issue.path.join('.')} — ${issue.message}`,
-            code: 'RUNTIME',
-            type: 'runtime',
-            severity: 'error',
-          })),
-        } satisfies ExportGeometryResult;
-      }
-      validatedOptions = parseResult.data as Record<string, unknown>;
-    } else if (zodSchemas && options && Object.keys(options).length > 0) {
-      const hasTranscoderRoute = this._capabilitiesManifest.routes.some(
-        (r) => r.targetFormat === format && r.transcoderId,
-      );
-      if (!hasTranscoderRoute) {
-        const declared = Object.keys(zodSchemas).join(', ');
-        exportSpan.end();
-        return {
-          success: false,
-          issues: [
-            {
-              message: `No export schema for format "${format}" — options cannot be validated. Declared formats: ${declared}. Register the format schema or use a transcoder.`,
-              code: 'KERNEL_CAPABILITY_MISSING',
-              type: 'runtime',
-              severity: 'error',
-            },
-          ],
-        } satisfies ExportGeometryResult;
-      }
-    }
-
-    const input: ExportGeometryInput = {
-      format,
-      options: validatedOptions,
-      nativeHandle: this.nativeHandle,
-    };
-
-    const resolvedArray = this.getMiddleware();
-    const activeMiddleware = resolvedArray.filter(
-      ({ middleware, enabled }) => enabled && middleware.wrapExportGeometry,
-    );
-
-    let result: ExportGeometryResult;
-
-    if (activeMiddleware.length === 0) {
-      const computeSpan = this.tracer.startSpan('kernel.export-compute');
-      result = await this.executeExportWithRoute(input, this.createRuntime());
-      computeSpan.end();
-    } else {
-      const depsSpan = this.tracer.startSpan('kernel.resolve-deps', {
-        phase: 'resolvingDeps',
-      });
-      const dependencies = await this.computeDependencies({
-        resolvedMiddleware: resolvedArray,
-      });
-      const dependencyHash = this.computeDependencyHash(dependencies);
-      depsSpan.end();
-
-      const runtimes = new Map<string, KernelMiddlewareRuntime>();
-      for (const { middleware, options: middlewareOptions } of activeMiddleware) {
-        runtimes.set(
-          middleware.name,
-          createMiddlewareRuntime({
-            onLog: this.onLog,
-            middlewareName: middleware.name,
-            filesystem: this.filesystem,
-            dependencies,
-            dependencyHash,
-            stateSchema: middleware.stateSchema,
-            options: middlewareOptions,
-            logger: this.getMiddlewareLogger(middleware.name),
-            registerWatchPath: this.handleRegisterWatchPath,
-          }),
-        );
-      }
-
-      const { tracer } = this;
-      let chain: ExportGeometryHandler = named('kernelHandler', async (handlerInput: ExportGeometryInput) => {
-        const computeSpan = tracer.startSpan('kernel.export-compute');
-        const exportResult = await this.executeExportWithRoute(handlerInput, this.createRuntime());
-        computeSpan.end();
-        return exportResult;
-      });
-
-      for (let index = activeMiddleware.length - 1; index >= 0; index--) {
-        const { middleware } = activeMiddleware[index]!;
-        const inner = chain;
-        const runtime = runtimes.get(middleware.name)!;
-        const middlewareName = middleware.name;
-        const wrapHook = middleware.wrapExportGeometry!;
-
-        chain = named(`middleware(${middlewareName})`, async (handlerInput: ExportGeometryInput) => {
-          const span = tracer.startSpan(`middleware.wrap(${middlewareName})`, {
-            middleware: middlewareName,
-          });
-          try {
-            const chainResult = await wrapHook(handlerInput, inner, runtime);
-            span.end();
-            return chainResult;
-          } catch (error) {
-            span.end();
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            this.logger.error('Middleware failed', {
-              data: { name: middlewareName, error: errorMessage },
-            });
-            return createKernelError([
-              {
-                message: `Middleware error in ${middlewareName}: ${errorMessage}`,
-                code: 'MIDDLEWARE_FAILED',
-                type: 'kernel',
-                severity: 'error',
-              },
-            ]);
-          }
-        });
-      }
-
-      result = await chain(input);
-    }
-
-    exportSpan.end();
-
-    return result;
-  }
-  /**
-   * Get the resolved middleware array for this worker.
-   * Override in subclasses to customize middleware (e.g., for testing).
-   *
-   * @returns Array of resolved middleware with their configs
-   */
-  public getMiddleware(): ResolvedMiddleware[] {
-    return this.resolvedMiddleware;
-  }
-
-  /**
-   * Reconfigure middleware at runtime without re-importing already loaded modules.
-   * New URLs are imported, removed URLs are dropped, existing URLs get config updates.
-   *
-   * @param entries - New middleware configuration to apply
-   */
-  public async configureMiddleware(entries: MiddlewareRegistrations): Promise<void> {
-    await this.loadMiddleware(entries);
-    this.logger.debug('Middleware reconfigured', {
-      data: { count: this.resolvedMiddleware.length },
-    });
-  }
-
-  /**
-   * Unified render entry point that combines parameter extraction and geometry computation
-   * in a single call. Per-render callbacks were retired in favour of autonomous notifies:
-   * `parametersResolved` and `progress` events fan out via the top-level
-   * {@link KernelWorker.onParametersResolved} / {@link KernelWorker.onProgressUpdate}
-   * fields wired by the dispatcher, threading the originating render generation (`rgen`)
-   * for frame-level correlation. This method remains as a synchronous helper for
-   * non-autonomous code paths (CLI, benchmarks) that drive a single render-and-await flow.
-   *
-   * @param input - Render input containing file, parameters, and options.
-   * @returns The computed geometry.
-   */
-  public async render(input: {
-    file: GeometryFile;
-    parameters: Record<string, unknown>;
-    options?: Record<string, unknown>;
-  }): Promise<HashedGeometryResult> {
-    this.tracer.reset();
-    const renderSpan = this.tracer.startSpan('kernel.render', {
-      file: input.file.filename,
-    });
-    const generation = ++this.renderGeneration;
-    this.onProgress = (phase: RenderPhase) => {
-      this.onProgressUpdate?.(phase, generation);
-    };
-    this.renderDependencyCache = undefined;
-    this.setBasePath(input.file);
-
-    try {
-      const parametersResult = await this.getParameters(input.file);
-      this.onParametersResolved?.(parametersResult, generation);
-
-      let mergedParameters = input.parameters;
-      if (parametersResult.success) {
-        const extracted = parametersResult.data as {
-          defaultParameters?: Record<string, unknown>;
-        };
-        if (extracted.defaultParameters) {
-          mergedParameters = deepmerge(extracted.defaultParameters, input.parameters);
-        }
-      }
-
-      const result = await this.createGeometry({
-        file: input.file,
-        parameters: mergedParameters,
-        options: input.options,
-      });
-
-      return result;
-    } finally {
-      this._updateWatchSetFromCaches();
-      this.onProgress = undefined;
-      renderSpan.end();
-    }
-  }
-
-  /**
-   * Selectively invalidate file caches for changed paths.
-   * Called by the kernel machine before render operations when files have changed.
-   *
-   * @param changedPaths - Absolute paths of files that changed
-   */
-  public async notifyFileChanged(changedPaths: readonly string[]): Promise<void> {
-    this._invalidateCachesForPaths(changedPaths);
-    this.onFileChanged(changedPaths);
-  }
-
-  /**
-   * Get the current set of watched file paths.
-   * Primarily for test assertions — production code should not depend on this.
-   * @returns A copy of the internal watched-path set.
-   */
-  public getWatchedPaths(): Set<string> {
-    return new Set(this.watchedPaths);
-  }
-
-  /**
-   * Get the current middleware-registered watch paths and their debounce tiers.
-   * Primarily for test assertions.
-   * @returns A copy of the internal middleware watch paths map.
-   */
-  public getMiddlewareWatchPaths(): Map<string, number> {
-    return new Map(this.middlewareWatchPaths);
-  }
-
-  /**
-   * Update filesystem watch subscriptions based on the current dependency set.
-   * Diffs against the previous watch set to avoid full resubscribe churn.
-   *
-   * @param dependencies - absolute paths of current dependencies
-   */
-  public updateWatchSet(dependencies: string[]): void {
-    if (!this.fileSystem?.watch) {
-      return;
-    }
-
-    const newPaths = new Set(dependencies.filter((p) => !p.includes('.tau/cache/')));
-
-    if (setsEqual(this.watchedPaths, newPaths)) {
-      return;
-    }
-
-    this.watchUnsubscribe?.();
-
-    if (newPaths.size === 0) {
-      this.watchedPaths = newPaths;
-      this.watchUnsubscribe = undefined;
-      return;
-    }
-
-    this.watchUnsubscribe = this.fileSystem.watch(
-      {
-        paths: [...newPaths],
-        recursive: false,
-        excludes: ['.tau/cache/**'],
-      },
-      (event) => {
-        const changedPaths: string[] = [];
-        if ('path' in event) {
-          changedPaths.push(event.path);
-        }
-        if (event.type === 'rename' && 'oldPath' in event) {
-          changedPaths.push(event.oldPath);
-          if ('newPath' in event) {
-            changedPaths.push(event.newPath);
-          }
-        }
-        if (event.type === 'reset' || event.type === 'overflow') {
-          this.fileHashCache.clear();
-          this.fileContentCache.clear();
-          this.bundleResultCache.clear();
-          clearExecuteCache();
-          this.onFileChanged([]);
-          if (this.currentFile) {
-            this.scheduleRender(fileChangeDebounce);
-          }
-          return;
-        }
-        if (changedPaths.length > 0) {
-          this._invalidateCachesForPaths(changedPaths);
-          this.onFileChanged(changedPaths);
-          if (this.currentFile) {
-            let watchDebounce = fileChangeDebounce;
-            for (const p of changedPaths) {
-              watchDebounce = Math.min(watchDebounce, this.middlewareWatchPaths.get(p) ?? fileChangeDebounce);
-            }
-            this.scheduleRender(watchDebounce);
-          }
-        }
-      },
-    );
-
-    this.watchedPaths = newPaths;
-  }
-
-  /**
-   * Load the bundler definition from its URL (or use a preloaded one).
-   * Context initialization is deferred until first use via ensureBundlerContext(),
-   * because the project path is not known until setBasePath() runs.
-   *
-   * @param bundlerEntry - Bundler registration with module URL and extensions
-   * @param preloadedDefinition - Optional pre-loaded definition (bypasses dynamic import; used in tests)
-   */
-  public async ensureLoadedBundler(
-    bundlerEntry: BundlerRegistration,
-    preloadedDefinition?: BundlerDefinition,
-  ): Promise<void> {
-    const initSpan = this.tracer.startSpan('kernel.bundler-init');
-
-    try {
-      let definition: BundlerDefinition;
-      if (preloadedDefinition) {
-        definition = preloadedDefinition;
-      } else {
-        const module_: Record<string, unknown> = (await import(
-          /* @vite-ignore */ bundlerEntry.bundlerModuleUrl
-        )) as Record<string, unknown>;
-        definition = (module_['default'] ?? module_) as BundlerDefinition;
-      }
-
-      const { extensions } = bundlerEntry;
-      for (const extension of extensions) {
-        if (!this.loadedBundlers.has(extension) && !this.pendingBundlerInits.has(extension)) {
-          this.pendingBundlerInits.set(extension, {
-            definition,
-            extensions,
-            options: bundlerEntry.options,
-          });
-        }
-      }
-    } finally {
-      initSpan.end();
-    }
-  }
-
-  /**
    * Whether a bundler is available for the given file extension.
    * Used by subclasses to decide whether bundler-assisted detection is available.
    *
@@ -1439,77 +4609,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    */
   protected hasBundlerForExtension(extension: string): boolean {
     return this.loadedBundlers.has(extension) || this.pendingBundlerInits.has(extension);
-  }
-
-  /**
-   * Ensure nativeHandle is available before export.
-   *
-   * The geometry cache middleware may serve createGeometry results from disk,
-   * bypassing the kernel entirely. In that case, the nativeHandle (set as a
-   * side-effect of onCreateGeometry) is never populated.
-   *
-   * Resolution order:
-   * 1. No-op if nativeHandle is already set
-   * 2. Deserialize from lastSerializedHandle (fast path — avoids re-running createGeometry)
-   * 3. Re-run createGeometry as a fallback to materialize the handle
-   */
-  protected async ensureNativeHandle(): Promise<void> {
-    if (this.nativeHandle !== undefined && this.nativeHandle !== null) {
-      return;
-    }
-
-    if (this.lastSerializedHandle !== undefined && this.lastSerializedHandle !== null) {
-      this.logger.debug('Restoring nativeHandle from serialized cache');
-      this.nativeHandle = this.lastSerializedHandle;
-      return;
-    }
-
-    if (!this.currentFile) {
-      return;
-    }
-
-    const reheatParameters =
-      Object.keys(this.lastRenderParameters).length > 0 ? this.lastRenderParameters : this.currentParameters;
-    this.logger.debug('Export reheat: re-running createGeometry to populate nativeHandle', {
-      data: {
-        filePath: this.activeFileAbsolutePath,
-        basePath: this.getProjectRootPath(),
-        parameterCount: Object.keys(reheatParameters).length,
-      },
-    });
-    const reheatSpan = this.tracer.startSpan('kernel.export-reheat');
-    const reheatRenderOptions = this.validateRenderOptions(this.currentRenderOptions);
-    if (!reheatRenderOptions.success) {
-      reheatSpan.end();
-      this.logger.warn('Export reheat skipped: render option validation failed', {
-        data: { issues: reheatRenderOptions.issues.map((i) => i.message) },
-      });
-      return;
-    }
-    try {
-      const reheatResult = await this.onCreateGeometry(
-        {
-          filePath: this.activeFileAbsolutePath,
-          basePath: this.getProjectRootPath(),
-          parameters: reheatParameters,
-          options: reheatRenderOptions.options,
-        },
-        this.createRuntime(),
-      );
-      this.logger.debug('Export reheat completed', {
-        data: {
-          success: reheatResult.success,
-          nativeHandleType: typeof this.nativeHandle,
-          nativeHandleSet: this.nativeHandle !== undefined,
-          issues: reheatResult.issues.map((i) => i.message),
-        },
-      });
-    } catch (error) {
-      this.logger.error('Export reheat threw', {
-        data: { error: error instanceof Error ? error.message : String(error) },
-      });
-    }
-    reheatSpan.end();
   }
 
   /**
@@ -1524,8 +4623,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /**
    * Ensure the bundler for a specific file extension is fully initialized.
    * Call this before any operation that needs the bundler (bundle, execute, detectImports).
-   * Must be called after setBasePath() so that getProjectRootPath() returns the correct value.
-   *
    * Use this when the file extension is known and the correct bundler must be selected.
    * Use ensureBundlerContext() for extension-agnostic contexts where any bundler will do.
    *
@@ -1534,7 +4631,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    */
   protected async ensureBundlerForExtension(
     extension: string,
-  ): Promise<{ definition: BundlerDefinition; ctx: unknown }> {
+  ): Promise<{ definition: BundlerDefinition; ctx: unknown; id?: string }> {
     const existing = this.loadedBundlers.get(extension);
     if (existing) {
       return existing;
@@ -1586,10 +4683,11 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   }
 
   /**
-   * Hook called after file change notification.
+   * Hook called when a file change may alter what was derived from source files. A change only a
+   * geometry-stage middleware depends on does not call it.
    * Subclasses can override to perform additional invalidation (e.g., selection cache).
    *
-   * @param _changedPaths - absolute paths of files that changed
+   * @param _changedPaths - Paths within the runtime filesystem that changed.
    */
   protected onFileChanged(_changedPaths: readonly string[]): void {
     // Default: no-op. KernelRuntimeWorker overrides to clear selectionCache.
@@ -1615,42 +4713,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   }
 
   /**
-   * Get bundled asset URLs (fonts, WASM, etc.) for cache key computation.
-   * Override in kernels that use bundled assets.
-   *
-   * URLs from Vite ?url imports contain content hashes in production.
-   * In development, the asset content is fetched and hashed directly.
-   *
-   * @returns Array of asset URLs to include in dependency hash
-   */
-  protected getAssetUrls(): string[] {
-    return [];
-  }
-
-  /**
-   * Get the project root path by stripping the subdirectory from basePath.
-   * For basePath '/projects/test/site' with activeFilePath 'site/main.scad',
-   * returns '/projects/test'.
-   *
-   * @returns absolute path to the project root, derived by stripping the active file's subdirectory from basePath
-   */
-  protected getProjectRootPath(): string {
-    if (this.cachedProjectRoot !== undefined) {
-      return this.cachedProjectRoot;
-    }
-
-    const lastSlash = this.activeFilePath.lastIndexOf('/');
-    const subDirectory = lastSlash === -1 ? '' : this.activeFilePath.slice(0, lastSlash);
-
-    this.cachedProjectRoot =
-      subDirectory && this.basePath.endsWith(`/${subDirectory}`)
-        ? this.basePath.slice(0, -(subDirectory.length + 1))
-        : this.basePath;
-
-    return this.cachedProjectRoot;
-  }
-
-  /**
    * Rebuild the capabilities manifest from current kernel/transcoder state and push
    * the update to the main thread via the `onCapabilitiesUpdated` callback.
    *
@@ -1662,6 +4724,281 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     this.onCapabilitiesUpdated?.(this._capabilitiesManifest);
   }
 
+  protected async resolveKernelBinding(
+    input: { entryPath: string },
+    _runtime: KernelRuntime,
+  ): Promise<KernelBinding | undefined> {
+    const kernelId = this.getActiveKernelId();
+    const kernelVersion = this.getActiveKernelVersion();
+    return kernelId && kernelVersion
+      ? {
+          kernelId,
+          kernelVersion,
+          entryPath: input.entryPath,
+        }
+      : undefined;
+  }
+
+  protected publishOperationOwner(_owner: OperationOwner): void {
+    // Base workers do not maintain a separate active-kernel read model.
+  }
+
+  protected async onGetParametersForOwner(
+    _owner: OperationOwner,
+    input: GetParametersInput,
+    runtime: KernelRuntime,
+  ): Promise<GetParameterDeclarationsResult> {
+    return this.onGetParameters(input, runtime);
+  }
+
+  protected async onGetDependenciesForOwner(
+    _owner: OperationOwner,
+    input: GetDependenciesInput,
+    runtime: KernelRuntime,
+  ): Promise<GetDependenciesResult> {
+    return this.onGetDependencies(input, runtime);
+  }
+
+  // oxlint-disable-next-line max-params -- Owner-bound hook also carries the evaluation slot.
+  protected async onCreateGeometryForOwner(
+    _owner: OperationOwner,
+    input: NativeBuildInput,
+    runtime: KernelRuntime,
+    _slot: EvaluationSlot,
+  ): Promise<CreateGeometryResult> {
+    return this.onCreateGeometry(input, runtime);
+  }
+
+  /** Evaluate the selected kernel before the current-client display bridge. */
+  // oxlint-disable-next-line max-params -- Owner-bound hook also carries the evaluation slot.
+  protected abstract onEvaluateForOwner(
+    owner: OperationOwner,
+    input: NativeBuildInput,
+    runtime: KernelRuntime,
+    slot: EvaluationSlot,
+  ): Promise<EvaluateResult>;
+
+  /** Expose an exact native render/export token only while its hook is running. */
+  private async withDocumentNativeAbort<Result>(
+    phase: 'render' | 'export',
+    hook: () => Promise<Result>,
+  ): Promise<Result> {
+    const active = this.activeDocumentNativeOperation;
+    if (!active) {
+      return hook();
+    }
+    this.documentEvaluationSequence = nextDocumentAbortSequence(this.documentEvaluationSequence);
+    const sequence = this.documentEvaluationSequence;
+    const view = this.documentSignalView;
+    const state = view ? beginDocumentAbort(view, sequence) : undefined;
+    setAbortContext({
+      signal: active.controller.signal,
+      ...(view && state !== undefined ? { documentSignalView: view, documentSignalState: state } : {}),
+      onSharedAbort: (reason) => {
+        active.controller.abort(reason);
+      },
+    });
+    active.progress(phase, sequence, state === undefined ? undefined : documentAbortGeneration(state));
+    try {
+      return await hook();
+    } finally {
+      clearAbortContext();
+      if (view) {
+        endDocumentAbort(view, sequence);
+      }
+    }
+  }
+
+  /** Allocate an identity before entering the terminal evaluate hook. */
+  protected createEvaluationSlot(owner: OperationOwner, identityKey: string): EvaluationSlot {
+    return {
+      id: ++this.nextEvaluationId,
+      identityKey,
+      owner,
+      hasHandle: false,
+      handle: undefined,
+    };
+  }
+
+  /** A deferred snapshot may read the payload only while its evaluation is retained. */
+  protected isEvaluationSlotLive(slot: EvaluationSlot): boolean {
+    return this.ownedNativeHandles.get(slot.id)?.slot === slot;
+  }
+
+  /**
+   * Whether the owner's kernel can snapshot its native handle, so a build entry can be stored.
+   * The base worker has no kernel registry and keeps the build action.
+   */
+  protected kernelStoresNativeHandleForOwner(_owner: OperationOwner): boolean {
+    return true;
+  }
+
+  /**
+   * Whether the owner's kernel implements the optional `meshGeometry` display phase.
+   * Base workers have no kernel registry, so the display path must come from
+   * inline `createGeometry` geometry.
+   */
+  protected kernelHasMeshPhaseForOwner(_owner: OperationOwner): boolean {
+    return false;
+  }
+
+  /** Select the current client's default view from one evaluation's serializable offers. */
+  protected abstract selectDefaultViewForOwner(
+    owner: OperationOwner,
+    offers: KernelOffers,
+  ): { view: string; mimeType: MediaType; instance?: string } | undefined;
+
+  /** Render a selected view before current-client artifact conversion. */
+  // oxlint-disable-next-line max-params -- Owner-bound hook also carries the evaluation slot.
+  protected abstract onRenderForOwner(
+    owner: OperationOwner,
+    input: RenderRequest & { nativeHandle: unknown },
+    runtime: KernelRuntime,
+    slot: EvaluationSlot,
+  ): Promise<RenderResult>;
+
+  // oxlint-disable-next-line max-params -- Owner-bound hook also carries the evaluation slot.
+  protected async onExportGeometryForOwner(
+    _owner: OperationOwner,
+    input: ExportGeometryInput,
+    runtime: KernelRuntime,
+    _slot?: EvaluationSlot,
+  ): Promise<ExportGeometryResult> {
+    return this.onExportGeometry(input, runtime);
+  }
+
+  /**
+   * Extra detail for an owner whose entry matched no kernel. Base workers have no kernel
+   * registry; the runtime worker names the entry extension and the registered ones.
+   *
+   * @param _owner - Owner whose binding carries no kernel.
+   * @returns A diagnostic sentence, or undefined when the worker cannot describe the miss.
+   */
+  protected describeUnselectedKernel(_owner: OperationOwner): string | undefined {
+    return undefined;
+  }
+
+  /**
+   * Committed WebAssembly heap of the kernel bound to `owner`, read when a rendering is delivered (D-RT-03).
+   *
+   * @param _owner - The rendering's operation owner.
+   * @returns The heap in bytes, or `undefined` when the kernel reports none.
+   */
+  protected kernelHeapBytesForOwner(_owner: OperationOwner): number | undefined {
+    return undefined;
+  }
+
+  protected async isNativeHandleValidForOwner(
+    _owner: OperationOwner,
+    _nativeHandle: unknown,
+    _runtime: KernelRuntime,
+  ): Promise<boolean | undefined> {
+    return undefined;
+  }
+
+  /**
+   * Evaluate options under which a fresh build would give exactly this handle's geometry, when the kernel built other
+   * than `options` asked for.
+   *
+   * @param _owner - Owner whose kernel built the handle.
+   * @param _nativeHandle - The handle.
+   * @param _options - The evaluate options the kernel built it with.
+   * @param _runtime - Runtime services for the kernel hook.
+   * @returns The options, or `undefined` when the handle reflects `options` or the kernel cannot tell.
+   */
+  // oxlint-disable-next-line max-params -- Owner-bound hook carries the handle, its options and the runtime.
+  protected effectiveNativeOptionsForOwner(
+    _owner: OperationOwner,
+    _nativeHandle: unknown,
+    _options: Record<string, unknown>,
+    _runtime: KernelRuntime,
+  ): Readonly<Record<string, unknown>> | undefined {
+    return undefined;
+  }
+
+  // oxlint-disable-next-line max-params -- Owner-bound hook also carries the evaluation slot.
+  protected async deserializeNativeHandleForOwner(
+    _owner: OperationOwner,
+    _serializedNativeHandle: unknown,
+    _runtime: KernelRuntime,
+    _slot: EvaluationSlot,
+  ): Promise<unknown | undefined> {
+    return undefined;
+  }
+
+  /** Release a dropped native handle through the kernel that created it. */
+  // oxlint-disable-next-line max-params -- Owner-bound hook also carries the evaluation slot.
+  protected disposeNativeHandleForOwner(
+    _owner: OperationOwner,
+    _nativeHandle: unknown,
+    _runtime: KernelRuntime,
+    _slot?: EvaluationSlot,
+  ): void {
+    // Workers without kernel-managed native memory have nothing to release.
+  }
+
+  /**
+   * Verify the declared implementation assets before loading a plugin.
+   *
+   * @param pluginId - Stable plugin identifier used in diagnostics.
+   * @param assets - Declared assets and their expected SHA-256 digests.
+   */
+  protected async verifyImplementationAssets(
+    pluginId: string,
+    assets: readonly RuntimeImplementationAsset[],
+  ): Promise<void> {
+    validateImplementationAssetDeclarations(pluginId, assets);
+
+    for (const asset of assets) {
+      const cached = this.assetHashCache.get(asset.url);
+      if (cached === asset.sha256) {
+        continue;
+      }
+      // oxlint-disable-next-line no-await-in-loop -- verification errors must identify the exact declared asset
+      await fetchVerifiedImplementationAsset(pluginId, asset);
+      this.assetHashCache.set(asset.url, asset.sha256);
+    }
+  }
+
+  /**
+   * Create the loader a transcoder uses to fetch its declared assets on first use.
+   *
+   * @param pluginId - Stable plugin identifier used in diagnostics.
+   * @param assets - Declared assets and their expected SHA-256 digests.
+   * @returns A loader that fetches, verifies and keeps each asset's bytes for the worker's life.
+   */
+  private createImplementationAssetLoader(
+    pluginId: string,
+    assets: readonly RuntimeImplementationAsset[],
+  ): ImplementationAssetLoader {
+    const byId = new Map(assets.map((asset) => [asset.id, asset]));
+    return {
+      load: async (id) => {
+        const asset = byId.get(id);
+        if (asset === undefined) {
+          throw new Error(`Unknown implementation asset ${pluginId}:${id}`);
+        }
+        const key = `${asset.url}\0${asset.sha256}`;
+        const pending = this.implementationAssetBytes.get(key);
+        if (pending !== undefined) {
+          return pending;
+        }
+        const load = fetchVerifiedImplementationAsset(pluginId, asset);
+        this.implementationAssetBytes.set(key, load);
+        try {
+          const bytes = await load;
+          this.assetHashCache.set(asset.url, asset.sha256);
+          return bytes;
+        } catch (error) {
+          if (this.implementationAssetBytes.get(key) === load) {
+            this.implementationAssetBytes.delete(key);
+          }
+          throw error;
+        }
+      },
+    };
+  }
+
   /**
    * Extract parameters from a file.
    *
@@ -1669,7 +5006,10 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @param runtime - Runtime services (filesystem, logger)
    * @returns The extracted parameters.
    */
-  protected abstract onGetParameters(input: GetParametersInput, runtime: KernelRuntime): Promise<GetParametersResult>;
+  protected abstract onGetParameters(
+    input: GetParametersInput,
+    runtime: KernelRuntime,
+  ): Promise<GetParameterDeclarationsResult>;
 
   /**
    * Compute geometry from a file.
@@ -1678,10 +5018,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @param runtime - Runtime services (filesystem, logger)
    * @returns The computed geometry.
    */
-  protected abstract onCreateGeometry(
-    input: CreateGeometryInput,
-    runtime: KernelRuntime,
-  ): Promise<CreateGeometryResult>;
+  protected abstract onCreateGeometry(input: NativeBuildInput, runtime: KernelRuntime): Promise<CreateGeometryResult>;
 
   /**
    * Export geometry using the framework-stored native handle from the last createGeometry call.
@@ -1697,12 +5034,12 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   ): Promise<ExportGeometryResult>;
 
   /**
-   * Discover all file dependencies for the given entry file.
+   * Discover all file dependencies for the given entry path.
    * Used for cache key computation to include all imported/included files.
    *
    * @param input - Input containing file path and project root
    * @param runtime - Runtime services (filesystem, logger)
-   * @returns Array of absolute file paths that are dependencies (including the entry file)
+   * @returns Root-relative dependencies, including the entry path.
    */
   protected abstract onGetDependencies(
     input: GetDependenciesInput,
@@ -1718,204 +5055,1495 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   protected abstract getActiveKernelId(): string | undefined;
 
   /**
-   * Get the absolute path of the active file.
-   * Combines project root with activeFilePath.
+   * Get the version of the currently active kernel. Used in dependency hashes so
+   * durable geometry/export cache entries are invalidated when kernel behavior changes.
    *
-   * @returns the fully resolved absolute file path
+   * @returns The active kernel version, or undefined if no kernel is selected
    */
-  private get activeFileAbsolutePath(): string {
-    return KernelWorker.resolveFromRoot(this.activeFilePath, this.getProjectRootPath());
-  }
+  protected abstract getActiveKernelVersion(): string | undefined;
 
   /**
-   * Emit a worker state transition to the main thread via the single
-   * ordered `postMessage` channel. Deduplicates repeated emissions so
-   * consumers observe one event per logical transition.
-   *
-   * @param state - The worker state to emit.
+   * Display-path mesh phase: produce the viewer artifact from the native handle
+   * when `createGeometry` deferred it. Runs the `wrapRender` middleware
+   * pipeline (display-mesh cache) around the kernel boundary; the native handle
+   * is materialized lazily inside the innermost handler, so a mesh-cache hit
+   * costs no kernel work and no handle deserialization.
    */
-  private pushState(state: WorkerState): void {
-    if (state === this.lastPushedState) {
-      return;
-    }
-    this.lastPushedState = state;
-    this.onStateChanged?.(state);
-  }
+  private async runMeshPhase(options: {
+    /** The compute operation its middleware evaluate under, when the caller follows their outcome. */
+    computeOperationId?: string;
+    owner: OperationOwner;
+    identity: RenderIdentity;
+    selection: { view: string; mimeType: MediaType; instance?: string } | undefined;
+    renderOptions: Record<string, unknown>;
+    requestedContent?: RuntimeContentInput;
+    resolvedMiddleware: ResolvedMiddleware[];
+    createResult: Extract<CreateGeometryResult, { success: true }>;
+    renderArtifact: MaterializedRender;
+  }): Promise<RenderResult> {
+    const {
+      computeOperationId,
+      owner,
+      identity,
+      selection,
+      renderOptions,
+      requestedContent,
+      resolvedMiddleware,
+      createResult,
+      renderArtifact,
+    } = options;
 
-  /**
-   * Placeholder for percentage-based progress emissions. Progress events
-   * fan out via `postMessage` driven by {@link KernelWorker.onProgressUpdate};
-   * this hook keeps the percentage-based path structurally co-located with
-   * the state-transition path for future use.
-   *
-   * @param _percent - The percentage of progress to emit.
-   */
-  private pushProgress(_percent: number): void {
-    // Intentionally empty — see JSDoc.
-  }
-
-  /**
-   * Check if the current render has been aborted by a newer generation.
-   *
-   * @param generation - The render generation to check.
-   * @returns True if aborted, false otherwise.
-   */
-  private isAborted(generation: number): boolean {
-    if (this.signalView) {
-      return Atomics.load(this.signalView, signalSlot.abortGeneration) !== generation;
-    }
-    return generation !== this.renderGeneration;
-  }
-
-  /**
-   * Schedule a render after a debounce delay. Clears any existing timer.
-   *
-   * @param renderDelay - Debounce delay before render fires. Milliseconds.
-   */
-  private scheduleRender(renderDelay: number): void {
-    clearTimeout(this.paramDebounceTimer);
-    this.pushState('buffering');
-    this.paramDebounceTimer = setTimeout(() => {
-      this.paramDebounceTimer = undefined;
-      void this.executeRender();
-    }, renderDelay);
-  }
-
-  /**
-   * Execute an autonomous render cycle. Handles the full pipeline:
-   * increment generation, bundle, execute, compute geometry, push results.
-   * Checks abort at each async boundary.
-   */
-  private async executeRender(): Promise<void> {
-    if (!this.currentFile) {
-      return;
+    if (!this.kernelHasMeshPhaseForOwner(owner) || !selection) {
+      return createKernelError([
+        {
+          message:
+            'Kernel has no display path: createGeometry returned no geometry and the kernel does not implement meshGeometry.',
+          code: 'KERNEL_CAPABILITY_MISSING',
+          type: 'kernel',
+          severity: 'error',
+        },
+      ]);
     }
 
-    let generation: number;
-    if (this.signalView) {
-      generation = Atomics.add(this.signalView, signalSlot.abortGeneration, 1) + 1;
-      this.renderGeneration = generation;
-      Atomics.store(this.signalView, signalSlot.abortReason, abortReasonEnum.none);
-      setAbortContext(this.signalView, generation);
-    } else {
-      generation = ++this.renderGeneration;
+    const selectedContentResult = this.selectRenderContent(owner, selection, {
+      resolvedMiddleware,
+      requested: requestedContent,
+    });
+    if (!selectedContentResult.success) {
+      return createKernelError(selectedContentResult.issues);
     }
+    const selectedContent = selectedContentResult.content;
 
-    this.pushState('rendering');
-    this.pushProgress(0);
-    this._renderInProgress = true;
-
+    const meshSpan = this.tracer.startSpan('kernel.mesh', {
+      phase: 'computingGeometry',
+    });
+    let meshSpanAttributes: ReturnType<typeof tessellationSpanAttributes> = {};
     try {
-      this.tracer.reset();
-      const renderSpan = this.tracer.startSpan('kernel.render', {
-        file: this.currentFile.filename,
-      });
-      this.onProgress = (phase: RenderPhase) => {
-        this.onProgressUpdate?.(phase, generation);
-      };
-      this.renderDependencyCache = undefined;
-      this.setBasePath(this.currentFile);
-
-      if (this.isAborted(generation)) {
-        return;
-      }
-
-      const renderWork = async (): Promise<HashedGeometryResult> => {
-        const parametersResult = await this.getParameters(this.currentFile!);
-        if (this.isAborted(generation)) {
-          throw new RenderAbortedError();
-        }
-        this.onParametersResolved?.(parametersResult, generation);
-
-        let mergedParameters = this.currentParameters;
-        if (parametersResult.success) {
-          const extracted = parametersResult.data as {
-            defaultParameters?: Record<string, unknown>;
-          };
-          if (extracted.defaultParameters) {
-            mergedParameters = deepmerge(extracted.defaultParameters, this.currentParameters);
-          }
-        }
-
-        await cooperativeYield();
-        if (this.isAborted(generation)) {
-          throw new RenderAbortedError();
-        }
-
-        this.pushProgress(30);
-
-        const geometryResult = await this.createGeometry({
-          file: this.currentFile!,
-          parameters: mergedParameters,
-          options: this.currentRenderOptions,
+      const runtime = this.createRuntime();
+      const computeMesh = async (handlerInput: RenderRequest): Promise<RenderResult> => {
+        const handle = await this.materializeNativeHandleForOwner({
+          owner,
+          runtime,
+          renderArtifact,
         });
-
-        if (this.isAborted(generation)) {
-          throw new RenderAbortedError();
+        if (!handle.success) {
+          return handle.result.success
+            ? { success: false, issues: [] }
+            : { success: false, issues: handle.result.issues };
         }
-
-        return geometryResult;
+        return this.withDocumentNativeAbort('render', async () =>
+          this.onRenderForOwner(
+            owner,
+            this.withProviderRuntimeContent(
+              { ...handlerInput, nativeHandle: handle.handle },
+              selectedContent,
+              this.getNativeRenderContentKeys(owner, selection.view),
+            ),
+            runtime,
+            renderArtifact.evaluationSlot ??
+              this.createEvaluationSlot(owner, createNativeHandleIdentityKey(renderArtifact.identity)),
+          ),
+        );
       };
 
-      const result = await renderWork();
-      this.pushProgress(100);
-      this.onProgress = undefined;
-      renderSpan.end();
+      const activeMiddleware = resolvedMiddleware.filter(
+        (resolved) =>
+          resolved.enabled &&
+          resolved.middleware.wrapRender &&
+          this.middlewareRunsForRender(resolved, owner, selection, selectedContent),
+      );
 
-      this.flushTelemetry();
-      this.onGeometryComputed?.(result, generation);
-      this.pushState(this.paramDebounceTimer ? 'buffering' : 'idle');
-    } catch (error) {
-      this.onProgress = undefined;
-      if (isRenderAbortedError(error) || this.isAborted(generation)) {
-        const reason = this.signalView ? Atomics.load(this.signalView, signalSlot.abortReason) : abortReasonEnum.none;
+      const { tracer } = this;
+      let chain: (input: RenderRequest) => Promise<RenderResult> = named(
+        'kernelHandler',
+        async (handlerInput: RenderRequest) => {
+          const computeSpan = tracer.startSpan('kernel.mesh-compute');
+          const meshResult = await computeMesh(handlerInput);
+          computeSpan.end();
+          return meshResult;
+        },
+      );
 
-        if (reason === abortReasonEnum.timeout) {
-          const timeoutMessage =
-            'Render timed out. Increase the timeout in viewer settings or simplify the model geometry.';
-          this.onError?.(
-            [{ message: timeoutMessage, code: 'RENDER_TIMEOUT', type: 'runtime', severity: 'error' }],
-            generation,
+      if (activeMiddleware.length > 0) {
+        const runtimes = new Map<string, KernelMiddlewareRuntime>();
+        for (const { middleware, options: middlewareOptions, id } of activeMiddleware) {
+          runtimes.set(
+            id,
+            createMiddlewareRuntime({
+              signal: this.operationSignal ?? neverAbortedSignal,
+              tracer: this.tracer,
+              onLog: this.onLog,
+              middlewareName: middleware.name,
+              filesystem: this.filesystem,
+              compute: this.createComputeRuntime(this.operationSignal ?? neverAbortedSignal, computeOperationId),
+              dependencies: identity.dependencies,
+              dependencyHash: identity.dependencyHash,
+              stateSchema: middleware.stateSchema,
+              options: middlewareOptions,
+              logger: this.getMiddlewareLogger(id, middleware.name),
+            }),
           );
-          this.pushState('error');
-        } else {
-          this.pushState(this.paramDebounceTimer ? 'buffering' : 'idle');
         }
-        return;
+
+        for (let index = activeMiddleware.length - 1; index >= 0; index--) {
+          const { middleware, id } = activeMiddleware[index]!;
+          const inner = chain;
+          const middlewareRuntime = runtimes.get(id)!;
+          const middlewareName = middleware.name;
+          const wrapHook = middleware.wrapRender!;
+
+          chain = named(`middleware(${middlewareName})`, async (handlerInput: RenderRequest) => {
+            const span = tracer.startSpan(`middleware.wrap(${middlewareName})`, {
+              middleware: middlewareName,
+              phase: 'render',
+            });
+            try {
+              const chainResult = await wrapHook(
+                this.withProviderRuntimeContent(
+                  handlerInput,
+                  selectedContent,
+                  middleware.content?.views?.[selection.mimeType] ?? [],
+                ),
+                inner,
+                middlewareRuntime,
+              );
+              span.end();
+              return chainResult;
+            } catch (error) {
+              span.end();
+              // A superseded or closed operation is aborted, not failed: its caller drops it.
+              if (middlewareRuntime.signal.aborted) {
+                throw error;
+              }
+              const errorMessage = error instanceof Error ? error.message : String(error);
+              this.logger.error('Middleware failed', {
+                data: { name: middlewareName, error: errorMessage },
+              });
+              return createKernelError([
+                {
+                  message: `Middleware error in ${middlewareName}: ${errorMessage}`,
+                  code: 'MIDDLEWARE_FAILED',
+                  type: 'kernel',
+                  severity: 'error',
+                },
+              ]);
+            }
+          });
+        }
       }
 
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.onError?.([{ message: errorMessage, code: 'RUNTIME', type: 'runtime', severity: 'error' }], generation);
-      this.pushState('error');
-    } finally {
-      clearAbortContext();
-      if (generation === this.renderGeneration) {
-        this._renderInProgress = false;
+      // The current client supplies one bag for evaluate and its default view.
+      const evaluateKeys = owner.binding?.kernelId
+        ? Object.keys(this.kernelCreateOptionsZodSchemaMap.get(owner.binding.kernelId)?.shape ?? {})
+        : [];
+      const selectedOptions = Object.fromEntries(
+        Object.entries(renderOptions).filter(([key]) => !evaluateKeys.includes(key)),
+      );
+      const meshResult = await chain({
+        ...selection,
+        options: selectedOptions,
+      });
+      if (!meshResult.success) {
+        return meshResult;
       }
-      this._updateWatchSetFromCaches();
+      meshSpanAttributes = tessellationSpanAttributes(meshResult.data.tessellation);
+      const observed = this.activeOperation?.observed;
+      const triangles = meshResult.data.tessellation?.triangles;
+      if (observed && typeof triangles === 'number' && Number.isFinite(triangles) && triangles >= 0) {
+        observed.triangles = triangles;
+      }
+
+      // Compose the display result: mesh-phase artifact plus create-phase warnings.
+      // The durable handle snapshot stays in `serializedNativeHandleSlot`, which the
+      // export path reads; a display result never carries it.
+      return {
+        ...meshResult,
+        issues: [...createResult.issues, ...meshResult.issues],
+      };
+    } finally {
+      meshSpan.end(meshSpanAttributes);
     }
+  }
+
+  private async createOperationOwner(file: RuntimeFileLocator, kind: OperationOwner['kind']): Promise<OperationOwner> {
+    const canonicalFile = this.canonicalGeometryFile(file);
+    this.setActiveFile(canonicalFile);
+    const entryPath = assertRootedPath(joinRelativePath(canonicalFile.path, canonicalFile.filename));
+    const binding = await this.resolveKernelBinding({ entryPath }, this.createRuntime());
+    return {
+      kind,
+      file: canonicalFile,
+      binding,
+    };
+  }
+
+  private async writeFilesAndInvalidate(
+    stage: Record<string, Uint8Array<ArrayBuffer>>,
+    sourceDocumentId?: string,
+  ): Promise<void> {
+    const entries = Object.entries(stage).map(([path, bytes]) => [assertRootedPath(path), bytes] as const);
+    if (new Set(entries.map(([path]) => path)).size !== entries.length) {
+      throw new TypeError('Staged runtime paths must be unique after canonicalization');
+    }
+    const publicationSlot = Promise.withResolvers<void>();
+    const publication = {
+      paths: new Set(entries.map(([path]) => path)),
+      promise: publicationSlot.promise,
+      resolve: publicationSlot.resolve,
+    };
+    this.stagedWritePublication = publication;
+    const changedPaths: string[] = [];
+    const revisions = new Map<string, ObservedFileRevision>();
+    const createdDirectories = new Set<string>();
+    try {
+      for (const [rootedPath, bytes] of entries) {
+        /* A host usually stages bytes it has just persisted itself. Those are an observation:
+         * writing them again would only repeat the write and its watch broadcast. */
+        // oxlint-disable-next-line no-await-in-loop -- staging must complete before dependency resolution
+        if (!(await this.holdsBytes(rootedPath, bytes))) {
+          const separator = rootedPath.lastIndexOf('/');
+          const directory = separator === -1 ? '' : rootedPath.slice(0, separator);
+          if (directory && !createdDirectories.has(directory)) {
+            // oxlint-disable-next-line no-await-in-loop -- staging must preserve filesystem order for deterministic tests
+            await this.filesystem.mkdir(directory, { recursive: true });
+            createdDirectories.add(directory);
+          }
+          // oxlint-disable-next-line no-await-in-loop -- staging must complete before dependency resolution
+          await this.filesystem.writeFile(rootedPath, bytes);
+        }
+        changedPaths.push(rootedPath);
+        if (this.fileHashCache.has(rootedPath) || this.watchedPaths.has(rootedPath)) {
+          revisions.set(rootedPath, {
+            // eslint-disable-next-line no-await-in-loop -- staging order and cache publication stay deterministic
+            hash: await this.hashContent(bytes),
+            content: bytes,
+          });
+        }
+      }
+      if (changedPaths.length > 0) {
+        this._applyObservedRevisions(changedPaths, revisions);
+        this.scheduleWatchedDocuments(changedPaths, sourceDocumentId);
+      }
+    } finally {
+      publication.resolve();
+      if (this.stagedWritePublication === publication) {
+        this.stagedWritePublication = undefined;
+      }
+    }
+  }
+
+  /**
+   * Whether the filesystem already holds exactly these bytes at a path.
+   *
+   * @param path - Rooted path to compare.
+   * @param bytes - Bytes about to be staged there.
+   * @returns False when the path is absent, unreadable or holds other bytes.
+   */
+  private async holdsBytes(path: string, bytes: Uint8Array<ArrayBuffer>): Promise<boolean> {
+    let current: Uint8Array<ArrayBuffer>;
+    try {
+      current = await this.filesystem.readFile(path);
+    } catch {
+      // Unreadable is not evidence of the bytes; the write reports whatever is wrong.
+      return false;
+    }
+    return current.byteLength === bytes.byteLength && current.every((value, index) => value === bytes[index]);
+  }
+
+  private createExportRequestPlan(
+    owner: OperationOwner,
+    request: {
+      readonly format: string;
+      readonly options?: Record<string, unknown>;
+      readonly content?: RuntimeContentInput;
+      readonly exportId?: string;
+    },
+  ): OwnerBoundExportPlan {
+    const { format, options, content, exportId } = request;
+    const rawOptions = options ?? {};
+    const ownerKernelId = owner.binding?.kernelId;
+    const zodSchemas = ownerKernelId ? this.kernelExportZodSchemasMap.get(ownerKernelId) : undefined;
+    const selectedDeclaration = exportId ? this.getDocumentExportDeclaration(owner, exportId) : undefined;
+    const directDeclaration = selectedDeclaration?.extension === format ? selectedDeclaration : undefined;
+    const formatZodSchema = directDeclaration ? directDeclaration.schema : zodSchemas?.[format];
+    if (!directDeclaration && ownerKernelId && this.kernelAmbiguousExportFormatsMap.get(ownerKernelId)?.has(format)) {
+      return {
+        success: false,
+        result: createKernelError([
+          {
+            message: `Kernel ${ownerKernelId} has multiple exports for ${format}; select an export ID.`,
+            code: 'EXPORT_AMBIGUOUS',
+            type: 'kernel',
+            severity: 'error',
+          },
+        ]),
+      };
+    }
+
+    // A named export whose extension is not the requested format was resolved through a route, so
+    // the request is a transcode even though some other export of this kernel declares the format.
+    // A kernel that offers the author's own `.stl` files alongside a meshed `glb` declares `stl`
+    // natively, and a build that wrote no authored file must still reach `glb` → `stl`.
+    const routedSelection = selectedDeclaration !== undefined && selectedDeclaration.extension !== format;
+    if (
+      directDeclaration !== undefined ||
+      (!routedSelection && zodSchemas !== undefined && Object.hasOwn(zodSchemas, format))
+    ) {
+      const admitted = admitKernelOptions(
+        formatZodSchema,
+        rawOptions,
+        `Kernel ${ownerKernelId} export ${format}`,
+        'EXPORT_OPTIONS_INVALID',
+      );
+      if (!admitted.success) {
+        return { success: false, result: createKernelError(admitted.issues) };
+      }
+      const contentResult = this.validateRuntimeContent(
+        'export',
+        this.getExportContentKeys(owner, format, exportId),
+        content,
+      );
+      if (!contentResult.success) {
+        return {
+          success: false,
+          result: createKernelError(contentResult.issues),
+        };
+      }
+      const parsedOptions: unknown = admitted.options;
+      if (typeof parsedOptions !== 'object' || parsedOptions === null || Array.isArray(parsedOptions)) {
+        return {
+          success: false,
+          result: createKernelError([
+            {
+              message: `Export options for ${ownerKernelId} → ${format} must resolve to an object.`,
+              code: 'RUNTIME',
+              type: 'runtime',
+              severity: 'error',
+            },
+          ]),
+        };
+      }
+      const validatedOptions: Record<string, unknown> = { ...parsedOptions };
+      const contentContributors = this.describeContentContributors(owner, format, contentResult.content, exportId);
+      return {
+        success: true,
+        owner,
+        input: {
+          format,
+          options: validatedOptions,
+          content: contentResult.content,
+        },
+        route: {
+          kind: 'direct',
+          kernelId: ownerKernelId,
+          targetFormat: format,
+          ...(exportId ? { exportId } : {}),
+          options: validatedOptions,
+          content: contentResult.content,
+        },
+        dependency: {
+          type: 'export',
+          format,
+          options: validatedOptions,
+          content: contentResult.content as Record<string, boolean>,
+          route: {
+            kind: 'direct',
+            kernelId: ownerKernelId,
+            targetFormat: format,
+            ...(exportId ? { exportId } : {}),
+            contentContributors,
+          },
+        },
+      };
+    }
+
+    const transcoderRoutes = this._capabilitiesManifest.routes.filter(
+      (route) => route.targetFormat === format && route.transcoderId && route.kernelId === ownerKernelId,
+    );
+    const requestedContentKeys = Object.keys(content ?? {});
+    const transcoderRoute = transcoderRoutes.find((route) => {
+      const supported = route.content?.schema.properties ?? {};
+      return requestedContentKeys.every((key) => key in supported);
+    });
+    if (!transcoderRoute) {
+      const availableRoute = transcoderRoutes[0];
+      if (availableRoute) {
+        const contentResult = this.validateRuntimeContent(
+          'export',
+          Object.keys(availableRoute.content?.schema.properties ?? {}) as RuntimeContentKey[],
+          content,
+        );
+        if (!contentResult.success) {
+          return {
+            success: false,
+            result: createKernelError(contentResult.issues),
+          };
+        }
+      }
+      const declared = zodSchemas ? Object.keys(zodSchemas).join(', ') : '';
+      if (Object.keys(rawOptions).length > 0 && zodSchemas) {
+        return {
+          success: false,
+          result: {
+            success: false,
+            issues: [
+              {
+                message: `No export schema for format "${format}" on kernel "${ownerKernelId}". Declared native formats: ${declared || 'none'}.`,
+                code: 'KERNEL_CAPABILITY_MISSING',
+                type: 'runtime',
+                severity: 'error',
+              },
+            ],
+          },
+        };
+      }
+
+      return {
+        success: false,
+        result: {
+          success: false,
+          issues: [
+            {
+              message: ownerKernelId
+                ? `No export route found for format "${format}" from kernel "${ownerKernelId}". Native formats: ${declared || 'none'}. Register a transcoder that supports this conversion.`
+                : `No export route found for format "${format}" because the render artifact has no selected kernel owner. ${this.describeUnselectedKernel(owner) ?? ''}`.trimEnd(),
+              code: ownerKernelId ? 'TRANSCODER_CAPABILITY_MISSING' : 'KERNEL_CAPABILITY_MISSING',
+              type: 'runtime',
+              severity: 'error',
+            },
+          ],
+        },
+      };
+    }
+
+    const allowedOptionKeys = new Set(Object.keys(collectJsonSchemaProperties(transcoderRoute.exportOptions.schema)));
+    const unsupportedOptionKey = Object.keys(rawOptions).find((key) => !allowedOptionKeys.has(key));
+    if (unsupportedOptionKey) {
+      return {
+        success: false,
+        result: createKernelError([
+          {
+            message: `Export option "${unsupportedOptionKey}" is not supported by route ${transcoderRoute.sourceFormat} → ${format}.`,
+            code: 'TRANSCODER_OPTIONS_INVALID',
+            type: 'runtime',
+            severity: 'error',
+          },
+        ]),
+      };
+    }
+
+    let sourceOptions: Record<string, unknown> = {};
+    let edgeOptions: Record<string, unknown> = {};
+    const sourceZodSchema = selectedDeclaration
+      ? selectedDeclaration.schema
+      : zodSchemas?.[transcoderRoute.sourceFormat];
+    const transcoder = this.loadedTranscoders.get(transcoderRoute.transcoderId!);
+    this.noteObservedPlugin(transcoderRoute.transcoderId!);
+    const matchingEdge = transcoder?.edges.find(
+      (edge) => edge.from === transcoderRoute.sourceFormat && edge.to === format,
+    );
+    const sourceRoute = this._capabilitiesManifest.routes.find(
+      (route) =>
+        route.kernelId === ownerKernelId &&
+        route.targetFormat === transcoderRoute.sourceFormat &&
+        route.transcoderId === undefined,
+    );
+    const pinnedSourceKeys = Object.keys(matchingEdge?.sourceOptions ?? {});
+    const selectedSourceSchema = selectedDeclaration?.schema
+      ? this.deriveJsonSchema(selectedDeclaration.schema, `export:${ownerKernelId}:${exportId}`).schema
+      : undefined;
+    const sourceOptionKeys = Object.keys(
+      selectedDeclaration
+        ? (selectedSourceSchema?.properties ?? {})
+        : (sourceRoute?.exportOptions.schema.properties ?? {}),
+    ).filter((key) => !pinnedSourceKeys.includes(key));
+    const edgeOptionKeys = [...allowedOptionKeys].filter((key) => !sourceOptionKeys.includes(key));
+    if (sourceZodSchema) {
+      const admittedSource = admitKernelOptions(
+        sourceZodSchema,
+        {
+          ...pickRecordProperties(rawOptions, sourceOptionKeys),
+          ...matchingEdge?.sourceOptions,
+        },
+        `Kernel ${ownerKernelId} source export ${transcoderRoute.sourceFormat}`,
+        'EXPORT_OPTIONS_INVALID',
+      );
+      if (!admittedSource.success) {
+        return {
+          success: false,
+          result: createKernelError(admittedSource.issues),
+        };
+      }
+      sourceOptions = admittedSource.options;
+    }
+
+    const sourceContentKeys = this.getExportContentKeys(owner, transcoderRoute.sourceFormat, exportId);
+    const edgeContentKeys = new Set(matchingEdge?.content ?? []);
+    const routeContentKeys = sourceContentKeys.filter((key) => edgeContentKeys.has(key));
+    const contentResult = this.validateRuntimeContent('export', routeContentKeys, content);
+    if (!contentResult.success) {
+      return {
+        success: false,
+        result: createKernelError(contentResult.issues),
+      };
+    }
+    const admittedEdge = admitKernelOptions(
+      matchingEdge?.optionsSchema,
+      pickRecordProperties(rawOptions, edgeOptionKeys),
+      `Transcoder edge ${transcoderRoute.sourceFormat} → ${format}`,
+      'TRANSCODER_OPTIONS_INVALID',
+    );
+    if (!admittedEdge.success) {
+      return { success: false, result: createKernelError(admittedEdge.issues) };
+    }
+    edgeOptions = admittedEdge.options;
+    sourceOptions = { ...sourceOptions, ...matchingEdge?.sourceOptions };
+    const contentContributors = this.describeContentContributors(
+      owner,
+      transcoderRoute.sourceFormat,
+      contentResult.content,
+      exportId,
+    );
+
+    return {
+      success: true,
+      owner,
+      input: { format, options: rawOptions, content: contentResult.content },
+      route: {
+        kind: 'transcoded',
+        kernelId: transcoderRoute.kernelId,
+        sourceFormat: transcoderRoute.sourceFormat,
+        targetFormat: transcoderRoute.targetFormat,
+        ...(exportId ? { exportId } : {}),
+        transcoderId: transcoderRoute.transcoderId!,
+        sourceOptions,
+        edgeOptions,
+        content: contentResult.content,
+      },
+      dependency: {
+        type: 'export',
+        format,
+        options: rawOptions,
+        content: contentResult.content as Record<string, boolean>,
+        route: {
+          kind: 'transcoded',
+          kernelId: transcoderRoute.kernelId,
+          sourceFormat: transcoderRoute.sourceFormat,
+          targetFormat: transcoderRoute.targetFormat,
+          ...(exportId ? { exportId } : {}),
+          transcoderId: transcoderRoute.transcoderId,
+          transcoderVersion: transcoder?.definition.version,
+          transcoderOptions: transcoder?.options,
+          transcoderAssets: transcoder?.implementationAssets.map(({ id, sha256 }) => ({ id, sha256 })),
+          contentContributors,
+          sourceOptions,
+          edgeOptions,
+        },
+      },
+    };
+  }
+
+  private async materializeNativeHandleForOwner(options: {
+    owner: OperationOwner;
+    runtime: KernelRuntime;
+    renderArtifact: MaterializedRender;
+    pinnedSourceRevision?: SourceRevision;
+  }): Promise<{ success: true; handle: unknown } | { success: false; result: ExportGeometryResult }> {
+    const { owner, runtime, renderArtifact } = options;
+    const retained = await this.retainedNativeHandleForOwner({ owner, runtime, renderArtifact });
+    if (retained.success) {
+      return retained;
+    }
+
+    if (options.pinnedSourceRevision && !(await this.pinnedSourceStillMatches(options.pinnedSourceRevision))) {
+      return { success: false, result: this.sourceSnapshotChangedResult() };
+    }
+    const reheatedSlot = await this.reheatNativeHandleForOwner(owner, renderArtifact, runtime);
+    if (this.isLiveNativeHandleSlotUsableForOwner(reheatedSlot, owner)) {
+      return { success: true, handle: reheatedSlot.handle };
+    }
+
+    return {
+      success: false,
+      result: createKernelError([
+        {
+          message: 'Export could not materialize the kernel-native geometry handle for the requested render identity.',
+          code: 'HANDLE_MISSING',
+          type: 'runtime',
+          severity: 'error',
+        },
+      ]),
+    };
+  }
+
+  /** The artifact's handle from its live or serialized slot, never built again. */
+  private async retainedNativeHandleForOwner(options: {
+    owner: OperationOwner;
+    runtime: KernelRuntime;
+    renderArtifact: MaterializedRender;
+  }): Promise<{ success: true; handle: unknown } | { success: false }> {
+    const { owner, runtime, renderArtifact } = options;
+    const { identity } = renderArtifact;
+
+    const liveSlot = this.getNativeHandleSlotForIdentity(identity, renderArtifact);
+    if (this.isLiveNativeHandleSlotUsableForOwner(liveSlot, owner)) {
+      const validity = await this.validateNativeHandleSlot({
+        owner,
+        renderArtifact,
+        slot: liveSlot,
+        runtime,
+      });
+      if (validity) {
+        return { success: true, handle: liveSlot.handle };
+      }
+    }
+
+    const serializedSlot = this.getSerializedNativeHandleSlotForIdentity(identity, renderArtifact);
+    if (serializedSlot && this.serializedSlotMatchesOwner(serializedSlot, owner)) {
+      const restored = await this.restoreSerializedNativeHandleSlot({
+        owner,
+        identity,
+        renderArtifact,
+        slot: serializedSlot,
+        runtime,
+      });
+      if (restored.success) {
+        return { success: true, handle: restored.handle };
+      }
+    }
+    return { success: false };
+  }
+
+  private liveSlotMatchesOwner(slot: NativeHandleSlot, owner: OperationOwner): boolean {
+    return slot.kernelId === owner.binding?.kernelId && slot.kernelVersion === owner.binding?.kernelVersion;
+  }
+
+  private serializedSlotMatchesOwner(slot: SerializedNativeHandleSlot, owner: OperationOwner): boolean {
+    return slot.kernelId === owner.binding?.kernelId && slot.kernelVersion === owner.binding?.kernelVersion;
+  }
+
+  private isLiveNativeHandleSlotUsableForOwner(
+    slot: NativeHandleSlot | undefined,
+    owner: OperationOwner,
+  ): slot is NativeHandleSlot {
+    return Boolean(slot && this.liveSlotMatchesOwner(slot, owner));
+  }
+
+  private async validateNativeHandleSlot(input: {
+    owner: OperationOwner;
+    renderArtifact: MaterializedRender;
+    slot: NativeHandleSlot;
+    runtime: KernelRuntime;
+  }): Promise<boolean> {
+    const { owner, renderArtifact, slot, runtime } = input;
+    try {
+      const isValid = await this.isNativeHandleValidForOwner(owner, slot.handle, runtime);
+      if (isValid === false) {
+        this.clearLiveNativeHandleSlot(renderArtifact, slot);
+        this.logger.debug('Native handle is stale; export will reheat');
+        return false;
+      }
+      return true;
+    } catch (error) {
+      this.clearLiveNativeHandleSlot(renderArtifact, slot);
+      this.logger.warn('Native-handle validity check failed; export will reheat', {
+        data: {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+      return false;
+    }
+  }
+
+  private async restoreSerializedNativeHandleSlot(options: {
+    owner: OperationOwner;
+    identity: RenderIdentity;
+    renderArtifact: MaterializedRender;
+    slot: SerializedNativeHandleSlot;
+    runtime: KernelRuntime;
+  }): Promise<{ success: true; handle: unknown } | { success: false }> {
+    const { owner, identity, renderArtifact, slot, runtime } = options;
+    try {
+      const { evaluationSlot } = renderArtifact;
+      if (!evaluationSlot) {
+        return { success: false };
+      }
+      const handle = await this.deserializeNativeHandleForOwner(
+        owner,
+        slot.serializedNativeHandle,
+        runtime,
+        evaluationSlot,
+      );
+      if (handle === undefined || handle === null) {
+        this.clearSerializedNativeHandleSlot(renderArtifact, slot);
+        return { success: false };
+      }
+      this.logger.debug('Restoring nativeHandle via owner-bound deserializeNativeHandle');
+      evaluationSlot.hasHandle = true;
+      evaluationSlot.handle = handle;
+      this.ownNativeHandle(evaluationSlot, owner);
+      renderArtifact.liveNativeHandleSlot = {
+        evaluationId: evaluationSlot.id,
+        identityKey: createNativeHandleIdentityKey(identity),
+        kernelId: identity.selectedKernelId,
+        kernelVersion: identity.selectedKernelVersion,
+        handle,
+      };
+      evaluationSlot.liveNativeHandleSlot = renderArtifact.liveNativeHandleSlot;
+      return { success: true, handle };
+    } catch (error) {
+      this.clearSerializedNativeHandleSlot(renderArtifact, slot);
+      this.logger.warn('Native-handle snapshot restore failed; export will reheat', {
+        data: {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+      return { success: false };
+    }
+  }
+
+  private async reheatNativeHandleForOwner(
+    owner: OperationOwner,
+    renderArtifact: MaterializedRender,
+    runtime: KernelRuntime,
+  ): Promise<NativeHandleSlot | undefined> {
+    const { identity } = renderArtifact;
+    const reheatInput = identity.nativeBuildInput;
+    if (!reheatInput) {
+      return undefined;
+    }
+    this.logger.debug('Export reheat: re-running createGeometry to populate nativeHandle', {
+      data: {
+        entryPath: reheatInput.entryPath,
+        parameterCount: Object.keys(reheatInput.parameters).length,
+      },
+    });
+    const reheatSpan = this.tracer.startSpan('kernel.export-reheat');
+    try {
+      this.pendingNativeHandle = undefined;
+      const evaluationSlot =
+        renderArtifact.evaluationSlot ?? this.createEvaluationSlot(owner, createNativeHandleIdentityKey(identity));
+      renderArtifact.evaluationSlot = evaluationSlot;
+      evaluationSlot.nativeBuildInput = reheatInput;
+      this.activeEvaluationSlot = evaluationSlot;
+      let reheatResult: CreateGeometryResult;
+      try {
+        reheatResult = await this.onCreateGeometryForOwner(owner, reheatInput, runtime, evaluationSlot);
+      } finally {
+        this.activeEvaluationSlot = undefined;
+      }
+      const slots = this.bindNativeHandleSlots({
+        identity,
+        slot: evaluationSlot,
+        success: reheatResult.success,
+        serializedNativeHandle: reheatResult.success ? reheatResult.serializedNativeHandle : undefined,
+        serializeNativeHandleSnapshot: reheatResult.success ? reheatResult.serializeNativeHandleSnapshot : undefined,
+      });
+      renderArtifact.liveNativeHandleSlot = slots.liveNativeHandleSlot;
+      renderArtifact.serializedNativeHandleSlot = slots.serializedNativeHandleSlot;
+      this.logger.debug('Export reheat completed', {
+        data: {
+          success: reheatResult.success,
+          nativeHandleType: typeof slots.liveNativeHandleSlot?.handle,
+          nativeHandleSet: slots.liveNativeHandleSlot !== undefined,
+          issues: reheatResult.issues.map((i) => i.message),
+        },
+      });
+      return slots.liveNativeHandleSlot;
+    } catch (error) {
+      this.logger.error('Export reheat threw', {
+        data: { error: error instanceof Error ? error.message : String(error) },
+      });
+      return undefined;
+    } finally {
+      reheatSpan.end();
+    }
+  }
+
+  private async runExportMiddlewarePipeline(options: {
+    plan: Extract<OwnerBoundExportPlan, { success: true }>;
+    renderIdentity: LastSettledRenderIdentity | undefined;
+    renderArtifact?: MaterializedRender;
+    activeMiddleware: ResolvedMiddleware[];
+    onCacheMiss?: (input: ExportPipelineRequest) => Promise<ExportGeometryResult>;
+    pinnedSourceRevision?: SourceRevision;
+  }): Promise<ExportGeometryResult> {
+    if (!options.renderIdentity) {
+      return this.createExportRenderIdentityMissingResult();
+    }
+
+    const depsSpan = this.tracer.startSpan('kernel.resolve-deps', {
+      phase: 'resolvingDeps',
+    });
+    // The document owns its evaluated source. Only the export leg observes
+    // current files; otherwise old handles would be cached under new source hashes.
+    let dependencies: Dependency[];
+    if (options.pinnedSourceRevision && options.renderArtifact) {
+      const exportDependencies = await this.computeMiddlewareDependencies(
+        options.plan.owner,
+        this.getExportExecutionList(options.plan),
+        ['export'],
+      );
+      dependencies = [
+        ...options.renderArtifact.identity.dependencies.filter(
+          ({ type }) => type !== 'content' && type !== 'export' && type !== 'middleware',
+        ),
+        ...exportDependencies.dependencies,
+        { type: 'content', content: options.plan.route.content as Record<string, boolean> },
+        options.plan.dependency,
+      ];
+    } else {
+      dependencies = await this.computeDependencies({
+        operations: ['evaluate', 'export'],
+        parameters: options.renderIdentity.parameters,
+        renderOptions: options.renderIdentity.renderOptions,
+        content: options.plan.route.content,
+        exportDependency: options.plan.dependency,
+        resolvedMiddleware: this.getExportExecutionList(options.plan),
+        owner: options.plan.owner,
+      });
+    }
+    const dependencyHash = await this.computeDependencyHash(dependencies);
+    depsSpan.end();
+
+    const runtimes = new Map<string, KernelMiddlewareRuntime>();
+    for (const { middleware, options: middlewareOptions, id } of options.activeMiddleware) {
+      runtimes.set(
+        id,
+        createMiddlewareRuntime({
+          signal: this.operationSignal ?? neverAbortedSignal,
+          tracer: this.tracer,
+          onLog: this.onLog,
+          middlewareName: middleware.name,
+          filesystem: this.filesystem,
+          compute: this.createComputeRuntime(this.operationSignal ?? neverAbortedSignal),
+          dependencies,
+          dependencyHash,
+          stateSchema: middleware.stateSchema,
+          options: middlewareOptions,
+          logger: this.getMiddlewareLogger(id, middleware.name),
+        }),
+      );
+    }
+
+    const { onCacheMiss, renderArtifact } = options;
+    const { targetFormat } = options.plan.route;
+    const kernelId = options.plan.owner.binding?.kernelId;
+    const declared =
+      kernelId && options.plan.route.kind === 'direct'
+        ? options.plan.route.exportId
+          ? this.getDocumentExportDeclaration(options.plan.owner, options.plan.route.exportId)
+          : this.kernelExportMetadataMap.get(kernelId)?.[targetFormat]
+        : undefined;
+    const exportRequest: ExportRequest = {
+      exportId: options.plan.route.exportId ?? (declared && 'id' in declared ? declared.id : targetFormat),
+      mimeType: declared?.mimeType ?? 'application/octet-stream',
+      extension: targetFormat,
+      options: options.plan.input.options,
+    };
+    const computeExport =
+      onCacheMiss ??
+      (async (handlerInput: ExportPipelineRequest): Promise<ExportGeometryResult> => {
+        if (!renderArtifact) {
+          return this.createExportRenderIdentityMissingResult();
+        }
+        return this.executeExportRequest(
+          { ...options.plan, input: handlerInput },
+          renderArtifact,
+          options.pinnedSourceRevision,
+        );
+      });
+
+    const { tracer } = this;
+    let chain: (input: ExportRequest) => Promise<KernelExportResult> = named(
+      'kernelHandler',
+      async (handlerInput: ExportRequest) => {
+        const computeSpan = tracer.startSpan('kernel.export-compute');
+        if (
+          handlerInput.exportId !== exportRequest.exportId ||
+          handlerInput.mimeType !== exportRequest.mimeType ||
+          handlerInput.extension !== exportRequest.extension
+        ) {
+          computeSpan.end();
+          return createKernelError([
+            {
+              message: `Middleware changed the selected export ${exportRequest.exportId}.`,
+              code: 'MIDDLEWARE_FAILED',
+              type: 'kernel',
+              severity: 'error',
+            },
+          ]);
+        }
+        const exportResult = await computeExport({
+          format: targetFormat,
+          options: handlerInput.options,
+        });
+        computeSpan.end();
+        if (!exportResult.success) {
+          return exportResult;
+        }
+        try {
+          return {
+            ...exportResult,
+            data: nonemptyExportFiles(exportResult.data),
+          };
+        } catch (error) {
+          return createKernelError([
+            {
+              message: error instanceof Error ? error.message : String(error),
+              code: 'EXPORT_ARTIFACT_SET_INVALID',
+              type: 'runtime',
+              severity: 'error',
+            },
+          ]);
+        }
+      },
+    );
+
+    for (let index = options.activeMiddleware.length - 1; index >= 0; index--) {
+      const { middleware, id } = options.activeMiddleware[index]!;
+      const inner = chain;
+      const runtime = runtimes.get(id)!;
+      const middlewareName = middleware.name;
+      const wrapHook = middleware.wrapExport!;
+
+      chain = named(`middleware(${middlewareName})`, async (handlerInput: ExportRequest) => {
+        const span = tracer.startSpan(`middleware.wrap(${middlewareName})`, {
+          middleware: middlewareName,
+          phase: 'export',
+        });
+        try {
+          const chainResult = await wrapHook(
+            this.withProviderRuntimeContent(
+              handlerInput,
+              options.plan.route.content,
+              middleware.content?.exports?.[options.plan.route.targetFormat] ?? [],
+            ),
+            inner,
+            runtime,
+          );
+          span.end();
+          return chainResult;
+        } catch (error) {
+          span.end();
+          // A superseded or closed operation is aborted, not failed: its caller drops it.
+          if (runtime.signal.aborted) {
+            throw error;
+          }
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          this.logger.error('Middleware failed', {
+            data: { name: middlewareName, error: errorMessage },
+          });
+          return createKernelError([
+            {
+              message: `Middleware error in ${middlewareName}: ${errorMessage}`,
+              code: 'MIDDLEWARE_FAILED',
+              type: 'kernel',
+              severity: 'error',
+            },
+          ]);
+        }
+      });
+    }
+
+    const result = await chain(exportRequest);
+    return result.success ? { ...result, data: [...result.data] } : result;
+  }
+
+  private async executeExportRequest(
+    plan: Extract<OwnerBoundExportPlan, { success: true }>,
+    renderArtifact: MaterializedRender,
+    pinnedSourceRevision?: SourceRevision,
+  ): Promise<ExportGeometryResult> {
+    const exportMaterialization =
+      plan.route.kind === 'direct'
+        ? { format: plan.route.targetFormat, options: plan.route.options }
+        : {
+            format: plan.route.sourceFormat,
+            options: plan.route.sourceOptions,
+          };
+    const desiredNativeHandleKey = await this.computeNativeHandleKey({
+      owner: plan.owner,
+      parameters: renderArtifact.identity.parameters,
+      renderOptions: renderArtifact.identity.renderOptions,
+      exportOptions: exportMaterialization.options,
+      content: plan.route.content,
+      ...(pinnedSourceRevision ? { pinnedIdentity: renderArtifact.identity } : {}),
+    });
+    if (!desiredNativeHandleKey.success) {
+      return createKernelError(desiredNativeHandleKey.issues);
+    }
+    const sameBuild = this.artifactMatchesNativeBuild(renderArtifact, plan.owner, desiredNativeHandleKey.key);
+    // A view built with other options can still serve the export when the kernel says its build is the export's.
+    const servedHandle = sameBuild
+      ? undefined
+      : await this.retainedBuildServingExport({
+          plan,
+          renderArtifact,
+          exportOptions: exportMaterialization.options,
+          runtime: this.createRuntime(),
+          pinned: pinnedSourceRevision !== undefined,
+        });
+    if (!sameBuild && servedHandle === undefined) {
+      if (pinnedSourceRevision && !(await this.pinnedSourceStillMatches(pinnedSourceRevision))) {
+        return this.sourceSnapshotChangedResult();
+      }
+      const parametersResult = await this.getParametersInLane(renderArtifact.identity.file, { owner: plan.owner });
+      if (!parametersResult.success) {
+        return parametersResult;
+      }
+      const extracted = parametersResult.data;
+      if (extracted.legacyProjection.status !== 'usable') {
+        return createKernelError([
+          {
+            message: 'Parameter schema cannot be represented by the active Draft-7 execution path',
+            code: 'RUNTIME',
+            type: 'kernel',
+            severity: 'error',
+            details: extracted.legacyProjection.diagnostics,
+          },
+        ]);
+      }
+      const materialized = await this.materializeRender(
+        {
+          file: renderArtifact.identity.file,
+          parameters: renderArtifact.identity.nativeBuildInput?.parameters ?? renderArtifact.identity.parameters,
+          parameterDefaults: extracted.defaults,
+          parameterManifest: extracted,
+          parameterSchema: extracted.legacyProjection.schema,
+          options: renderArtifact.identity.renderOptions,
+          content: plan.route.content,
+          export: { ...exportMaterialization, dependency: plan.dependency },
+        },
+        { owner: plan.owner },
+      );
+      if (!materialized.artifact.result.success) {
+        return createKernelError(materialized.artifact.result.issues);
+      }
+      renderArtifact = materialized.artifact;
+    }
+
+    const runtime = this.createRuntime();
+    const nativeInput: Awaited<ReturnType<typeof this.prepareNativeExportInput>> = servedHandle
+      ? { success: true, input: { ...plan.input, nativeHandle: servedHandle.handle } }
+      : await this.prepareNativeExportInput({
+          plan,
+          runtime,
+          renderArtifact,
+          pinnedSourceRevision,
+        });
+    if (!nativeInput.success) {
+      return nativeInput.result;
+    }
+
+    const computeSpan = this.tracer.startSpan('kernel.export-compute');
+    const result = await this.executeExportWithRoute(plan, {
+      input: nativeInput.input,
+      runtime,
+      renderIdentity: renderArtifact.identity,
+      evaluationSlot: renderArtifact.evaluationSlot,
+    });
+    computeSpan.end();
+    return result;
+  }
+
+  /**
+   * The artifact's retained handle when the kernel reports that its build is exactly what the export's construction
+   * options would build, for example a fallback to the export's mesh. Only a live or serialized handle qualifies, and
+   * every other native-handle dependency must still match, so a miss builds for the export as before.
+   */
+  private async retainedBuildServingExport(input: {
+    plan: Extract<OwnerBoundExportPlan, { success: true }>;
+    renderArtifact: MaterializedRender;
+    exportOptions: Record<string, unknown>;
+    runtime: KernelRuntime;
+    pinned: boolean;
+  }): Promise<{ handle: unknown } | undefined> {
+    const { plan, renderArtifact, runtime } = input;
+    const { identity } = renderArtifact;
+    const { owner } = plan;
+    const builtWith = identity.nativeBuildInput?.options;
+    const createSchema = owner.binding?.kernelId
+      ? this.kernelCreateOptionsZodSchemaMap.get(owner.binding.kernelId)
+      : undefined;
+    if (!builtWith || !createSchema) {
+      return undefined;
+    }
+    const viewOptions = this.resolveCreateOptions(identity.renderOptions, undefined, owner);
+    const exportOptions = this.resolveCreateOptions(identity.renderOptions, input.exportOptions, owner);
+    if (
+      !viewOptions.success ||
+      !exportOptions.success ||
+      !('options' in viewOptions.input) ||
+      !('options' in exportOptions.input)
+    ) {
+      return undefined;
+    }
+    // The view's own key, recomputed with the export's dependencies: only the construction options may differ.
+    const viewKey = await this.computeNativeHandleKey({
+      owner,
+      parameters: identity.parameters,
+      renderOptions: identity.renderOptions,
+      exportOptions: input.exportOptions,
+      content: plan.route.content,
+      createOptions: viewOptions.input.options,
+      ...(input.pinned ? { pinnedIdentity: identity } : {}),
+    });
+    if (!viewKey.success || !this.artifactMatchesNativeBuild(renderArtifact, owner, viewKey.key)) {
+      return undefined;
+    }
+    const retained = await this.retainedNativeHandleForOwner({ owner, runtime, renderArtifact });
+    if (!retained.success) {
+      return undefined;
+    }
+    let effective: Readonly<Record<string, unknown>> | undefined;
+    try {
+      effective = this.effectiveNativeOptionsForOwner(owner, retained.handle, builtWith, runtime);
+    } catch (error) {
+      this.logger.warn('Effective-options hook failed; export will build', {
+        data: { error: error instanceof Error ? error.message : String(error) },
+      });
+      return undefined;
+    }
+    if (effective === undefined) {
+      return undefined;
+    }
+    const admitted = admitKernelOptions(
+      createSchema,
+      effective,
+      'Kernel effective options',
+      'EVALUATE_OPTIONS_INVALID',
+    );
+    if (!admitted.success || canonicalJson(admitted.options) !== canonicalJson(exportOptions.input.options)) {
+      return undefined;
+    }
+    this.logger.debug('Export reuses the retained build: the kernel reports it as the export build');
+    return { handle: retained.handle };
+  }
+
+  private async prepareNativeExportInput(options: {
+    plan: Extract<OwnerBoundExportPlan, { success: true }>;
+    runtime: KernelRuntime;
+    renderArtifact: MaterializedRender;
+    pinnedSourceRevision?: SourceRevision;
+  }): Promise<{ success: true; input: KernelExportGeometryInput } | { success: false; result: ExportGeometryResult }> {
+    const { plan, runtime, renderArtifact } = options;
+    const nativeHandle = await this.materializeNativeHandleForOwner({
+      owner: plan.owner,
+      runtime,
+      renderArtifact,
+      pinnedSourceRevision: options.pinnedSourceRevision,
+    });
+    if (!nativeHandle.success) {
+      return nativeHandle;
+    }
+
+    return {
+      success: true,
+      input: {
+        ...plan.input,
+        nativeHandle: nativeHandle.handle,
+      },
+    };
+  }
+
+  /**
+   * Drop what was derived from the changed paths' dependency graph.
+   *
+   * A path only a geometry-stage middleware declared (a parameter record, say) cannot change
+   * dependency discovery, parameters or kernel selection, so only the middleware dependency
+   * sets that name it go. Any other change, including a path no settled set names yet, clears
+   * everything as before.
+   *
+   * ponytail: the narrowing is all-or-nothing per change, keyed on the geometry-only case the
+   * edit path needs; a source edit still clears every entry's caches, not just its own.
+   *
+   * @param changedPaths - Rooted paths whose bytes changed.
+   */
+  private invalidateDependencyDerivedState(changedPaths: readonly string[]): void {
+    const middlewareSets = [...this.middlewareDependencyCache].map(([key, pending]) => ({
+      key,
+      set: this.settledDependencyPaths.get(pending),
+    }));
+    const sets = [
+      ...[...this.commonDependencyCache.values()].map((pending) => this.settledDependencyPaths.get(pending)),
+      ...middlewareSets.map(({ set }) => set),
+    ];
+    const settled = sets.filter((set) => set !== undefined);
+    const geometryOnly =
+      changedPaths.length > 0 &&
+      settled.length === sets.length &&
+      changedPaths.every(
+        (path) =>
+          settled.some(({ paths }) => paths.has(path)) &&
+          !settled.some(({ paths, affectsParameters }) => affectsParameters && paths.has(path)),
+      );
+    if (geometryOnly) {
+      for (const { key, set } of middlewareSets) {
+        if (set && changedPaths.some((path) => set.paths.has(path))) {
+          this.middlewareDependencyCache.delete(key);
+        }
+      }
+      return;
+    }
+    this.commonDependencyCache.clear();
+    this.middlewareDependencyCache.clear();
+    this.parameterResultCache = undefined;
+    this.onFileChanged(changedPaths);
+  }
+
+  /**
+   * Record the paths a dependency set was resolved from once it settles.
+   *
+   * @param pending - The dependency computation about to be cached.
+   * @param describe - Reads the paths, and whether they feed parameters, from the settled set.
+   * @returns The promise to cache in place of `pending`.
+   */
+  // oxlint-disable-next-line typescript/promise-function-async -- the record is keyed by the returned promise's own identity.
+  private recordDependencyPaths<Value>(
+    pending: Promise<Value>,
+    describe: (value: Value) => DependencyPaths,
+  ): Promise<Value> {
+    // oxlint-disable-next-line promise/prefer-await-to-then -- an async body cannot name the promise it returns.
+    const recorded: Promise<Value> = pending.then((value) => {
+      this.settledDependencyPaths.set(recorded, describe(value));
+      return value;
+    });
+    return recorded;
   }
 
   /**
    * Invalidate file-level caches for the given changed paths.
-   * Shared by both `notifyFileChanged` (command-driven) and the watch handler (autonomous).
-   * @param changedPaths - Absolute paths of files that changed.
+   * Shared by explicit `notifyFileChanged` calls and the watch handler.
+   * @param changedPaths - Root-relative paths of files that changed.
    */
   private _invalidateCachesForPaths(changedPaths: readonly string[]): void {
+    this.invalidateDependencyDerivedState(changedPaths);
     for (const path of changedPaths) {
       this.fileHashCache.delete(path);
       this.fileContentCache.delete(path);
-      this.fileContentCache.delete(`utf8:${path}`);
     }
+    this._invalidateBundleCachesForPaths(changedPaths);
+  }
+
+  private _applyObservedRevisions(
+    changedPaths: readonly string[],
+    revisions: ReadonlyMap<string, ObservedFileRevision | undefined>,
+  ): void {
+    this.invalidateDependencyDerivedState(changedPaths);
+    for (const path of changedPaths) {
+      const revision = revisions.get(path);
+      if (revision === undefined) {
+        this.fileHashCache.delete(path);
+        this.fileContentCache.delete(path);
+        continue;
+      }
+      if (revision.expectedPrior !== undefined && this.fileHashCache.get(path) !== revision.expectedPrior.hash) {
+        this.fileHashCache.delete(path);
+        this.fileContentCache.delete(path);
+        continue;
+      }
+      this.fileHashCache.set(path, revision.hash);
+      if (revision.content === undefined) {
+        this.fileContentCache.delete(path);
+      } else {
+        this.fileContentCache.set(path, revision.content);
+      }
+    }
+    this._invalidateBundleCachesForPaths(changedPaths);
+  }
+
+  private _invalidateBundleCachesForPaths(changedPaths: readonly string[]): void {
     for (const [entryPath, result] of this.bundleResultCache) {
       if (
         changedPaths.includes(entryPath) ||
         result.dependencies.some((dep) => changedPaths.includes(dep)) ||
         result.unresolvedPaths.some((dep) => changedPaths.includes(dep))
       ) {
-        clearExecuteCache(result.code);
-        this.bundleResultCache.delete(entryPath);
+        this.supersedeBundle(entryPath, result);
       }
+    }
+  }
+
+  /**
+   * Retire an entry's cached bundle, keeping its executed module until the next bundle shows
+   * whether the code changed (N10).
+   *
+   * @param entryPath - The entry.
+   * @param result - Its cached bundle.
+   */
+  private supersedeBundle(entryPath: string, result: BundleResult): void {
+    const superseded = this.supersededBundleCode.get(entryPath);
+    if (superseded !== undefined && superseded !== result.code) {
+      this.clearBundlerExecutionCaches(superseded);
+    }
+    this.supersededBundleCode.set(entryPath, result.code);
+    this.bundleResultCache.delete(entryPath);
+    this.bundleGlobalsKeys.delete(entryPath);
+  }
+
+  private clearBundlerExecutionCaches(code?: string): void {
+    for (const bundler of new Set(this.loadedBundlers.values())) {
+      bundler.definition.clearExecutionCache?.(code, bundler.ctx);
+    }
+  }
+
+  private exactWatchEventPaths(event: Exclude<WatchEvent, { type: 'reset' }>): string[] {
+    const paths: string[] = [];
+    if ('path' in event) {
+      paths.push(assertRootedPath(event.path));
+    }
+    if (event.type === 'rename') {
+      paths.push(assertRootedPath(event.oldPath), assertRootedPath(event.newPath));
+    }
+    return [...new Set(paths)];
+  }
+
+  private async routeWatchEvent(event: WatchEvent): Promise<void> {
+    if (!this.operationAdmissionOpen) {
+      return;
+    }
+    try {
+      await this.enqueueWatchReconciliation(async () => {
+        const paths = event.type === 'reset' ? [...this.watchedPaths] : this.exactWatchEventPaths(event);
+        // The barrier has to be observed again after the read: a staged write that began
+        // while this reconciliation was reading would otherwise be judged against the
+        // pre-write revision and supersede its own admitted record.
+        const awaitStagedWrite = async (): Promise<boolean> => {
+          const stagedWrite = this.stagedWritePublication;
+          if (!stagedWrite || !paths.some((path) => stagedWrite.paths.has(path))) {
+            return false;
+          }
+          await stagedWrite.promise;
+          return true;
+        };
+        await awaitStagedWrite();
+        let revisions = await this.readChangedObservedRevisions(paths);
+        if (await awaitStagedWrite()) {
+          revisions = await this.readChangedObservedRevisions(paths);
+        }
+        if (revisions.size === 0 || !this.operationAdmissionOpen) {
+          return;
+        }
+        const changedPaths = [...revisions.keys()];
+        // Proven external changes must retire unpinned evaluations before FIFO invalidation.
+        // A committed export keeps its admitted operation; unrelated documents stay live.
+        for (const document of this.documents.values()) {
+          if (
+            document.watch &&
+            !document.closed &&
+            changedPaths.some((path) => document.watchPaths.has(path)) &&
+            (document.pendingCommitted === undefined || document.pendingCommitted.pins === 0)
+          ) {
+            document.evaluationController?.abort(abortReasonEnum.superseded);
+          }
+        }
+        await this.enqueueOperation(async () => this.routeExactChangedPaths(changedPaths, revisions));
+      });
+    } catch (error) {
+      this.reportWatchRoutingError(error);
+    }
+  }
+
+  private async enqueueWatchReconciliation(operation: () => Promise<void>): Promise<void> {
+    const previous = this.watchReconciliationTail;
+    const next = Promise.withResolvers<void>();
+    this.watchReconciliationTail = next.promise;
+    await previous;
+    try {
+      await operation();
+    } finally {
+      next.resolve();
+    }
+  }
+
+  private async readChangedObservedRevisions(
+    paths: readonly string[],
+  ): Promise<Map<string, ObservedFileRevision | undefined>> {
+    const changed = new Map<string, ObservedFileRevision | undefined>();
+    const { fileSystem } = this;
+    if (!fileSystem) {
+      return changed;
+    }
+    for (const path of paths) {
+      const expectedPrior = { hash: this.fileHashCache.get(path) };
+      let revision: ObservedFileRevision | undefined;
+      let readFailed = false;
+      try {
+        // oxlint-disable-next-line no-await-in-loop -- serialized reads preserve the observer's revision order
+        const content = await fileSystem.readFile(path);
+        revision = {
+          // eslint-disable-next-line no-await-in-loop -- serialized hashes preserve the observer's revision order
+          hash: await this.hashContent(content),
+          content,
+          expectedPrior,
+        };
+      } catch (error) {
+        if (isNotFoundError(error)) {
+          revision = { hash: 'missing', expectedPrior };
+        } else {
+          readFailed = true;
+        }
+      }
+      const known = this.fileHashCache.get(path);
+      if (!readFailed && known === undefined && revision) {
+        /* No prior revision means the render that armed this watch has not read
+         * the path yet — every path a render *has* observed carries a hash (or
+         * `'missing'`) by the time it enters the watch set. So this read is the
+         * path's baseline, not evidence of a change: an OS that replays the
+         * write predating the arm (macOS does, milliseconds later) would
+         * otherwise schedule an evaluation that supersedes the one arming the watch. */
+        this.fileHashCache.set(path, revision.hash);
+        if (revision.content !== undefined) {
+          this.fileContentCache.set(path, revision.content);
+        }
+        continue;
+      }
+      if (readFailed || revision?.hash !== known) {
+        changed.set(path, revision);
+      }
+    }
+    return changed;
+  }
+
+  private reportWatchRoutingError(error: unknown): void {
+    const issues = this.errorToRuntimeIssues(error);
+    if (this.operationAdmissionOpen) {
+      this.logger.warn('Failed to route a watched file change', {
+        data: { issues },
+      });
+    }
+  }
+
+  private async routeExactChangedPaths(
+    paths: readonly string[],
+    revisions?: ReadonlyMap<string, ObservedFileRevision | undefined>,
+  ): Promise<void> {
+    if (revisions && [...revisions.values()].some((revision) => revision === undefined)) {
+      // A failed observer read cannot prove the prior evaluation still matches.
+      this.retainedEvaluation = undefined;
+    }
+    if (revisions) {
+      this._applyObservedRevisions(paths, revisions);
+    } else {
+      this._invalidateCachesForPaths(paths);
+    }
+    this.scheduleWatchedDocuments(paths);
+  }
+
+  private scheduleWatchedDocuments(paths: readonly string[], sourceDocumentId?: string): void {
+    for (const document of this.documents.values()) {
+      if (
+        document.id === sourceDocumentId ||
+        !document.watch ||
+        document.closed ||
+        !paths.some((path) => document.watchPaths.has(path))
+      ) {
+        continue;
+      }
+      document.parameters = { ...document.committedParameters };
+      document.evaluateOptions = { ...document.committedEvaluateOptions };
+      this.scheduleDocumentEvaluation(document, document.intent, false);
     }
   }
 
@@ -1923,29 +6551,44 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Derive the full set of watched dependencies from all active caches
    * and update the filesystem watch subscription.
    */
-  private _updateWatchSetFromCaches(): void {
-    const allDeps = new Set<string>();
-    if (this.activeFilePath) {
-      allDeps.add(this.activeFileAbsolutePath);
+  private async reconcileObservedPaths(): Promise<void> {
+    const allDeps = new Map<string, number>();
+    const refused = [...this.refusedReads].flatMap((path) => {
+      try {
+        return [assertRootedPath(path)];
+      } catch {
+        return [];
+      }
+    });
+    this.refusedReads.clear();
+    /* The render observed each as not there yet: its landing is a change from that, never a first baseline. */
+    for (const path of refused) {
+      if (!this.fileHashCache.has(path)) {
+        this.fileHashCache.set(path, 'missing');
+      }
+    }
+    for (const document of this.documents.values()) {
+      if (document.watch && !document.closed) {
+        for (const path of refused) {
+          document.watchPaths.add(path);
+        }
+        for (const path of document.watchPaths) {
+          allDeps.set(path, fileChangeDebounce);
+        }
+      }
     }
     for (const result of this.bundleResultCache.values()) {
       for (const dep of result.dependencies) {
-        allDeps.add(dep);
+        allDeps.set(assertRootedPath(dep), fileChangeDebounce);
       }
       for (const path of result.unresolvedPaths) {
-        allDeps.add(path);
+        allDeps.set(assertRootedPath(path), fileChangeDebounce);
       }
     }
     for (const path of this.fileHashCache.keys()) {
-      allDeps.add(path);
+      allDeps.set(assertRootedPath(path), fileChangeDebounce);
     }
-    for (const path of this.unresolvedDependencyPaths) {
-      allDeps.add(path);
-    }
-    for (const path of this.middlewareWatchPaths.keys()) {
-      allDeps.add(path);
-    }
-    this.updateWatchSet([...allDeps]);
+    await this.reconcileWatchSet(allDeps);
   }
 
   /**
@@ -1957,19 +6600,21 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    */
   private async doInitializeBundler(pending: {
     definition: BundlerDefinition;
-    extensions: string[];
+    extensions: readonly string[];
     options?: Record<string, unknown>;
-  }): Promise<{ definition: BundlerDefinition; ctx: unknown }> {
+    id?: string;
+  }): Promise<{ definition: BundlerDefinition; ctx: unknown; id?: string }> {
     const { definition, extensions, options: bundlerOptions } = pending;
-    const projectPath = this.getProjectRootPath();
     const initSpan = this.tracer.startSpan('kernel.bundler-context-init');
 
     try {
       const rawOptions = bundlerOptions ?? {};
       const validatedOptions = definition.optionsSchema ? definition.optionsSchema.parse(rawOptions) : rawOptions;
 
-      const context = await definition.initialize({ filesystem: this.filesystem, projectPath }, validatedOptions);
-      const loaded = { definition, ctx: context };
+      const context = await definition.initialize(validatedOptions, {
+        filesystem: this.bundlerFilesystem,
+      });
+      const loaded = { definition, ctx: context, ...(pending.id === undefined ? {} : { id: pending.id }) };
 
       for (const extension of extensions) {
         this.loadedBundlers.set(extension, loaded);
@@ -1977,7 +6622,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       }
 
       for (const [name, entry] of this.pendingModuleRegistrations) {
-        definition.registerModule(name, entry, context);
+        definition.registerModule({ name, module: entry }, context);
       }
 
       if (this.pendingBundlerInits.size === 0) {
@@ -1991,33 +6636,35 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   }
 
   /**
-   * Load middleware modules from URLs and resolve their configs.
-   * Uses a module cache to avoid redundant network requests when reconfiguring.
+   * Load middleware definitions from worker-owned plugin implementations and resolve their configs.
    *
-   * @param middlewareEntries - Ordered array of middleware entries
+   * @param middlewarePlugins - Ordered array of middleware plugins
    */
-  private async loadMiddleware(middlewareEntries: MiddlewareRegistrations): Promise<void> {
+  private async loadMiddleware(middlewarePlugins: readonly MiddlewarePlugin[]): Promise<void> {
     const middlewareSpan = this.tracer.startSpan('kernel.load-middleware', {
-      count: middlewareEntries.length,
+      count: middlewarePlugins.length,
     });
 
     try {
       const resolved: ResolvedMiddleware[] = [];
+      const ids = new Set<string>();
 
-      for (const entry of middlewareEntries) {
+      for (const entry of middlewarePlugins) {
+        if (ids.has(entry.id)) {
+          throw new Error(`Duplicate middleware id: ${entry.id}`);
+        }
+        ids.add(entry.id);
         // oxlint-disable-next-line no-await-in-loop -- Middleware must be loaded sequentially to preserve order
-        const middleware = await this.importMiddlewareModule(entry.url);
+        const middleware = await this.importMiddlewareModule(entry);
 
-        const resolvedOptions = middleware.optionsSchema
-          ? (middleware.optionsSchema.parse(entry.options ?? {}) as Record<string, unknown>)
-          : {};
+        const resolvedOptions = middleware.optionsSchema ? middleware.optionsSchema.parse(entry.options ?? {}) : {};
 
-        const enabled = entry.enabled ?? middleware.enabled ?? true;
+        const enabled = middleware.enabled ?? true;
 
         resolved.push({
           middleware,
           options: resolvedOptions,
-          url: entry.url,
+          id: entry.id,
           enabled,
         });
       }
@@ -2029,23 +6676,18 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   }
 
   /**
-   * Load and initialize transcoder modules from their entry descriptors.
-   * Each transcoder is dynamically imported, validated, initialized with its options,
-   * and its edges are discovered for manifest building.
+   * Load transcoder descriptors from worker-owned plugin implementations.
    *
-   * @param entries - Transcoder module entries with id, URL, and options
+   * @param entries - Transcoder plugins with id and options
    */
-  private async loadTranscoders(entries: TranscoderModuleEntry[]): Promise<void> {
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- variance: accepts any transcoder plugin generic
+  private async loadTranscoders(entries: readonly TranscoderPluginEntry[]): Promise<void> {
     const transcoderSpan = this.tracer.startSpan('kernel.load-transcoders', {
       count: entries.length,
     });
+    const registeredEdges = new Set<string>();
 
     try {
-      const transcoderRuntime: TranscoderRuntime = {
-        logger: this.logger,
-        tracer: this.tracer,
-      };
-
       for (const entry of entries) {
         const importSpan = this.tracer.startSpan('kernel.load-transcoder', {
           id: entry.id,
@@ -2053,28 +6695,33 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
         try {
           // oxlint-disable-next-line no-await-in-loop -- Sequential to preserve init order
-          const module_: Record<string, unknown> = (await import(/* @vite-ignore */ entry.moduleUrl)) as Record<
-            string,
-            unknown
-          >;
-          const definition = (module_['default'] ?? module_) as TranscoderDefinition;
+          const definition = await resolveRuntimePluginDefinition<TranscoderDefinition>('transcoder', entry);
 
           const rawOptions = entry.options ?? {};
           const validatedOptions = definition.optionsSchema ? definition.optionsSchema.parse(rawOptions) : rawOptions;
 
           // oxlint-disable-next-line no-await-in-loop -- Sequential to preserve init order
-          const context = await definition.initialize(validatedOptions, transcoderRuntime);
-
-          const { edges } = definition;
+          const implementationAssets = definition.implementationAssets ?? [];
+          const edges = definition.edges.filter(({ from, to }) => {
+            const key = `${from}\0${to}`;
+            if (registeredEdges.has(key)) {
+              return false;
+            }
+            registeredEdges.add(key);
+            return true;
+          });
 
           this.loadedTranscoders.set(entry.id, {
             id: entry.id,
             definition,
-            context,
+            context: undefined,
+            initialized: false,
             edges,
+            options: validatedOptions,
+            implementationAssets,
           });
 
-          this.logger.debug(`Loaded transcoder: ${entry.id} with ${edges.length} edge(s)`);
+          this.logger.debug(`Registered transcoder: ${entry.id} with ${edges.length} edge(s)`);
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           this.logger.error(`Failed to load transcoder ${entry.id}: ${errorMessage}`);
@@ -2087,26 +6734,70 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     }
   }
 
-  /**
-   * Derive JSON Schema and defaults from a Zod schema, returning empty objects on failure.
-   */
-  private deriveJsonSchema(
+  private async initializeTranscoder(transcoder: LoadedTranscoder): Promise<unknown> {
+    if (transcoder.initialized) {
+      return transcoder.context;
+    }
+    transcoder.initialization ??= (async () => {
+      if (transcoder.definition.implementationAssetLoading === 'on-use') {
+        validateImplementationAssetDeclarations(transcoder.id, transcoder.implementationAssets);
+      } else {
+        await this.verifyImplementationAssets(transcoder.id, transcoder.implementationAssets);
+      }
+      const context = await transcoder.definition.initialize(transcoder.options, {
+        logger: this.logger,
+        tracer: this.tracer,
+        implementationAssets: this.createImplementationAssetLoader(transcoder.id, transcoder.implementationAssets),
+      });
+      transcoder.context = context;
+      transcoder.initialized = true;
+      return context;
+    })();
+    const { initialization } = transcoder;
+    try {
+      return await initialization;
+    } catch (error) {
+      if (transcoder.initialization === initialization) {
+        transcoder.initialization = undefined;
+      }
+      throw error;
+    }
+  }
+
+  /** Derive JSON Schema and defaults from a Zod schema. */
+  protected deriveJsonSchema(
     zodSchema: z.ZodType,
     label: string,
   ): { schema: JSONSchema7; defaults: Record<string, unknown> } {
-    try {
-      const schema = toJSONSchema(zodSchema, { target: 'draft-7' }) as JSONSchema7 & { $schema?: unknown };
-      delete schema.$schema;
-      return {
-        schema,
-        defaults: (zodSchema.parse({}) ?? {}) as Record<string, unknown>,
-      };
-    } catch {
-      this.logger.warn(`Failed to derive JSON Schema for ${label}`);
-      const empty: JSONSchema7 = {};
-      return { schema: empty, defaults: {} };
+    // Offers derive the same kernel schemas on every evaluation; a schema's derivation never changes.
+    const cached = this.derivedJsonSchemas.get(zodSchema);
+    if (cached) {
+      return cached;
     }
+    let schema: JSONSchema7;
+    try {
+      // Spreading drops Zod's non-enumerable `~standard` key: the manifest is wire data, so it is plain JSON here.
+      const { $schema: _dialect, ...plain } = toJSONSchema(zodSchema, {
+        target: 'draft-7',
+        io: 'input',
+      }) as JSONSchema7;
+      schema = plain;
+    } catch (error) {
+      throw new Error(`Failed to derive JSON Schema for ${label}.`, {
+        cause: error,
+      });
+    }
+
+    const defaults = inputDefaults(schema);
+    const derived = { schema, defaults: zodSchema.safeParse(defaults).success ? defaults : {} };
+    this.derivedJsonSchemas.set(zodSchema, derived);
+    return derived;
   }
+
+  private readonly derivedJsonSchemas = new WeakMap<
+    z.ZodType,
+    { schema: JSONSchema7; defaults: Record<string, unknown> }
+  >();
 
   /**
    * Build the capabilities manifest from loaded kernel metadata and transcoder edges.
@@ -2118,7 +6809,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    *
    * Fidelity is looked up from `@taucad/types` rather than hard-coded so kernels
    * remain the source of truth for their declared formats and the fidelity table
-   * stays a single, data-driven location.
+   * stays a single, data-driven location. A direct route takes its format's
+   * fidelity; a transcoded route is `'brep'` only when both edge formats are, since
+   * exactness cannot increase along a route. Transcoder edges declare no fidelity.
    *
    * @returns The computed capabilities manifest
    */
@@ -2129,6 +6822,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       format: FileExtension;
       schema: JSONSchema7;
       defaults: Record<string, unknown>;
+      contentKeys: readonly RuntimeContentKey[];
     };
     const kernelExports: KernelExport[] = [];
 
@@ -2137,23 +6831,45 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
       for (const format of formats) {
         const zodSchema = zodSchemas[format];
-        const empty: { schema: JSONSchema7; defaults: Record<string, unknown> } = { schema: {}, defaults: {} };
+        const empty: {
+          schema: JSONSchema7;
+          defaults: Record<string, unknown>;
+        } = { schema: {}, defaults: {} };
         const { schema, defaults } = zodSchema ? this.deriveJsonSchema(zodSchema, `${kernelId}:${format}`) : empty;
 
-        kernelExports.push({ kernelId, format, schema, defaults });
+        const contentKeys = new Set(this.kernelExportContentMap.get(kernelId)?.[format] ?? []);
+        for (const { enabled, middleware } of this.getMiddleware()) {
+          if (enabled) {
+            for (const key of middleware.content?.exports?.[format] ?? []) {
+              contentKeys.add(key);
+            }
+          }
+        }
+        const content = this.buildContentCapability('export', [...contentKeys]);
+
+        kernelExports.push({
+          kernelId,
+          format,
+          schema,
+          defaults,
+          contentKeys: [...contentKeys],
+        });
 
         routes.push({
           targetFormat: format,
           kernelId,
           sourceFormat: format,
           fidelity: lookupExportFidelity(format),
-          schema,
-          defaults,
+          exportOptions: { schema, defaults },
+          ...(content ? { content } : {}),
         });
       }
     }
 
-    const emptyEdgeSchemas: { schema: JSONSchema7; defaults: Record<string, unknown> } = { schema: {}, defaults: {} };
+    const emptyEdgeSchemas: {
+      schema: JSONSchema7;
+      defaults: Record<string, unknown>;
+    } = { schema: {}, defaults: {} };
     for (const transcoder of this.loadedTranscoders.values()) {
       for (const edge of transcoder.edges) {
         const edgeSchemas = edge.optionsSchema
@@ -2165,27 +6881,128 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
             continue;
           }
 
-          const { schema, defaults } = mergeJsonSchemas(cap, edgeSchemas);
+          const sourceSchemas = omitJsonSchemaProperties(cap, Object.keys(edge.sourceOptions ?? {}));
+          const sourceKeys = new Set(Object.keys(collectJsonSchemaProperties(sourceSchemas.schema)));
+          const overlap = Object.keys(collectJsonSchemaProperties(edgeSchemas.schema)).filter((key) =>
+            sourceKeys.has(key),
+          );
+          const unreachableRequired = overlap.filter((key) => edgeSchemas.schema.required?.includes(key));
+          if (unreachableRequired.length > 0) {
+            throw new Error(
+              `Transcoder ${transcoder.id} requires source-owned export options ${unreachableRequired.join(', ')} on ${edge.from} → ${edge.to}.`,
+            );
+          }
+          const publicEdgeSchemas = omitJsonSchemaProperties(edgeSchemas, overlap);
+          const { schema, defaults } = mergeJsonSchemas(sourceSchemas, publicEdgeSchemas, {
+            a: `${cap.kernelId}:${edge.from}`,
+            b: `${transcoder.id}:${edge.from}->${edge.to}`,
+          });
+          const edgeKeys = new Set(edge.content ?? []);
+          const content = this.buildContentCapability(
+            'export',
+            cap.contentKeys.filter((key) => edgeKeys.has(key)),
+          );
 
           routes.push({
             targetFormat: edge.to,
             kernelId: cap.kernelId,
             sourceFormat: edge.from,
             transcoderId: transcoder.id,
-            fidelity: edge.fidelity,
-            schema,
-            defaults,
+            fidelity:
+              lookupExportFidelity(edge.from) === 'brep' && lookupExportFidelity(edge.to) === 'brep' ? 'brep' : 'mesh',
+            exportOptions: { schema, defaults },
+            ...(content ? { content } : {}),
           });
         }
       }
     }
 
-    const renderSchemas: Record<string, { schema: JSONSchema7; defaults: Record<string, unknown> }> = {};
-    for (const [kernelId, zodSchema] of this.kernelRenderZodSchemaMap) {
-      renderSchemas[kernelId] = this.deriveJsonSchema(zodSchema, `render:${kernelId}`);
+    const renderCapabilities: Record<
+      string,
+      {
+        renderOptions: {
+          schema: JSONSchema7;
+          defaults: Record<string, unknown>;
+        };
+        content?: { schema: JSONSchema7; defaults: RuntimeContentInput };
+        cancellation?: 'cooperative';
+      }
+    > = {};
+    for (const kernelId of this.kernelRenderContentMap.keys()) {
+      const zodSchema = this.kernelRenderZodSchemaMap.get(kernelId);
+      const renderOptions = zodSchema
+        ? this.deriveJsonSchema(zodSchema, `render:${kernelId}`)
+        : { schema: {}, defaults: {} };
+      const keys = new Set(this.kernelRenderContentMap.get(kernelId) ?? []);
+      for (const { enabled, middleware } of this.getMiddleware()) {
+        if (enabled) {
+          for (const key of this.getMiddlewareRenderContentKeys(middleware, kernelId)) {
+            keys.add(key);
+          }
+        }
+      }
+      const content = this.buildContentCapability('render', [...keys]);
+      renderCapabilities[kernelId] = {
+        renderOptions,
+        ...(content ? { content } : {}),
+        ...(this.kernelCancellationMap.get(kernelId) ? { cancellation: 'cooperative' } : {}),
+      };
     }
 
-    return { routes, renderSchemas };
+    const registrations: CapabilitiesManifest['registrations'] = [
+      ...this.manifestKernelPlugins.map<RuntimeCapabilityRegistration>(
+        ({ id, extensions, permissions, builtinDependencies }) => ({
+          kind: 'kernel',
+          id,
+          extensions,
+          ...(permissions === undefined ? {} : { permissions }),
+          ...(builtinDependencies === undefined ? {} : { builtinDependencies }),
+        }),
+      ),
+      ...this.middlewarePlugins.map<RuntimeCapabilityRegistration>(({ id, permissions }) => ({
+        kind: 'middleware',
+        id,
+        ...(permissions === undefined ? {} : { permissions }),
+      })),
+      ...this.bundlerPlugins.map<RuntimeCapabilityRegistration>(({ id, permissions }) => ({
+        kind: 'bundler',
+        id,
+        ...(permissions === undefined ? {} : { permissions }),
+      })),
+      ...this.transcoderPlugins.map<RuntimeCapabilityRegistration>(({ id, permissions }) => ({
+        kind: 'transcoder',
+        id,
+        ...(permissions === undefined ? {} : { permissions }),
+      })),
+    ];
+
+    return { registrations, routes, renderCapabilities };
+  }
+
+  private buildContentCapability(
+    operation: 'render' | 'export',
+    keys: readonly RuntimeContentKey[],
+  ): { schema: JSONSchema7; defaults: RuntimeContentInput } | undefined {
+    if (keys.length === 0) {
+      return undefined;
+    }
+    return {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: Object.fromEntries(
+          keys.map((key) => [
+            key,
+            {
+              type: 'boolean',
+              description:
+                key === 'includeEdges' ? 'Include auxiliary visible edge overlays.' : 'Include Tau topology metadata.',
+            },
+          ]),
+        ),
+      },
+      defaults: Object.fromEntries(keys.map((key) => [key, contentDefault(operation, key)])) as RuntimeContentInput,
+    };
   }
 
   /**
@@ -2195,182 +7012,240 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    *    and execute the first viable route via the matching transcoder.
    * 3. Return an actionable error if no route succeeds.
    *
-   * @param input - The export geometry input
-   * @param runtime - The kernel runtime services
+   * @param plan - Owner-bound export plan selected for this render artifact.
+   * @param execution - Export input, runtime services, and settled render identity.
    * @returns The export result
    */
   // oxlint-disable-next-line complexity -- Multi-step route planner with fallback
   private async executeExportWithRoute(
-    input: ExportGeometryInput,
-    runtime: KernelRuntime,
+    plan: Extract<OwnerBoundExportPlan, { success: true }>,
+    execution: {
+      readonly input: KernelExportGeometryInput;
+      readonly runtime: KernelRuntime;
+      readonly renderIdentity: RenderIdentity;
+      readonly evaluationSlot?: EvaluationSlot;
+    },
   ): Promise<ExportGeometryResult> {
-    const activeKernelId = this.getActiveKernelId();
-
-    if (!activeKernelId) {
-      return this.onExportGeometry(input, runtime);
+    const { input, runtime, renderIdentity, evaluationSlot } = execution;
+    if (plan.route.kind === 'direct') {
+      return this.withDocumentNativeAbort('export', async () =>
+        this.onExportGeometryForOwner(
+          plan.owner,
+          this.withProviderRuntimeContent(
+            {
+              ...this.withoutRuntimeContent(input),
+              format: plan.route.targetFormat,
+              options: input.options,
+              ...(plan.route.exportId ? { exportId: plan.route.exportId } : {}),
+            },
+            plan.route.content,
+            this.getNativeExportContentKeys(plan.owner, plan.route.targetFormat, plan.route.exportId),
+          ),
+          runtime,
+          evaluationSlot,
+        ),
+      );
     }
-
-    const zodSchemas = this.kernelExportZodSchemasMap.get(activeKernelId);
-    const kernelFormats = zodSchemas ? (Object.keys(zodSchemas) as FileExtension[]) : undefined;
-
-    if (kernelFormats?.includes(input.format)) {
-      return this.onExportGeometry(input, runtime);
-    }
-
-    const candidateRoutes = this._capabilitiesManifest.routes.filter(
-      (r) => r.targetFormat === input.format && r.transcoderId && (!activeKernelId || r.kernelId === activeKernelId),
-    );
 
     const transcoderRuntime: TranscoderRuntime = {
       logger: this.logger,
       tracer: this.tracer,
+      signal: runtime.signal,
     };
 
-    // Failures from routes that were attempted but did not produce a result.
-    // Surfaced instead of the generic "no route" error, which would misreport
-    // a failing conversion (e.g. a transcoder wasm that cannot initialise) as
-    // a missing registration.
-    const attemptedRouteIssues: KernelIssue[] = [];
-
-    /* oxlint-disable no-await-in-loop -- Sequential candidate evaluation: each route runs source export + transcode */
-    for (const route of candidateRoutes) {
-      const transcoder = this.loadedTranscoders.get(route.transcoderId!);
-      if (!transcoder) {
-        continue;
-      }
-
-      const zodSchemas = activeKernelId ? this.kernelExportZodSchemasMap.get(activeKernelId) : undefined;
-      const sourceZodSchema = zodSchemas?.[route.sourceFormat];
-      let resolvedSourceOptions = input.options;
-      if (sourceZodSchema) {
-        const parseResult = sourceZodSchema.safeParse(input.options);
-        if (parseResult.success) {
-          resolvedSourceOptions = parseResult.data as Record<string, unknown>;
-        }
-      }
-
-      const sourceInput: ExportGeometryInput = {
-        ...input,
-        format: route.sourceFormat,
-        options: resolvedSourceOptions,
-      };
-
-      const kernelResult = await this.onExportGeometry(sourceInput, runtime);
-      if (!kernelResult.success) {
-        attemptedRouteIssues.push({
-          message:
-            `Source export "${route.sourceFormat}" for route ${route.sourceFormat} → ${input.format} ` +
-            `via "${route.transcoderId}" failed: ${kernelResult.issues.map((issue) => issue.message).join('; ')}`,
-          code: 'RUNTIME',
+    const { route } = plan;
+    const transcoder = this.loadedTranscoders.get(route.transcoderId);
+    if (!transcoder) {
+      return createKernelError([
+        {
+          message: `No loaded transcoder "${route.transcoderId}" for route ${route.sourceFormat} → ${route.targetFormat}.`,
+          code: 'TRANSCODER_CAPABILITY_MISSING',
           type: 'runtime',
           severity: 'error',
-        });
-        continue;
-      }
+        },
+      ]);
+    }
 
-      const matchingEdge = transcoder.edges.find(
-        (edge) => edge.from === route.sourceFormat && edge.to === input.format,
+    const sourceInput: KernelExportGeometryInput & { exportId?: string } = {
+      ...this.withoutRuntimeContent(input),
+      format: route.sourceFormat,
+      options: route.sourceOptions,
+      ...(route.exportId ? { exportId: route.exportId } : {}),
+    };
+    const sourceMetadata = route.exportId
+      ? this.getDocumentExportDeclaration(plan.owner, route.exportId)
+      : this.kernelExportMetadataMap.get(route.kernelId)?.[route.sourceFormat];
+    const sourceExportRequest: ExportRequest = {
+      exportId: route.exportId ?? (sourceMetadata && 'id' in sourceMetadata ? sourceMetadata.id : route.sourceFormat),
+      mimeType: sourceMetadata?.mimeType ?? 'application/octet-stream',
+      extension: route.sourceFormat,
+      options: route.sourceOptions,
+    };
+    const contributors = this.getSourceContentContributors(plan.owner, route);
+    let sourceHandler: (input: ExportRequest) => Promise<KernelExportResult> = async (handlerInput) => {
+      if (
+        handlerInput.exportId !== sourceExportRequest.exportId ||
+        handlerInput.mimeType !== sourceExportRequest.mimeType ||
+        handlerInput.extension !== sourceExportRequest.extension
+      ) {
+        return createKernelError([
+          {
+            message: `Middleware changed the selected source export ${sourceExportRequest.exportId}.`,
+            code: 'MIDDLEWARE_FAILED',
+            type: 'kernel',
+            severity: 'error',
+          },
+        ]);
+      }
+      const result = await this.withDocumentNativeAbort('export', async () =>
+        this.onExportGeometryForOwner(
+          plan.owner,
+          this.withProviderRuntimeContent(
+            { ...sourceInput, options: handlerInput.options },
+            route.content,
+            this.getNativeExportContentKeys(plan.owner, route.sourceFormat, route.exportId),
+          ),
+          runtime,
+          evaluationSlot,
+        ),
       );
-      let resolvedTranscodeOptions = input.options;
-      if (matchingEdge?.optionsSchema) {
-        const edgeParseResult = matchingEdge.optionsSchema.safeParse(input.options);
-        if (!edgeParseResult.success) {
-          return createKernelError(
-            edgeParseResult.error.issues.map((issue) => ({
-              message: `Transcoder edge option validation failed (${route.sourceFormat} → ${input.format}): ${issue.path.join('.')} — ${issue.message}`,
-              code: 'RUNTIME',
-              severity: 'error',
-            })),
-          );
-        }
-        resolvedTranscodeOptions = edgeParseResult.data as Record<string, unknown>;
+      if (!result.success) {
+        return result;
       }
+      try {
+        return { ...result, data: nonemptyExportFiles(result.data) };
+      } catch (error) {
+        return createKernelError([
+          {
+            message: error instanceof Error ? error.message : String(error),
+            code: 'EXPORT_ARTIFACT_SET_INVALID',
+            type: 'runtime',
+            severity: 'error',
+          },
+        ]);
+      }
+    };
+    if (contributors.length > 0) {
+      const dependencies = [...renderIdentity.dependencies, plan.dependency];
+      const dependencyHash = await this.computeDependencyHash(dependencies);
+      for (let index = contributors.length - 1; index >= 0; index--) {
+        const contributor = contributors[index]!;
+        const inner = sourceHandler;
+        const middlewareRuntime = createMiddlewareRuntime({
+          signal: runtime.signal,
+          tracer: runtime.tracer,
+          onLog: this.onLog,
+          middlewareName: contributor.middleware.name,
+          filesystem: this.filesystem,
+          compute: runtime.compute,
+          dependencies,
+          dependencyHash,
+          stateSchema: contributor.middleware.stateSchema,
+          options: contributor.options,
+          logger: this.getMiddlewareLogger(contributor.id, contributor.middleware.name),
+        });
+        sourceHandler = async (handlerInput) => {
+          try {
+            return await contributor.middleware.wrapExport!(
+              this.withProviderRuntimeContent(
+                handlerInput,
+                route.content,
+                contributor.middleware.content?.exports?.[route.sourceFormat] ?? [],
+              ),
+              inner,
+              middlewareRuntime,
+            );
+          } catch (error) {
+            // A superseded or closed operation is aborted, not failed: its caller drops it.
+            if (middlewareRuntime.signal.aborted) {
+              throw error;
+            }
+            const message = error instanceof Error ? error.message : String(error);
+            return createKernelError([
+              {
+                message: `Middleware error in ${contributor.middleware.name}: ${message}`,
+                code: 'MIDDLEWARE_FAILED',
+                type: 'kernel',
+                severity: 'error',
+              },
+            ]);
+          }
+        };
+      }
+    }
+    const sourceResult = await sourceHandler(sourceExportRequest);
+    const kernelResult: ExportGeometryResult = sourceResult.success
+      ? { ...sourceResult, data: [...sourceResult.data] }
+      : sourceResult;
+    if (!kernelResult.success) {
+      return kernelResult;
+    }
 
-      const transcodeResult = await transcoder.definition.transcode(
+    let context: unknown;
+    try {
+      context = await this.initializeTranscoder(transcoder);
+      runtime.signal.throwIfAborted();
+    } catch (error) {
+      runtime.signal.throwIfAborted();
+      return createKernelError([
+        {
+          message: `Failed to initialize transcoder "${route.transcoderId}": ${error instanceof Error ? error.message : String(error)}`,
+          code: 'TRANSCODER_INITIALIZATION_FAILED',
+          type: 'runtime',
+          severity: 'error',
+        },
+      ]);
+    }
+
+    try {
+      const result = await transcoder.definition.transcode(
         {
           from: route.sourceFormat,
-          to: input.format,
+          to: route.targetFormat,
           files: kernelResult.data,
-          options: resolvedTranscodeOptions,
+          options: route.edgeOptions,
         },
         transcoderRuntime,
-        transcoder.context,
+        context,
       );
-      if (transcodeResult.success) {
-        return transcodeResult;
-      }
-
-      attemptedRouteIssues.push({
-        message:
-          `Transcode route ${route.sourceFormat} → ${input.format} via "${route.transcoderId}" failed: ` +
-          transcodeResult.issues.map((issue) => issue.message).join('; '),
-        code: 'RUNTIME',
-        type: 'runtime',
-        severity: 'error',
-      });
-    }
-    /* oxlint-enable no-await-in-loop */
-
-    if (attemptedRouteIssues.length > 0) {
-      return { success: false, issues: attemptedRouteIssues };
-    }
-
-    const nativeFormats = kernelFormats?.join(', ') ?? 'none';
-    return {
-      success: false,
-      issues: [
+      runtime.signal.throwIfAborted();
+      return result;
+    } catch (error) {
+      runtime.signal.throwIfAborted();
+      return createKernelError([
         {
-          message:
-            `No export route found for format "${input.format}"` +
-            (activeKernelId ? ` from kernel "${activeKernelId}"` : '') +
-            `. Native formats: ${nativeFormats}. Register a transcoder that supports this conversion.`,
-          code: 'KERNEL_CAPABILITY_MISSING',
+          message: `Transcoder "${route.transcoderId}" failed: ${error instanceof Error ? error.message : String(error)}`,
+          code: 'TRANSCODER_EXECUTION_FAILED',
           type: 'runtime',
           severity: 'error',
         },
-      ],
-    };
+      ]);
+    }
   }
 
   /**
    * Import a middleware module, using the cache to avoid redundant imports.
    *
-   * @param url - import specifier pointing to the middleware module's entry point
+   * @param entries - registered bundler entries
    * @returns The middleware instance
    */
-  private async importMiddlewareModule(url: string): Promise<KernelMiddleware> {
-    const cached = this.middlewareModuleCache.get(url);
+  private async loadBundlers(entries: readonly BundlerPlugin[]): Promise<void> {
+    for (const entry of entries) {
+      // oxlint-disable-next-line no-await-in-loop -- Bundler registration order should remain deterministic
+      await this.ensureLoadedBundler(entry);
+    }
+  }
+
+  private async importMiddlewareModule(entry: MiddlewarePlugin): Promise<RuntimeMiddlewareDefinition> {
+    const cached = this.middlewareModuleCache.get(entry.id);
     if (cached) {
       return cached;
     }
 
-    const module_: Record<string, unknown> = (await import(/* @vite-ignore */ url)) as Record<string, unknown>;
-    const middleware = this.resolveMiddlewareExport(module_);
+    const middleware = await resolveRuntimePluginDefinition<RuntimeMiddlewareDefinition>('middleware', entry);
 
-    this.middlewareModuleCache.set(url, middleware);
+    this.middlewareModuleCache.set(entry.id, middleware);
     return middleware;
-  }
-
-  /**
-   * Resolve the middleware export from a dynamically imported module.
-   * Checks for a default export first, then looks for the first export
-   * that has a `name` property (duck-typed as KernelMiddleware).
-   *
-   * @param module_ - The imported module
-   * @returns The resolved middleware instance
-   */
-  private resolveMiddlewareExport(module_: Record<string, unknown>): KernelMiddleware {
-    if (module_['default'] && typeof module_['default'] === 'object' && 'name' in module_['default']) {
-      return module_['default'] as KernelMiddleware;
-    }
-
-    for (const value of Object.values(module_)) {
-      if (typeof value === 'object' && value !== null && 'name' in value) {
-        return value as KernelMiddleware;
-      }
-    }
-
-    throw new Error('Middleware module does not export a valid KernelMiddleware');
   }
 
   /**
@@ -2383,46 +7258,176 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    */
   private createFileSystem(): KernelFileSystem {
     const fileSystem = this.fileSystem!;
-    const { tracer } = this;
+    const { tracer, refusedReads } = this;
+    const checkOperationAbort = (): void => {
+      (this.operationSignal ?? neverAbortedSignal).throwIfAborted();
+    };
+    /* A read refused while its file is still arriving names a file the render must run again for once it lands. */
+    const follow = async <Value>(path: string, read: Promise<Value>): Promise<Value> => {
+      try {
+        return await read;
+      } catch (error) {
+        if ((error as { code?: unknown } | undefined)?.code === 'PENDING') {
+          refusedReads.add(path);
+        }
+        throw error;
+      }
+    };
 
     function readFile(path: string, encoding: 'utf8'): Promise<string>;
     function readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
     async function readFile(path: string, encoding?: 'utf8'): Promise<string | Uint8Array<ArrayBuffer>> {
+      checkOperationAbort();
       const span = tracer.startSpan('fs.read', { path });
-      const data = encoding ? await fileSystem.readFile(path, encoding) : await fileSystem.readFile(path);
-      span.end();
-      return data;
+      try {
+        const data = await follow<string | Uint8Array<ArrayBuffer>>(
+          path,
+          encoding ? fileSystem.readFile(path, encoding) : fileSystem.readFile(path),
+        );
+        checkOperationAbort();
+        return data;
+      } finally {
+        span.end();
+      }
     }
 
+    const { hashFiles } = fileSystem;
     return createRuntimeFileSystem({
+      ...(hashFiles === undefined
+        ? {}
+        : {
+            async hashFiles(paths: readonly string[]): Promise<Record<string, string>> {
+              checkOperationAbort();
+              const span = tracer.startSpan('fs.hashFiles', { count: paths.length });
+              try {
+                const digests = await hashFiles.call(fileSystem, paths);
+                checkOperationAbort();
+                return digests;
+              } finally {
+                span.end();
+              }
+            },
+          }),
       id: 'runtime:kernel-worker-bridge',
-      capabilities: { persistent: true, writable: true, quotaBased: false, caseSensitive: true },
+      capabilities: fileSystem.capabilities,
       // oxlint-disable-next-line eslint/no-empty-function -- Underlying FS owns its lifecycle; the bridge is a stateless decorator with nothing to release.
       dispose() {},
       readFile,
 
       async exists(path: string): Promise<boolean> {
+        checkOperationAbort();
         const span = tracer.startSpan('fs.exists', { path });
-        const fileExists = await fileSystem.exists(path);
-        span.end();
-        return fileExists;
+        try {
+          const fileExists = await follow(path, fileSystem.exists(path));
+          checkOperationAbort();
+          return fileExists;
+        } finally {
+          span.end();
+        }
       },
 
       async readdir(path: string): Promise<string[]> {
+        checkOperationAbort();
         const span = tracer.startSpan('fs.readdir', { path });
-        const entries = await fileSystem.readdir(path);
-        span.end();
-        return entries;
+        try {
+          const entries = await follow(path, fileSystem.readdir(path));
+          checkOperationAbort();
+          return entries;
+        } finally {
+          span.end();
+        }
       },
 
-      writeFile: async (path: string, data: Uint8Array<ArrayBuffer> | string) => fileSystem.writeFile(path, data),
-      mkdir: async (path: string, options?: { recursive?: boolean }) => fileSystem.mkdir(path, options),
-      unlink: async (path: string) => fileSystem.unlink(path),
-      rmdir: async (path: string) => fileSystem.rmdir(path),
-      rename: async (oldPath: string, newPath: string) => fileSystem.rename(oldPath, newPath),
-      stat: async (path: string) => fileSystem.stat(path),
-      lstat: async (path: string) => fileSystem.lstat(path),
+      async writeFile(path: string, data: Uint8Array<ArrayBuffer> | string): Promise<void> {
+        checkOperationAbort();
+        await fileSystem.writeFile(path, data);
+        checkOperationAbort();
+      },
+      async mkdir(path: string, options?: { recursive?: boolean }): Promise<void> {
+        checkOperationAbort();
+        await fileSystem.mkdir(path, options);
+        checkOperationAbort();
+      },
+      async unlink(path: string): Promise<void> {
+        checkOperationAbort();
+        await fileSystem.unlink(path);
+        checkOperationAbort();
+      },
+      async rmdir(path: string): Promise<void> {
+        checkOperationAbort();
+        await fileSystem.rmdir(path);
+        checkOperationAbort();
+      },
+      async rename(oldPath: string, newPath: string): Promise<void> {
+        checkOperationAbort();
+        await fileSystem.rename(oldPath, newPath);
+        checkOperationAbort();
+      },
+      async stat(path: string) {
+        checkOperationAbort();
+        const result = await follow(path, fileSystem.stat(path));
+        checkOperationAbort();
+        return result;
+      },
+      async lstat(path: string) {
+        checkOperationAbort();
+        const result = await follow(path, fileSystem.lstat(path));
+        checkOperationAbort();
+        return result;
+      },
     });
+  }
+
+  /**
+   * The filesystem the bundler reads through (D15).
+   *
+   * A cold open resolved the same graph twice and read the same bytes three times over: once per
+   * bundler pass and once more for the dependency hashes. Contents come from `fileContentCache` —
+   * the map `clearVolatileFileCaches` and the watch invalidator already keep honest — and
+   * existence from the operation-scoped probe caches, so each module is probed and read once.
+   *
+   * @returns The kernel filesystem with reads and probes served from the caches.
+   */
+  private get bundlerFilesystem(): KernelFileSystem {
+    const base = this.filesystem;
+    this.bundlerFilesystemView ??= {
+      ...base,
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- an overloaded method cannot be written as an arrow.
+      readFile: (async (path: string, encoding?: 'utf8') => {
+        let content = this.fileContentCache.get(path);
+        if (content === undefined) {
+          content = await base.readFile(path);
+          // Project sources only: a CDN package artifact is read twice per cold open and can be
+          // megabytes, and this cache lives as long as the watch does.
+          if (!path.startsWith('node_modules/')) {
+            this.fileContentCache.set(path, content);
+          }
+        }
+        if (encoding !== 'utf8') {
+          return typeof content === 'string' ? new TextEncoder().encode(content) : content;
+        }
+        return typeof content === 'string' ? content : new TextDecoder().decode(content);
+      }) as KernelFileSystem['readFile'],
+      exists: async (path: string) => {
+        const cached = this.fileExistsCache.get(path);
+        if (cached !== undefined) {
+          return cached;
+        }
+        const answer = await base.exists(path);
+        this.fileExistsCache.set(path, answer);
+        return answer;
+      },
+      stat: async (path: string) => {
+        const cached = this.fileStatCache.get(path);
+        if (cached !== undefined) {
+          return cached;
+        }
+        const entry = await base.stat(path);
+        this.fileStatCache.set(path, entry);
+        return entry;
+      },
+    };
+    return this.bundlerFilesystemView;
   }
 
   /**
@@ -2436,29 +7441,136 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @returns Array of all dependencies
    */
   private async computeDependencies(input: {
+    operations: ReadonlyArray<MiddlewareFileDependency['affects'][number]>;
     parameters?: Record<string, unknown>;
+    renderOptions?: Record<string, unknown>;
+    content?: RuntimeContentInput;
+    exportDependency?: ExportDependency;
     resolvedMiddleware?: ResolvedMiddleware[];
+    dependencyContext?: DependencyResolutionContext;
+    owner: OperationOwner;
   }): Promise<Dependency[]> {
-    // Use cached base deps within a render cycle (file discovery + hashing is expensive)
-    let baseDeps: Dependency[];
-    if (this.renderDependencyCache) {
-      baseDeps = this.renderDependencyCache.dependencies;
-    } else {
-      baseDeps = await this.computeBaseDependencies(input.resolvedMiddleware);
-      // Cache for reuse by createGeometry within the same render cycle
-      this.renderDependencyCache = { hash: '', dependencies: baseDeps };
+    const executionList = input.resolvedMiddleware ?? this.getMiddleware();
+    const commonDependencyKey = canonicalJson({
+      file: input.owner.file,
+      kernelId: input.owner.binding?.kernelId,
+      kernelVersion: input.owner.binding?.kernelVersion,
+      options: input.owner.binding?.kernelId ? (this.kernelInitOptionsMap.get(input.owner.binding.kernelId) ?? {}) : {},
+      assets: input.owner.binding?.kernelId
+        ? (this.kernelImplementationAssetsMap.get(input.owner.binding.kernelId) ?? [])
+        : [],
+    });
+    const executionListKey = canonicalJson({
+      operations: input.operations,
+      middleware: executionList
+        .filter(({ enabled }) => enabled)
+        .map(({ id, middleware, options }) => ({
+          id,
+          version: middleware.version,
+          options,
+        })),
+    });
+    let commonDependencies = input.dependencyContext?.commonDependencies;
+    if (!commonDependencies) {
+      commonDependencies = this.commonDependencyCache.get(commonDependencyKey);
+      if (!commonDependencies) {
+        const pending = this.recordDependencyPaths(this.computeCommonDependencies(input.owner), ({ paths }) => ({
+          paths,
+          affectsParameters: true,
+        }));
+        this.commonDependencyCache.set(commonDependencyKey, pending);
+        commonDependencies = this.evictRejectedCacheEntry({
+          cache: this.commonDependencyCache,
+          key: commonDependencyKey,
+          pending,
+        });
+      }
+      if (input.dependencyContext) {
+        input.dependencyContext.commonDependencies = commonDependencies;
+      }
+    }
+    const common = await commonDependencies;
+
+    let middlewareDependencies = input.dependencyContext?.middlewareDependenciesByExecutionList?.get(executionListKey);
+    if (!middlewareDependencies) {
+      const middlewareDependencyKey = `${commonDependencyKey}|${executionListKey}`;
+      middlewareDependencies = this.middlewareDependencyCache.get(middlewareDependencyKey);
+      if (!middlewareDependencies) {
+        const pending = this.recordDependencyPaths(
+          this.computeMiddlewareDependencies(input.owner, executionList, input.operations),
+          ({ watchPaths }) => ({
+            paths: new Set(watchPaths.keys()),
+            affectsParameters: input.operations.includes('describe'),
+          }),
+        );
+        this.middlewareDependencyCache.set(middlewareDependencyKey, pending);
+        middlewareDependencies = this.evictRejectedCacheEntry({
+          cache: this.middlewareDependencyCache,
+          key: middlewareDependencyKey,
+          pending,
+        });
+      }
+      if (input.dependencyContext) {
+        input.dependencyContext.middlewareDependenciesByExecutionList ??= new Map();
+        input.dependencyContext.middlewareDependenciesByExecutionList.set(executionListKey, middlewareDependencies);
+      }
     }
 
-    if (input.parameters === undefined) {
-      return baseDeps;
+    const phase = await middlewareDependencies;
+    /* The declarations are registered here rather than where they are discovered: discovery is
+     * cached, and a render that answers from that cache still reads those paths and still has to
+     * watch them. Registering only on a miss made a re-opened entry deaf to an external edit of
+     * the paths its middleware declared. */
+    const runtimeDeps: Dependency[] = [
+      ...common.fileDependencies,
+      ...phase.dependencies,
+      ...common.trailingDependencies,
+    ];
+
+    if (input.parameters !== undefined) {
+      const parameterDep: ParameterDependency = {
+        type: 'parameter',
+        parameters: input.parameters,
+      };
+      runtimeDeps.push(parameterDep);
     }
 
-    // Add parameter dependency for geometry computation
-    const parameterDep: ParameterDependency = {
-      type: 'parameter',
-      parameters: input.parameters,
-    };
-    return [...baseDeps, parameterDep];
+    if (input.renderOptions !== undefined) {
+      const renderOptionsDep: RenderOptionsDependency = {
+        type: 'render-options',
+        options: input.renderOptions,
+      };
+      runtimeDeps.push(renderOptionsDep);
+    }
+
+    if (input.content !== undefined) {
+      const contentDep: ContentDependency = {
+        type: 'content',
+        content: input.content as Record<string, boolean>,
+      };
+      runtimeDeps.push(contentDep);
+    }
+
+    if (input.exportDependency !== undefined) {
+      runtimeDeps.push(input.exportDependency);
+    }
+
+    return runtimeDeps;
+  }
+
+  private async evictRejectedCacheEntry<Value>(options: {
+    cache: Map<string, Promise<Value>>;
+    key: string;
+    pending: Promise<Value>;
+  }): Promise<Value> {
+    try {
+      return await options.pending;
+    } catch (error) {
+      if (options.cache.get(options.key) === options.pending) {
+        options.cache.delete(options.key);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -2466,35 +7578,67 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * can be cached for the duration of a render cycle (shared between
    * getParameters and createGeometry).
    *
-   * @param resolvedMiddleware - optional resolved middleware entries to include as dependencies
-   * @returns array of file and asset dependencies with content hashes
+   * @param owner - Kernel/file owner for this dependency-resolution operation
+   * @returns Common file and trailing identity dependencies with content hashes.
    */
-  private async computeBaseDependencies(resolvedMiddleware?: ResolvedMiddleware[]): Promise<Dependency[]> {
+  private async computeCommonDependencies(owner: OperationOwner): Promise<CommonDependencySet> {
+    const ownerFilePath = assertRootedPath(joinRelativePath(owner.file.path, owner.file.filename));
+
     // 1. Discover file dependencies from kernel module
     const discoverSpan = this.tracer.startSpan('deps.discover');
     const discoverInput: GetDependenciesInput = {
-      filePath: this.activeFileAbsolutePath,
-      basePath: this.getProjectRootPath(),
+      entryPath: ownerFilePath,
     };
-    const depsResult = await this.onGetDependencies(discoverInput, this.createRuntime());
-    this.unresolvedDependencyPaths = new Set(depsResult.unresolved);
-    const absolutePaths = depsResult.resolved;
+    const discoveryRuntime = this.createRuntime();
+    this.bundlerResolvedEntries.delete(ownerFilePath);
+    const depsResult = await this.onGetDependenciesForOwner(owner, discoverInput, discoveryRuntime);
+    const resolvedByBundler = this.bundlerResolvedEntries.delete(ownerFilePath);
+    const unresolvedPaths = [...new Set(depsResult.unresolved.map((path) => assertRootedPath(path)))];
+    const rootedPaths = [...new Set(depsResult.resolved.map((path) => assertRootedPath(path)))];
+    const bundleDependency = await this.bundleDependencyFor({
+      resolvedByBundler,
+      owner,
+      entryPath: ownerFilePath,
+      rootedPaths,
+      runtime: discoveryRuntime,
+    });
+    /* Absence is an observation: a request-scoped operation that retained "this import does
+     * not resolve" has to notice the file appearing. */
+    for (const path of unresolvedPaths) {
+      this.fileHashCache.set(path, 'missing');
+    }
     discoverSpan.end();
 
     // 2. Read uncached files
-    const uncachedPaths = absolutePaths.filter((p) => !this.fileHashCache.has(p));
+    const uncachedPaths = rootedPaths.filter((p) => !this.fileHashCache.has(p));
     if (uncachedPaths.length > 0) {
+      // The bundler just read these through `fileContentCache`; only what it did not touch is read
+      // here (W22). A hash still needs the bytes, so a cached *string* is re-encoded, not re-read.
+      const unreadPaths = uncachedPaths.filter((p) => !this.fileContentCache.has(p));
       const readSpan = this.tracer.startSpan('deps.read', {
-        fileCount: uncachedPaths.length,
+        fileCount: unreadPaths.length,
       });
-      const contentMap = await this.filesystem.readFiles(uncachedPaths);
+      const contentMap: Record<string, Uint8Array<ArrayBuffer>> = unreadPaths.length > 0
+        ? await this.filesystem.readFiles(unreadPaths)
+        : {};
+      for (const path of uncachedPaths) {
+        const cached = this.fileContentCache.get(path);
+        if (cached !== undefined) {
+          contentMap[path] = typeof cached === 'string' ? new TextEncoder().encode(cached) : cached;
+        }
+      }
       readSpan.end();
 
       const hashSpan = this.tracer.startSpan('deps.hash', {
         fileCount: uncachedPaths.length,
       });
-      for (const [path, content] of Object.entries(contentMap)) {
-        this.fileHashCache.set(path, this.hashContent(content));
+      for (const path of Object.keys(contentMap)) {
+        const content = contentMap[path];
+        if (content === undefined) {
+          continue;
+        }
+        // oxlint-disable-next-line no-await-in-loop -- hashes are retained in deterministic dependency order
+        this.fileHashCache.set(path, await this.hashContent(content));
         this.fileContentCache.set(path, content);
       }
 
@@ -2502,80 +7646,208 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     }
 
     // Contract: getDependencies() must return paths in deterministic order.
-    const fileDeps: FileDependency[] = absolutePaths.map((absolutePath) => ({
+    const fileDeps: FileDependency[] = rootedPaths.map((rootedPath) => ({
       type: 'file',
-      path: absolutePath,
-      contentHash: this.fileHashCache.get(absolutePath)!,
+      path: rootedPath,
+      contentHash: this.fileHashCache.get(rootedPath)!,
     }));
-
-    // 2. Middleware file dependencies (from getDependencies hooks)
-    const middleware = resolvedMiddleware ?? this.getMiddleware();
-    const middlewareFilePaths: string[] = [];
-    for (const { middleware: mw, options: mwOptions, enabled } of middleware) {
-      if (enabled && mw.getDependencies) {
-        const getDeps = mw.getDependencies as (
-          input: GetDependenciesInput,
-          options: Record<string, unknown>,
-        ) => string[] | Promise<string[]>;
-        // oxlint-disable-next-line no-await-in-loop -- Sequential to preserve deterministic ordering
-        const paths = await getDeps(discoverInput, mwOptions);
-        middlewareFilePaths.push(...paths);
+    if (bundleDependency) {
+      for (const dependency of fileDeps) {
+        this.bundleCoveredFiles.add(dependency);
       }
     }
-
-    if (middlewareFilePaths.length > 0) {
-      for (const filePath of middlewareFilePaths) {
-        if (!this.fileHashCache.has(filePath)) {
-          try {
-            // oxlint-disable-next-line no-await-in-loop -- Individual reads to handle missing files gracefully
-            const content = await this.filesystem.readFile(filePath);
-            this.fileHashCache.set(filePath, this.hashContent(content));
-          } catch {
-            this.fileHashCache.set(filePath, 'missing');
-          }
-        }
-        fileDeps.push({
-          type: 'file',
-          path: filePath,
-          contentHash: this.fileHashCache.get(filePath)!,
-        });
-      }
-    }
-
-    // 3. Middleware signature dependencies (only enabled, index preserves chain order)
-    const middlewareDeps: MiddlewareDependency[] = middleware
-      .filter(({ enabled }) => enabled)
-      .map(({ middleware: mw, options: mwOptions }, index) => ({
-        type: 'middleware',
-        name: mw.name,
-        version: mw.version ?? '1',
-        index,
-        options: mwOptions,
-      }));
 
     // 4. Framework dependency
     const frameworkDep: FrameworkDependency = {
       type: 'framework',
       name: 'tau',
-      version: tauVersion,
+      version: packageVersion,
     };
 
+    const activeKernelId = owner.binding?.kernelId;
+    const activeKernelVersion = owner.binding?.kernelVersion;
+    const kernelDeps: KernelDependency[] =
+      activeKernelId && activeKernelVersion
+        ? [{ type: 'kernel', id: activeKernelId, version: activeKernelVersion }]
+        : [];
+
     // 5. Options dependencies (options are stable between renders, no sort needed)
-    const optionDeps: OptionDependency[] = Object.entries(this.options).map(([key, value]) => ({
+    const selectedKernelOptions = activeKernelId ? (this.kernelInitOptionsMap.get(activeKernelId) ?? {}) : {};
+    const optionDeps: OptionDependency[] = Object.entries(selectedKernelOptions).map(([key, value]) => ({
       type: 'option',
       key,
       value,
     }));
 
     // 6. Asset dependencies (fonts, WASM, etc.)
-    const assetUrls = this.getAssetUrls();
-    const assetDeps: AssetDependency[] = assetUrls.map((urlOrVersion, index) => ({
+    const implementationAssets = activeKernelId ? (this.kernelImplementationAssetsMap.get(activeKernelId) ?? []) : [];
+    const assetDeps: AssetDependency[] = implementationAssets.map((asset) => ({
       type: 'asset',
-      name: `asset-${index}`,
-      contentHash: this.hashAssetUrl(urlOrVersion),
+      name: `${activeKernelId}:${asset.id}`,
+      contentHash: asset.sha256,
     }));
 
-    return [...fileDeps, ...middlewareDeps, frameworkDep, ...optionDeps, ...assetDeps];
+    return {
+      fileDependencies: bundleDependency ? [...fileDeps, bundleDependency] : fileDeps,
+      trailingDependencies: [...kernelDeps, frameworkDep, ...optionDeps, ...assetDeps],
+      paths: new Set([...rootedPaths, ...unresolvedPaths]),
+    };
+  }
+
+  /**
+   * The bundle that stands in for the resolved sources' content in the build key (R24), when there is one.
+   *
+   * Only a kernel that declares `sourceIdentity: 'bundle'`, and whose resolve just answered through
+   * `runtime.bundler.resolveDependencies`, qualifies: it reads its sources only
+   * through the bundle's output, so the output's digest decides behaviour, and a comment or a
+   * reformat that prints the same bundle keeps the key. The bundle must also name exactly the
+   * resolved paths; anything else (a failed bundle, a resolve that is not the bundler's) keeps
+   * hashing raw content.
+   *
+   * @param input - The discovery to key.
+   * @param input.resolvedByBundler - Whether the kernel's resolve answered through `runtime.bundler.resolveDependencies`.
+   * @param input.owner - The operation owner whose kernel resolved the paths.
+   * @param input.entryPath - The rooted entry path.
+   * @param input.rootedPaths - The resolved dependency paths, in discovery order.
+   * @param input.runtime - The runtime discovery ran with; its bundler is the one the kernel uses.
+   * @returns The bundle dependency, or `undefined` to key on raw content.
+   */
+  private async bundleDependencyFor(input: {
+    resolvedByBundler: boolean;
+    owner: OperationOwner;
+    entryPath: string;
+    rootedPaths: readonly string[];
+    runtime: KernelRuntime;
+  }): Promise<BundleDependency | undefined> {
+    const { resolvedByBundler, owner, entryPath, rootedPaths, runtime } = input;
+    if (!resolvedByBundler || this.kernelSourceIdentity(owner) !== 'bundle') {
+      return undefined;
+    }
+    // The bundle its describe and evaluate are about to read; built here when resolve did not.
+    const bundle =
+      this.cachedBundleFor(entryPath, this.bundleGlobalsFor(entryPath)) ?? (await runtime.bundler.bundle(entryPath));
+    if (!bundle.success) {
+      return undefined;
+    }
+    const bundled = new Set(bundle.dependencies.map((path) => assertRootedPath(path)));
+    if (bundled.size !== rootedPaths.length || !rootedPaths.every((path) => bundled.has(path))) {
+      return undefined;
+    }
+    let codeHash = this.bundleCodeHashes.get(bundle);
+    if (codeHash === undefined) {
+      /* Built-in shims name this worker's random module-registry scope; it routes the same exports
+       * in every worker, so the key reads the portable form and two workers share their keys. */
+      codeHash = sha256String(portableKernelModuleCode(bundle.code, { registryScope: this.registryScope }));
+      this.bundleCodeHashes.set(bundle, codeHash);
+    }
+    return { type: 'bundle', entryPath, codeHash: await codeHash };
+  }
+
+  /**
+   * What the build key reads for an owner's sources: the selected kernel's declared
+   * `sourceIdentity`. A worker without kernel definitions keys raw files.
+   *
+   * @param _owner - The operation owner.
+   * @returns `'bundle'` only for a kernel that opted in.
+   */
+  protected kernelSourceIdentity(_owner: OperationOwner): 'files' | 'bundle' {
+    return 'files';
+  }
+
+  /**
+   * Which registered built-in modules an entry's bundle binds as script globals, or `undefined`
+   * for all of them. A worker that knows which kernel registered each module narrows it to the
+   * entry's kernel, so the bundle (and the key over it) does not depend on what else loaded.
+   *
+   * @param _entryPath - The entry being bundled.
+   * @returns A predicate over module names, or `undefined` for every registered module.
+   */
+  protected bundleModuleScope(_entryPath: string): ((name: string) => boolean) | undefined {
+    return undefined;
+  }
+
+  /** Resolve only the dependencies declared by one middleware execution list. */
+  private async computeMiddlewareDependencies(
+    owner: OperationOwner,
+    middleware: ResolvedMiddleware[],
+    operations: ReadonlyArray<MiddlewareFileDependency['affects'][number]>,
+  ): Promise<MiddlewareDependencySet> {
+    const discoverInput: GetDependenciesInput = {
+      entryPath: assertRootedPath(joinRelativePath(owner.file.path, owner.file.filename)),
+    };
+    const declarations: MiddlewareFileDependency[] = [];
+    for (const { middleware: definition, options, enabled, id } of middleware) {
+      if (!enabled || !definition.resolve) {
+        continue;
+      }
+      try {
+        // oxlint-disable-next-line no-await-in-loop -- Middleware declaration order is part of dependency identity.
+        const resolved = await definition.resolve(discoverInput, {
+          signal: this.operationSignal ?? neverAbortedSignal,
+          logger: this.getMiddlewareLogger(id, definition.name),
+          filesystem: this.filesystem,
+          options,
+        });
+        declarations.push(
+          ...resolved
+            .filter((declaration) => declaration.affects.some((operation) => operations.includes(operation)))
+            .map((declaration) => ({
+              ...declaration,
+              path: assertRootedPath(declaration.path),
+            })),
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw Object.assign(new Error(`Middleware dependency error in ${definition.name}: ${message}`), {
+          issues: [
+            {
+              message: `Middleware dependency error in ${definition.name}: ${message}`,
+              code: 'MIDDLEWARE_FAILED',
+              type: 'kernel',
+              severity: 'error',
+            } satisfies KernelIssue,
+          ],
+        });
+      }
+    }
+
+    const fileDependencies: FileDependency[] = [];
+    const watchPaths = new Map<string, number>();
+    for (const declaration of declarations) {
+      watchPaths.set(declaration.path, declaration.watchDebounce ?? fileChangeDebounce);
+      if (!this.fileHashCache.has(declaration.path)) {
+        try {
+          // oxlint-disable-next-line no-await-in-loop -- Individual reads preserve declaration order and missing-file semantics.
+          const content = await this.filesystem.readFile(declaration.path);
+          // oxlint-disable-next-line no-await-in-loop -- Hash publication must precede dependency construction.
+          this.fileHashCache.set(declaration.path, await this.hashContent(content));
+        } catch (error) {
+          if (!isNotFoundError(error)) {
+            throw error;
+          }
+          this.fileHashCache.set(declaration.path, 'missing');
+        }
+      }
+      fileDependencies.push({
+        type: 'file',
+        path: declaration.path,
+        contentHash: this.fileHashCache.get(declaration.path)!,
+      });
+    }
+
+    const signatureDependencies: MiddlewareDependency[] = middleware
+      .filter(({ middleware: definition, enabled }) => enabled && definition.mutates !== false)
+      .map(({ middleware: definition, options, id }, index) => ({
+        type: 'middleware',
+        id,
+        version: definition.version,
+        index,
+        options,
+      }));
+    return {
+      dependencies: [...fileDependencies, ...signatureDependencies],
+      watchPaths,
+    };
   }
 
   /**
@@ -2654,14 +7926,42 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    *
    * @returns a bundler interface that delegates to extension-specific bundler implementations
    */
-  private createBundlerFacade(): KernelBundler {
-    if (this.cachedBundlerFacade) {
-      return this.cachedBundlerFacade;
-    }
+  /**
+   * The script globals an entry's bundle binds now: the selected kernel's modules, sorted, or
+   * `undefined` (every registered module) before the entry has a kernel.
+   *
+   * @param entryPath - The entry to bundle.
+   * @returns The module names, or `undefined`.
+   */
+  private bundleGlobalsFor(entryPath: string): readonly string[] | undefined {
+    const scope = this.bundleModuleScope(entryPath);
+    return scope ? [...this.registeredModuleNames].filter((name) => scope(name)).toSorted() : undefined;
+  }
 
-    this.cachedBundlerFacade = {
+  /**
+   * The cached bundle for an entry, only when it was built with the same script globals. A bundle
+   * built for another kernel selection is retired, so its banner never runs without this kernel's
+   * globals.
+   *
+   * @param entryPath - The entry.
+   * @param globals - The globals the bundle must bind.
+   * @returns The cached bundle, or `undefined` to bundle again.
+   */
+  private cachedBundleFor(entryPath: string, globals: readonly string[] | undefined): BundleResult | undefined {
+    const cached = this.bundleResultCache.get(entryPath);
+    if (cached === undefined || this.bundleGlobalsKeys.get(entryPath) === canonicalJson(globals ?? null)) {
+      return cached;
+    }
+    this.supersedeBundle(entryPath, cached);
+    return undefined;
+  }
+
+  private createBundlerFacade(signal: AbortSignal): KernelBundler {
+    const facade: KernelBundler = {
       bundle: async (entryPath: string): Promise<BundleResult> => {
-        const cached = this.bundleResultCache.get(entryPath);
+        signal.throwIfAborted();
+        const globals = this.bundleGlobalsFor(entryPath);
+        const cached = this.cachedBundleFor(entryPath, globals);
         if (cached) {
           return cached;
         }
@@ -2674,24 +7974,46 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
         const extension = KernelWorker.getFileExtension(entryPath);
         const bundler = await this.ensureBundlerForExtension(extension);
 
-        const bundleResult = await bundler.definition.bundle({ entryPath }, bundler.ctx);
-        bundleSpan.end();
+        const bundleResult = await bundler.definition.bundle(
+          { entryPath, ...(globals === undefined ? {} : { globals }) },
+          { signal },
+          bundler.ctx,
+        );
+        signal.throwIfAborted();
+        bundleSpan.end(bundler.id === undefined ? undefined : { 'bundler.id': bundler.id });
         this.bundleResultCache.set(entryPath, bundleResult);
+        this.bundleGlobalsKeys.set(entryPath, canonicalJson(globals ?? null));
+        const superseded = this.supersededBundleCode.get(entryPath);
+        if (superseded !== undefined) {
+          this.supersededBundleCode.delete(entryPath);
+          if (superseded !== bundleResult.code) {
+            this.clearBundlerExecutionCaches(superseded);
+          }
+        }
         return bundleResult;
       },
       resolveDependencies: async (entryPath: string): Promise<GetDependenciesResult> => {
-        const cached = this.bundleResultCache.get(entryPath);
+        this.bundlerResolvedEntries.add(entryPath);
+        const cached = this.cachedBundleFor(entryPath, this.bundleGlobalsFor(entryPath));
         if (cached) {
-          return { resolved: cached.dependencies, unresolved: cached.unresolvedPaths };
+          return {
+            resolved: cached.dependencies,
+            unresolved: cached.unresolvedPaths,
+          };
         }
 
-        const result = await this.createBundlerFacade().bundle(entryPath);
-        return { resolved: result.dependencies, unresolved: result.unresolvedPaths };
+        const result = await facade.bundle(entryPath);
+        return {
+          resolved: result.dependencies,
+          unresolved: result.unresolvedPaths,
+        };
       },
+      registryScope: this.registryScope,
       registerModule: (name: string, entry: BuiltinModule): void => {
+        this.registeredModuleNames.add(name);
         if (this.loadedBundlers.size > 0) {
           for (const bundler of new Set(this.loadedBundlers.values())) {
-            bundler.definition.registerModule(name, entry, bundler.ctx);
+            bundler.definition.registerModule({ name, module: entry }, bundler.ctx);
           }
         } else {
           this.pendingModuleRegistrations.set(name, entry);
@@ -2699,7 +8021,183 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       },
     };
 
-    return this.cachedBundlerFacade;
+    return facade;
+  }
+
+  private createComputeRuntime(signal: AbortSignal, operationId: string = randomUuid()): KernelComputeCapability {
+    this.computeHost ??= createComputeCapabilityHost({
+      binding: this.computeBinding,
+      workspace: 'worker',
+      onDiagnostic: (message) => {
+        this.logger.warn(message);
+      },
+      isIdle: () => this.admittedOperations === 0,
+      onPublicationSettled: ({ actionDigest, operationId, status, reason, duration }) => {
+        this.tracer.startSpan('kernel.compute.publication', { operationId }).end({
+          actionDigest,
+          status,
+          duration,
+          ...(reason === undefined ? {} : { reason }),
+        });
+        // Background work settles after its operation flushed; report it now unless an admitted
+        // operation's root is still open, whose terminal reply then carries it.
+        if (this.admittedOperations === 0) {
+          this.telemetryCollector?.flush();
+        }
+        this.settleProjectionRelease(operationId, actionDigest, status === 'stored' || reason === 'duplicate');
+        this.settleBuildPublication(actionDigest, status === 'stored' || reason === 'duplicate');
+      },
+      onScopeSettled: ({ operationId, generation, settlement }) => {
+        this.tracer.startSpan('kernel.compute.reuse', { operationId }).end({
+          generation,
+          status: settlement.status,
+          published: settlement.published.length,
+          omitted: settlement.omitted.length,
+          conflicts: settlement.conflicts.length,
+          ...(settlement.reason === undefined ? {} : { reason: settlement.reason }),
+        });
+      },
+    });
+    const capability = this.observeComputeReuse(
+      this.computeHost.capability(
+        signal,
+        operationId,
+        this.activeOperationHold === undefined ? undefined : { hold: this.activeOperationHold },
+      ),
+    );
+    const release = this.projectionReleases.get(operationId);
+    if (capability.status === 'off' || !release) {
+      return capability;
+    }
+    const evaluate: typeof capability.evaluate = async (evaluation) => {
+      const observed = release.first === undefined;
+      if (observed) {
+        release.first = 'pending';
+      }
+      try {
+        const result = await capability.evaluate(evaluation);
+        if (observed) {
+          if (result.source === 'cache' || result.publication.status === 'stored') {
+            release.first = 'held';
+          } else if (result.publication.status === 'deferred') {
+            release.first = { deferred: result.actionDigest };
+          } else {
+            release.first = 'unheld';
+          }
+        }
+        return result;
+      } catch (error) {
+        if (observed) {
+          release.first = 'unheld';
+        }
+        throw error;
+      }
+    };
+    return { ...capability, evaluate };
+  }
+
+  /**
+   * Record the active operation's reuse outcome on its observed facts.
+   * @param capability - The compute capability for the operation.
+   * @returns The capability, its evaluate wrapped when an operation is observed.
+   */
+  private observeComputeReuse(capability: KernelComputeCapability): KernelComputeCapability {
+    const observed = this.activeOperation?.observed;
+    if (observed === undefined) {
+      return capability;
+    }
+    if (capability.status === 'off') {
+      observed.reuse = 'off';
+      return capability;
+    }
+    const { evaluate } = capability;
+    return {
+      ...capability,
+      evaluate: async (evaluation) => {
+        const result = await evaluate(evaluation);
+        // Any computation in the operation makes it `computed`; only an operation served wholly from cache is `cache`.
+        observed.reuse = result.source === 'computed' || observed.reuse === 'computed' ? 'computed' : 'cache';
+        return result;
+      },
+    };
+  }
+
+  /**
+   * Follow one mesh phase's compute outcome so its projection can release the bytes (WP6 follow-up).
+   * @param operationId - The compute operation its middleware evaluate under.
+   */
+  private trackProjectionRelease(operationId: string): void {
+    this.projectionReleases.set(operationId, {});
+    while (this.projectionReleases.size > maxProjectionReleases) {
+      const oldest = this.projectionReleases.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      this.projectionReleases.delete(oldest);
+    }
+  }
+
+  /**
+   * Keep a fresh projection only while it is the sole holder of its mesh. When the compute cache
+   * served it, or will hold it once its deferred publication stores, a later view of the same
+   * options is a cache hit, so the projection's whole copy of the bytes buys about one lookup.
+   * @param operationId - The compute operation of the mesh phase that made the projection.
+   * @param bound - The evaluation's projection map, the view slot, and the entry just stored there.
+   */
+  private bindProjectionRelease(operationId: string, bound: NonNullable<ProjectionRelease['bound']>): void {
+    const release = this.projectionReleases.get(operationId);
+    if (!release) {
+      return;
+    }
+    if (release.first === 'held') {
+      this.projectionReleases.delete(operationId);
+      bound.projections.delete(bound.slot);
+    } else if (typeof release.first === 'object') {
+      release.bound = bound;
+    } else {
+      // No reuse ran (compute off or no caching middleware), or it will not hold the mesh: keep it.
+      this.projectionReleases.delete(operationId);
+    }
+  }
+
+  /**
+   * A deferred publication settled: release its projection when the cache now holds the mesh.
+   * @param operationId - The compute operation that scheduled it.
+   * @param actionDigest - The published action.
+   * @param held - Whether the cache holds the action now (stored, or a duplicate of a stored one).
+   */
+  private settleProjectionRelease(operationId: string, actionDigest: ActionDigest, held: boolean): void {
+    const release = this.projectionReleases.get(operationId);
+    if (typeof release?.first !== 'object' || release.first.deferred !== actionDigest) {
+      return;
+    }
+    this.projectionReleases.delete(operationId);
+    const { bound } = release;
+    // A newer projection may have replaced it; that one has its own release.
+    if (held && bound && bound.projections.get(bound.slot) === bound.projection) {
+      bound.projections.delete(bound.slot);
+    }
+  }
+
+  /**
+   * Bind the compute facet for this worker.
+   * @param binding - Off, memory, or a host-minted durable store spec.
+   */
+  public setComputeBinding(binding: ComputeBinding): void {
+    this.computeBinding = binding;
+    this.computeHost = undefined;
+  }
+
+  /**
+   * Permit the publication tail of every closed compute scope.
+   *
+   * Invoked only after a result has actually been delivered to the client, so
+   * disposable export and encode work cannot precede or starve delivery. The
+   * The document dispatcher calls it after result delivery and on the return
+   * path of every `call`, so publication tails cannot starve (N6).
+   */
+  public permitComputePublication(): void {
+    this.computeHost?.permitPublication();
   }
 
   /**
@@ -2709,37 +8207,48 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    *
    * @returns KernelRuntime instance
    */
-  private createRuntime(): KernelRuntime {
-    this.cachedRuntime ??= {
+  private createRuntime(signal = this.operationSignal ?? neverAbortedSignal): KernelRuntime {
+    return {
+      signal,
+      // A call outside any operation shares its identity with nothing.
+      operationId: this.currentOperationId ?? ++this.operationSequence,
       filesystem: this.filesystem,
       logger: this.logger,
       fileContentCache: this.fileContentCache,
-      bundler: this.createBundlerFacade(),
-      execute: async (code: string): Promise<ExecuteResult> => {
+      bundler: this.createBundlerFacade(signal),
+      execute: async (code: string, options?: KernelExecuteOptions): Promise<ExecuteResult> => {
+        signal.throwIfAborted();
         await this.ensureBundlerContext();
+        if (options?.fresh === true) {
+          // The new instance is cached under the same code, so the clear on a file edit still frees it.
+          this.clearBundlerExecutionCaches(code);
+        }
 
         const executeSpan = this.tracer.startSpan('kernel.execute', {
           phase: 'computingGeometry',
         });
         const firstBundler = this.loadedBundlers.values().next().value!;
-        const result = await firstBundler.definition.execute(code, firstBundler.ctx);
+        const result = await firstBundler.definition.execute({ code }, { signal }, firstBundler.ctx);
+        signal.throwIfAborted();
         executeSpan.end();
         return result;
       },
       tracer: this.tracer,
+      compute: this.createComputeRuntime(signal),
+      getCompiledWasmModule: (url) => this.getCompiledWasmModule(url),
+      realm: realmResources,
     };
-
-    return this.cachedRuntime;
   }
 
   /**
-   * Get or create a cached logger for a middleware by name.
+   * Get or create a cached logger for a middleware by stable plugin id.
    *
-   * @param middlewareName - the middleware component name used as the log origin
+   * @param middlewareId - stable cache key for the middleware plugin
+   * @param middlewareName - display name used as the log origin
    * @returns a logger scoped to the given middleware
    */
-  private getMiddlewareLogger(middlewareName: string): RuntimeLogger {
-    let logger = this.middlewareLoggerCache.get(middlewareName);
+  private getMiddlewareLogger(middlewareId: string, middlewareName: string): RuntimeLogger {
+    let logger = this.middlewareLoggerCache.get(middlewareId);
     if (!logger) {
       logger = {
         log: (message, options) => {
@@ -2791,101 +8300,423 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
           });
         },
       };
-      this.middlewareLoggerCache.set(middlewareName, logger);
+      this.middlewareLoggerCache.set(middlewareId, logger);
     }
 
     return logger;
   }
 
-  private hashContent(content: Uint8Array<ArrayBuffer>): string {
-    return hashBytes(content);
-  }
-
-  private hashAssetUrl(url: string): string {
-    const cached = this.assetHashCache.get(url);
-    if (cached) {
-      return cached;
-    }
-
-    // Vite ?url imports include a content hash in the URL (production) or a
-    // cache-busted path (dev). Hashing the URL string itself is sufficient for
-    // cache invalidation and avoids fetching multi-MB WASM/font binaries.
-    const hash = hashString(url);
-    this.assetHashCache.set(url, hash);
-    return hash;
+  private async hashContent(content: Uint8Array<ArrayBuffer>): Promise<string> {
+    return sha256Bytes(content);
   }
 
   /**
-   * Set the base path for relative file operations based on a GeometryFile.
-   * Extracts the directory from the filename and combines it with the path.
+   * Select the active file and express it relative to the virtual root.
    *
    * @param file - The geometry file being processed
    */
-  private setBasePath(file: GeometryFile): void {
-    if (this.basePath === file.path && this.activeFilePath === file.filename) {
+  private setActiveFile(file: RuntimeFileLocator): void {
+    const localFilePath = assertRootedPath(joinRelativePath(file.path, file.filename));
+    if (this.activeFilePath === localFilePath) {
       return;
     }
 
-    this.activeFilePath = file.filename;
-
-    const lastSlashIndex = file.filename.lastIndexOf('/');
-    const directory = lastSlashIndex === -1 ? '' : file.filename.slice(0, lastSlashIndex);
-
-    this.basePath = directory ? joinPath(file.path, directory) : file.path;
-
-    this.cachedRuntime = undefined;
-    this.cachedProjectRoot = undefined;
-    this.cachedBundlerFacade = undefined;
+    this.activeFilePath = localFilePath;
   }
 
   /**
-   * Register a middleware watch path with an optional custom debounce tier.
-   * Called by middleware via `runtime.registerWatchPath()`.
-   * Idempotent — re-registering the same path updates the debounce value.
+   * Overlay validated source-export construction values onto render defaults.
    *
-   * @param absolutePath - The absolute path to register.
-   * @param options - The options for the watch path.
+   * Only fields declared by the render schema cross the create boundary.
+   *
+   * @param renderOptions - Validated render defaults for this request.
+   * @param exportOptions - Validated selected source-format options, when exporting.
+   * @param owner - Kernel owner used to resolve and validate the render schema.
+   * @returns Resolved construction values or structured validation issues.
    */
-  private readonly handleRegisterWatchPath = (absolutePath: string, options?: { watchDebounce?: number }): void => {
-    this.middlewareWatchPaths.set(absolutePath, options?.watchDebounce ?? fileChangeDebounce);
-  };
-
-  /**
-   * Validate render options against the active kernel's render Zod schema.
-   * Always returns a populated object — when a schema exists, applies defaults
-   * via `safeParse(renderOptions ?? {})`. When no schema exists, returns `renderOptions ?? {}`.
-   */
-  private validateRenderOptions(
-    renderOptions: Record<string, unknown> | undefined,
-  ): { success: true; options: Record<string, unknown> } | { success: false; issues: KernelIssue[] } {
-    const activeKernelId = this.getActiveKernelId();
-    const zodSchema = activeKernelId ? this.kernelRenderZodSchemaMap.get(activeKernelId) : undefined;
-    if (!zodSchema) {
-      return { success: true, options: renderOptions ?? {} };
+  private resolveCreateOptions(
+    renderOptions: Record<string, unknown>,
+    exportOptions: Record<string, unknown> | undefined,
+    owner: OperationOwner,
+  ):
+    | {
+        success: true;
+        input: Pick<NativeBuildInput, 'options'> | Record<never, never>;
+      }
+    | { success: false; issues: KernelIssue[] } {
+    const kernelId = owner.binding?.kernelId;
+    const createSchema = kernelId ? this.kernelCreateOptionsZodSchemaMap.get(kernelId) : undefined;
+    if (!createSchema) {
+      return { success: true, input: {} };
     }
-    const parseResult = zodSchema.safeParse(renderOptions ?? {});
-    if (parseResult.success) {
-      return { success: true, options: parseResult.data as Record<string, unknown> };
+
+    const createKeys = Object.keys(createSchema.shape);
+    const renderDefaults = kernelId ? this.kernelRenderZodSchemaMap.get(kernelId)?.safeParse({}) : undefined;
+    const candidate = deepmerge(
+      {
+        ...(renderDefaults?.success
+          ? pickRecordProperties(renderDefaults.data as Record<string, unknown>, createKeys)
+          : {}),
+        ...pickRecordProperties(renderOptions, createKeys),
+      },
+      pickRecordProperties(exportOptions ?? {}, createKeys),
+      {
+        arrayMerge: (_target: unknown[], source: unknown[]) => source,
+      },
+    );
+    const admitted = admitKernelOptions(
+      createSchema,
+      candidate,
+      `Kernel ${kernelId} evaluate`,
+      'EVALUATE_OPTIONS_INVALID',
+    );
+    return admitted.success
+      ? { success: true, input: { options: admitted.options } }
+      : { success: false, issues: admitted.issues };
+  }
+
+  private async computeNativeHandleKey(input: {
+    owner: OperationOwner;
+    parameters: Record<string, unknown>;
+    renderOptions: Record<string, unknown>;
+    exportOptions?: Record<string, unknown>;
+    content: RuntimeContentInput;
+    pinnedIdentity?: RenderIdentity;
+    /** Hash these construction options in place of the parsed ones, keeping every other dependency. */
+    createOptions?: Record<string, unknown>;
+  }): Promise<{ success: true; key: string } | { success: false; issues: KernelIssue[] }> {
+    const createOptions = this.resolveCreateOptions(input.renderOptions, input.exportOptions, input.owner);
+    if (!createOptions.success) {
+      return createOptions;
+    }
+    // Retain the admitted evaluation closure, but still compare parsed
+    // construction options before attempting live/serialized handle reuse.
+    const dependencies = input.pinnedIdentity
+      ? input.pinnedIdentity.dependencies.filter(
+          ({ type }) => type !== 'render-options' && type !== 'content' && type !== 'export',
+        )
+      : await this.computeDependencies({
+          operations: ['evaluate'],
+          parameters: input.parameters,
+          resolvedMiddleware: this.getCreateExecutionList(
+            input.owner,
+            input.content,
+            input.exportOptions !== undefined,
+          ),
+          owner: input.owner,
+        });
+    if ('options' in createOptions.input) {
+      dependencies.push({
+        type: 'option',
+        key: 'native-build-options',
+        value: input.createOptions ?? createOptions.input.options,
+      });
     }
     return {
-      success: false,
-      issues: parseResult.error.issues.map((issue) => ({
-        message: `Render option validation failed: ${issue.path.join('.')} — ${issue.message}`,
-        code: 'RUNTIME',
-        severity: 'error',
-      })),
+      success: true,
+      key: await this.computeDependencyHash(dependencies),
     };
   }
 
-  private computeDependencyHash(dependencies: readonly Dependency[]): string {
+  private artifactMatchesNativeBuild(
+    artifact: MaterializedRender,
+    owner: OperationOwner,
+    nativeHandleKey: string,
+  ): boolean {
+    return (
+      artifact.identity.nativeHandleKey === nativeHandleKey &&
+      artifact.identity.selectedKernelId === owner.binding?.kernelId &&
+      artifact.identity.selectedKernelVersion === owner.binding?.kernelVersion
+    );
+  }
+
+  /** Preserve the current client's combined bag until evaluation chooses its offered view. */
+  private validateRenderOptions(
+    renderOptions: Record<string, unknown> | undefined,
+    owner: OperationOwner,
+  ): { success: true; options: Record<string, unknown> } | { success: false; issues: KernelIssue[] } {
+    if (!this.deferRenderOptionAdmission) {
+      const kernelId = owner.binding?.kernelId;
+      const schema = kernelId ? this.kernelRenderZodSchemaMap.get(kernelId) : undefined;
+      if (!schema) {
+        return { success: true, options: renderOptions ?? {} };
+      }
+      return admitKernelOptions(
+        schema,
+        renderOptions ?? {},
+        `Kernel ${kernelId ?? '<unknown>'} view`,
+        'VIEW_OPTIONS_INVALID',
+      );
+    }
+    return { success: true, options: renderOptions ?? {} };
+  }
+
+  protected getNativeRenderContentKeys(owner: OperationOwner, _view?: string): readonly RuntimeContentKey[] {
+    return owner.binding?.kernelId ? (this.kernelRenderContentMap.get(owner.binding.kernelId) ?? []) : [];
+  }
+
+  private getMiddlewareRenderContentKeys(
+    middleware: RuntimeMiddlewareDefinition,
+    kernelId: string | undefined,
+    selectedMimeType?: MediaType,
+  ): readonly RuntimeContentKey[] {
+    const mimeType = selectedMimeType ?? (kernelId ? this.kernelRenderMimeTypeMap.get(kernelId) : undefined);
+    return mimeType ? (middleware.content?.views?.[mimeType] ?? []) : [];
+  }
+
+  private getRenderContentKeys(owner: OperationOwner): readonly RuntimeContentKey[] {
+    const keys = new Set(
+      owner.binding?.kernelId ? (this.kernelAllViewContentMap.get(owner.binding.kernelId) ?? []) : [],
+    );
+    for (const { enabled, middleware } of this.getMiddleware()) {
+      if (enabled) {
+        for (const declaration of Object.values(middleware.content?.views ?? {})) {
+          for (const key of declaration ?? []) {
+            keys.add(key);
+          }
+        }
+      }
+    }
+    return [...keys];
+  }
+
+  private getNativeExportContentKeys(
+    owner: OperationOwner,
+    format: string,
+    exportId?: string,
+  ): readonly RuntimeContentKey[] {
+    if (exportId) {
+      return this.getDocumentExportDeclaration(owner, exportId)?.content ?? [];
+    }
+    return owner.binding?.kernelId ? (this.kernelExportContentMap.get(owner.binding.kernelId)?.[format] ?? []) : [];
+  }
+
+  private getExportContentKeys(owner: OperationOwner, format: string, exportId?: string): readonly RuntimeContentKey[] {
+    const keys = new Set(this.getNativeExportContentKeys(owner, format, exportId));
+    for (const { enabled, middleware } of this.getMiddleware()) {
+      if (enabled) {
+        for (const key of middleware.content?.exports?.[format] ?? []) {
+          keys.add(key);
+        }
+      }
+    }
+    return [...keys];
+  }
+
+  private validateRuntimeContent(
+    operation: 'render' | 'export',
+    supported: readonly RuntimeContentKey[],
+    content: RuntimeContentInput | undefined,
+  ): { success: true; content: RuntimeContentInput } | { success: false; issues: KernelIssue[] } {
+    try {
+      return {
+        success: true,
+        content: normalizeRuntimeContent(operation, supported, content),
+      };
+    } catch (error) {
+      if (!(error instanceof RuntimeContentUnsupportedError)) {
+        throw error;
+      }
+      return {
+        success: false,
+        issues: [
+          {
+            message: error.message,
+            code: error.code,
+            type: 'runtime',
+            severity: 'error',
+          },
+        ],
+      };
+    }
+  }
+
+  /**
+   * The content one view's mesh phase runs with: the request projected onto the properties the
+   * kernel and its enabled mesh middleware declare for the view, with operation defaults applied.
+   *
+   * @param owner - The operation owner.
+   * @param selection - The selected view and its media type.
+   * @param request - The mesh execution list and the caller's content request.
+   * @param request.resolvedMiddleware - The mesh execution list.
+   * @param request.requested - The caller's content request.
+   * @returns The normalized content, or the unsupported-content issues.
+   */
+  private selectRenderContent(
+    owner: OperationOwner,
+    selection: { view: string; mimeType: MediaType },
+    request: { resolvedMiddleware: readonly ResolvedMiddleware[]; requested: RuntimeContentInput | undefined },
+  ): { success: true; content: RuntimeContentInput } | { success: false; issues: KernelIssue[] } {
+    const { resolvedMiddleware, requested } = request;
+    const selectedKeys = new Set(this.getNativeRenderContentKeys(owner, selection.view));
+    for (const { enabled, middleware } of resolvedMiddleware) {
+      if (enabled) {
+        for (const key of middleware.content?.views?.[selection.mimeType] ?? []) {
+          selectedKeys.add(key);
+        }
+      }
+    }
+    return this.validateRuntimeContent('render', [...selectedKeys], requested);
+  }
+
+  private projectRuntimeContent(
+    content: RuntimeContentInput | undefined,
+    keys: readonly RuntimeContentKey[],
+  ): RuntimeContentInput {
+    return Object.fromEntries(keys.map((key) => [key, content?.[key] ?? false])) as RuntimeContentInput;
+  }
+
+  private withoutRuntimeContent<Input extends Record<PropertyKey, unknown>>(input: Input): Omit<Input, 'content'> {
+    const { content: _content, ...rest } = input as Input & {
+      readonly content?: RuntimeContentInput;
+    };
+    return rest;
+  }
+
+  private withProviderRuntimeContent<Input extends Record<PropertyKey, unknown>>(
+    input: Input,
+    canonicalContent: RuntimeContentInput,
+    keys: readonly RuntimeContentKey[],
+  ): Omit<Input, 'content'> & { readonly content?: RuntimeContentInput } {
+    const rest = this.withoutRuntimeContent(input);
+    return keys.length === 0
+      ? rest
+      : {
+          ...rest,
+          content: this.projectRuntimeContent(canonicalContent, keys),
+        };
+  }
+
+  private getCreateExecutionList(
+    _owner: OperationOwner,
+    _content: RuntimeContentInput,
+    _exportOperation: boolean,
+  ): ResolvedMiddleware[] {
+    return this.getMiddleware().filter(
+      ({ enabled, middleware }) => enabled && Boolean(middleware.wrapEvaluate ?? middleware.resolve),
+    );
+  }
+
+  private getMeshExecutionList(_owner: OperationOwner, _content: RuntimeContentInput): ResolvedMiddleware[] {
+    return this.getMiddleware().filter(({ enabled, middleware }) => enabled && Boolean(middleware.wrapRender));
+  }
+
+  private getOuterExportExecutionList(plan: Extract<OwnerBoundExportPlan, { success: true }>): ResolvedMiddleware[] {
+    return this.getMiddleware().filter(
+      (resolved) =>
+        resolved.enabled && Boolean(resolved.middleware.wrapExport) && this.middlewareRunsInOuterExport(resolved, plan),
+    );
+  }
+
+  private getExportExecutionList(plan: Extract<OwnerBoundExportPlan, { success: true }>): ResolvedMiddleware[] {
+    const create = this.getCreateExecutionList(plan.owner, plan.route.content, true);
+    const sourceContributors =
+      plan.route.kind === 'transcoded' ? this.getSourceContentContributors(plan.owner, plan.route) : [];
+    return this.mergeExecutionLists(create, sourceContributors, this.getOuterExportExecutionList(plan));
+  }
+
+  private mergeExecutionLists(...lists: readonly ResolvedMiddleware[][]): ResolvedMiddleware[] {
+    const ids = new Set(lists.flatMap((list) => list.map(({ id }) => id)));
+    return this.getMiddleware().filter(({ id }) => ids.has(id));
+  }
+
+  // oxlint-disable-next-line max-params -- The selected view, owner and content jointly determine middleware ownership.
+  private middlewareRunsForRender(
+    resolved: ResolvedMiddleware,
+    owner: OperationOwner,
+    selection: { view: string; mimeType: MediaType },
+    content: RuntimeContentInput,
+  ): boolean {
+    if (!resolved.middleware.content?.views) {
+      return true;
+    }
+    const declared = this.getMiddlewareRenderContentKeys(
+      resolved.middleware,
+      owner.binding?.kernelId,
+      selection.mimeType,
+    );
+    const native = new Set(this.getNativeRenderContentKeys(owner, selection.view));
+    return declared.some((key) => content[key] === true && !native.has(key));
+  }
+
+  private middlewareRunsInOuterExport(
+    resolved: ResolvedMiddleware,
+    plan: Extract<OwnerBoundExportPlan, { success: true }>,
+  ): boolean {
+    const declarations = resolved.middleware.content?.exports;
+    if (!declarations) {
+      return true;
+    }
+    if (plan.route.kind === 'transcoded') {
+      return false;
+    }
+    const declared = declarations[plan.route.targetFormat] ?? [];
+    const native = new Set(this.getNativeExportContentKeys(plan.owner, plan.route.targetFormat, plan.route.exportId));
+    return declared.some((key) => plan.route.content[key] === true && !native.has(key));
+  }
+
+  private getSourceContentContributors(
+    owner: OperationOwner,
+    route: Extract<OwnerBoundExportRoute, { kind: 'transcoded' }>,
+  ): ResolvedMiddleware[] {
+    return this.getContentContributors(owner, route.sourceFormat, route.content, route.exportId);
+  }
+
+  // oxlint-disable-next-line max-params -- The source export ID disambiguates same-extension content contributors.
+  private getContentContributors(
+    owner: OperationOwner,
+    format: string,
+    content: RuntimeContentInput,
+    exportId?: string,
+  ): ResolvedMiddleware[] {
+    const native = new Set(this.getNativeExportContentKeys(owner, format, exportId));
+    return this.getMiddleware().filter(({ enabled, middleware }) => {
+      if (!enabled || !middleware.wrapExport) {
+        return false;
+      }
+      return (middleware.content?.exports?.[format] ?? []).some((key) => content[key] === true && !native.has(key));
+    });
+  }
+
+  // oxlint-disable-next-line max-params -- Mirrors contributor selection while retaining route provenance.
+  private describeContentContributors(
+    owner: OperationOwner,
+    format: string,
+    content: RuntimeContentInput,
+    exportId?: string,
+  ): NonNullable<NonNullable<ExportDependency['route']>['contentContributors']> {
+    const allMiddleware = this.getMiddleware();
+    return this.getContentContributors(owner, format, content, exportId).map((resolved) => ({
+      id: resolved.id,
+      version: resolved.middleware.version,
+      index: allMiddleware.indexOf(resolved),
+      options: resolved.options,
+    }));
+  }
+
+  private async computeDependencyHash(
+    dependencies: readonly Dependency[],
+    scope: 'build' | 'source' = 'build',
+  ): Promise<string> {
     const contentHashSpan = this.tracer.startSpan('deps.content-hash');
-    const hex = hashString(JSON.stringify(dependencies));
+    /* A build key keys covered files by path; their bundle dependency carries the content (R24).
+     * A source key (a description's revision, which may be persisted) is exactly the file identity:
+     * file bytes, no bundle dependency. */
+    const keyed =
+      scope === 'source'
+        ? dependencies.filter((dependency) => dependency.type !== 'bundle')
+        : dependencies.map((dependency) =>
+            dependency.type === 'file' && this.bundleCoveredFiles.has(dependency)
+              ? { type: dependency.type, path: dependency.path }
+              : dependency,
+          );
+    const hex = await sha256String(canonicalJson(keyed));
     contentHashSpan.end();
     return hex;
   }
 }
 
-preserveMethodNames(KernelWorker, ['render', 'createGeometry', 'exportGeometry', 'getParameters']);
+preserveMethodNames(KernelWorker, ['getParameters']);
 
 /**
  * Merge two pre-resolved JSON Schema objects by combining their `properties`,
@@ -2899,7 +8730,9 @@ preserveMethodNames(KernelWorker, ['render', 'createGeometry', 'exportGeometry',
 function mergeJsonSchemas(
   a: { schema: JSONSchema7; defaults: Record<string, unknown> },
   b: { schema: JSONSchema7; defaults: Record<string, unknown> },
+  owners?: { readonly a: string; readonly b: string },
 ): { schema: JSONSchema7; defaults: Record<string, unknown> } {
+  const resolvedOwners = owners ?? { a: 'source schema', b: 'target schema' };
   const aEmpty = Object.keys(a.schema).length === 0;
   const bEmpty = Object.keys(b.schema).length === 0;
 
@@ -2913,8 +8746,32 @@ function mergeJsonSchemas(
     return { schema: b.schema, defaults: b.defaults };
   }
 
+  const bUnionKey = b.schema.anyOf ? 'anyOf' : b.schema.oneOf ? 'oneOf' : undefined;
+  if (bUnionKey) {
+    const branches = b.schema[bUnionKey] ?? [];
+    return {
+      schema: {
+        ...b.schema,
+        [bUnionKey]: branches.map((branch) => {
+          if (typeof branch !== 'object') {
+            throw new TypeError(`Cannot merge ${resolvedOwners.a} into a boolean ${resolvedOwners.b} branch.`);
+          }
+          return mergeJsonSchemas(a, { schema: branch, defaults: b.defaults }, resolvedOwners).schema;
+        }),
+      },
+      defaults: { ...a.defaults, ...b.defaults },
+    };
+  }
+
   const aProps = a.schema.properties ?? {};
   const bProps = b.schema.properties ?? {};
+  const collisions = Object.keys(aProps).filter((key) => key in bProps);
+  if (collisions.length > 0) {
+    throw new Error(
+      `Export option schema collision between ${resolvedOwners.a} and ${resolvedOwners.b}: ${collisions.join(', ')}. ` +
+        "Rename one owner's option or pin the source option on the transcoder edge.",
+    );
+  }
   const aRequired = a.schema.required ?? [];
   const bRequired = b.schema.required ?? [];
   const mergedRequired = [...new Set([...aRequired, ...bRequired])];
@@ -2927,4 +8784,56 @@ function mergeJsonSchemas(
     },
     defaults: { ...a.defaults, ...b.defaults },
   };
+}
+
+function collectJsonSchemaProperties(schema: JSONSchema7): Record<string, unknown> {
+  const properties: Record<string, unknown> = { ...schema.properties };
+  for (const branch of [...(schema.anyOf ?? []), ...(schema.oneOf ?? [])]) {
+    if (typeof branch === 'object') {
+      Object.assign(properties, collectJsonSchemaProperties(branch));
+    }
+  }
+  return properties;
+}
+
+function inputDefaults(schema: JSONSchema7): Record<string, unknown> {
+  const firstBranch = (schema.anyOf ?? schema.oneOf)?.[0];
+  const branchDefaults = typeof firstBranch === 'object' ? inputDefaults(firstBranch) : {};
+  return {
+    ...branchDefaults,
+    ...Object.fromEntries(
+      Object.entries(schema.properties ?? {}).flatMap(([key, property]) =>
+        typeof property === 'object' && 'default' in property ? [[key, property.default]] : [],
+      ),
+    ),
+  };
+}
+
+function omitJsonSchemaProperties(
+  input: { schema: JSONSchema7; defaults: Record<string, unknown> },
+  keys: readonly string[],
+): { schema: JSONSchema7; defaults: Record<string, unknown> } {
+  if (keys.length === 0) {
+    return input;
+  }
+  const omitted = new Set(keys);
+  const properties = Object.fromEntries(
+    Object.entries(input.schema.properties ?? {}).filter(([key]) => !omitted.has(key)),
+  );
+  const { required: sourceRequired = [], ...schema } = input.schema;
+  const required = sourceRequired.filter((key) => !omitted.has(key));
+  const defaults = Object.fromEntries(Object.entries(input.defaults).filter(([key]) => !omitted.has(key)));
+  return {
+    schema: {
+      ...schema,
+      properties,
+      ...(required.length > 0 ? { required } : {}),
+    },
+    defaults,
+  };
+}
+
+function pickRecordProperties(input: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  const selected = new Set(keys);
+  return Object.fromEntries(Object.entries(input).filter(([key]) => selected.has(key)));
 }

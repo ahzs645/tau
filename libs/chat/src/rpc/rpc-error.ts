@@ -1,11 +1,13 @@
 import { getErrno } from '@taucad/utils/error';
+import { VirtualPathError } from '@taucad/utils/path';
 import type { RpcClientErrorCode } from '#schemas/rpc.schema.js';
-import { rpcClientErrorCode } from '#schemas/rpc.schema.js';
+import { rpcClientErrorCode, rpcClientErrorCodeSchema } from '#schemas/rpc.schema.js';
 import type { RpcHandlerError } from '#rpc/rpc-dependencies.js';
 
 /**
  * Canonical mapping from POSIX errno codes to RPC client error codes.
- * Used as the primary classification signal — checked before message matching.
+ * The only classification signal: `code` is set by every filesystem Tau
+ * speaks to, and nothing is inferred from an error's message.
  *
  * ZenFS (kerium Exception), Node.js (ErrnoException), and the kernel filesystem
  * bridge all set `error.code` to these POSIX strings.
@@ -15,6 +17,7 @@ const errnoToRpcCode: Record<string, RpcClientErrorCode> = {
   ENOENT: rpcClientErrorCode.fileNotFound,
   EACCES: rpcClientErrorCode.permissionDenied,
   EPERM: rpcClientErrorCode.permissionDenied,
+  EROFS: rpcClientErrorCode.permissionDenied,
 };
 /* eslint-enable @typescript-eslint/naming-convention -- end POSIX errno block */
 
@@ -29,36 +32,45 @@ export function getErrorMessage(error: unknown): string {
 
 /** @public */
 export function getErrorCode(error: unknown): RpcClientErrorCode {
+  if (error instanceof VirtualPathError) {
+    return rpcClientErrorCode.validationError;
+  }
+
   if (error instanceof Error) {
     const errno = getErrno(error);
+    const typedCode = rpcClientErrorCodeSchema.safeParse(errno);
+    if (typedCode.success) {
+      return typedCode.data;
+    }
     if (errno && errno in errnoToRpcCode) {
       return errnoToRpcCode[errno]!;
     }
 
-    const message = error.message.toLowerCase();
-    if (message.includes('not found') || message.includes('enoent') || message.includes('no such file')) {
-      return rpcClientErrorCode.fileNotFound;
-    }
-
-    if (message.includes('permission') || message.includes('eacces')) {
-      return rpcClientErrorCode.permissionDenied;
-    }
-
-    if (message.includes('parse') || message.includes('json')) {
-      return rpcClientErrorCode.parseError;
-    }
-
+    /* A message is prose, not a classification: substring matching read
+     * `PARSE_ERROR` out of any failure whose path ended in `.json`, and
+     * `FILE_NOT_FOUND` out of any sentence containing "not found". Every
+     * filesystem Tau speaks to — ZenFS, Node and the kernel bridge — sets
+     * `code`, so an error without one is simply an I/O failure. */
     return rpcClientErrorCode.ioError;
   }
 
   return rpcClientErrorCode.unknown;
 }
 
-/** @public */
+const isRetryable = (error: unknown): boolean =>
+  error instanceof Error && 'retryable' in error && error.retryable === true;
+
+/**
+ * The handler failure for a thrown error. An error that says `retryable: true` (a file still downloading, say) keeps
+ * saying so, so the agent asks again rather than giving up on the file.
+ *
+ * @public
+ */
 export function toRpcError(error: unknown): RpcHandlerError {
   return {
     success: false,
     errorCode: getErrorCode(error),
     message: getErrorMessage(error),
+    ...(isRetryable(error) ? { retryable: true } : {}),
   };
 }

@@ -1,0 +1,828 @@
+import { expect, test } from 'vitest';
+import { page as selectors } from 'vitest/browser';
+import * as target from '#support/external-target.js';
+
+const projectNames = {
+  a: 'Project Navigation A',
+  b: 'Project Navigation B',
+} as const;
+
+const chatNames = {
+  older: 'Older activity',
+  newer: 'Newer activity',
+} as const;
+
+type PersistedChatActivity = Readonly<{
+  id: string;
+  name: string;
+  resourceId: string;
+  createdAt: number;
+  updatedAt: number;
+  recencyAt?: number;
+  /** From the project's composer unread record, not the chat record (D9). */
+  unread: boolean;
+  activeExecution?: unknown;
+  activeKernel?: string;
+  draft?: unknown;
+  error?: unknown;
+  messageEdits?: unknown;
+  messages: readonly unknown[];
+  startupRequest?: unknown;
+}>;
+
+type ChatActivitySnapshot = Readonly<{
+  chats: readonly PersistedChatActivity[];
+  projectLastActivityAt: number;
+}>;
+
+type ChatActivityBridge = Readonly<{
+  read(): Promise<ChatActivitySnapshot>;
+}>;
+
+const readChatActivitySnapshot = async (): Promise<ChatActivitySnapshot> =>
+  target.evaluate(async () => {
+    const bridge = (globalThis as typeof globalThis & { __TAU_CHAT_ACTIVITY_TEST__?: ChatActivityBridge })
+      .__TAU_CHAT_ACTIVITY_TEST__;
+    if (!bridge) {
+      throw new Error('Chat activity e2e bridge is unavailable');
+    }
+    return bridge.read();
+  });
+
+const readActivityChatOrder = async (): Promise<string[]> =>
+  target.evaluate(
+    (names) =>
+      [...document.querySelectorAll<HTMLElement>('[data-slot="chat-trigger"]')]
+        .map((row) => row.querySelector('a')?.textContent.trim())
+        .filter((name): name is string => name === names.older || name === names.newer),
+    chatNames,
+  );
+
+const openActivityChat = async (name: string): Promise<void> => {
+  await target.click(selectors.getByRole('link', { name, exact: true }));
+  await expect
+    .poll(async () =>
+      target.evaluate(
+        (expected) =>
+          [...document.querySelectorAll<HTMLElement>('[data-slot="chat-trigger"]')]
+            .find((row) => row.dataset['active'] === 'true')
+            ?.querySelector('a')
+            ?.textContent.trim() === expected,
+        name,
+      ),
+    )
+    .toBe(true);
+};
+
+type CameraInput = Readonly<{
+  position: readonly [number, number, number];
+  target: readonly [number, number, number];
+  /** Sent to the live camera only; omitted, the camera keeps the field of view it presents. */
+  fov?: number;
+  zoom: number;
+  rollRadians: number;
+}>;
+
+type CameraEvidence = Readonly<{
+  projection: 'orthographic' | 'perspective';
+  requestedFov: number;
+  verticalSpan: number;
+  position: readonly [number, number, number];
+  quaternion: readonly [number, number, number, number];
+  target: readonly [number, number, number];
+  zoom?: number;
+  aspect: number;
+}>;
+
+const waitForCameraBridge = async (): Promise<void> => {
+  await target.waitFor(() => Boolean(globalThis.__TAU_SECTION_VIEW_TEST__));
+};
+
+const waitForTwoFrames = async (): Promise<void> => {
+  await target.evaluate(
+    async () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            resolve();
+          });
+        });
+      }),
+  );
+};
+
+const setCamera = async (camera: CameraInput): Promise<CameraEvidence> => {
+  await waitForCameraBridge();
+  await target.evaluate((nextCamera) => {
+    const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+    if (!bridge) {
+      throw new Error('Graphics e2e bridge is unavailable.');
+    }
+    bridge.setCamera(nextCamera);
+  }, camera);
+  await waitForTwoFrames();
+  return readCamera();
+};
+
+const readCamera = async (): Promise<CameraEvidence> =>
+  target.evaluate(() => {
+    const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+    if (!bridge) {
+      throw new Error('Graphics e2e bridge is unavailable.');
+    }
+    return bridge.getCamera();
+  });
+
+/*
+ * The field of view is a view command's leaf since #1911: the view's controls write the record, which seeds the camera,
+ * and a change sent straight to the camera (the bridge's `fov`) is never written. A durable field of view is set here
+ * through the person's control.
+ */
+const setFieldOfView = async (degrees: number): Promise<void> => {
+  await target.click(selectors.getByRole('button', { name: 'Viewer settings' }));
+  const row = selectors.getByRole('menuitem', { name: /^Field of view, 0° is orthographic, / });
+  await target.expectVisible(row);
+  await target.focus(row);
+  await target.keyboardPress('Enter');
+  for (const digit of String(degrees)) {
+    // oxlint-disable-next-line no-await-in-loop -- The digits are keystrokes, typed in order.
+    await target.keyboardPress(digit);
+  }
+  await target.keyboardPress('Enter');
+  await target.expectAttribute(row, 'aria-label', `Field of view, 0° is orthographic, ${degrees}°`);
+  /* The focused row shows its tooltip, and Escape dismisses that tooltip before it closes the menu (the topmost
+   * dismissable layer takes it). A menu left open hides the rest of the page from the accessibility tree, so the
+   * next role query (a sidebar link) never finds it: press Escape until the menu is gone. */
+  const menu = selectors.getByRole('menu');
+  await expect
+    .poll(async () => {
+      if (await target.isVisible(menu)) {
+        await target.keyboardPress('Escape');
+      }
+      return target.isVisible(menu);
+    })
+    .toBe(false);
+  await expect
+    .poll(async () => {
+      const camera = await readCamera();
+      return camera.requestedFov;
+    })
+    .toBe(degrees);
+};
+
+const startCameraRestoreObservation = async (entryPath: string): Promise<void> => {
+  await target.evaluate((observedEntryPath) => {
+    const scope = globalThis as typeof globalThis & {
+      __tauCameraRestoreSamples?: CameraEvidence[];
+      __tauStopCameraRestoreObservation?: boolean;
+    };
+    scope.__tauCameraRestoreSamples = [];
+    scope.__tauStopCameraRestoreObservation = false;
+    const sample = (): void => {
+      if (scope.__tauStopCameraRestoreObservation) {
+        return;
+      }
+      const isEntryActive = [...document.querySelectorAll<HTMLElement>('.dv-tab.dv-active-tab')].some(
+        (tab) => tab.ariaLabel === observedEntryPath,
+      );
+      const cameraBridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+      const samples = scope.__tauCameraRestoreSamples;
+      if (isEntryActive && cameraBridge && samples) {
+        samples.push(cameraBridge.getCamera());
+      }
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  }, entryPath);
+};
+
+const stopCameraRestoreObservation = async (): Promise<CameraEvidence[]> => {
+  await waitForTwoFrames();
+  return target.evaluate(() => {
+    const scope = globalThis as typeof globalThis & {
+      __tauCameraRestoreSamples?: CameraEvidence[];
+      __tauStopCameraRestoreObservation?: boolean;
+    };
+    scope.__tauStopCameraRestoreObservation = true;
+    return scope.__tauCameraRestoreSamples ?? [];
+  });
+};
+
+const expectVectorClose = (actual: readonly number[], expected: readonly number[], precision = 7): void => {
+  expect(actual).toHaveLength(expected.length);
+  for (const [index, value] of expected.entries()) {
+    expect(actual[index]).toBeCloseTo(value, precision);
+  }
+};
+
+const expectCameraFrameRestored = (actual: CameraEvidence, expected: CameraEvidence): void => {
+  expect(actual.projection).toBe(expected.projection);
+  expect(actual.requestedFov).toBeCloseTo(expected.requestedFov, 8);
+  expect(actual.verticalSpan).toBeCloseTo(expected.verticalSpan, 7);
+  expect(actual.zoom).toBeCloseTo(expected.zoom ?? Number.NaN, 8);
+  expect(actual.aspect).toBeCloseTo(expected.aspect, 7);
+  const quaternionDot = Math.abs(
+    actual.quaternion.reduce((sum, value, index) => sum + value * expected.quaternion[index]!, 0),
+  );
+  expect(quaternionDot).toBeCloseTo(1, 7);
+
+  if (expected.projection === 'perspective') {
+    expectVectorClose(actual.position, expected.position);
+    return;
+  }
+
+  // Orthographic depth along the viewing axis is bounds-derived and does not
+  // affect the image. Its lateral camera position must still be exact.
+  const [x, y, z, w] = expected.quaternion;
+  const backward = [2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)] as const;
+  const delta = actual.position.map((value, index) => value - expected.position[index]!) as [number, number, number];
+  const axialDistance = delta.reduce((sum, value, index) => sum + value * backward[index]!, 0);
+  const lateralDistance = Math.hypot(...delta.map((value, index) => value - axialDistance * backward[index]!));
+  expect(lateralDistance).toBeCloseTo(0, 7);
+};
+
+const expectCameraRestored = (actual: CameraEvidence, expected: CameraEvidence): void => {
+  expectCameraFrameRestored(actual, expected);
+  expectVectorClose(actual.position, expected.position);
+  expectVectorClose(actual.target, expected.target);
+};
+
+async function expectProject(options: { name: string; entryPath: string }): Promise<void> {
+  await target.expectVisible(selectors.getByText(options.name, { exact: true }).first(), 60_000);
+  await target.expectVisible(selectors.getByCss(`.dv-tab[aria-label="${options.entryPath}"]`), 60_000);
+  await target.expectVisible(selectors.getByTestId('cad-viewer-canvas-region').getByCss('canvas').first(), 60_000);
+  await target.expectVisible(selectors.getByCss('.tiptap[contenteditable="true"]').first(), 60_000);
+  await target.expectCount(selectors.getByText(/doesn't exist|may have been deleted|project not found/i), 0);
+}
+
+async function openRecentProject(name: string): Promise<void> {
+  const link = selectors.getByRole('link', { name }).first();
+  await target.expectVisible(link, 60_000);
+  await target.click(link);
+  await target.expectUrl(/\/w\/[^/]+\/[^/]+$/u, 60_000);
+}
+
+async function observeProjectShellContinuity(): Promise<void> {
+  await target.expectVisible(selectors.getByCss('[data-slot="sidebar-wrapper"]'));
+  await target.evaluate(() => {
+    const scope = globalThis as typeof globalThis & {
+      __tauProjectShellObserver?: MutationObserver;
+    };
+    scope.__tauProjectShellObserver?.disconnect();
+    delete document.documentElement.dataset['projectShellMissing'];
+    scope.__tauProjectShellObserver = new MutationObserver(() => {
+      if (!document.querySelector('[data-slot="sidebar-wrapper"]')) {
+        document.documentElement.dataset['projectShellMissing'] = 'true';
+      }
+    });
+    scope.__tauProjectShellObserver.observe(document.body, { childList: true, subtree: true });
+  });
+}
+
+async function stopObservingProjectShell(): Promise<string | undefined> {
+  return target.evaluate(() => {
+    const scope = globalThis as typeof globalThis & {
+      __tauProjectShellObserver?: MutationObserver;
+      __tauStopCameraRestoreObservation?: boolean;
+    };
+    scope.__tauProjectShellObserver?.disconnect();
+    scope.__tauStopCameraRestoreObservation = true;
+    delete scope.__tauProjectShellObserver;
+    return document.documentElement.dataset['projectShellMissing'];
+  });
+}
+
+type SectionCutValues =
+  | Readonly<{ kind: 'plane'; plane: 'xy' | 'xz' | 'yz'; offset: number; isFlipped: boolean }>
+  | Readonly<{
+      kind: 'revolution';
+      axis: 'x' | 'y' | 'z';
+      origin: readonly [number, number, number];
+      start: number;
+      sweep: number;
+    }>;
+
+type SectionCutInput =
+  | Readonly<{ kind: 'plane'; plane: 'xy' | 'xz' | 'yz'; offset?: number; isFlipped?: boolean }>
+  | Readonly<{ kind: 'revolution'; axis: 'x' | 'y' | 'z'; start?: number; sweep?: number }>;
+
+type SectionViewEvidence = Readonly<{ isActive: boolean; cuts: readonly SectionCutValues[] }>;
+
+type DurableViewSettings = Readonly<{
+  cameraFovAngle: number;
+  upDirection: 'x' | 'y' | 'z';
+  enableGrid: boolean;
+  sectionView?: Readonly<{ active: boolean; cuts: readonly SectionCutValues[] }>;
+}>;
+
+const setSectionCuts = async (cuts: readonly SectionCutInput[]): Promise<void> => {
+  await waitForCameraBridge();
+  await target.evaluate((nextCuts) => {
+    const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+    if (!bridge) {
+      throw new Error('Graphics e2e bridge is unavailable.');
+    }
+    bridge.setSectionCuts(nextCuts);
+  }, cuts);
+  await waitForTwoFrames();
+};
+
+/** The live section's values; cut ids are made anew at every seed, so they are left out. */
+const readSectionView = async (): Promise<SectionViewEvidence> =>
+  target.evaluate(() => {
+    const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+    if (!bridge) {
+      throw new Error('Graphics e2e bridge is unavailable.');
+    }
+    const { isActive, cuts } = bridge.getSectionState();
+    return { isActive, cuts: cuts.map(({ id: _id, ...values }) => values) };
+  });
+
+/** The persisted record this view owns, narrowed to keys Law 4 calls durable. */
+const readDurableViewSettings = async (): Promise<DurableViewSettings | undefined> =>
+  target.evaluate(() => {
+    const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+    const settings = bridge?.getViewSettings();
+    if (!settings) {
+      return undefined;
+    }
+    return {
+      cameraFovAngle: settings.cameraFovAngle,
+      upDirection: settings.upDirection,
+      enableGrid: settings.enableGrid,
+      sectionView: settings.sectionView,
+    };
+  });
+
+test('client navigation keeps every project-scoped resource on one logical project ID', async () => {
+  await target.addInitScript(() => {
+    (globalThis as typeof globalThis & { __tauDocumentIdentity?: string }).__tauDocumentIdentity = crypto.randomUUID();
+  });
+
+  await target.navigate('/__e2e/project-navigation');
+  /* The seed creates two projects through the file-manager worker before it
+   * navigates, and the worker's own OPFS mount alone costs seconds on a loaded
+   * machine — the two rows below already wait for this URL with a 60 s poll. A
+   * fixed wait raced it; the diagnostics are kept for a seed that truly never
+   * opens. */
+  try {
+    await target.expectUrl(/\/w\/[^/]+\/[^/]+$/u, 60_000);
+  } catch (error) {
+    const initialState = await target.evaluate(() => ({ href: location.href, text: document.body.textContent }));
+    const diagnostics = await target.events();
+    throw new Error(`Project-navigation seed did not open: ${JSON.stringify({ ...initialState, diagnostics })}`, {
+      cause: error,
+    });
+  }
+  const documentIdentity = await target.evaluate(
+    () => (globalThis as typeof globalThis & { __tauDocumentIdentity?: string }).__tauDocumentIdentity,
+  );
+  await expectProject({ name: projectNames.a, entryPath: 'alpha.ts' });
+  await waitForCameraBridge();
+  /* The entry's first frame replaces any pose set before it (the framing machine), so the camera is set after it. */
+  await target.expectGeometryFramed();
+  const legacyDefaultCamera = await readCamera();
+  expect(legacyDefaultCamera.projection).toBe('perspective');
+  expect(legacyDefaultCamera.requestedFov).toBe(60);
+  await observeProjectShellContinuity();
+
+  try {
+    const perspectiveCamera = await setCamera({
+      position: [43, -31, 27],
+      target: [3, -4, 5],
+      fov: 42,
+      zoom: 1,
+      rollRadians: 0.37,
+    });
+    await openRecentProject(projectNames.b);
+    await expectProject({ name: projectNames.b, entryPath: 'beta.ts' });
+    /* Observe from here, as the orthographic leg does: the sampler only records while alpha is the
+     * active tab, and waiting for B's own camera first hid alpha's first frames behind a race. */
+    await startCameraRestoreObservation('alpha.ts');
+    await waitForCameraBridge();
+    await target.expectGeometryFramed();
+    await waitForTwoFrames();
+    const projectBetaCamera = await readCamera();
+    expect(projectBetaCamera.projection).toBe('perspective');
+    expect(projectBetaCamera.requestedFov).toBe(60);
+    await openRecentProject(projectNames.a);
+    await expectProject({ name: projectNames.a, entryPath: 'alpha.ts' });
+    await waitForCameraBridge();
+    expectCameraRestored(await readCamera(), perspectiveCamera);
+    const perspectiveFrames = await stopCameraRestoreObservation();
+    expect(perspectiveFrames.length).toBeGreaterThan(0);
+    for (const frame of perspectiveFrames) {
+      expectCameraFrameRestored(frame, perspectiveCamera);
+    }
+
+    const orthographicCamera = await setCamera({
+      position: [-29, 37, 24],
+      target: [-6, 2, 4],
+      fov: 0,
+      zoom: 2,
+      rollRadians: -0.22,
+    });
+    await openRecentProject(projectNames.b);
+    await expectProject({ name: projectNames.b, entryPath: 'beta.ts' });
+    await startCameraRestoreObservation('alpha.ts');
+    await openRecentProject(projectNames.a);
+    await expectProject({ name: projectNames.a, entryPath: 'alpha.ts' });
+    await waitForCameraBridge();
+    expectCameraRestored(await readCamera(), orthographicCamera);
+    const orthographicFrames = await stopCameraRestoreObservation();
+    expect(orthographicFrames.length).toBeGreaterThan(0);
+    for (const frame of orthographicFrames) {
+      expectCameraFrameRestored(frame, orthographicCamera);
+    }
+    await openRecentProject(projectNames.b);
+    await expectProject({ name: projectNames.b, entryPath: 'beta.ts' });
+    await waitForCameraBridge();
+    expectCameraRestored(await readCamera(), projectBetaCamera);
+  } finally {
+    expect(await stopObservingProjectShell()).toBeUndefined();
+  }
+
+  await expect
+    .poll(async () =>
+      target.evaluate(
+        () => (globalThis as typeof globalThis & { __tauDocumentIdentity?: string }).__tauDocumentIdentity,
+      ),
+    )
+    .toBe(documentIdentity);
+  const events = await target.events();
+  const lifecycleFailures = [...events.pageErrors, ...events.consoleMessages.map(({ text }) => text)].filter(
+    (message) => /modelInteraction actor is not available|null.*addEventListener/iu.test(message),
+  );
+  expect(lifecycleFailures).toEqual([]);
+});
+
+test('chat navigation preserves ordering until an accepted user submit advances recency', async () => {
+  /* Recency advances inside `actions.sendMessage`, which runs only after
+   * `admitWorkspace` resolves — and that awaits the model catalog for up to
+   * 20 s. `GET /v1/models` is stubbed only by this fixture, so without it the
+   * submit below cannot advance anything inside any poll. The script is one
+   * closing text turn: the row asserts the ordering the accepted submit
+   * produces, not the reply. */
+  await target.installAgentHostGatewayFixture([
+    { text: 'Recency advanced.', usage: { inputTokens: 20, outputTokens: 8 } },
+  ]);
+  await target.navigate('/__e2e/project-navigation?activity=1');
+  await target.expectUrl(/\/w\/[^/]+\/[^/]+$/u, 60_000);
+  await target.expectVisible(selectors.getByRole('link', { name: chatNames.older, exact: true }), 60_000);
+  await target.expectVisible(selectors.getByRole('link', { name: chatNames.newer, exact: true }), 60_000);
+  await expect.poll(readActivityChatOrder).toEqual([chatNames.newer, chatNames.older]);
+
+  const beforeNavigation = await readChatActivitySnapshot();
+  expect(beforeNavigation.chats.find(({ name }) => name === chatNames.newer)?.unread).toBe(true);
+  await openActivityChat(chatNames.newer);
+  /* `markViewed` writes the record once the chat's composer binds, after the row turns active. The
+   * repeated-focus read below stays immediate: once cleared, nothing may mark it unread again. */
+  await expect
+    .poll(async () => {
+      const snapshot = await readChatActivitySnapshot();
+      return snapshot.chats.find(({ name }) => name === chatNames.newer)?.unread;
+    })
+    .toBe(false);
+  const afterFirstFocus = await readChatActivitySnapshot();
+  await openActivityChat(chatNames.older);
+  await openActivityChat(chatNames.newer);
+  const afterRepeatedFocus = await readChatActivitySnapshot();
+  expect(afterRepeatedFocus.chats.find(({ name }) => name === chatNames.newer)?.unread).toBe(
+    afterFirstFocus.chats.find(({ name }) => name === chatNames.newer)?.unread,
+  );
+  await openActivityChat(chatNames.older);
+  const afterNavigation = await readChatActivitySnapshot();
+
+  expect(await readActivityChatOrder()).toEqual([chatNames.newer, chatNames.older]);
+  expect(afterNavigation.chats.map(({ name, updatedAt, recencyAt }) => ({ name, updatedAt, recencyAt }))).toEqual(
+    beforeNavigation.chats.map(({ name, updatedAt, recencyAt }) => ({ name, updatedAt, recencyAt })),
+  );
+  expect(afterNavigation.projectLastActivityAt).toBe(beforeNavigation.projectLastActivityAt);
+
+  const composer = selectors.getByCss('.tiptap[contenteditable="true"]').first();
+  await target.fill(composer, 'advance this chat');
+  await target.press(composer, 'Enter');
+  /* Admission is the gate, not the render: 20 s of model-catalog wait plus a
+   * workspace prepare do not fit vitest's 1 s default poll. */
+  await expect.poll(readActivityChatOrder, { timeout: 60_000 }).toEqual([chatNames.older, chatNames.newer]);
+
+  const afterSubmit = await readChatActivitySnapshot();
+  const olderBefore = beforeNavigation.chats.find(({ name }) => name === chatNames.older)!;
+  const olderAfter = afterSubmit.chats.find(({ name }) => name === chatNames.older)!;
+  expect(olderAfter.recencyAt).toBeGreaterThan(olderBefore.recencyAt!);
+  expect(afterSubmit.projectLastActivityAt).toBeGreaterThan(beforeNavigation.projectLastActivityAt);
+
+  await openRecentProject(projectNames.b);
+  await openRecentProject(projectNames.a);
+  await expect.poll(readActivityChatOrder).toEqual([chatNames.older, chatNames.newer]);
+  const afterRevisit = await readChatActivitySnapshot();
+  expect(afterRevisit.chats.map(({ name, recencyAt }) => ({ name, recencyAt }))).toEqual(
+    afterSubmit.chats.map(({ name, recencyAt }) => ({ name, recencyAt })),
+  );
+  expect(afterRevisit.projectLastActivityAt).toBe(afterSubmit.projectLastActivityAt);
+});
+
+test('sidebar chat opens its pane after the pane is closed', async () => {
+  await target.navigate('/__e2e/project-navigation');
+  await target.expectUrl(/\/w\/[^/]+\/[^/]+$/u, 60_000);
+
+  const chat = selectors.getByRole('link', { name: 'Initial chat', exact: true });
+  const toggle = selectors.getByRole('button', { name: 'Toggle Chat lane' });
+  const isChatLanePressed = async (): Promise<string | undefined> => {
+    const result = await target.read(toggle, { attributes: ['aria-pressed'] });
+    return result.attributes['aria-pressed'] ?? undefined;
+  };
+  await target.expectVisible(chat, 60_000);
+  await target.expectVisible(toggle, 60_000);
+  await target.click(toggle);
+  await expect.poll(isChatLanePressed).toBe('false');
+
+  await target.click(chat);
+  await expect.poll(isChatLanePressed).toBe('true');
+});
+
+test('project and chat rows reveal their actions over a dissolving name', async () => {
+  /* No gateway fixture, so no model catalog: this is the offline open. Opening the project attaches
+   * its chat to the agent host, which needs no catalog; an attach that demanded one read `Failed`,
+   * a status sentence and so a tooltip on a chat nothing ever ran in. */
+  await target.setViewport({ width: 1024, height: 900 });
+  await target.navigate('/__e2e/project-navigation');
+  await target.expectUrl(/\/w\/[^/]+\/[^/]+$/u, 60_000);
+
+  const projectTrigger = selectors.getByCss('[data-slot="project-trigger"]').first();
+  const chatTrigger = selectors.getByCss('[data-slot="chat-trigger"]').first();
+  await target.expectVisible(projectTrigger, 60_000);
+  await target.expectVisible(chatTrigger, 60_000);
+
+  const searchButton = selectors.getByRole('button', { name: 'Search', exact: true });
+  const newProjectButton = selectors.getByRole('link', { name: /New project/u });
+  await target.expectVisible(searchButton);
+  await target.expectVisible(newProjectButton);
+  const headerControlMetrics = await target.evaluate(() => {
+    const search = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+      button.textContent.trim().startsWith('Search'),
+    );
+    const newProject = [...document.querySelectorAll<HTMLElement>('[data-sidebar="menu-button"]')].find((button) =>
+      button.textContent.includes('New project'),
+    );
+    /* `ProjectsLabel` appends a `N live` count beside the word whenever a
+     * project is open (`project-navigation.tsx`), so the label reads
+     * `Recents1 live` here. It is the sidebar's only group label. */
+    const projects = [...document.querySelectorAll<HTMLElement>('[data-slot="sidebar-group-label"]')].find((label) =>
+      label.textContent.startsWith('Recents'),
+    );
+    const project = document.querySelector<HTMLElement>('[data-slot="project-trigger"]');
+    const navButtons = [...document.querySelectorAll<HTMLElement>('[data-sidebar="menu-button"]')];
+    /* The sidebar's standing destinations: `Projects`, the one `navMain` row
+     * (`route.constants.ts`), and the `More` row whose menu lists Community and
+     * the other secondary destinations (#817, 8f929d9c8d). `navSecondary` — and
+     * with it the `Files` row this used to read — moved into the user dropdown
+     * in `be3d0eb6e`, and `Project Library` has never been a committed label. */
+    const projectsNav = navButtons.find((button) => button.textContent.trim() === 'Projects');
+    const more = navButtons.find((button) => button.textContent.trim() === 'More');
+    if (!search || !newProject || !projects || !project || !projectsNav || !more) {
+      throw new Error('Sidebar controls were not ready.');
+    }
+    const searchBounds = search.getBoundingClientRect();
+    const newProjectBounds = newProject.getBoundingClientRect();
+    const searchIconBounds = search.querySelector('svg')?.getBoundingClientRect();
+    const newProjectIconBounds = newProject.querySelector('svg')?.getBoundingClientRect();
+    const searchShortcutBounds = search.lastElementChild?.getBoundingClientRect();
+    const newProjectShortcutBounds = newProject.lastElementChild?.getBoundingClientRect();
+    if (!searchIconBounds || !newProjectIconBounds || !searchShortcutBounds || !newProjectShortcutBounds) {
+      throw new Error('Sidebar control adornments were not ready.');
+    }
+    return {
+      fontSizes: [getComputedStyle(search).fontSize, getComputedStyle(newProject).fontSize],
+      heightDelta: Math.abs(searchBounds.height - newProjectBounds.height),
+      horizontalEdges: [search, newProject, project, projectsNav, more].map((element) => {
+        const bounds = element.getBoundingClientRect();
+        return [bounds.left, bounds.right];
+      }),
+      iconCenterDelta: Math.abs(
+        searchIconBounds.top +
+          searchIconBounds.height / 2 -
+          searchBounds.top -
+          (newProjectIconBounds.top + newProjectIconBounds.height / 2 - newProjectBounds.top),
+      ),
+      leftDelta: Math.abs(searchBounds.left - newProjectBounds.left),
+      rightDelta: Math.abs(searchBounds.right - newProjectBounds.right),
+      shortcutCenterDelta: Math.abs(
+        searchShortcutBounds.top +
+          searchShortcutBounds.height / 2 -
+          searchBounds.top -
+          (newProjectShortcutBounds.top + newProjectShortcutBounds.height / 2 - newProjectBounds.top),
+      ),
+    };
+  });
+  expect(headerControlMetrics.fontSizes[0]).toBe(headerControlMetrics.fontSizes[1]);
+  expect(headerControlMetrics.heightDelta).toBeLessThanOrEqual(0.5);
+  expect(headerControlMetrics.iconCenterDelta).toBeLessThanOrEqual(0.5);
+  expect(headerControlMetrics.leftDelta).toBeLessThanOrEqual(0.5);
+  expect(headerControlMetrics.rightDelta).toBeLessThanOrEqual(0.5);
+  expect(headerControlMetrics.shortcutCenterDelta).toBeLessThanOrEqual(0.5);
+  for (const edges of headerControlMetrics.horizontalEdges.slice(1)) {
+    expect(Math.abs(edges[0]! - headerControlMetrics.horizontalEdges[0]![0]!)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(edges[1]! - headerControlMetrics.horizontalEdges[0]![1]!)).toBeLessThanOrEqual(0.5);
+  }
+  await target.expectVisible(selectors.getByRole('link', { name: 'Projects', exact: true }));
+
+  const paneHeaderHeightDelta = await target.evaluate(() => {
+    const chatHeader = document.querySelector<HTMLElement>('[data-slot="floating-panel-content-header"]');
+    const tabStrip = document.querySelector<HTMLElement>('.dv-tabs-and-actions-container');
+    if (!chatHeader || !tabStrip) {
+      throw new Error('Pane headers were not ready.');
+    }
+    return Math.abs(chatHeader.getBoundingClientRect().height - tabStrip.getBoundingClientRect().height);
+  });
+  expect(paneHeaderHeightDelta).toBeLessThanOrEqual(0.5);
+
+  const closeButton = selectors.getByCss('.dv-tab.dv-active-tab .dv-default-tab-action').first();
+  await target.expectVisible(closeButton);
+  const closeMetrics = await target.evaluateLocator(closeButton, (element) => {
+    const tab = element.closest<HTMLElement>('.dv-tab');
+    if (!tab) {
+      throw new Error('Active tab was not ready.');
+    }
+    const tabBounds = tab.getBoundingClientRect();
+    const closeBounds = element.getBoundingClientRect();
+    const tabStyle = getComputedStyle(tab);
+    return {
+      background: getComputedStyle(element).backgroundColor,
+      tabBackground: tabStyle.backgroundColor,
+      flex: [tabStyle.flexGrow, tabStyle.flexShrink, tabStyle.minWidth, tabStyle.maxWidth],
+      inset: [
+        closeBounds.top - tabBounds.top,
+        tabBounds.bottom - closeBounds.bottom,
+        tabBounds.right - closeBounds.right,
+      ],
+    };
+  });
+  /* An unhovered close action carries the tab's own fill so it masks the title
+   * dissolving beneath it rather than showing a second pill: `dockview.tsx:166`
+   * (`.dv-tab.dv-active-tab … .dv-default-tab-action:not(:hover)` → `!bg-accent`,
+   * committed in `c23b6ed7c`). `dockview-tabs.spec.ts:156` pins the same fact.
+   * The row could not read this until `2cfd558fd` repaired the lookups above. */
+  expect(closeMetrics.background).toBe(closeMetrics.tabBackground);
+  expect(closeMetrics.background).not.toBe('rgba(0, 0, 0, 0)');
+  /* The 112 px floor is capped at the strip's width, so a lone tab at large text sizes still fits (#1144). */
+  expect(closeMetrics.flex).toEqual(['1', '1', 'min(112px, 100%)', '160px']);
+  expect(Math.max(...closeMetrics.inset) - Math.min(...closeMetrics.inset)).toBeLessThanOrEqual(1);
+  await target.hover(closeButton);
+  expect(await target.evaluateLocator(closeButton, (element) => getComputedStyle(element).backgroundColor)).not.toBe(
+    closeMetrics.background,
+  );
+
+  /* Sidebar v2 (D7, D13, D15): actions take no width at rest, appear over the
+   * dissolving tail on hover, and never move the name. */
+  const readProjectRow = async () =>
+    target.evaluateLocator(projectTrigger, (element) => {
+      const actions = element.querySelector<HTMLElement>('.fade-action');
+      const label = element.querySelector<HTMLElement>('a .fade-label');
+      if (!actions || !label) {
+        throw new Error('Project row was not ready.');
+      }
+      return {
+        actionLabels: [...actions.querySelectorAll<HTMLButtonElement>('button')].map((button) => button.ariaLabel),
+        actionsDisplay: getComputedStyle(actions).display,
+        fadeSize: getComputedStyle(label).getPropertyValue('--fade-label-size').trim(),
+        height: element.getBoundingClientRect().height,
+        labelWidth: label.getBoundingClientRect().width,
+        truncated: element.querySelector('.truncate') !== null,
+      };
+    });
+  const projectBeforeHover = await readProjectRow();
+  expect(projectBeforeHover.actionLabels).toEqual([
+    `More actions for ${projectNames.a}`,
+    `New chat in ${projectNames.a}`,
+  ]);
+  expect(projectBeforeHover.actionsDisplay).toBe('none');
+  expect(projectBeforeHover.fadeSize).toBe('1.5rem');
+  expect(projectBeforeHover.height).toBe(28);
+  expect(projectBeforeHover.truncated).toBe(false);
+
+  await target.hover(projectTrigger);
+  const projectOnHover = await readProjectRow();
+  expect(projectOnHover.actionsDisplay).toBe('flex');
+  expect(projectOnHover.fadeSize).toBe('2.625rem');
+  expect(projectOnHover.labelWidth).toBe(projectBeforeHover.labelWidth);
+
+  await target.mouseMove(1000, 899);
+  const rowMetrics = await target.evaluate(() => {
+    const projects = [...document.querySelectorAll<HTMLElement>('[data-slot="project-trigger"]')];
+    const chat = document.querySelector<HTMLElement>('[data-slot="chat-trigger"]');
+    if (!projects[0] || !projects[1] || !chat) {
+      throw new Error('Sidebar project rows were not ready.');
+    }
+    const nextProjectBounds = projects[1].getBoundingClientRect();
+    const chatBounds = chat.getBoundingClientRect();
+    const chatList = chat.closest<HTMLElement>('[data-slot="sidebar-menu-sub"]');
+    const projectLabel = projects[0].querySelector('a .fade-label');
+    const chatLabel = chat.querySelector('a .fade-label');
+    const chatStatus = chat.querySelector('[data-slot="chat-status"]');
+    if (!chatList || !projectLabel || !chatLabel || !chatStatus) {
+      throw new Error('Sidebar row labels were not ready.');
+    }
+    const sidebar = chat.closest<HTMLElement>('[data-sidebar="content"]');
+    return {
+      chatHasLeadingIcon: chat.querySelector('a svg') !== null,
+      chatHeight: chatBounds.height,
+      chatLabelLeft: chatLabel.getBoundingClientRect().left,
+      chatStatusFirst: chat.firstElementChild === chatStatus,
+      chatTooltipState: chat.querySelector<HTMLAnchorElement>('a')?.dataset['state'] ?? null,
+      gapToNextProject: nextProjectBounds.top - chatBounds.bottom,
+      overflow: sidebar === null ? 0 : sidebar.scrollWidth - sidebar.clientWidth,
+      projectLabelLeft: projectLabel.getBoundingClientRect().left,
+      railWidth: Number.parseFloat(getComputedStyle(chatList).borderLeftWidth),
+    };
+  });
+  expect(rowMetrics.chatHasLeadingIcon).toBe(false);
+  expect(rowMetrics.chatTooltipState).toBeNull();
+  expect(rowMetrics.chatStatusFirst).toBe(true);
+  expect(rowMetrics.chatHeight).toBe(28);
+  /* D8: a chat name sits one slot (21 px) in from its project's name, on a rail. */
+  expect(Math.abs(rowMetrics.chatLabelLeft - rowMetrics.projectLabelLeft - 21)).toBeLessThanOrEqual(0.5);
+  expect(rowMetrics.railWidth).toBe(1);
+  /* D10: an expanded project's block is separated from the next project. */
+  expect(rowMetrics.gapToNextProject).toBeGreaterThanOrEqual(4);
+  expect(rowMetrics.overflow).toBe(0);
+
+  await target.hover(chatTrigger);
+  const chatAction = await target.evaluateLocator(chatTrigger, (element) => {
+    const button = element.querySelector<HTMLButtonElement>('button');
+    if (!button) {
+      throw new Error('Chat action was not ready.');
+    }
+    return {
+      background: getComputedStyle(button).backgroundColor,
+      label: button.ariaLabel,
+      visible: button.checkVisibility(),
+    };
+  });
+  expect(chatAction).toEqual({
+    background: 'rgba(0, 0, 0, 0)',
+    label: 'More actions for Initial chat',
+    visible: true,
+  });
+});
+
+/* Law 4: a durable key restores identically whether the person returns to a live project or reloads
+ * the tab. The camera proves the session substrate (W3); the section's cuts prove the v12 seed. */
+test('revisit and reload restore the same durable view settings', async () => {
+  await target.navigate('/__e2e/project-navigation');
+  await target.expectUrl(/\/w\/[^/]+\/[^/]+$/u, 60_000);
+  await expectProject({ name: projectNames.a, entryPath: 'alpha.ts' });
+  await waitForCameraBridge();
+  await target.expectGeometryFramed();
+
+  await setFieldOfView(42);
+  const camera = await setCamera({
+    position: [43, -31, 27],
+    target: [3, -4, 5],
+    zoom: 1,
+    rollRadians: 0.37,
+  });
+  expect(camera.requestedFov).toBe(42);
+  await setSectionCuts([
+    { kind: 'plane', plane: 'xz', offset: 0.022, isFlipped: true },
+    { kind: 'revolution', axis: 'z', start: 23, sweep: 120 },
+  ]);
+  const sectionAfterCut = await readSectionView();
+  expect(sectionAfterCut).toMatchObject({
+    isActive: true,
+    cuts: [
+      { kind: 'plane', plane: 'xz', offset: 0.022, isFlipped: true },
+      { kind: 'revolution', axis: 'z', start: 23, sweep: 120 },
+    ],
+  });
+  // The write side is debounced, so wait for the cuts to reach the durable record.
+  await expect
+    .poll(
+      async () => {
+        const durable = await readDurableViewSettings();
+        return durable?.sectionView;
+      },
+      { timeout: 30_000 },
+    )
+    .toEqual({ active: true, cuts: sectionAfterCut.cuts });
+  const durableAfterCut = await readDurableViewSettings();
+
+  await openRecentProject(projectNames.b);
+  await expectProject({ name: projectNames.b, entryPath: 'beta.ts' });
+  await openRecentProject(projectNames.a);
+  await expectProject({ name: projectNames.a, entryPath: 'alpha.ts' });
+  await waitForCameraBridge();
+  await waitForTwoFrames();
+  expectCameraRestored(await readCamera(), camera);
+  expect(await readSectionView()).toEqual(sectionAfterCut);
+  expect(await readDurableViewSettings()).toEqual(durableAfterCut);
+
+  await target.reload();
+  await target.expectUrl(/\/w\/[^/]+\/[^/]+$/u, 60_000);
+  await expectProject({ name: projectNames.a, entryPath: 'alpha.ts' });
+  await waitForCameraBridge();
+  await waitForTwoFrames();
+  expectCameraFrameRestored(await readCamera(), camera);
+  expect(await readSectionView()).toEqual(sectionAfterCut);
+  expect(await readDurableViewSettings()).toEqual(durableAfterCut);
+});

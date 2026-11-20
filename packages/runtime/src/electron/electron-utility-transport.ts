@@ -1,0 +1,49 @@
+/**
+ * `electronUtilityTransport` — bundled Topology C transport (callable plugin).
+ *
+ * Consume the plugin directly on `createRuntimeClient`:
+ *
+ * ```typescript
+ * import { createRuntimeClient } from '#index.js';
+ * import { electronUtilityTransport } from '#electron/renderer.js';
+ * import type { AnyRuntimeDefinition } from '#worker/index.js';
+ *
+ * const { port1 } = new MessageChannel();
+ * const client = createRuntimeClient<AnyRuntimeDefinition>({
+ *   transport: electronUtilityTransport({ port: port1 }),
+ * });
+ * ```
+ *
+ * **Utility-process host**: use standalone {@link electronUtilityHost}; the
+ * `MessagePortMain` arrives via `process.parentPort` after main bridges the
+ * channel.
+ *
+ * Architecture and wire constraints match
+ * {@link electronUtilityClient} / {@link electronUtilityHost}.
+ *
+ * @public
+ */
+
+import { defineRuntimeTransport } from '#transport/index.js';
+
+import { electronUtilityClient, electronUtilityMainClient } from '#electron/electron-utility-client.js';
+import {
+  electronUtilityClientOptionsSchema,
+  electronUtilityMainClientOptionsSchema,
+} from '#electron/electron-utility-transport.schemas.js';
+
+const electronUtilityId = 'electron-utility';
+
+/** Bundled Electron utility-process transport plugin. @public */
+export const electronUtilityTransport = defineRuntimeTransport({
+  id: electronUtilityId,
+  clientOptionsSchema: electronUtilityClientOptionsSchema,
+  client: electronUtilityClient,
+});
+
+/** Main-brokered utility-to-utility variant of the Electron runtime transport. @public */
+export const electronUtilityMainTransport = defineRuntimeTransport({
+  id: electronUtilityId,
+  clientOptionsSchema: electronUtilityMainClientOptionsSchema,
+  client: electronUtilityMainClient,
+});

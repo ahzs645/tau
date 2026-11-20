@@ -1,0 +1,960 @@
+// @vitest-environment jsdom
+import { Profiler, useImperativeHandle, useSyncExternalStore } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, render, screen } from '@testing-library/react';
+import type { MyUIMessage } from '@taucad/chat';
+import { chatTurnRequestSchema } from '@taucad/chat/schemas';
+import type {
+  ChatTextareaHandle,
+  ChatTextareaProperties,
+  ChatTextareaSubmitPayload,
+} from '#components/chat/chat-textarea-types.js';
+import type { CadChatSubmitInput } from '#chat-clients/use-cad-chat-client.js';
+import { storedRef } from '@taucad/chat-ui/utils/attachment.test-utils';
+import { buildTurnGroups } from '#routes/w.$workspace.$project/chat-turn-groups.js';
+import { WaitClockProvider } from '@taucad/ui/hooks/use-wait-clock';
+import type { WaitClock } from '@taucad/ui/hooks/use-wait-clock';
+
+// `useKernel` must NOT be called from chat-history anymore — guard with a
+// throwing mock so any regression is caught loudly.
+vi.mock('#hooks/use-kernel.js', () => ({
+  useKernel: () => {
+    throw new Error('chat-history should no longer call useKernel — switch to useCadChatClient');
+  },
+}));
+
+// Chat-history only reads `messageOrder` / `messages` selectors from useChat
+// now; sendMessage / regenerate / etc. flow through useCadChatClient.
+/** The transcript's load state the chat session reports (I21: `loading | loaded | empty`); A12 adds it to the store. */
+type TranscriptState = 'loading' | 'loaded' | 'empty';
+type MockChatState = { readonly messages: readonly MyUIMessage[]; readonly transcript?: TranscriptState };
+const chatStateRef: { current: MockChatState } = { current: { messages: [] } };
+const setMockMessages = (messages: readonly MyUIMessage[]): void => {
+  chatStateRef.current = { messages };
+};
+/* A row that drives a load publishes through the session's subscription, so its state change commits as the store's
+ * would, without a rerender from the row. */
+const chatStateListeners = new Set<() => void>();
+let chatStateVersion = 0;
+const subscribeChatState = (listener: () => void): (() => void) => {
+  chatStateListeners.add(listener);
+  return () => {
+    chatStateListeners.delete(listener);
+  };
+};
+const publishChatState = (state: MockChatState): void => {
+  chatStateRef.current = state;
+  chatStateVersion += 1;
+  for (const listener of chatStateListeners) {
+    listener();
+  }
+};
+let locationState: { readonly focusChatComposer?: boolean } | undefined;
+let archiveOpen = false;
+vi.mock('react-router', () => ({
+  useLocation: () => ({ state: locationState }),
+  useParams: () => ({ workspace: 'home', project: 'one' }),
+}));
+vi.mock('#hooks/use-search-parameter.js', () => ({ useSearchParameter: () => [archiveOpen, vi.fn()] }));
+vi.mock('#routes/w.$workspace.$project/archived-chats.js', () => ({
+  ArchivedChats: () => <section aria-label='Archived chats' />,
+}));
+// Fake persistence actor — `chat-history.tsx` subscribes to
+// `restoreCancelledDraft` emits to refocus the composer after the
+// persistence machine lifts a cancelled user message back into the draft.
+// The fake captures registered callbacks so the empty-cancel test below
+// can drive the emit synchronously.
+type FakePersistenceListener = (payload: unknown) => void;
+const persistenceListeners = new Map<string, Set<FakePersistenceListener>>();
+const fakePersistenceActorRef = {
+  on: (type: string, callback: FakePersistenceListener) => {
+    let bucket = persistenceListeners.get(type);
+    if (!bucket) {
+      bucket = new Set();
+      persistenceListeners.set(type, bucket);
+    }
+    bucket.add(callback);
+    const ownedBucket = bucket;
+    return {
+      unsubscribe: () => {
+        ownedBucket.delete(callback);
+      },
+    };
+  },
+};
+
+const emitRestoreCancelledDraft = (payload: unknown): void => {
+  const bucket = persistenceListeners.get('restoreCancelledDraft');
+  if (!bucket) {
+    return;
+  }
+  for (const listener of bucket) {
+    listener(payload);
+  }
+};
+
+vi.mock('#hooks/use-chat.js', () => ({
+  useChatSelector: (selector: (state: unknown) => unknown) => {
+    useSyncExternalStore(subscribeChatState, () => chatStateVersion);
+    const { messages, transcript = messages.length === 0 ? 'empty' : 'loaded' } = chatStateRef.current;
+    return selector({
+      messages,
+      messageOrder: messages.map((m) => m.id),
+      turnGroups: buildTurnGroups(messages),
+      agentInvocations: '',
+      transcript,
+      // No tray is remembered: these rows are about the transcript; the browser rows cover the trays (U10).
+      rememberedComposerTrays: [],
+    });
+  },
+  useChatContext: () => ({ activeChatId: 'chat_test', persistenceActorRef: fakePersistenceActorRef }),
+}));
+
+// Capture the body the chat client receives on submit so the wire-format
+// invariant test below can validate it against the shared API schema.
+const submitMock = vi.fn();
+const cadChatRef: {
+  current: {
+    submit: (input: CadChatSubmitInput) => void;
+    agent: unknown;
+  };
+} = {
+  current: {
+    submit: submitMock,
+    agent: {
+      profile: 'cad',
+      execution: { kind: 'tau', model: 'openai-gpt-5.5' },
+      kernel: 'replicad',
+      mode: 'agent',
+      toolChoice: 'auto',
+      testingEnabled: true,
+    },
+  },
+};
+vi.mock('#chat-clients/use-cad-chat-client.js', () => ({
+  useCadChatClient: () => cadChatRef.current,
+}));
+
+// Capture the textarea onSubmit callback and focus handle so the tests
+// can both invoke onSubmit directly and assert that empty-cancel
+// recoveries refocus the composer.
+const capturedTextarea: {
+  onSubmit?: ChatTextareaProperties['onSubmit'];
+  className?: string;
+  handOff?: ChatTextareaProperties['handOff'];
+  focus: ReturnType<typeof vi.fn<() => void>>;
+} = {
+  focus: vi.fn<() => void>(),
+};
+vi.mock('#components/chat/chat-textarea.js', () => ({
+  ChatTextarea: (properties: {
+    readonly ref?: React.Ref<ChatTextareaHandle>;
+    readonly onSubmit?: ChatTextareaProperties['onSubmit'];
+    readonly className?: string;
+    readonly enableMobileCollapse?: boolean;
+    readonly handOff?: ChatTextareaProperties['handOff'];
+  }): React.JSX.Element => {
+    capturedTextarea.onSubmit = properties.onSubmit;
+    capturedTextarea.handOff = properties.handOff;
+    capturedTextarea.className = properties.className;
+    useImperativeHandle(properties.ref, () => ({ focus: capturedTextarea.focus }), []);
+    return <div data-testid='chat-textarea' data-collapsible={properties.enableMobileCollapse === true} />;
+  },
+}));
+
+// Queue behavior is covered by its view and session-store suites; this leaf fixture owns history composition.
+vi.mock('#components/chat/chat-message-queue.js', () => ({ ChatMessageQueue: () => null }));
+vi.mock('#routes/w.$workspace.$project/chat-message-planning.js', () => ({
+  ChatMessagePlanning: () => (
+    <div role='status' aria-label='Current activity'>
+      Reading files
+    </div>
+  ),
+}));
+
+vi.mock('#routes/w.$workspace.$project/chat-message.js', () => ({
+  ChatMessage: ({ messageId, footer }: { readonly messageId: string; readonly footer?: React.ReactNode }) => (
+    <div data-testid='chat-message' data-message-id={messageId}>
+      {footer}
+    </div>
+  ),
+}));
+
+vi.mock('#routes/w.$workspace.$project/chat-revision-marker.js', () => ({
+  ChatRevisionMarker: ({
+    userMessageId,
+    isLatestTurn,
+  }: {
+    readonly userMessageId: string;
+    readonly isLatestTurn: boolean;
+  }) => <div data-testid='turn-revision' data-user-message-id={userMessageId} data-latest={String(isLatestTurn)} />,
+}));
+
+vi.mock('@taucad/project-workspace/components/scroll-down-button', () => ({
+  ScrollDownButton: () => <button type='button' aria-label='Scroll to bottom' />,
+}));
+
+vi.mock('#routes/w.$workspace.$project/revision-seams.js', () => ({
+  RevisionSeams: () => null,
+}));
+
+vi.mock('#routes/w.$workspace.$project/fork-divider.js', () => ({
+  ForkDivider: () => null,
+}));
+
+vi.mock('#routes/w.$workspace.$project/chat-error.js', () => ({
+  ChatError: () => <div data-testid='chat-error-adornment' />,
+}));
+
+vi.mock('#routes/w.$workspace.$project/chat-title-bar.js', () => ({
+  ChatTitleBar: ({ closeButton }: { readonly closeButton?: React.ReactNode }) => (
+    <span data-testid='chat-title-bar'>{closeButton}</span>
+  ),
+}));
+
+vi.mock('@taucad/project-workspace/components/chat-history-empty', () => ({
+  ChatHistoryEmpty: () => <div data-slot='panel-empty-state' />,
+}));
+
+vi.mock('#components/ui/floating-panel.js', () => ({
+  FloatingPanel: ({ children }: { readonly children: React.ReactNode }) => <div>{children}</div>,
+  FloatingPanelClose: ({ label }: { readonly label?: string }) => <button type='button' aria-label={label} />,
+  FloatingPanelContent: ({ children }: { readonly children: React.ReactNode }) => <div>{children}</div>,
+  FloatingPanelContentHeader: ({
+    children,
+    className,
+  }: {
+    readonly children: React.ReactNode;
+    readonly className?: string;
+  }) => (
+    <div data-slot='floating-panel-content-header' className={className}>
+      {children}
+    </div>
+  ),
+  FloatingPanelErrorContent: () => null,
+}));
+
+vi.mock('@taucad/ui/components/key-shortcut', () => ({
+  KeyShortcut: ({ children }: { readonly children: React.ReactNode }) => <span>{children}</span>,
+}));
+
+vi.mock('@taucad/ui/components/keyboard', () => ({
+  useKeybinding: () => ({ formattedKeyCombination: 'Ctrl+C' }),
+}));
+
+vi.mock('@taucad/chat-ui/components/at-reference-context', () => ({
+  AtReferenceProvider: ({ children }: { readonly children: React.ReactNode }) => <div>{children}</div>,
+}));
+
+vi.mock('#hooks/use-file-manager.js', () => ({
+  useFileManager: () => ({ treeService: undefined }),
+}));
+/* The files hooks read the same services from files-ui's own context. */
+vi.mock('@taucad/files-ui/hooks/use-file-services', async () => {
+  const { useFileManager } = await import('#hooks/use-file-manager.js');
+  return { useFileServices: useFileManager, useOptionalFileServices: useFileManager };
+});
+
+vi.mock('#hooks/use-chats.js', () => ({
+  useChats: () => ({ chats: [] }),
+}));
+vi.mock('#hooks/use-chat-records.js', () => ({
+  useChatRecords: () => ({ chats: [] }),
+}));
+
+vi.mock('#hooks/use-project.js', () => ({
+  useProject: () => ({ projectId: 'project_test' }),
+}));
+
+const skillsCatalogReads = vi.hoisted(() => vi.fn(() => []));
+vi.mock('#hooks/use-skills-catalog.js', () => ({ useSkillsCatalog: skillsCatalogReads }));
+
+// Capture the Virtuoso props so tests can both inspect counts and render
+// the produced items by walking `itemContent` over `totalCount`.
+const capturedVirtuoso: {
+  totalCount?: number;
+  itemContent?: (index: number) => React.ReactNode;
+  followOutput?: () => 'auto' | false;
+  initialTopMostItemIndex?: { index: string; align: string };
+} = {};
+const scrollToIndexMock = vi.fn();
+const DefaultScroller = ({ children }: { readonly children?: React.ReactNode }): React.JSX.Element => (
+  <div>{children}</div>
+);
+vi.mock('react-virtuoso', () => ({
+  Virtuoso: (properties: {
+    readonly data: readonly unknown[];
+    readonly initialTopMostItemIndex: { index: string; align: string };
+    readonly itemContent: (index: number, item: unknown) => React.ReactNode;
+    readonly followOutput: () => 'auto' | false;
+    readonly ref?: React.Ref<{ scrollToIndex: typeof scrollToIndexMock }>;
+    readonly components?: {
+      readonly EmptyPlaceholder?: React.ComponentType<{ readonly context?: unknown }>;
+      readonly Scroller?: React.ComponentType<{ readonly children?: React.ReactNode; readonly context?: unknown }>;
+    };
+    readonly context?: unknown;
+    readonly 'data-transcript-state'?: string;
+  }) => {
+    capturedVirtuoso.initialTopMostItemIndex = properties.initialTopMostItemIndex;
+    capturedVirtuoso.totalCount = properties.data.length;
+    capturedVirtuoso.itemContent = async (index) => properties.itemContent(index, properties.data[index]);
+    capturedVirtuoso.followOutput = properties.followOutput;
+    useImperativeHandle(properties.ref, () => ({ scrollToIndex: scrollToIndexMock }), []);
+    const items: React.ReactNode[] = [];
+    for (let index = 0; index < properties.data.length; index++) {
+      items.push(
+        <div key={index} data-testid='virtuoso-item' data-index={index}>
+          {properties.itemContent(index, properties.data[index])}
+        </div>,
+      );
+    }
+    /* Like Virtuoso, the root takes the list's own attributes, the list's Scroller holds its rows, the empty
+     * placeholder shows for no data, and both custom components receive the list's `context`. */
+    const EmptyPlaceholder = properties.components?.EmptyPlaceholder;
+    const Scroller = properties.components?.Scroller ?? DefaultScroller;
+    return (
+      <div data-testid='virtuoso' data-transcript-state={properties['data-transcript-state']}>
+        <Scroller context={properties.context}>
+          {items.length === 0 && EmptyPlaceholder ? <EmptyPlaceholder context={properties.context} /> : items}
+        </Scroller>
+      </div>
+    );
+  },
+}));
+
+const { ChatHistory } = await import('#routes/w.$workspace.$project/chat-history.js');
+const { ResponsiveSurfaceProvider } = await import('@taucad/ui/hooks/use-mobile');
+
+const draftAttachment = storedRef({ hash: 'f'.repeat(64), mediaType: 'application/pdf', filename: 'spec.pdf' });
+
+const submitDraft = async (content = 'hello', attachments: ChatTextareaSubmitPayload['attachments'] = []) => {
+  await capturedTextarea.onSubmit?.({ content, attachments });
+};
+
+const message = (id: string, role: MyUIMessage['role']): MyUIMessage => ({
+  id,
+  role,
+  parts: [{ type: 'text', text: id }],
+});
+
+describe('ChatHistory — submit routes through useCadChatClient', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedTextarea.onSubmit = undefined;
+    capturedTextarea.className = undefined;
+    setMockMessages([]);
+    archiveOpen = false;
+  });
+
+  it('replaces the transcript and composer with the archive without reading transcript projections', () => {
+    archiveOpen = true;
+    const view = render(<ChatHistory />);
+    expect(screen.getByRole('region', { name: 'Archived chats' })).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-textarea')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('virtuoso')).not.toBeInTheDocument();
+    expect(skillsCatalogReads).not.toHaveBeenCalled();
+    archiveOpen = false;
+    view.rerender(<ChatHistory className='returned' />);
+    expect(screen.queryByRole('region', { name: 'Archived chats' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('chat-textarea')).toBeInTheDocument();
+  });
+
+  it('skips hidden transcript and skill projections, then reveals current messages', () => {
+    setMockMessages([message('u1', 'user')]);
+    const view = render(<ChatHistory isExpanded={false} setIsExpanded={vi.fn()} />);
+
+    expect(skillsCatalogReads).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('virtuoso')).toBeNull();
+    expect(screen.queryByTestId('chat-textarea')).toBeNull();
+
+    setMockMessages([message('u1', 'user'), message('a1', 'assistant')]);
+    view.rerender(<ChatHistory isExpanded={false} setIsExpanded={vi.fn()} />);
+    expect(skillsCatalogReads).not.toHaveBeenCalled();
+
+    view.rerender(<ChatHistory isExpanded setIsExpanded={vi.fn()} />);
+    expect(skillsCatalogReads).toHaveBeenCalledOnce();
+    expect(screen.getAllByTestId('chat-message')).toHaveLength(2);
+    expect(screen.getByTestId('chat-textarea')).toBeInTheDocument();
+  });
+
+  it('names its Close after the panel, as its tooltip does (I6)', () => {
+    render(<ChatHistory />);
+
+    expect(screen.getByRole('button', { name: 'Close Chat' })).toBeInTheDocument();
+  });
+
+  it('opens with one header row that holds the title bar, and no status row under it', () => {
+    const { container } = render(<ChatHistory />);
+
+    const headers = container.querySelectorAll('[data-slot=floating-panel-content-header]');
+    expect(headers).toHaveLength(1);
+    expect(headers[0]).toHaveClass('gap-1');
+    expect(headers[0]?.querySelector('[data-testid=chat-title-bar]')).not.toBeNull();
+    expect(container.querySelector('.sticky')).toBeNull();
+  });
+
+  /* PL6: the composer adopts only the native input its own project's placeholder served. */
+  it("should adopt the composer hand-off scoped to the route's project", () => {
+    render(<ChatHistory />);
+
+    expect(capturedTextarea.handOff).toEqual({ surface: 'project-composer', scope: 'home/one' });
+  });
+
+  it('leaves the surface styling with ChatTextarea and caps the composer width', () => {
+    render(<ChatHistory />);
+
+    expect(capturedTextarea.className).toBeUndefined();
+    expect(screen.getByTestId('chat-textarea').parentElement).toHaveClass('max-w-xl');
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' }).parentElement).toBe(
+      screen.getByTestId('chat-textarea').parentElement,
+    );
+  });
+
+  it.each([
+    ['a phone', true],
+    ['desktop and tablets', false],
+  ] as const)('lets the composer rest as one row only on %s (D14, D12)', (_device, isMobile) => {
+    render(
+      <ResponsiveSurfaceProvider isMobile={isMobile} container={undefined}>
+        <ChatHistory />
+      </ResponsiveSurfaceProvider>,
+    );
+
+    expect(screen.getByTestId('chat-textarea')).toHaveAttribute('data-collapsible', String(isMobile));
+  });
+
+  it('calls cadChat.submit with the text and attachment references from the textarea', async () => {
+    render(<ChatHistory />);
+    await submitDraft('design a desk', [draftAttachment]);
+
+    expect(submitMock).toHaveBeenCalledTimes(1);
+    expect(submitMock).toHaveBeenCalledWith({ text: 'design a desk', attachments: [draftAttachment] });
+  });
+
+  // Wire-format invariant. The chat-client builds the per-request `agent`
+  // payload from `useCadAgentConfig`. We verify the request body the API
+  // would receive (synthesised here from the captured agent identity + AI
+  // SDK envelope fields) parses cleanly through the shared
+  // `chatTurnRequestSchema`. This is the regression coverage for the
+  // original "missing kernel on resubmit" bug — the chat-client owns the
+  // wire body, not the chat-history component.
+  it('produces a wire body satisfying chatTurnRequestSchema when submit fires', async () => {
+    render(<ChatHistory />);
+    await submitDraft('build a vase');
+
+    const userMessage: MyUIMessage = {
+      id: 'msg_test',
+      role: 'user',
+      parts: [{ type: 'text', text: 'build a vase' }],
+    };
+    const wireBody = {
+      id: 'chat_test',
+      projectId: 'project_test',
+      messages: [userMessage],
+      agent: cadChatRef.current.agent,
+      admission: { version: 1, idempotencyKey: 'request_0000000001' },
+      execution: { hostId: 'host_test', workspaceId: 'workspace_test', baseRevisionId: 'rev_test' },
+    };
+
+    expect(() => chatTurnRequestSchema.parse(wireBody)).not.toThrow();
+  });
+});
+
+describe('ChatHistory — turn group rendering', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedTextarea.onSubmit = undefined;
+    capturedVirtuoso.initialTopMostItemIndex = undefined;
+    capturedVirtuoso.totalCount = undefined;
+    capturedVirtuoso.itemContent = undefined;
+    capturedVirtuoso.followOutput = undefined;
+    scrollToIndexMock.mockClear();
+    setMockMessages([]);
+  });
+
+  it('should render natural-height turn groups without a trailing viewport spacer', () => {
+    setMockMessages([
+      message('u1', 'user'),
+      message('a1', 'assistant'),
+      message('u2', 'user'),
+      message('a2', 'assistant'),
+      message('a3', 'assistant'),
+    ]);
+
+    render(<ChatHistory />);
+
+    const items = screen.getAllByTestId('virtuoso-item');
+    expect(items).toHaveLength(2);
+
+    const firstGroup = items[0]!.firstElementChild as HTMLElement;
+    const lastGroup = items[1]!.firstElementChild as HTMLElement;
+
+    // First group bundles u1 + a1, no min-h.
+    expect(firstGroup.className).not.toContain('min-h-(--chat-live-turn-min-h)');
+    const firstGroupMessages = firstGroup.querySelectorAll<HTMLElement>('[data-testid="chat-message"]');
+    expect([...firstGroupMessages].map((node) => node.dataset['messageId'])).toEqual(['u1', 'a1']);
+
+    // The last group also takes only its content height.
+    expect(lastGroup.className).not.toContain('min-h-');
+    const lastGroupMessages = lastGroup.querySelectorAll<HTMLElement>('[data-testid="chat-message"]');
+    expect([...lastGroupMessages].map((node) => node.dataset['messageId'])).toEqual(['u2', 'a2', 'a3']);
+  });
+
+  it('should attach one revision summary to each request, before its replies', () => {
+    setMockMessages([
+      message('u1', 'user'),
+      message('a1', 'assistant'),
+      message('u2', 'user'),
+      message('a2', 'assistant'),
+      message('a3', 'assistant'),
+    ]);
+    render(<ChatHistory />);
+    const [firstGroup, lastGroup] = screen
+      .getAllByTestId('virtuoso-item')
+      .map((item) => item.firstElementChild as HTMLElement);
+    const order = (group: HTMLElement | undefined): string[] =>
+      [...(group?.children ?? [])].map((node) =>
+        node instanceof HTMLElement
+          ? `${node.dataset['testid'] ?? ''}:${node.dataset['messageId'] ?? node.dataset['userMessageId'] ?? ''}`
+          : '',
+      );
+    const summaryOf = (group: HTMLElement | undefined): HTMLElement | undefined =>
+      group?.querySelector<HTMLElement>('[data-testid="turn-revision"]') ?? undefined;
+
+    /* The card is the request's own footer (R11), so replies can never land between them. */
+    const footerOf = (group: HTMLElement | undefined, id: string): string[] =>
+      order(group?.querySelector<HTMLElement>(`[data-message-id="${id}"]`) ?? undefined);
+    expect(order(firstGroup)).toEqual(['chat-message:u1', 'chat-message:a1']);
+    expect(footerOf(firstGroup, 'u1')).toEqual(['turn-revision:u1']);
+    expect(footerOf(firstGroup, 'a1')).toEqual([]);
+    expect(order(lastGroup).slice(0, 3)).toEqual(['chat-message:u2', 'chat-message:a2', 'chat-message:a3']);
+    expect(footerOf(lastGroup, 'u2')).toEqual(['turn-revision:u2']);
+    expect(lastGroup?.querySelectorAll('[data-testid="turn-revision"]')).toHaveLength(1);
+    expect(summaryOf(firstGroup)?.dataset['latest']).toBe('false');
+    expect(summaryOf(lastGroup)?.dataset['latest']).toBe('true');
+  });
+
+  it('should render a leading assistant message in its own group when no user message precedes it', () => {
+    setMockMessages([message('a0', 'assistant')]);
+
+    render(<ChatHistory />);
+
+    const items = screen.getAllByTestId('virtuoso-item');
+    expect(items).toHaveLength(1);
+
+    // A leading assistant greeting also takes only its content height.
+    const onlyGroup = items[0]!.firstElementChild as HTMLElement;
+    expect(onlyGroup.className).not.toContain('min-h-');
+    const messages = onlyGroup.querySelectorAll<HTMLElement>('[data-testid="chat-message"]');
+    expect([...messages].map((node) => node.dataset['messageId'])).toEqual(['a0']);
+  });
+
+  it('renders ChatError adornment inside the last turn group only', () => {
+    setMockMessages([
+      message('u1', 'user'),
+      message('a1', 'assistant'),
+      message('u2', 'user'),
+      message('a2', 'assistant'),
+    ]);
+
+    render(<ChatHistory />);
+
+    expect(screen.queryAllByTestId('chat-error-adornment')).toHaveLength(1);
+
+    const items = screen.getAllByTestId('virtuoso-item');
+    expect(items).toHaveLength(2);
+
+    expect(items[0]!.querySelector('[data-testid="chat-error-adornment"]')).toBeNull();
+
+    const lastTurnAdornment = items[1]!.querySelector('[data-testid="chat-error-adornment"]');
+    expect(lastTurnAdornment).not.toBeNull();
+
+    expect(screen.getByTestId('virtuoso').querySelectorAll('[data-testid="chat-error-adornment"]')).toHaveLength(1);
+  });
+
+  it('keeps the error adornment reachable on a chat with no turns yet (W19-b)', () => {
+    /* The first turn of a fresh project is refused by the durable workspace
+     * before any user message exists, so the banner that rides the last turn
+     * group has no group to ride and the person saw nothing at all (I12). */
+    setMockMessages([]);
+
+    render(<ChatHistory />);
+
+    expect(screen.queryAllByTestId('chat-error-adornment')).toHaveLength(1);
+    expect(screen.getByTestId('virtuoso').querySelectorAll('[data-testid="chat-error-adornment"]')).toHaveLength(0);
+  });
+
+  it('should pass the correct totalCount to Virtuoso (one per turn group)', () => {
+    setMockMessages([
+      message('a0', 'assistant'),
+      message('u1', 'user'),
+      message('a1', 'assistant'),
+      message('u2', 'user'),
+    ]);
+
+    render(<ChatHistory />);
+
+    expect(capturedVirtuoso.totalCount).toBe(3);
+    expect(typeof capturedVirtuoso.itemContent).toBe('function');
+  });
+
+  it('opens at the bottom and leaves scroll-away intact when a new turn arrives', () => {
+    setMockMessages([message('u1', 'user'), message('a1', 'assistant')]);
+    const view = render(<ChatHistory />);
+    expect(capturedVirtuoso.initialTopMostItemIndex).toEqual({ index: 'LAST', align: 'end' });
+    expect(capturedVirtuoso.followOutput?.()).toBe('auto');
+    setMockMessages([message('u1', 'user'), message('a1', 'assistant'), message('u2', 'user')]);
+    view.rerender(<ChatHistory className='updated' />);
+    expect(scrollToIndexMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps exactly one activity row in the composer region outside the transcript', () => {
+    setMockMessages([message('u1', 'user'), message('a1', 'assistant')]);
+    render(<ChatHistory />);
+    const activity = screen.getByRole('status', { name: 'Current activity' });
+    expect(screen.getByRole('region', { name: 'Chat composer' })).toContainElement(activity);
+    expect(screen.getByTestId('virtuoso')).not.toContainElement(activity);
+  });
+});
+
+describe('ChatHistory — composer refocus', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedTextarea.onSubmit = undefined;
+    capturedTextarea.focus = vi.fn<() => void>();
+    persistenceListeners.clear();
+    locationState = undefined;
+    setMockMessages([]);
+  });
+
+  it('focuses the composer when a new-chat surface requests it', () => {
+    locationState = { focusChatComposer: true };
+    render(<ChatHistory />);
+
+    expect(capturedTextarea.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('refocuses the composer on the next animation frame when persistence emits restoreCancelledDraft', async () => {
+    const requestAnimationFrameSpy = vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => {
+      callback(0);
+      return 0;
+    });
+
+    try {
+      render(<ChatHistory />);
+
+      const userMessage: MyUIMessage = {
+        id: 'msg_user_cancelled',
+        role: 'user',
+        parts: [{ type: 'text', text: 'design a bracket' }],
+      };
+
+      // Subscriber registers during the mount effect.
+      expect(persistenceListeners.get('restoreCancelledDraft')?.size).toBe(1);
+      expect(capturedTextarea.focus).not.toHaveBeenCalled();
+
+      act(() => {
+        emitRestoreCancelledDraft({
+          type: 'restoreCancelledDraft',
+          userMessage,
+          truncatedMessages: [],
+          cause: 'user_stop',
+        });
+      });
+
+      expect(requestAnimationFrameSpy).toHaveBeenCalledTimes(1);
+      expect(capturedTextarea.focus).toHaveBeenCalledTimes(1);
+    } finally {
+      requestAnimationFrameSpy.mockRestore();
+    }
+  });
+
+  it('unsubscribes the restore listener on unmount', () => {
+    const { unmount } = render(<ChatHistory />);
+
+    expect(persistenceListeners.get('restoreCancelledDraft')?.size).toBe(1);
+
+    unmount();
+
+    expect(persistenceListeners.get('restoreCancelledDraft')?.size ?? 0).toBe(0);
+  });
+});
+
+/**
+ * The list's own container marks its transcript's load state: A12 renders `data-transcript-state` on the
+ * Virtuoso root (passed as a Virtuoso prop), or on its Scroller from the list's `context`. The mock renders both and
+ * passes `context` to the Scroller and the empty placeholder, as Virtuoso does.
+ */
+const transcriptLoadingMarker = '[data-transcript-state="loading"]';
+/** The same marker once the list has left `loading` with the chat's turns. */
+const transcriptLoadedMarker = '[data-transcript-state="loaded"]';
+
+type CommitFrame = {
+  readonly emptyState: boolean;
+  readonly loading: boolean;
+  readonly loaded: boolean;
+  readonly turns: number;
+};
+
+/** What the document holds now: the empty-chat state, the list's load markers, and the turns shown. */
+const readFrame = (): CommitFrame => ({
+  emptyState: document.querySelector('[data-slot="panel-empty-state"]') !== null,
+  loading: document.querySelector(transcriptLoadingMarker) !== null,
+  loaded: document.querySelector(transcriptLoadedMarker) !== null,
+  turns: document.querySelectorAll('[data-testid="chat-message"]').length,
+});
+
+/**
+ * Render the chat lane over a transcript load the row controls, reading the document at every React commit.
+ *
+ * @param history - What the load resolves to: the chat's turns, or none for a truly empty chat.
+ * @returns Every commit's frame, and the step that settles the load.
+ */
+/* A fresh performance clock: a document open the lane ends is ended per clock, so a row that times one gets its own. */
+const freshPerformanceClock = (): WaitClock => ({ now: () => performance.now() });
+
+const renderOverDeferredTranscript = (history: readonly MyUIMessage[], clock: WaitClock = freshPerformanceClock()) => {
+  const commits: CommitFrame[] = [];
+  publishChatState({ messages: [], transcript: 'loading' });
+  const tree = (
+    <WaitClockProvider clock={clock}>
+      <Profiler
+        id='chat-history'
+        onRender={() => {
+          commits.push(readFrame());
+        }}
+      >
+        <ChatHistory />
+      </Profiler>
+    </WaitClockProvider>
+  );
+  const { unmount } = render(tree);
+  return {
+    commits,
+    unmount,
+    resolve: () => {
+      act(() => {
+        publishChatState({ messages: history, transcript: history.length === 0 ? 'empty' : 'loaded' });
+      });
+    },
+  };
+};
+
+describe('ChatHistory — transcript load (I21)', () => {
+  const history = [message('u1', 'user'), message('a1', 'assistant')];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setMockMessages([]);
+    archiveOpen = false;
+  });
+
+  it('never shows the empty-chat state for a chat with history while its transcript loads (U7)', () => {
+    const load = renderOverDeferredTranscript(history);
+    const steps = [readFrame()];
+    load.resolve();
+    steps.push(readFrame());
+
+    expect(load.commits.length).toBeGreaterThan(1);
+    expect(load.commits.filter((frame) => frame.emptyState)).toEqual([]);
+    expect(steps.filter((frame) => frame.emptyState)).toEqual([]);
+    expect(screen.getAllByTestId('chat-message')).toHaveLength(2);
+  });
+
+  it('shows the empty-chat state at once for a chat that is truly empty (U7)', () => {
+    publishChatState({ messages: [], transcript: 'empty' });
+    const commits: CommitFrame[] = [];
+    render(
+      <Profiler
+        id='chat-history'
+        onRender={() => {
+          commits.push(readFrame());
+        }}
+      >
+        <ChatHistory />
+      </Profiler>,
+    );
+
+    expect(commits[0]?.emptyState).toBe(true);
+    // A truly empty chat is out of `loading` from its first commit, not marked by its turn count.
+    expect(commits.filter((frame) => frame.loading)).toEqual([]);
+    expect(document.querySelector('[data-slot="panel-empty-state"]')).toBeInTheDocument();
+  });
+
+  it('has no commit with the list neither loading nor showing a turn, for a chat with history (U19)', () => {
+    const load = renderOverDeferredTranscript(history);
+    load.resolve();
+
+    expect(load.commits.length).toBeGreaterThan(1);
+    expect(load.commits.filter((frame) => !frame.loading && frame.turns === 0)).toEqual([]);
+    // The list leaves `loading` once the load settles, so the filter above holds that commit to its turns.
+    expect(load.commits.at(-1)).toMatchObject({ loading: false, loaded: true, turns: 2 });
+  });
+});
+
+/*
+ * A15d, C9's new rows (loading states UX blueprint, § Chat lane; U7): while the transcript loads, the chat header's
+ * trailing slot holds the wait indicator, which reveals 1,000 ms into the wait; a lane mounted during the document's own
+ * open counts from navigation start, a later wait from its own start. jsdom runs no CSS, so the rows read the reveal
+ * delay the indicator hands its animation.
+ */
+describe('ChatHistory — transcript wait indicator (A15d)', () => {
+  const history = [message('u1', 'user'), message('a1', 'assistant')];
+  const headerIndicator = (): HTMLElement | undefined =>
+    document.querySelector<HTMLElement>('[data-slot="floating-panel-content-header"] [data-slot="wait-indicator"]') ??
+    undefined;
+  const navigationEntry = (name: string): PerformanceEntry => ({
+    name,
+    entryType: 'navigation',
+    startTime: 0,
+    duration: 0,
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- The DOM's PerformanceEntry names this member.
+    toJSON: () => ({ name }),
+  });
+  const revealDelay = (): number => {
+    const body = headerIndicator()?.querySelector<HTMLElement>('[data-slot="wait-indicator-body"]');
+    const revealValue = body?.style.getPropertyValue('--wait-reveal-delay') ?? '';
+    const match = /^calc\((-?[\d.]+)ms \+ var\(--wait-offset, 0ms\)\)$|^(-?[\d.]+)ms$/u.exec(revealValue);
+    return Number(match?.[1] ?? match?.[2] ?? Number.NaN);
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setMockMessages([]);
+    archiveOpen = false;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    globalThis.history.replaceState(null, '', '/');
+  });
+
+  it.each([
+    { opened: '/w/acme/bracket', current: '/w/acme/bracket' },
+    /* The route rewrites the URL it opened with before the transcript waits (review round 5). */
+    { opened: '/w/acme/bracket', current: '/w/acme/bracket?chat=chat-1' },
+  ])(
+    "shows 'Loading chat' in the header's indicator slot (D14) only from 1,000 ms after navigation for the open's own load, opened at $opened, now at $current",
+    ({ opened, current }) => {
+      globalThis.history.replaceState(null, '', current);
+      vi.spyOn(performance, 'getEntriesByType').mockReturnValue([navigationEntry(`http://localhost${opened}`)]);
+      vi.spyOn(performance, 'now').mockReturnValue(400);
+      renderOverDeferredTranscript(history);
+
+      const indicator = headerIndicator();
+      expect(indicator).toHaveAttribute('data-state', 'waiting');
+      expect(indicator).toHaveTextContent('Loading chat…');
+      /* 600 ms left of the 1,000 ms, counted from navigation start, not from this mount. */
+      expect(revealDelay()).toBe(600);
+      /* A route open is announced once, by the route: the slot is seen, not live. */
+      expect(indicator).not.toHaveAttribute('role', 'status');
+    },
+  );
+
+  /* Review round 8: the route corrects the slugs with `replaceState`, which keeps the history entry. */
+  it('counts the open from navigation start after the route corrects the URL to canonical slugs', () => {
+    globalThis.history.replaceState(null, '', '/w/acme/bracket');
+    vi.spyOn(performance, 'getEntriesByType').mockReturnValue([
+      navigationEntry('http://localhost/w/ws_01/proj_0123456789ABCDEFGHIJK'),
+    ]);
+    vi.stubGlobal('navigation', { activation: { entry: { key: 'loaded' } }, currentEntry: { key: 'loaded' } });
+    vi.spyOn(performance, 'now').mockReturnValue(400);
+    try {
+      renderOverDeferredTranscript(history);
+      expect(revealDelay()).toBe(600);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('times a load from its own start on another history entry than the document loaded', () => {
+    globalThis.history.replaceState(null, '', '/w/acme/bracket');
+    vi.spyOn(performance, 'getEntriesByType').mockReturnValue([navigationEntry('http://localhost/')]);
+    vi.stubGlobal('navigation', { activation: { entry: { key: 'loaded' } }, currentEntry: { key: 'pushed' } });
+    vi.spyOn(performance, 'now').mockReturnValue(5000);
+    try {
+      renderOverDeferredTranscript(history);
+      expect(revealDelay()).toBe(1000);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  /* Review round 10: a pushed entry on the document's project (the archive, then a chat) is a later wait. */
+  it('times a load on a pushed entry of the document project from its own start', () => {
+    globalThis.history.replaceState(null, '', '/w/acme/bracket?chat=archived');
+    vi.spyOn(performance, 'getEntriesByType').mockReturnValue([navigationEntry('http://localhost/w/acme/bracket')]);
+    vi.stubGlobal('navigation', { activation: { entry: { key: 'loaded' } }, currentEntry: { key: 'pushed' } });
+    vi.spyOn(performance, 'now').mockReturnValue(5000);
+    try {
+      renderOverDeferredTranscript(history);
+      expect(revealDelay()).toBe(1000);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('times a return to the document project, after leaving it, from its own start', () => {
+    const clock = freshPerformanceClock();
+    globalThis.history.replaceState(null, '', '/w/acme/bracket');
+    vi.spyOn(performance, 'getEntriesByType').mockReturnValue([navigationEntry('http://localhost/w/acme/bracket')]);
+    vi.spyOn(performance, 'now').mockReturnValue(400);
+    const first = renderOverDeferredTranscript(history, clock);
+    expect(revealDelay()).toBe(600);
+    /* To Home, which unmounts the lane, and back 10 s later: the transcript loads again, as a later wait. */
+    globalThis.history.replaceState(null, '', '/');
+    first.unmount();
+    globalThis.history.replaceState(null, '', '/w/acme/bracket');
+    vi.spyOn(performance, 'now').mockReturnValue(10_400);
+    renderOverDeferredTranscript(history, clock);
+
+    expect(headerIndicator()).toHaveAttribute('data-state', 'waiting');
+    expect(revealDelay()).toBe(1000);
+  });
+
+  it('keeps timing the open from navigation start when the lane remounts on the document project', () => {
+    const clock = freshPerformanceClock();
+    globalThis.history.replaceState(null, '', '/w/acme/bracket');
+    vi.spyOn(performance, 'getEntriesByType').mockReturnValue([navigationEntry('http://localhost/w/acme/bracket')]);
+    vi.spyOn(performance, 'now').mockReturnValue(400);
+    renderOverDeferredTranscript(history, clock).unmount();
+    vi.spyOn(performance, 'now').mockReturnValue(700);
+    renderOverDeferredTranscript(history, clock);
+
+    expect(revealDelay()).toBe(300);
+  });
+
+  /* Review round 14: a replace keeps the document's entry, so the settled open must end on its own. */
+  it("times a lane remounted over a loading chat after the open's transcript settled from its own start", () => {
+    const clock = freshPerformanceClock();
+    globalThis.history.replaceState(null, '', '/w/acme/bracket');
+    vi.spyOn(performance, 'getEntriesByType').mockReturnValue([navigationEntry('http://localhost/w/acme/bracket')]);
+    vi.spyOn(performance, 'now').mockReturnValue(400);
+    const open = renderOverDeferredTranscript(history, clock);
+    act(() => {
+      publishChatState({ messages: history, transcript: 'loaded' });
+    });
+    open.unmount();
+    vi.spyOn(performance, 'now').mockReturnValue(9000);
+    renderOverDeferredTranscript(history, clock);
+
+    expect(revealDelay()).toBe(1000);
+  });
+
+  it('times a load that starts after the open from its own start', () => {
+    vi.spyOn(performance, 'getEntriesByType').mockReturnValue([navigationEntry('http://localhost/elsewhere')]);
+    vi.spyOn(performance, 'now').mockReturnValue(5000);
+    renderOverDeferredTranscript(history);
+
+    expect(headerIndicator()).toHaveAttribute('data-state', 'waiting');
+    expect(revealDelay()).toBe(1000);
+  });
+
+  it('leaves the slot empty for a chat whose transcript is known', () => {
+    publishChatState({ messages: history, transcript: 'loaded' });
+    render(<ChatHistory />);
+
+    expect(headerIndicator()).toHaveAttribute('data-state', 'idle');
+    expect(headerIndicator()).toBeEmptyDOMElement();
+  });
+});

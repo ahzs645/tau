@@ -1,0 +1,384 @@
+import '#test/browser.css';
+import { cleanup, render } from '@testing-library/react';
+import { useFrame } from '@react-three/fiber';
+import type { RootState } from '@react-three/fiber';
+import type { ComponentProps } from 'react';
+import {
+  BoxGeometry,
+  DepthTexture,
+  Mesh,
+  MeshStandardMaterial,
+  Vector3,
+  WebGLCubeRenderTarget,
+  WebGLRenderer,
+} from 'three';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { createActor, createAsyncLogic } from 'xstate';
+import { afterEach, expect, inject, it, vi } from 'vitest';
+import { page } from 'vitest/browser';
+import type { Artifact } from '@taucad/runtime';
+import { CadViewer } from '#cad/cad-viewer.jsx';
+import { KeyboardProvider } from '@taucad/ui/components/keyboard';
+import { GraphicsProvider } from '#hooks/use-graphics.jsx';
+import { graphicsMachine } from '#machines/graphics.machine.js';
+import { isViewportWebGpu } from '#graphics/three/viewport-cad-renderer.js';
+import type * as threeContextModule from '#graphics/three/three-context.jsx';
+import type { ThreeProvider } from '#graphics/three/three-context.jsx';
+import type * as rendererModule from '#graphics/three/renderer.js';
+import {
+  captureRendererOutput,
+  createRendererOutputCanvas,
+  disposeRendererOutput,
+  installRendererOutput,
+} from '@taucad/runtime-testing/browser/three-renderer-output';
+
+import { defaultViewerEnvironment, ViewerEnvironmentProvider } from '#environment/viewer-environment.jsx';
+import { createRenderer } from '#graphics/three/renderer.js';
+
+it('should release a cube environment after its canvas renderer has retired', async () => {
+  const canvas = document.createElement('canvas');
+  const renderer = await createRenderer('viewport', 'webgl', canvas);
+  if (!(renderer instanceof WebGLRenderer)) {
+    throw new TypeError('The WebGL canvas must own a WebGL renderer.');
+  }
+  const target = new WebGLCubeRenderTarget(16);
+  renderer.setRenderTarget(target);
+  renderer.setRenderTarget(null);
+  const disposeDepth = vi.fn();
+  target.depthTexture = new DepthTexture(16, 16);
+  target.depthTexture.addEventListener('dispose', disposeDepth);
+  renderer.dispose();
+  expect(() => {
+    target.dispose();
+    target.dispose();
+  }).not.toThrow();
+  expect(disposeDepth).toHaveBeenCalledOnce();
+});
+
+let state: RootState | undefined;
+let frames = 0;
+let sceneSamples: number | undefined;
+let captureFrame: (() => Promise<void>) | undefined;
+let pendingFrame: Promise<void> | undefined;
+vi.mock('#graphics/three/renderer.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof rendererModule>();
+  return {
+    ...actual,
+    createRenderer: async (...args: Parameters<typeof actual.createRenderer>) => {
+      const renderer = await actual.createRenderer(...args);
+      installRendererOutput(renderer, inject('webGpuProfile'));
+      return renderer;
+    },
+  };
+});
+function FrameProbe(): undefined {
+  useFrame((current) => {
+    state = current;
+    current.scene.onBeforeRender = () => {
+      sceneSamples = current.gl.getRenderTarget()?.samples;
+    };
+    frames += 1;
+    const requested = captureFrame;
+    captureFrame = undefined;
+    if (requested) {
+      pendingFrame = requested();
+    }
+  }, 4);
+  return undefined;
+}
+// Keep the real renderer, scene and mesh loader; observe pixels after their final render pass.
+vi.mock('#graphics/three/three-context.jsx', async (importOriginal) => {
+  const actual = await importOriginal<typeof threeContextModule>();
+  return {
+    ...actual,
+    ThreeProvider: (props: ComponentProps<typeof ThreeProvider>) => (
+      <actual.ThreeProvider {...props}>
+        {props.children}
+        <FrameProbe />
+      </actual.ThreeProvider>
+    ),
+  };
+});
+
+const difference = (left: Uint8ClampedArray, right: Uint8ClampedArray): number => {
+  let changed = 0;
+  for (let index = 0; index < left.length; index += 4) {
+    if (
+      Math.abs(left[index]! - right[index]!) +
+        Math.abs(left[index + 1]! - right[index + 1]!) +
+        Math.abs(left[index + 2]! - right[index + 2]!) +
+        Math.abs(left[index + 3]! - right[index + 3]!) >
+      20
+    ) {
+      changed += 1;
+    }
+  }
+  return changed;
+};
+
+afterEach(async () => {
+  captureFrame = undefined;
+  await pendingFrame;
+  if (state) {
+    await disposeRendererOutput(state.gl);
+  }
+  cleanup();
+  document.documentElement.classList.remove('dark');
+  state = undefined;
+  frames = 0;
+  sceneSamples = undefined;
+  pendingFrame = undefined;
+});
+
+it.each([
+  ['webgl', 'light'],
+  ['webgpu', 'light'],
+  ['webgl', 'dark'],
+  ['webgpu', 'dark'],
+] as const)('should retain the %s empty scene through model transitions in %s mode', async (backend, theme) => {
+  document.documentElement.classList.toggle('dark', theme === 'dark');
+  await page.viewport(900, 650);
+  const actor = createActor(
+    graphicsMachine.provide({
+      actors: {
+        probeWebGpu: createAsyncLogic({
+          run: async () => backend === 'webgpu',
+        }),
+      },
+    }),
+    { input: {} },
+  ).start();
+  if (backend === 'webgpu') {
+    await vi.waitFor(() => {
+      expect(actor.getSnapshot().context.webGpuAvailable).toBe(true);
+    });
+  }
+  const geometry = new BoxGeometry(0.6, 0.6, 0.6);
+  const material = new MeshStandardMaterial({ color: 0x16_aa_a4 });
+  const binary = await new GLTFExporter().parseAsync(new Mesh(geometry, material), { binary: true });
+  if (!(binary instanceof ArrayBuffer)) {
+    throw new Error('Expected a binary GLB');
+  }
+  const artifact: Artifact = {
+    mimeType: 'model/gltf-binary',
+    content: new Uint8Array(binary),
+  };
+  const fixture = (
+    model?: Artifact,
+    { grid = true, axes = true, gizmo = true }: { grid?: boolean; axes?: boolean; gizmo?: boolean } = {},
+  ): React.JSX.Element => (
+    <div role='application' aria-label='CAD canvas' className='relative h-144 w-208 bg-background'>
+      <ViewerEnvironmentProvider
+        value={{
+          ...defaultViewerEnvironment,
+          colorScheme: theme,
+          graphicsBackend: backend,
+        }}
+      >
+        <KeyboardProvider>
+          <GraphicsProvider graphicsRef={actor}>
+            <CadViewer
+              enableZoom
+              enablePan
+              enableGrid={grid}
+              enableAxes={axes}
+              enableGizmo={gizmo}
+              artifact={model}
+              artifactHash={model ? 'box' : undefined}
+              sourceFile='main.ts'
+            />
+          </GraphicsProvider>
+        </KeyboardProvider>
+      </ViewerEnvironmentProvider>
+    </div>
+  );
+  try {
+    const view = render(fixture());
+    // The canvas renders on demand, so an idle empty scene can stop after its first frames.
+    // Request each frame rather than relying on start-up invalidations to reach the count.
+    await vi.waitFor(
+      () => {
+        state?.invalidate();
+        expect(frames).toBeGreaterThan(2);
+      },
+      { timeout: 45_000 },
+    );
+    const renderer = state!.gl;
+    const canvas = renderer.domElement;
+    expect(isViewportWebGpu(renderer)).toBe(true);
+    if (isViewportWebGpu(renderer)) {
+      expect('isWebGPUBackend' in renderer.backend && renderer.backend.isWebGPUBackend).toBe(backend === 'webgpu');
+      expect(renderer.samples).toBe(0);
+      expect(renderer.reversedDepthBuffer).toBe(backend === 'webgpu');
+    }
+    const capture = async (): Promise<Uint8ClampedArray> => {
+      let pixels: Uint8ClampedArray = new Uint8ClampedArray();
+      // Let scene changes settle, completing each final-frame readback before requesting the next.
+      for (let sample = 0; sample < 3; sample++) {
+        const completed = Promise.withResolvers<Uint8ClampedArray>();
+        captureFrame = async () => {
+          try {
+            completed.resolve(await captureRendererOutput(renderer));
+          } catch (error) {
+            completed.reject(error);
+          }
+        };
+        state!.invalidate();
+        // oxlint-disable-next-line eslint/no-await-in-loop -- Each frame must finish its GPU copy before another capture.
+        pixels = await completed.promise;
+      }
+      return pixels;
+    };
+    const screenshot = async (pixels: Uint8ClampedArray, phase: string): Promise<void> => {
+      let copy: HTMLCanvasElement | undefined;
+      try {
+        if (backend === 'webgpu' && inject('webGpuProfile') === 'software') {
+          copy = createRendererOutputCanvas({ renderer, pixels });
+          document.body.append(copy);
+        }
+        await page.screenshot({
+          path: `../../../../../out/test-results/empty-viewer/${backend}-${theme}-${phase}.png`,
+        });
+      } finally {
+        copy?.remove();
+      }
+    };
+    const empty = await capture();
+    if (isViewportWebGpu(renderer)) {
+      expect(sceneSamples, 'the lean scene pass remains single-sample').toBe(0);
+    }
+    const origin = new Vector3().project(state!.camera);
+    expect(Math.abs(origin.x), 'default camera centres the origin horizontally').toBeLessThan(0.001);
+    expect(Math.abs(origin.y), 'default camera centres the origin vertically').toBeLessThan(0.001);
+    expect(
+      origin.z,
+      JSON.stringify({
+        position: state!.camera.position.toArray(),
+        near: state!.camera.near,
+        far: state!.camera.far,
+      }),
+    ).toBeGreaterThan(-1);
+    expect(origin.z).toBeLessThan(1);
+    await screenshot(empty, 'empty');
+    view.rerender(fixture(undefined, { grid: false }));
+    const noGrid = await capture();
+    // Exclude the bottom-right gizmo: each coloured world axis must contribute visible pixels.
+    const axisPixels = [0, 0, 0];
+    for (let index = 0; index < noGrid.length; index += 4) {
+      const x = (index / 4) % canvas.width;
+      const y = Math.floor(index / 4 / canvas.width);
+      if (x > canvas.width * 0.75 && y > canvas.height * 0.7) {
+        continue;
+      }
+      const channels = [noGrid[index]!, noGrid[index + 1]!, noGrid[index + 2]!];
+      for (const channel of [0, 1, 2]) {
+        if (
+          channels[channel]! > channels[(channel + 1) % 3]! + 15 &&
+          channels[channel]! > channels[(channel + 2) % 3]! + 15
+        ) {
+          axisPixels[channel]! += 1;
+        }
+      }
+    }
+    for (const count of axisPixels) {
+      expect(count, 'each world axis is visible before a model loads').toBeGreaterThan(50);
+    }
+    expect(difference(empty, noGrid), 'grid contributes visible pixels').toBeGreaterThan(100);
+    // The browser composites the canvas over the page background. Composite the strongest grid
+    // pixels the same way: a line must step as far from white as it does from the dark surface.
+    const background = (() => {
+      const swatch = document.createElement('canvas').getContext('2d')!;
+      swatch.fillStyle = getComputedStyle(document.querySelector('[aria-label="CAD canvas"]')!).backgroundColor;
+      swatch.fillRect(0, 0, 1, 1);
+      return swatch.getImageData(0, 0, 1, 1).data[0]!;
+    })();
+    const gridSteps: number[] = [];
+    for (let index = 0; index < empty.length; index += 4) {
+      const [red, green, blue, alpha] = [empty[index]!, empty[index + 1]!, empty[index + 2]!, empty[index + 3]!];
+      if (alpha === 0 || alpha === 255 || Math.max(red, green, blue) - Math.min(red, green, blue) > 3) {
+        continue;
+      }
+      const shown = (green * alpha + background * (255 - alpha)) / 255;
+      gridSteps.push(Math.abs(shown - background));
+    }
+    gridSteps.sort((left, right) => left - right);
+    const strongestGridStep = gridSteps[Math.floor(gridSteps.length * 0.99)] ?? 0;
+    expect(strongestGridStep, `grid lines stand out from the ${theme} background`).toBeGreaterThan(12);
+    view.rerender(fixture(undefined, { grid: false, axes: false }));
+    const noAxes = await capture();
+    expect(difference(noGrid, noAxes), 'axes contribute visible pixels').toBeGreaterThan(50);
+    view.rerender(fixture(undefined, { grid: false, axes: false, gizmo: false }));
+    const noGizmo = await capture();
+    expect(difference(noAxes, noGizmo), 'gizmo contributes visible pixels').toBeGreaterThan(100);
+    const gizmoBounds = {
+      left: canvas.width,
+      top: canvas.height,
+      right: 0,
+      bottom: 0,
+    };
+    let gizmoEdgePixels = 0;
+    for (let index = 0; index < noAxes.length; index += 4) {
+      if (difference(noAxes.subarray(index, index + 4), noGizmo.subarray(index, index + 4)) === 0) {
+        continue;
+      }
+      const x = (index / 4) % canvas.width;
+      const y = Math.floor(index / 4 / canvas.width);
+      gizmoBounds.left = Math.min(gizmoBounds.left, x);
+      gizmoBounds.top = Math.min(gizmoBounds.top, y);
+      gizmoBounds.right = Math.max(gizmoBounds.right, x);
+      gizmoBounds.bottom = Math.max(gizmoBounds.bottom, y);
+      if (noAxes[index + 3]! > 0 && noAxes[index + 3]! < 255) {
+        gizmoEdgePixels += 1;
+      }
+    }
+    const ratio = renderer.getPixelRatio();
+    expect(gizmoBounds.left, 'gizmo remains in its 96px bottom-right viewport').toBeGreaterThanOrEqual(
+      canvas.width - 96 * ratio,
+    );
+    expect(gizmoBounds.top).toBeGreaterThanOrEqual(canvas.height - 96 * ratio);
+    expect(gizmoBounds.right - gizmoBounds.left, 'gizmo retains its visible size').toBeGreaterThan(40 * ratio);
+    expect(gizmoBounds.bottom - gizmoBounds.top).toBeGreaterThan(40 * ratio);
+    expect(gizmoEdgePixels, 'the final gizmo silhouette retains antialiased coverage').toBeGreaterThan(20);
+
+    actor.send({
+      type: 'updateArtifact',
+      artifact: {
+        mimeType: 'model/gltf-binary',
+        content: new Uint8Array(binary),
+      },
+      hash: 'box',
+      sourceFile: 'main.ts',
+    });
+    view.rerender(fixture(artifact));
+    await vi.waitFor(
+      () => {
+        expect(actor.getSnapshot().context.geometryRadius).toBeGreaterThan(0);
+      },
+      { timeout: 45_000 },
+    );
+    const model = await capture();
+    expect(difference(empty, model), 'model becomes visible').toBeGreaterThan(1000);
+    expect(state!.gl).toBe(renderer);
+    expect(state!.gl.domElement).toBe(canvas);
+    await screenshot(model, 'model');
+
+    actor.send({ type: 'clearArtifact' });
+    view.rerender(fixture());
+    const cleared = await capture();
+    expect(difference(model, cleared), 'old model disappears').toBeGreaterThan(1000);
+    expect(state!.gl).toBe(renderer);
+    expect(state!.gl.domElement).toBe(canvas);
+    view.rerender(fixture(undefined, { grid: false, axes: false, gizmo: false }));
+    expect(difference(cleared, await capture()), 'empty scene remains visible after clearing').toBeGreaterThan(100);
+  } finally {
+    captureFrame = undefined;
+    await pendingFrame;
+    if (state) {
+      await disposeRendererOutput(state.gl);
+    }
+    cleanup();
+    actor.stop();
+    geometry.dispose();
+    material.dispose();
+  }
+});

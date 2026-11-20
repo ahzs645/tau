@@ -1,0 +1,348 @@
+/**
+ * The shell's list of directories a renderer may name as a filesystem root,
+ * and the E6 fork resolver built over it.
+ *
+ * L4's contract is explicit about the division: the runtime guarantees the
+ * fork context is a bounded flat string record and nothing more — *path trust
+ * is the shell's*. So a root becomes admissible exactly two ways: it is the
+ * app's own Home directory, or the user picked it in the native directory
+ * dialog. A compromised renderer can then only name a directory a human
+ * already chose, which is the same boundary `showDirectoryPicker` gives the
+ * browser build.
+ *
+ * The set outlives the session, because the workspace record that names a
+ * picked folder does: the renderer stores it in IndexedDB and offers it again
+ * on the next launch, so a grant main forgot would answer `EACCES` for a
+ * folder the user believes is still connected. This file is the desktop
+ * equivalent of a persisted File System Access permission grant.
+ */
+
+/* eslint-disable @typescript-eslint/naming-convention -- environment names and Electron privilege keys are not camelCase */
+
+import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
+
+import type { ElectronRuntimeForkResolver } from '@taucad/runtime/electron/main';
+
+/** Directories the shell will accept as a filesystem root. */
+export type ProjectRootRegistry = {
+  /** Record a directory the user chose (or the app owns). */
+  admit(directory: string): void;
+  /** Remove exactly one saved grant, persisting before changing live authority. Never touches its files. */
+  revoke(directory: string): boolean;
+  /** Every admitted directory, resolved. */
+  roots(): readonly string[];
+  /** Whether `directory` is an admitted root or lives inside one. */
+  isTrusted(directory: string): boolean;
+  /** Canonical spelling of a trusted directory, or undefined when untrusted. */
+  canonical(directory: string): string | undefined;
+};
+
+/** Options for {@link createProjectRootRegistry}. */
+export type ProjectRootRegistryOptions = {
+  /**
+   * File the grants are persisted to, e.g. `userData/granted-roots.json`.
+   * Omitted, the registry lives only for this session.
+   */
+  readonly storePath?: string;
+  /**
+   * Called once when the store exists but cannot be read as a list of grants. The damaged file has already been
+   * renamed to `granted-roots.corrupt-<time>.json` beside it (R14), so the caller only reports it.
+   *
+   * @param quarantinePath - Where the damaged file now is.
+   */
+  readonly onQuarantine?: (quarantinePath: string) => void;
+};
+
+/**
+ * Physical spelling of a path, resolving every symlink it can.
+ *
+ * Shared with the services host, which must admit a root under the same name
+ * main registers it by: main names a project by its realpath
+ * (`services-broker.ts`), while the grant holds the spelling the person picked,
+ * and under `$TMPDIR` on macOS those differ.
+ *
+ * @param directory - Absolute or relative path to canonicalise.
+ * @returns The realpath of the deepest existing ancestor plus the rest.
+ */
+export const canonicalPath = (directory: string): string => {
+  const resolved = resolve(directory);
+  const suffix: string[] = [];
+  let ancestor = resolved;
+  while (ancestor !== dirname(ancestor)) {
+    try {
+      return join(realpathSync.native(ancestor), ...suffix.reverse());
+    } catch {
+      suffix.push(basename(ancestor));
+      ancestor = dirname(ancestor);
+    }
+  }
+  try {
+    return join(realpathSync.native(ancestor), ...suffix.reverse());
+  } catch {
+    return resolved;
+  }
+};
+
+/**
+ * Open the granted-root registry, restoring any previously granted folders.
+ *
+ * @param options - Optional persistence location.
+ * @returns The registry.
+ */
+export const createProjectRootRegistry = (options: ProjectRootRegistryOptions = {}): ProjectRootRegistry => {
+  const { storePath } = options;
+  const admitted = new Set<string>();
+
+  if (storePath !== undefined) {
+    let text: string | undefined;
+    try {
+      text = readFileSync(storePath, 'utf8');
+    } catch {
+      /* No grants yet, or a file that cannot be read now: start empty rather than fail to boot. */
+    }
+    if (text !== undefined) {
+      let stored: unknown;
+      try {
+        stored = JSON.parse(text);
+      } catch {
+        stored = undefined;
+      }
+      if (Array.isArray(stored)) {
+        for (const entry of stored) {
+          if (typeof entry === 'string' && isAbsolute(entry)) {
+            admitted.add(resolve(entry));
+          }
+        }
+      } else {
+        /* A damaged file: start empty rather than fail to boot, but keep the damaged copy instead of letting the next
+         * admission overwrite it, so the folders it named can still be recovered by hand (B10). */
+        quarantine(storePath, options.onQuarantine);
+      }
+    }
+  }
+
+  const persist = (): void => {
+    if (storePath === undefined) {
+      return;
+    }
+    try {
+      mkdirSync(dirname(storePath), { recursive: true });
+      const temporary = `${storePath}.tmp`;
+      writeFileSync(temporary, `${JSON.stringify([...admitted], undefined, 2)}\n`, 'utf8');
+      renameSync(temporary, storePath);
+    } catch {
+      /* A grant that cannot be recorded still holds for this session. */
+    }
+  };
+
+  return {
+    admit(directory) {
+      const root = resolve(directory);
+      if (admitted.has(root)) {
+        return;
+      }
+      admitted.add(root);
+      persist();
+    },
+    revoke(directory) {
+      const root = resolve(directory);
+      if (!admitted.has(root)) {
+        return false;
+      }
+      const remaining = [...admitted].filter((entry) => entry !== root);
+      if (storePath !== undefined) {
+        const temporary = `${storePath}.tmp`;
+        writeFileSync(temporary, `${JSON.stringify(remaining, undefined, 2)}\n`, 'utf8');
+        renameSync(temporary, storePath);
+      }
+      admitted.delete(root);
+      return true;
+    },
+    roots: () => [...admitted],
+    isTrusted(directory) {
+      return isAbsolute(directory) && trustedCanonical(admitted, directory) !== undefined;
+    },
+    canonical(directory) {
+      return isAbsolute(directory) ? trustedCanonical(admitted, directory) : undefined;
+    },
+  };
+};
+
+/* Descendants are admitted because projects live *inside* a granted root (`userData/home/<project>`,
+ * `<picked>/<project>`); the `sep` suffix keeps `…/home-evil` from matching `…/home`. A filesystem root (`/`, `C:\`)
+ * already ends in the separator, so it is not given a second one. */
+const isWithin = (candidate: string, root: string): boolean =>
+  candidate === root || candidate.startsWith(root.endsWith(sep) ? root : root + sep);
+
+/**
+ * The canonical spelling of `directory` when it lies inside an admitted root, touching only the roots it names (B30).
+ *
+ * Canonicalising a root is a synchronous `realpath`, and on a mount that has stopped answering it blocks the whole
+ * process. So the roots whose stored spelling already contains the candidate are canonicalised first, which is
+ * normally one; every other root is canonicalised only when none of those admits it, which is the case of a path
+ * spelled through a different alias of its root (`/var` and `/private/var` on macOS).
+ *
+ * @param admitted - The admitted roots, as stored.
+ * @param directory - Absolute path the caller names.
+ * @returns The candidate's canonical spelling, or undefined when no root admits it.
+ */
+const trustedCanonical = (admitted: ReadonlySet<string>, directory: string): string | undefined => {
+  const named = resolve(directory);
+  const candidate = canonicalPath(directory);
+  const matched: string[] = [];
+  const others: string[] = [];
+  for (const root of admitted) {
+    (isWithin(named, root) || isWithin(candidate, root) ? matched : others).push(root);
+  }
+  for (const roots of [matched, others]) {
+    if (roots.some((root) => isWithin(candidate, canonicalPath(root)))) {
+      return candidate;
+    }
+  }
+  return undefined;
+};
+
+/**
+ * Move a damaged grant file aside as `granted-roots.corrupt-<time>.json` and report it. A rename that fails is
+ * skipped: the registry starts empty either way, as it always has.
+ *
+ * @param storePath - The damaged store.
+ * @param report - Told where the copy went.
+ */
+const quarantine = (storePath: string, report: ((quarantinePath: string) => void) | undefined): void => {
+  const stem = basename(storePath).replace(/\.json$/u, '');
+  const time = new Date().toISOString().replaceAll(/[:.]/gu, '-');
+  const quarantinePath = join(dirname(storePath), `${stem}.corrupt-${time}.json`);
+  try {
+    renameSync(storePath, quarantinePath);
+  } catch {
+    return;
+  }
+  report?.(quarantinePath);
+};
+
+/* Own, enumerable `__proto__` is what a structured-cloned IPC payload can
+ * carry, and assigning it onto the sanitized record is the pollution path. */
+const unsafeContextKeys: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+/* One entry (`workspaceRoot`) is all any concern sends today, and a host path
+ * is far under 4 KiB — tighter than the runtime's fork-context bounds because
+ * this context reaches a launcher rather than a process environment. */
+const maxServicesContextEntries = 8;
+const maxServicesContextChars = 4096;
+
+/**
+ * Validate one renderer-supplied services context into a flat string record.
+ *
+ * The sibling of `sanitizeForkContext` in `@taucad/runtime/electron/main`, and
+ * for the same reason: the renderer names the context, so main owns the shape
+ * before anything downstream reads a key out of it. Trust in the *values* is a
+ * separate step — {@link ProjectRootRegistry.isTrusted} decides whether a
+ * `workspaceRoot` may be served at all.
+ *
+ * @param payload - Raw `context` field of the port request.
+ * @returns The sanitized context, empty when the renderer sent none.
+ * @throws When the payload is not a bounded flat record of strings.
+ */
+export const sanitizeServicesContext = (payload: unknown): Record<string, string> => {
+  if (payload === undefined || payload === null) {
+    return {};
+  }
+  if (typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new TypeError('Desktop shell: services context must be a string record');
+  }
+  const entries = Object.entries(payload);
+  if (entries.length > maxServicesContextEntries) {
+    throw new Error(`Desktop shell: services context exceeds ${String(maxServicesContextEntries)} entries`);
+  }
+  const context: Record<string, string> = {};
+  let characters = 0;
+  for (const [key, value] of entries) {
+    if (unsafeContextKeys.has(key)) {
+      throw new Error(`Desktop shell: services context key "${key}" is not allowed`);
+    }
+    if (typeof value !== 'string') {
+      throw new TypeError(`Desktop shell: services context value for "${key}" is not a string`);
+    }
+    characters += key.length + value.length;
+    if (characters > maxServicesContextChars) {
+      throw new Error(`Desktop shell: services context exceeds ${String(maxServicesContextChars)} characters`);
+    }
+    context[key] = value;
+  }
+  return context;
+};
+
+/** Environment names {@link createKernelForkResolver} may set. */
+export const kernelForkEnvAllowlist = ['TAU_PROJECT_ROOT', 'TAU_RUNTIME_DEBUG', 'TAU_RUNTIME_EPHEMERAL'] as const;
+
+/** Options for {@link createKernelForkResolver}. */
+export type KernelForkResolverOptions = {
+  /** Roots the shell will accept from a renderer. */
+  readonly registry: ProjectRootRegistry;
+  /** Root used when the renderer names none. */
+  readonly defaultRoot: string;
+  /** Additional ephemeral root attested by another main-owned broker. */
+  readonly isTrustedRoot?: (directory: string) => boolean;
+};
+
+/**
+ * Resolve one kernel-utility fork from the renderer's context.
+ *
+ * Throwing refuses the request outright — the broker forks nothing and reports
+ * through `onError`. That is the correct answer to an untrusted root: silently
+ * substituting the default would hand the renderer a working kernel over the
+ * wrong directory.
+ *
+ * @param options - Trusted-root registry and the fallback root.
+ * @returns A resolver for `registerElectronRuntimeMain`.
+ */
+export const createKernelForkResolver = (options: KernelForkResolverOptions): ElectronRuntimeForkResolver => {
+  return (context) => {
+    const { definition, purpose } = context;
+    if (purpose !== undefined && purpose !== 'ephemeral') {
+      throw new Error(`Desktop shell refused unknown runtime purpose: ${purpose}`);
+    }
+    if (definition !== undefined && definition !== 'default' && definition !== 'debug') {
+      throw new Error(`Desktop shell refused unknown runtime definition: ${definition}`);
+    }
+    if (purpose === 'ephemeral') {
+      if (context['projectRoot'] !== undefined || context['root'] !== undefined) {
+        throw new Error('Desktop shell refused a rooted ephemeral runtime.');
+      }
+      return {
+        env: {
+          TAU_RUNTIME_EPHEMERAL: '1',
+          ...(definition === 'debug' ? { TAU_RUNTIME_DEBUG: '1' } : {}),
+        },
+      };
+    }
+    const requested = context['projectRoot'];
+    if (
+      requested !== undefined &&
+      (!isAbsolute(requested) || (!options.registry.isTrusted(requested) && !options.isTrustedRoot?.(requested)))
+    ) {
+      throw new Error(`Desktop shell refused an untrusted project root: ${requested}`);
+    }
+    const projectRoot =
+      requested === undefined
+        ? resolve(options.defaultRoot)
+        : (options.registry.canonical(requested) ?? resolve(requested));
+    return {
+      env: {
+        TAU_PROJECT_ROOT: projectRoot,
+        /* One kernel bundle, two definitions: the debug recipe keeps kernel
+         * source mapping, so it is selected by environment rather than by a
+         * second `utilityEntry` that would duplicate the whole chunk.
+         *
+         * Unreached today, deliberately kept: the only caller — `apps/ui`'s
+         * `desktopKernelOptions` — hardcodes `definition: 'default'`, so the
+         * missing link is one literal in a file outside this lane's budget, not
+         * anything here. This arm and `debugRuntime` are the shell's half of
+         * the E6 contract and cost one branch; removing them would mean
+         * rebuilding both when the renderer gains the toggle. */
+        ...(definition === 'debug' ? { TAU_RUNTIME_DEBUG: '1' } : {}),
+      },
+    };
+  };
+};

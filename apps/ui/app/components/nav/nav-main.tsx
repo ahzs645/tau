@@ -1,7 +1,13 @@
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, EllipsisVertical } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { NavLink } from 'react-router';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
+import { Link, matchPath, NavLink, useLocation } from 'react-router';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@taucad/ui/components/collapsible';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@taucad/ui/components/dropdown-menu';
 import {
   SidebarGroup,
   SidebarGroupLabel,
@@ -12,10 +18,57 @@ import {
   SidebarMenuSubButton,
   SidebarMenuSubItem,
 } from '#components/ui/sidebar.js';
-import { Loader } from '#components/ui/loader.js';
+import { Loader } from '@taucad/ui/components/loader';
+import { cn } from '@taucad/ui/utils/cn';
+
+type NavMoreItem = {
+  title: string;
+  url: string;
+  icon?: LucideIcon;
+  action?: () => void;
+};
+
+/** The "More" row: secondary destinations in a menu beside the sidebar, or in a drawer on a phone. */
+function NavMore({ items }: { readonly items: readonly NavMoreItem[] }): React.JSX.Element {
+  const { pathname } = useLocation();
+  const isActive = items.some((item) => matchPath({ path: item.url, end: false }, pathname) !== null);
+
+  return (
+    <SidebarMenuItem>
+      <DropdownMenu isResponsive>
+        <DropdownMenuTrigger asChild>
+          <SidebarMenuButton isActive={isActive}>
+            <EllipsisVertical className='size-4 shrink-0' />
+            <span className='flex-1 truncate'>More</span>
+          </SidebarMenuButton>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent drawerTitle='More' side='right' align='start' className='min-w-48'>
+          {items.map((item) => {
+            const content = (
+              <>
+                {item.icon ? <item.icon className='size-4 shrink-0' /> : null}
+                <span className='flex-1 truncate'>{item.title}</span>
+              </>
+            );
+            return item.action ? (
+              <DropdownMenuItem key={item.title} onSelect={item.action}>
+                {content}
+              </DropdownMenuItem>
+            ) : (
+              <DropdownMenuItem key={item.title} asChild>
+                <Link to={item.url}>{content}</Link>
+              </DropdownMenuItem>
+            );
+          })}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </SidebarMenuItem>
+  );
+}
 
 export function NavMain({
   items,
+  moreItems,
   groupLabel,
   className,
 }: {
@@ -30,11 +83,13 @@ export function NavMain({
       url: string;
     }>;
   }>;
+  /** Listed under a trailing "More" row; the row is omitted when empty. */
+  readonly moreItems?: readonly NavMoreItem[];
   readonly groupLabel?: string;
   readonly className?: string;
 }): React.JSX.Element {
   return (
-    <SidebarGroup className={className}>
+    <SidebarGroup className={cn('px-2', className)}>
       {groupLabel ? <SidebarGroupLabel>{groupLabel}</SidebarGroupLabel> : null}
       <SidebarMenu>
         {items.map((item) => {
@@ -56,8 +111,8 @@ export function NavMain({
             <Collapsible key={item.title} asChild defaultOpen={item.isActive} className='group/collapsible'>
               <SidebarMenuItem>
                 <NavLink to={item.url}>
-                  {({ isActive, isPending }) => (
-                    <CollapsibleTrigger asChild>
+                  {({ isActive, isPending }) => {
+                    const row = (
                       <SidebarMenuButton asChild isActive={isActive}>
                         <span>
                           {isPending ? <Loader /> : item.icon ? <item.icon className='size-4 shrink-0' /> : null}
@@ -67,8 +122,11 @@ export function NavMain({
                           ) : null}
                         </span>
                       </SidebarMenuButton>
-                    </CollapsibleTrigger>
-                  )}
+                    );
+
+                    // Leaf rows control nothing, so they must not carry the trigger's aria-expanded/aria-controls.
+                    return hasItems ? <CollapsibleTrigger asChild>{row}</CollapsibleTrigger> : row;
+                  }}
                 </NavLink>
                 {hasItems ? (
                   <CollapsibleContent asChild>
@@ -94,6 +152,7 @@ export function NavMain({
             </Collapsible>
           );
         })}
+        {moreItems !== undefined && moreItems.length > 0 ? <NavMore items={moreItems} /> : null}
       </SidebarMenu>
     </SidebarGroup>
   );

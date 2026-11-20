@@ -1,21 +1,23 @@
 'use client';
 
+import { useSignInMagicLink } from '@better-auth-ui/react/plugins/magic-link';
+
 import { authMutationKeys } from '@better-auth-ui/core';
-import { useAuth, useAuthPlugin, useSignInMagicLink } from '@better-auth-ui/react';
-import type { MagicLinkAuthClient } from '@better-auth-ui/react';
+import { useAuth, useAuthPlugin } from '@better-auth-ui/react';
+import type { MagicLinkAuthClient } from '@better-auth-ui/core/plugins/magic-link';
 import { useIsMutating } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { SyntheticEvent } from 'react';
 import { toast } from 'sonner';
 
-import { Button } from '#components/ui/button.js';
-import { Card, CardContent, CardHeader, CardTitle } from '#components/ui/card.js';
-import { Field, FieldDescription, FieldError, FieldGroup, FieldSeparator } from '#components/ui/field.js';
-import { Input } from '#components/ui/input.js';
-import { Spinner } from '#components/ui/spinner.js';
+import { Button } from '@taucad/ui/components/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@taucad/ui/components/card';
+import { Field, FieldDescription, FieldError, FieldGroup, FieldSeparator } from '@taucad/ui/components/field';
+import { Input } from '@taucad/ui/components/input';
+import { Spinner } from '@taucad/ui-kit/components/spinner';
 import { magicLinkPlugin } from '#utils/magic-link-plugin.js';
-import { cn } from '#utils/ui.utils.js';
-import { Label } from '#components/ui/label.js';
+import { cn } from '@taucad/ui/utils/cn';
+import { Label } from '@taucad/ui/components/label';
 import { ProviderButtons } from '#components/auth/provider-buttons.js';
 import type { SocialLayout } from '#components/auth/provider-buttons.js';
 import { useAuthEmailDraft } from '#components/auth/auth-email-draft.js';
@@ -50,12 +52,6 @@ export function MagicLink({ className, socialLayout, socialPosition = 'bottom' }
 
   const [email, setEmail] = useState(emailDraft);
   const [isMagicLinkSubmitActive, setIsMagicLinkSubmitActive] = useState(false);
-
-  useEffect(() => {
-    if (!email && emailDraft) {
-      setEmail(emailDraft);
-    }
-  }, [email, emailDraft]);
 
   const { mutate: signInMagicLink, isPending: signInMagicLinkPending } = useSignInMagicLink(
     authClient as MagicLinkAuthClient,
@@ -97,7 +93,9 @@ export function MagicLink({ className, socialLayout, socialPosition = 'bottom' }
   return (
     <Card className={cn('w-full max-w-sm', className)}>
       <CardHeader>
-        <CardTitle className='text-xl'>{localization.auth.signIn}</CardTitle>
+        <CardTitle level={1} variant='title'>
+          {localization.auth.signIn}
+        </CardTitle>
       </CardHeader>
 
       <CardContent>

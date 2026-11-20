@@ -1,0 +1,1462 @@
+import { EventEmitter } from 'node:events';
+
+import type { IpcMain, MessagePortMain, UtilityProcess } from 'electron';
+import { describe, expect, it, vi } from 'vitest';
+import { _registerComputeStore } from '#cache/kernel-compute-runtime.js';
+import type { ComputeGeneration, ComputeStore, ComputeStoreControl } from '#types/runtime-compute.types.js';
+
+type Handler = (...args: unknown[]) => void;
+type HeadersReceivedHandler = (
+  details: { responseHeaders?: Record<string, string[]> },
+  callback: (result: unknown) => void,
+) => void;
+
+const listeners = new Map<string, Handler>();
+const existingHeaderName = 'Existing';
+const messageChannelMainExportName = 'MessageChannelMain';
+const tauElectronDebugEnvName = 'TAU_ELECTRON_DEBUG';
+type FakeStream = {
+  readonly on: ReturnType<typeof vi.fn>;
+  readonly resume: ReturnType<typeof vi.fn>;
+  /** Deliver one chunk to whatever the broker attached as a `'data'` listener. */
+  write(chunk: string): void;
+  /** End the pipe, as Electron does once the dead child's stderr closes. */
+  end(): void;
+};
+const liveUtilities: Array<{
+  readonly kill: ReturnType<typeof vi.fn>;
+  readonly on: ReturnType<typeof vi.fn>;
+  readonly postMessage: ReturnType<typeof vi.fn>;
+  readonly stdout?: FakeStream;
+  readonly stderr?: FakeStream;
+}> = [];
+const headerHandlers: HeadersReceivedHandler[] = [];
+const headerFilters: unknown[] = [];
+
+vi.mock('electron', () => {
+  class MessageChannelMain {
+    public readonly port1 = {
+      id: 'renderer-port',
+      postMessage: vi.fn(),
+      on: vi.fn(),
+      off: vi.fn(),
+      start: vi.fn(),
+      close: vi.fn(),
+    };
+    public readonly port2 = {
+      id: 'utility-port',
+      postMessage: vi.fn(),
+      on: vi.fn(),
+      off: vi.fn(),
+      start: vi.fn(),
+      close: vi.fn(),
+    };
+  }
+
+  /**
+   * A piped standard stream, as Electron hands one back for `stdio: 'pipe'`.
+   *
+   * @returns The stream stub plus a `write` that drives its `'data'` listeners.
+   */
+  const createStream = (): FakeStream => {
+    const dataListeners: Array<(chunk: unknown) => void> = [];
+    const endListeners: Array<() => void> = [];
+    return {
+      on: vi.fn((event: string, listener: (chunk: unknown) => void) => {
+        if (event === 'data') {
+          dataListeners.push(listener);
+        }
+        if (event === 'end') {
+          endListeners.push(listener as () => void);
+        }
+      }),
+      resume: vi.fn(),
+      write(chunk: string): void {
+        for (const listener of dataListeners) {
+          listener(Buffer.from(chunk));
+        }
+      },
+      end(): void {
+        for (const listener of endListeners) {
+          listener();
+        }
+      },
+    };
+  };
+
+  return {
+    ipcMain: {
+      on: vi.fn((channel: string, handler: Handler) => {
+        listeners.set(channel, handler);
+      }),
+      off: vi.fn((channel: string, handler: Handler) => {
+        if (listeners.get(channel) === handler) {
+          listeners.delete(channel);
+        }
+      }),
+    },
+    [messageChannelMainExportName]: MessageChannelMain,
+    session: {
+      defaultSession: {
+        webRequest: {
+          onHeadersReceived: vi.fn((filter: unknown, handler: HeadersReceivedHandler) => {
+            headerFilters.push(filter);
+            headerHandlers.push(handler);
+          }),
+        },
+      },
+    },
+    utilityProcess: {
+      fork: vi.fn(() => {
+        const utility = {
+          // Electron answers whether the signal was delivered.
+          kill: vi.fn(() => true),
+          on: vi.fn(),
+          postMessage: vi.fn(),
+          stdout: createStream(),
+          stderr: createStream(),
+        };
+        liveUtilities.push(utility);
+        return utility;
+      }),
+    },
+  };
+});
+
+/**
+ * Install the header handler and run one response through the freshly
+ * registered listener (`headerHandlers` is module-scoped and accumulates one
+ * entry per install).
+ *
+ * @param responseHeaders - Headers Electron delivers for the response.
+ * @returns The headers the handler hands back to Electron.
+ */
+const applyRuntimeHeaders = async (responseHeaders: Record<string, string[]>): Promise<Record<string, string[]>> => {
+  const { installElectronRuntimeHeaders } = await import('#electron/main.js');
+  installElectronRuntimeHeaders();
+  let applied: Record<string, string[]> | undefined;
+  headerHandlers.at(-1)?.({ responseHeaders }, (value) => {
+    applied = (value as { responseHeaders: Record<string, string[]> }).responseHeaders;
+  });
+  if (!applied) {
+    throw new Error('installElectronRuntimeHeaders did not invoke its callback');
+  }
+  return applied;
+};
+
+/**
+ * Drive one `requestRuntimePort` IPC message into the registered broker.
+ *
+ * @param sender - Renderer `webContents` stub used for lifecycle listeners.
+ * @param senderFrame - Frame stub that receives the relayed port and host-exit messages.
+ * @param request - Correlated request identity and optional fork context.
+ * @returns The frame stub, so a caller can observe what the broker posted to it.
+ */
+const requestRuntimePort = <Frame extends { postMessage: ReturnType<typeof vi.fn> }>(
+  sender: { once: ReturnType<typeof vi.fn>; removeListener: ReturnType<typeof vi.fn> },
+  senderFrame?: Frame,
+  request: { readonly context?: unknown; readonly requestId?: string } = {},
+): Frame => {
+  const frame = senderFrame ?? ({ postMessage: vi.fn() } as unknown as Frame);
+  listeners.get('taucad:connect-runtime')?.(
+    { sender, senderFrame: frame },
+    { context: request.context, requestId: request.requestId ?? 'request-1' },
+  );
+  return frame;
+};
+
+/**
+ * Read the `'exit'` listener the broker installed on the most recent utility.
+ *
+ * @returns The exit handler Electron would invoke with the process exit code.
+ */
+const lastUtilityExitHandler = (): ((code: number) => void) => {
+  const utility = liveUtilities.at(-1);
+  const call = utility?.on.mock.calls.find(([event]) => event === 'exit');
+  if (!call) {
+    throw new Error('The broker registered no utility exit listener');
+  }
+  return call[1] as (code: number) => void;
+};
+
+/**
+ * Exit the most recent utility the way Electron does, then let the broker's
+ * bounded stderr drain settle so the exit report has been posted.
+ *
+ * @param code - Process exit code Electron reports.
+ * @param lateStderr - Bytes the pipe delivers *after* the exit, as the real race does.
+ * @returns Nothing, once the broker has reported the exit.
+ */
+const exitLastUtility = async (code: number, lateStderr?: string): Promise<void> => {
+  const stderr = liveUtilities.at(-1)?.stderr;
+  lastUtilityExitHandler()(code);
+  if (lateStderr !== undefined) {
+    stderr?.write(lateStderr);
+  }
+  stderr?.end();
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+};
+
+describe('Electron main runtime helpers', () => {
+  it('resolves a distinct trusted compute binding for every admitted fork', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const generation = 1 as ComputeGeneration;
+    const control: ComputeStoreControl = {
+      inspect: async () => ({
+        entries: 0,
+        logicalBytes: 0,
+        pinnedBytes: 0,
+        pendingBytes: 0,
+        generation,
+        physicalBytes: { status: 'unsupported' },
+      }),
+      clear: async () => ({ status: 'cleared', generation, retained: 0 }),
+      collect: async () => ({ status: 'complete', reclaimed: 0 }),
+    };
+    const register = (): ComputeStore =>
+      _registerComputeStore({
+        spec: Object.freeze({}) as ComputeStore,
+        workspace: 'trusted',
+        engine: { open: vi.fn() },
+        control,
+      });
+    const first = register();
+    const second = register();
+    const forged = Object.freeze({}) as ComputeStore;
+    const broker = registerElectronRuntimeMain({
+      utilityEntry: '/runtime.js',
+      resolveFork: (context) => ({
+        compute:
+          context['project'] === 'off'
+            ? { mode: 'off' }
+            : {
+                mode: 'durable',
+                store: context['project'] === 'first' ? first : context['project'] === 'second' ? second : forged,
+              },
+      }),
+    });
+    broker.connect({ purpose: 'main-process-client', context: { project: 'first' } });
+    broker.connect({ purpose: 'main-process-client', context: { project: 'second' } });
+    expect(liveUtilities.at(-2)?.postMessage.mock.calls[0]?.[1]).toHaveLength(2);
+    expect(liveUtilities.at(-1)?.postMessage.mock.calls[0]?.[1]).toHaveLength(2);
+    expect(liveUtilities.at(-2)?.postMessage.mock.calls[0]?.[1]?.[1]).not.toBe(
+      liveUtilities.at(-1)?.postMessage.mock.calls[0]?.[1]?.[1],
+    );
+    expect(() => broker.connect({ purpose: 'main-process-client', context: { project: 'forged' } })).toThrow(
+      /unregistered store capability/u,
+    );
+    broker.connect({ purpose: 'main-process-client', context: { project: 'off' } });
+    expect(liveUtilities.at(-1)?.postMessage.mock.calls[0]?.[1]).toHaveLength(1);
+    broker.dispose();
+  });
+  it('transfers a private durable compute port and refuses a forged capability', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const generation = 0 as ComputeGeneration;
+    const control: ComputeStoreControl = {
+      inspect: async () => ({
+        entries: 0,
+        logicalBytes: 0,
+        pinnedBytes: 0,
+        pendingBytes: 0,
+        generation,
+        physicalBytes: { status: 'unsupported' },
+      }),
+      clear: async () => ({ status: 'cleared', generation, retained: 0 }),
+      collect: async () => ({ status: 'complete', reclaimed: 0 }),
+    };
+    const store = _registerComputeStore({
+      spec: Object.freeze({}) as ComputeStore,
+      workspace: 'test',
+      engine: { open: vi.fn() },
+      control,
+    });
+    const handle = registerElectronRuntimeMain({
+      utilityEntry: '/dist/main/kernel-host.js',
+      compute: { mode: 'durable', store },
+    });
+    handle.connect({ purpose: 'main-process-client' });
+    expect(liveUtilities.at(-1)?.postMessage.mock.calls.at(-1)?.[1]).toHaveLength(2);
+    handle.dispose();
+
+    const forged = Object.freeze({}) as ComputeStore;
+    const invalid = registerElectronRuntimeMain({
+      utilityEntry: '/dist/main/kernel-host.js',
+      compute: { mode: 'durable', store: forged },
+    });
+    expect(() => invalid.connect({ purpose: 'main-process-client' })).toThrow(/unregistered store capability/u);
+    invalid.dispose();
+    liveUtilities.length = 0;
+  });
+  it('installs cross-origin isolation headers while preserving existing headers', async () => {
+    const { installElectronRuntimeHeaders } = await import('#electron/main.js');
+
+    installElectronRuntimeHeaders();
+
+    const result: unknown[] = [];
+    headerHandlers[0]?.({ responseHeaders: { [existingHeaderName]: ['kept'] } }, (value) => result.push(value));
+
+    expect(result).toEqual([
+      {
+        responseHeaders: {
+          [existingHeaderName]: ['kept'],
+          'Cross-Origin-Embedder-Policy': ['require-corp'],
+          'Cross-Origin-Opener-Policy': ['same-origin'],
+          'Cross-Origin-Resource-Policy': ['same-origin'],
+        },
+      },
+    ]);
+  });
+
+  it('registers the IPC bridge, relays ports, and tears down utility processes', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const senderOnce = vi.fn<(event: string, handler: () => void) => void>();
+    const postMessage =
+      vi.fn<
+        (channel: string, payload: { readonly hostId: string; readonly requestId: string }, ports: unknown[]) => void
+      >();
+    const sender = { once: senderOnce, removeListener: vi.fn() };
+
+    const handle = registerElectronRuntimeMain({
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Node defines this environment variable name.
+      env: { NODE_ENV: 'test', [tauElectronDebugEnvName]: '1' },
+      serviceName: 'tau-kernel-host',
+      utilityEntry: '/dist/main/kernel-host.js',
+    });
+
+    listeners.get('taucad:connect-runtime')?.({ sender, senderFrame: { postMessage } }, { requestId: 'request-1' });
+
+    expect(liveUtilities[0]?.postMessage).toHaveBeenCalledWith({ taucadRuntime: true, runtimePortIndex: 0 }, [
+      expect.objectContaining({ id: 'utility-port' }),
+    ]);
+    expect(postMessage).toHaveBeenCalledOnce();
+    const [relayChannel, relayPayload, relayPorts] = postMessage.mock.calls[0]!;
+    expect(relayChannel).toBe('taucad:connect-runtime:port');
+    expect(relayPayload.hostId).toBeTypeOf('string');
+    expect(relayPayload.requestId).toBe('request-1');
+    expect(relayPorts).toEqual([expect.objectContaining({ id: 'renderer-port' })]);
+    expect(senderOnce).toHaveBeenCalledWith('destroyed', expect.any(Function));
+
+    const [, destroyedHandler] = senderOnce.mock.calls[0] as ['destroyed', () => void];
+    destroyedHandler();
+    expect(liveUtilities[0]?.kill).toHaveBeenCalledTimes(1);
+
+    handle.dispose();
+    expect(listeners.has('taucad:connect-runtime')).toBe(false);
+    expect(listeners.has('taucad:connect-runtime:release')).toBe(false);
+    expect(liveUtilities[0]?.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an absent or invalid request identity before forking', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const { utilityProcess } = await import('electron');
+    const fork = vi.mocked(utilityProcess.fork);
+    const forkCallsBefore = fork.mock.calls.length;
+    const onError = vi.fn<(error: Error) => void>();
+    const handle = registerElectronRuntimeMain({ onError, utilityEntry: '/dist/main/kernel-host.js' });
+    const event = { sender: { once: vi.fn(), removeListener: vi.fn() }, senderFrame: { postMessage: vi.fn() } };
+
+    for (const payload of [undefined, {}, { requestId: '' }, { requestId: 7 }, { requestId: 'x'.repeat(129) }]) {
+      listeners.get('taucad:connect-runtime')?.(event, payload);
+    }
+
+    expect(fork).toHaveBeenCalledTimes(forkCallsBefore);
+    expect(onError).toHaveBeenCalledTimes(5);
+    handle.dispose();
+  });
+
+  it('adopts a prewarmed spare for a matching fork context and keeps one warm', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    liveUtilities.length = 0;
+    const handle = registerElectronRuntimeMain({ utilityEntry: '/dist/main/kernel-host.js' });
+
+    handle.prewarm();
+    expect(liveUtilities).toHaveLength(1);
+    const spare = liveUtilities[0];
+    handle.connect({ purpose: 'main-process-client' });
+
+    /* The request was served by the process that was already running — no fork
+     * stands between it and the RPC hello — and a fresh spare took its place. */
+    expect(spare?.postMessage).toHaveBeenCalledOnce();
+    expect(liveUtilities).toHaveLength(2);
+    expect(liveUtilities[1]?.postMessage).not.toHaveBeenCalled();
+    handle.dispose();
+    expect(liveUtilities[1]?.kill).toHaveBeenCalledOnce();
+
+    /* A context that resolves to a different environment is a different pool
+     * key: the spare stays untouched and the request forks its own. */
+    liveUtilities.length = 0;
+    const keyed = registerElectronRuntimeMain({
+      utilityEntry: '/dist/main/kernel-host.js',
+      forkEnvAllowlist: [tauElectronDebugEnvName],
+      resolveFork: (context) => ({ env: { [tauElectronDebugEnvName]: context['debug'] ?? '0' } }),
+    });
+    keyed.prewarm();
+    keyed.connect({ purpose: 'main-process-client', context: { debug: '1' } });
+    expect(liveUtilities[0]?.postMessage).not.toHaveBeenCalled();
+    expect(liveUtilities[1]?.postMessage).toHaveBeenCalledOnce();
+    keyed.dispose();
+    liveUtilities.length = 0;
+  });
+
+  it('keeps the preferred spare warm across ephemeral requests', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    liveUtilities.length = 0;
+    const handle = registerElectronRuntimeMain({
+      utilityEntry: '/dist/main/kernel-host.js',
+      forkEnvAllowlist: [tauElectronDebugEnvName],
+      resolveFork: (context) => (context['ephemeral'] === '1' ? { env: { [tauElectronDebugEnvName]: '1' } } : {}),
+    });
+
+    handle.prewarm();
+    /* Thumbnail contexts fork separately without evicting the project spare. */
+    handle.connect({ purpose: 'main-process-client', context: { ephemeral: '1' } });
+    expect(liveUtilities[0]?.kill).not.toHaveBeenCalled();
+    expect(liveUtilities[0]?.postMessage).not.toHaveBeenCalled();
+    expect(liveUtilities[1]?.postMessage).toHaveBeenCalledOnce();
+    handle.connect({ purpose: 'main-process-client', context: { ephemeral: '1' } });
+    expect(liveUtilities).toHaveLength(3);
+    expect(liveUtilities[0]?.kill).not.toHaveBeenCalled();
+
+    /* The next project open still adopts the original prewarmed utility. */
+    handle.connect({ purpose: 'main-process-client' });
+    expect(liveUtilities[0]?.postMessage).toHaveBeenCalledOnce();
+    expect(liveUtilities).toHaveLength(4);
+    expect(liveUtilities[3]?.postMessage).not.toHaveBeenCalled();
+
+    handle.dispose();
+    liveUtilities.length = 0;
+  });
+
+  it('refuses a mismatched fork at the live cap without evicting the preferred spare', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    liveUtilities.length = 0;
+    const handle = registerElectronRuntimeMain({
+      utilityEntry: '/dist/main/kernel-host.js',
+      maxUtilities: 1,
+      forkEnvAllowlist: [tauElectronDebugEnvName],
+      resolveFork: (context) => (context['ephemeral'] === '1' ? { env: { [tauElectronDebugEnvName]: '1' } } : {}),
+    });
+
+    handle.prewarm();
+    handle.connect({ purpose: 'main-process-client', context: { ephemeral: '1' } });
+    expect(() => handle.connect({ purpose: 'main-process-client', context: { ephemeral: '1' } })).toThrow(
+      /1 utility processes/u,
+    );
+    expect(liveUtilities).toHaveLength(2);
+    expect(liveUtilities[0]?.kill).not.toHaveBeenCalled();
+    expect(liveUtilities[0]?.postMessage).not.toHaveBeenCalled();
+
+    handle.dispose();
+    liveUtilities.length = 0;
+  });
+
+  it('should retire a spare nobody adopts within its idle time and warm a new one on the next fork', async () => {
+    vi.useFakeTimers();
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    liveUtilities.length = 0;
+    const onError = vi.fn();
+    const handle = registerElectronRuntimeMain({
+      onError,
+      spareIdleMilliseconds: 120_000,
+      utilityEntry: '/dist/main/kernel-host.js',
+    });
+    try {
+      handle.prewarm();
+      const idle = liveUtilities[0];
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(idle?.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      /* A supervised retirement, not a boot death: nothing is reported. */
+      expect(idle?.kill).toHaveBeenCalledOnce();
+      expect(onError).not.toHaveBeenCalled();
+
+      /* The spare was gone, so this request forks cold and a fresh spare follows it. */
+      handle.connect({ purpose: 'main-process-client' });
+      expect(liveUtilities).toHaveLength(3);
+      const adopted = liveUtilities[1];
+      const refilled = liveUtilities[2];
+      expect(adopted?.postMessage).toHaveBeenCalledOnce();
+      expect(refilled?.postMessage).not.toHaveBeenCalled();
+
+      /* An adopted spare is never retired by the idle timer. */
+      handle.connect({ purpose: 'main-process-client' });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(refilled?.postMessage).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(refilled?.kill).not.toHaveBeenCalled();
+    } finally {
+      handle.dispose();
+      vi.useRealTimers();
+      liveUtilities.length = 0;
+    }
+  });
+
+  it('should report a spare that exits before adoption', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    liveUtilities.length = 0;
+    const onError = vi.fn<(error: Error) => void>();
+    const handle = registerElectronRuntimeMain({ utilityEntry: '/dist/main/kernel-host.js', onError });
+
+    handle.prewarm();
+    await exitLastUtility(9, 'kernel host failed to boot\n');
+
+    expect(onError).toHaveBeenCalledOnce();
+    const [reported] = onError.mock.calls[0] ?? [];
+    expect(reported?.name).toBe('Error');
+    expect(reported?.message).toMatch(
+      /pooled spare exited with code 9 before any request adopted it: kernel host failed to boot/u,
+    );
+
+    handle.dispose();
+    liveUtilities.length = 0;
+  });
+
+  it('refuses a fork past the utility cap with a named error', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    liveUtilities.length = 0;
+    const handle = registerElectronRuntimeMain({ utilityEntry: '/dist/main/kernel-host.js', maxUtilities: 2 });
+
+    const first = handle.connect({ purpose: 'main-process-client' });
+    handle.connect({ purpose: 'main-process-client' });
+    const refused = (): unknown => handle.connect({ purpose: 'main-process-client' });
+
+    expect(refused).toThrow(/2 utility processes/u);
+    expect(refused).toThrow(expect.objectContaining({ name: 'ElectronRuntimeUtilityLimitError' }));
+    /* The cap bounds processes, not lifetime leases: a released slot is reusable. */
+    first.dispose();
+    expect(refused).not.toThrow();
+    handle.dispose();
+    liveUtilities.length = 0;
+  });
+
+  it('admits nine concurrent runtime leases under the desktop cap', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    liveUtilities.length = 0;
+    const handle = registerElectronRuntimeMain({ utilityEntry: '/dist/main/kernel-host.js', maxUtilities: 64 });
+    const leases = Array.from({ length: 9 }, () => handle.connect({ purpose: 'main-process-client' }));
+    expect(liveUtilities).toHaveLength(9);
+    expect(liveUtilities.every((utility) => utility.postMessage.mock.calls.length === 1)).toBe(true);
+    for (const lease of leases) {
+      lease.dispose();
+    }
+    handle.dispose();
+    liveUtilities.length = 0;
+  });
+
+  it('should answer a refused renderer request with the reason instead of a port', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    liveUtilities.length = 0;
+    const onError = vi.fn<(error: Error) => void>();
+    const sender = { once: vi.fn(), removeListener: vi.fn() };
+    const handle = registerElectronRuntimeMain({
+      utilityEntry: '/dist/main/kernel-host.js',
+      maxUtilities: 1,
+      onError,
+    });
+
+    const served = requestRuntimePort(sender, undefined, { requestId: 'request-1' });
+    const refused = requestRuntimePort(sender, undefined, { requestId: 'request-2' });
+
+    expect(served.postMessage).toHaveBeenCalledWith(
+      'taucad:connect-runtime:port',
+      expect.objectContaining({ requestId: 'request-1' }),
+      [expect.anything()],
+    );
+    /* No port, and the cap in the payload: the renderer's own await rejects on
+     * this instead of waiting out a hand-off that is never coming. */
+    expect(refused.postMessage).toHaveBeenCalledExactlyOnceWith('taucad:connect-runtime:port', {
+      error: 'registerElectronRuntimeMain: refusing to exceed 1 utility processes',
+      requestId: 'request-2',
+    });
+    expect(onError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ name: 'ElectronRuntimeUtilityLimitError' }),
+    );
+
+    handle.dispose();
+    liveUtilities.length = 0;
+  });
+
+  it('should hold as many utilities as the application asks for when no guard is set', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    liveUtilities.length = 0;
+    const handle = registerElectronRuntimeMain({ utilityEntry: '/dist/main/kernel-host.js' });
+
+    /* Past the count this broker used to refuse at: how many projects may be
+     * live is the application's admission policy, not the broker's. */
+    for (let index = 0; index < 9; index += 1) {
+      handle.connect({ purpose: 'main-process-client' });
+    }
+
+    expect(liveUtilities).toHaveLength(9);
+
+    handle.dispose();
+    liveUtilities.length = 0;
+  });
+
+  it('kills only the utility process addressed by a renderer release', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const sender = { once: vi.fn(), removeListener: vi.fn() };
+    const postMessage = vi.fn();
+    const handle = registerElectronRuntimeMain({ utilityEntry: '/dist/main/kernel-host.js' });
+
+    listeners.get('taucad:connect-runtime')?.({ sender, senderFrame: { postMessage } }, { requestId: 'request-1' });
+    listeners.get('taucad:connect-runtime')?.({ sender, senderFrame: { postMessage } }, { requestId: 'request-2' });
+    const firstPayload = postMessage.mock.calls[0]?.[1] as { hostId: string };
+
+    listeners.get('taucad:connect-runtime:release')?.(
+      { sender },
+      { hostId: firstPayload.hostId, reason: 'operation-timeout' },
+    );
+
+    const first = liveUtilities.at(-2);
+    const second = liveUtilities.at(-1);
+    expect(first?.kill).toHaveBeenCalledOnce();
+    expect(second?.kill).not.toHaveBeenCalled();
+    handle.dispose();
+    expect(first?.kill).toHaveBeenCalledOnce();
+    expect(second?.kill).toHaveBeenCalledOnce();
+  });
+  it('emits exactly one entry per managed header when input keys are lowercase', async () => {
+    const applied = await applyRuntimeHeaders({
+      'cross-origin-opener-policy': ['unsafe-none'],
+      'cross-origin-embedder-policy': ['unsafe-none'],
+    });
+
+    const entriesFor = (name: string): Array<[string, string[]]> =>
+      Object.entries(applied).filter(([key]) => key.toLowerCase() === name);
+    expect(entriesFor('cross-origin-opener-policy')).toEqual([['Cross-Origin-Opener-Policy', ['same-origin']]]);
+    expect(entriesFor('cross-origin-embedder-policy')).toEqual([['Cross-Origin-Embedder-Policy', ['require-corp']]]);
+  });
+
+  it('preserves unrelated headers and their casing', async () => {
+    const applied = await applyRuntimeHeaders({ [existingHeaderName]: ['kept'], 'x-Tau-Trace': ['abc'] });
+
+    expect(applied[existingHeaderName]).toEqual(['kept']);
+    expect(applied['x-Tau-Trace']).toEqual(['abc']);
+  });
+
+  it('is idempotent across two applications', async () => {
+    const once = await applyRuntimeHeaders({ [existingHeaderName]: ['kept'] });
+    const twice = await applyRuntimeHeaders(once);
+
+    expect(twice).toEqual(once);
+  });
+
+  it('stays in sync with the canonical documentHeaders', async () => {
+    const { documentHeaders } = await import('#cross-origin-isolation/index.js');
+    const applied = await applyRuntimeHeaders({});
+
+    expect(applied).toEqual(
+      Object.fromEntries(Object.entries(documentHeaders).map(([name, value]) => [name, [value]])),
+    );
+  });
+
+  it('releases the utility when the renderer process is gone', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const senderOnce = vi.fn<(event: string, handler: () => void) => void>();
+    const handle = registerElectronRuntimeMain({ utilityEntry: '/dist/main/kernel-host.js' });
+
+    requestRuntimePort({ once: senderOnce, removeListener: vi.fn() });
+
+    expect(senderOnce).toHaveBeenCalledWith('render-process-gone', expect.any(Function));
+    const utility = liveUtilities.at(-1);
+    const handlerFor = (event: string): (() => void) => senderOnce.mock.calls.find(([name]) => name === event)![1];
+
+    handlerFor('render-process-gone')();
+    expect(utility?.kill).toHaveBeenCalledTimes(1);
+
+    handlerFor('destroyed')();
+    expect(utility?.kill).toHaveBeenCalledTimes(1);
+
+    handle.dispose();
+  });
+
+  it('forwards execArgv to the utility fork and omits the key when unset', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const { utilityProcess } = await import('electron');
+    const fork = vi.mocked(utilityProcess.fork);
+    const execArgv = ['--max-old-space-size=8192'];
+
+    const tuned = registerElectronRuntimeMain({ execArgv, utilityEntry: '/dist/main/kernel-host.js' });
+    requestRuntimePort({ once: vi.fn(), removeListener: vi.fn() });
+    const tunedOptions = fork.mock.calls.at(-1)?.[2];
+    expect(tunedOptions).toMatchObject({ execArgv: ['--max-old-space-size=8192'] });
+    expect(tunedOptions?.execArgv).not.toBe(execArgv);
+    tuned.dispose();
+
+    const untuned = registerElectronRuntimeMain({ utilityEntry: '/dist/main/kernel-host.js' });
+    requestRuntimePort({ once: vi.fn(), removeListener: vi.fn() });
+    expect(fork.mock.calls.at(-1)?.[2]).not.toHaveProperty('execArgv');
+    untuned.dispose();
+  });
+
+  it('registers a document-only web request filter', async () => {
+    const { installElectronRuntimeHeaders } = await import('#electron/main.js');
+
+    installElectronRuntimeHeaders();
+
+    expect(headerFilters.at(-1)).toEqual({ urls: ['<all_urls>'], types: ['mainFrame', 'subFrame'] });
+  });
+
+  it('emits the complete documentHeaders set on a document response', async () => {
+    const { documentHeaders } = await import('#cross-origin-isolation/index.js');
+    const applied = await applyRuntimeHeaders({ 'cross-origin-resource-policy': ['cross-origin'] });
+
+    for (const [name, value] of Object.entries(documentHeaders)) {
+      expect(Object.entries(applied).filter(([key]) => key.toLowerCase() === name.toLowerCase())).toEqual([
+        [name, [value]],
+      ]);
+    }
+  });
+
+  it('honours a filtering ipcMain view', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const { utilityProcess } = await import('electron');
+    const fork = vi.mocked(utilityProcess.fork);
+    const forkCallsBefore = fork.mock.calls.length;
+    const allowedSender = { once: vi.fn(), removeListener: vi.fn() };
+    const gated = new Map<string, Handler>();
+    const filteringIpcMain = {
+      on: vi.fn((channel: string, handler: Handler) => {
+        gated.set(channel, (...args) => {
+          const [event] = args;
+          if ((event as { sender?: unknown }).sender !== allowedSender) {
+            return;
+          }
+          handler(...args);
+        });
+      }),
+      off: vi.fn((channel: string) => {
+        gated.delete(channel);
+      }),
+    };
+
+    const handle = registerElectronRuntimeMain({
+      ipcMain: filteringIpcMain as unknown as IpcMain,
+      utilityEntry: '/dist/main/kernel-host.js',
+    });
+    gated.get('taucad:connect-runtime')?.(
+      { sender: { once: vi.fn(), removeListener: vi.fn() }, senderFrame: { postMessage: vi.fn() } },
+      { requestId: 'request-denied' },
+    );
+
+    expect(fork).toHaveBeenCalledTimes(forkCallsBefore);
+
+    gated.get('taucad:connect-runtime')?.(
+      { sender: allowedSender, senderFrame: { postMessage: vi.fn() } },
+      { requestId: 'request-allowed' },
+    );
+    expect(fork).toHaveBeenCalledTimes(forkCallsBefore + 1);
+    handle.dispose();
+  });
+
+  it('relays the utility exit code to the owning renderer frame', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const postMessage = vi.fn<(channel: string, payload: { readonly hostId: string }, ports?: unknown[]) => void>();
+    const handle = registerElectronRuntimeMain({ utilityEntry: '/dist/main/kernel-host.js' });
+
+    const senderFrame = requestRuntimePort({ once: vi.fn(), removeListener: vi.fn() }, { postMessage });
+    const { hostId } = senderFrame.postMessage.mock.calls[0]![1] as { hostId: string };
+
+    await exitLastUtility(7);
+
+    expect(postMessage).toHaveBeenLastCalledWith('taucad:connect-runtime:host-exit', {
+      hostId,
+      exitCode: 7,
+      released: false,
+    });
+    handle.dispose();
+  });
+
+  it('pipes utility output by default, drains stdout, and honours an explicit stdio', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const { utilityProcess } = await import('electron');
+    const fork = vi.mocked(utilityProcess.fork);
+
+    const piped = registerElectronRuntimeMain({ utilityEntry: '/dist/main/kernel-host.js' });
+    requestRuntimePort({ once: vi.fn(), removeListener: vi.fn() });
+    expect(fork.mock.calls.at(-1)?.[2]?.stdio).toBe('pipe');
+    /* Draining is unconditional: an unread pipe stalls the child. */
+    expect(liveUtilities.at(-1)?.stdout?.resume).toHaveBeenCalledOnce();
+    expect(liveUtilities.at(-1)?.stderr?.on).toHaveBeenCalledWith('data', expect.any(Function));
+    piped.dispose();
+
+    const inherited = registerElectronRuntimeMain({ stdio: 'inherit', utilityEntry: '/dist/main/kernel-host.js' });
+    requestRuntimePort({ once: vi.fn(), removeListener: vi.fn() });
+    expect(fork.mock.calls.at(-1)?.[2]?.stdio).toBe('inherit');
+    inherited.dispose();
+  });
+
+  it('forwards every stderr chunk and relays a bounded tail with the exit', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const onUtilityFork = vi.fn<(fork: { hostId: string; entry: string }) => void>();
+    const onUtilityStderr = vi.fn<(output: { hostId: string; chunk: string }) => void>();
+    const onUtilityExit = vi.fn<(exit: { hostId: string; exitCode: number; stderrTail?: string }) => void>();
+    const postMessage = vi.fn<(channel: string, payload: Record<string, unknown>, ports?: unknown[]) => void>();
+    const handle = registerElectronRuntimeMain({
+      onUtilityExit,
+      onUtilityFork,
+      onUtilityStderr,
+      utilityEntry: '/dist/main/kernel-host.js',
+    });
+
+    requestRuntimePort({ once: vi.fn(), removeListener: vi.fn() }, { postMessage });
+    const { hostId } = postMessage.mock.calls[0]![1] as { hostId: string };
+    expect(onUtilityFork).toHaveBeenCalledExactlyOnceWith({ hostId, entry: '/dist/main/kernel-host.js' });
+
+    const overflow = 'x'.repeat(5000);
+    liveUtilities.at(-1)?.stderr?.write(overflow);
+    liveUtilities.at(-1)?.stderr?.write('Error: boot failed\n');
+    expect(onUtilityStderr.mock.calls.map(([output]) => output.chunk)).toEqual([overflow, 'Error: boot failed\n']);
+
+    await exitLastUtility(1);
+
+    const [relayChannel, relayPayload] = postMessage.mock.calls.at(-1)!;
+    expect(relayChannel).toBe('taucad:connect-runtime:host-exit');
+    expect(relayPayload).toMatchObject({ hostId, exitCode: 1, released: false });
+    const { stderrTail } = relayPayload as { stderrTail: string };
+    expect(stderrTail).toHaveLength(4096);
+    expect(stderrTail.endsWith('Error: boot failed\n')).toBe(true);
+    expect(onUtilityExit).toHaveBeenCalledExactlyOnceWith({ hostId, exitCode: 1, released: false, stderrTail });
+    handle.dispose();
+  });
+
+  it('waits for the stderr the pipe delivers after the exit', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const onUtilityExit = vi.fn<(exit: { hostId: string; stderrTail?: string }) => void>();
+    const postMessage = vi.fn<(channel: string, payload: Record<string, unknown>, ports?: unknown[]) => void>();
+    const handle = registerElectronRuntimeMain({ onUtilityExit, utilityEntry: '/dist/main/kernel-host.js' });
+
+    requestRuntimePort({ once: vi.fn(), removeListener: vi.fn() }, { postMessage });
+    const { hostId } = postMessage.mock.calls[0]![1] as { hostId: string };
+
+    /* Electron's order for a boot death: `'exit'` first, the stack after. */
+    const bootStack = "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'nanoraster'\n";
+    await exitLastUtility(1, bootStack);
+
+    expect(postMessage).toHaveBeenLastCalledWith('taucad:connect-runtime:host-exit', {
+      hostId,
+      exitCode: 1,
+      released: false,
+      stderrTail: bootStack,
+    });
+    expect(onUtilityExit).toHaveBeenCalledExactlyOnceWith({
+      hostId,
+      exitCode: 1,
+      released: false,
+      stderrTail: bootStack,
+    });
+    handle.dispose();
+  });
+
+  it('relays the exit within the drain bound when the stream never ends', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const postMessage = vi.fn<(channel: string, payload: Record<string, unknown>, ports?: unknown[]) => void>();
+    const handle = registerElectronRuntimeMain({ utilityEntry: '/dist/main/kernel-host.js' });
+
+    requestRuntimePort({ once: vi.fn(), removeListener: vi.fn() }, { postMessage });
+    const { hostId } = postMessage.mock.calls[0]![1] as { hostId: string };
+
+    vi.useFakeTimers();
+    try {
+      lastUtilityExitHandler()(1);
+      liveUtilities.at(-1)?.stderr?.write('never ends\n');
+      expect(postMessage).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(postMessage).toHaveBeenLastCalledWith('taucad:connect-runtime:host-exit', {
+        hostId,
+        exitCode: 1,
+        released: false,
+        stderrTail: 'never ends\n',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    handle.dispose();
+  });
+
+  it('marks every kill main initiated as released', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const handle = registerElectronRuntimeMain({ utilityEntry: '/dist/main/kernel-host.js' });
+    const releasedFlags: boolean[] = [];
+
+    /* Each of the four kill paths: renderer release, destroyed sender, gone
+     * renderer process, broker dispose — plus a main-client lease dispose. */
+    const senderOnce = vi.fn<(event: string, handler: () => void) => void>();
+    const sender = { once: senderOnce, removeListener: vi.fn() };
+    const postMessage = vi.fn<(channel: string, payload: Record<string, unknown>) => void>();
+    const relayedRelease = async (): Promise<boolean> => {
+      await exitLastUtility(0);
+      return postMessage.mock.calls.at(-1)![1]['released'] as boolean;
+    };
+
+    requestRuntimePort(sender, { postMessage }, { requestId: 'release' });
+    const { hostId } = postMessage.mock.calls.at(-1)![1] as { hostId: string };
+    listeners.get('taucad:connect-runtime:release')?.({ sender }, { hostId });
+    releasedFlags.push(await relayedRelease());
+
+    requestRuntimePort(sender, { postMessage }, { requestId: 'destroyed' });
+    senderOnce.mock.calls.findLast(([event]) => event === 'destroyed')![1]();
+    releasedFlags.push(await relayedRelease());
+
+    requestRuntimePort(sender, { postMessage }, { requestId: 'gone' });
+    senderOnce.mock.calls.findLast(([event]) => event === 'render-process-gone')![1]();
+    releasedFlags.push(await relayedRelease());
+
+    const lease = handle.connect({ purpose: 'main-process-client' });
+    lease.dispose();
+    await exitLastUtility(0);
+    const leaseExit = await lease.closed;
+    releasedFlags.push(leaseExit.released);
+
+    const quitting = handle.connect({ purpose: 'main-process-client' });
+    handle.dispose();
+    await exitLastUtility(0);
+    const quittingExit = await quitting.closed;
+    releasedFlags.push(quittingExit.released);
+
+    expect(releasedFlags).toEqual([true, true, true, true, true]);
+  });
+
+  it('mints an independently leased main-client port and reacquires after a utility crash', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const resolveFork = vi.fn(() => ({}));
+    const handle = registerElectronRuntimeMain({ resolveFork, utilityEntry: '/dist/main/kernel-host.js' });
+
+    const first = handle.connect({
+      purpose: 'main-process-client',
+      context: { projectRoot: '/projects/a' },
+    });
+    const firstUtility = liveUtilities.at(-1);
+    expect(first.port).toMatchObject({ id: 'renderer-port' });
+    expect(resolveFork).toHaveBeenLastCalledWith({ projectRoot: '/projects/a' });
+
+    await exitLastUtility(9);
+    await expect(first.closed).resolves.toEqual({ exitCode: 9, released: false });
+
+    const second = handle.connect({
+      purpose: 'main-process-client',
+      context: { projectRoot: '/projects/a' },
+    });
+    const secondUtility = liveUtilities.at(-1);
+    expect(secondUtility).not.toBe(firstUtility);
+    second.dispose();
+    expect(secondUtility?.kill).toHaveBeenCalledOnce();
+    expect(firstUtility?.kill).not.toHaveBeenCalled();
+
+    handle.dispose();
+    expect(() => handle.connect({ purpose: 'main-process-client' })).toThrow(/broker is disposed/u);
+  });
+
+  it('kills the exact utility when post-fork channel setup fails', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const fileSystemPort = {
+      postMessage: vi.fn(),
+      on: vi.fn(),
+      off: vi.fn(),
+      start: vi.fn(),
+      close: vi.fn(),
+    };
+    const handle = registerElectronRuntimeMain({
+      resolveFork: () => ({ fileSystemPort: fileSystemPort as unknown as MessagePortMain }),
+      utilityEntry: '/dist/main/kernel-host.js',
+    });
+    const nextUtilityIndex = liveUtilities.length;
+    const { utilityProcess } = await import('electron');
+    vi.mocked(utilityProcess.fork).mockImplementationOnce(() => {
+      const failed = {
+        kill: vi.fn(),
+        on: vi.fn(),
+        postMessage: vi.fn(() => {
+          throw new Error('port transfer failed');
+        }),
+      };
+      liveUtilities.push(failed);
+      return failed as unknown as UtilityProcess;
+    });
+
+    expect(() => handle.connect({ purpose: 'main-process-client' })).toThrow(/port transfer failed/u);
+    expect(liveUtilities[nextUtilityIndex]?.kill).toHaveBeenCalledOnce();
+    expect(fileSystemPort.close).toHaveBeenCalledOnce();
+    handle.dispose();
+  });
+
+  it('transfers an admitted filesystem port at an explicit boot-frame index', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const fileSystemPort = {
+      postMessage: vi.fn(),
+      on: vi.fn(),
+      off: vi.fn(),
+      start: vi.fn(),
+      close: vi.fn(),
+    };
+    const handle = registerElectronRuntimeMain({
+      resolveFork: () => ({ fileSystemPort: fileSystemPort as unknown as MessagePortMain }),
+      utilityEntry: '/dist/main/kernel-host.js',
+    });
+
+    handle.connect({ purpose: 'main-process-client' });
+
+    expect(liveUtilities.at(-1)?.postMessage).toHaveBeenLastCalledWith(
+      { taucadRuntime: true, runtimePortIndex: 0, fileSystemPortIndex: 1 },
+      [expect.objectContaining({ id: 'utility-port' }), fileSystemPort],
+    );
+    handle.dispose();
+  });
+
+  it('threads a sanitized fork context into the app resolver', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const { utilityProcess } = await import('electron');
+    const fork = vi.mocked(utilityProcess.fork);
+    const resolveFork = vi.fn(() => ({
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Environment variable names are SCREAMING_SNAKE.
+      env: { TAU_PROJECT_ROOT: '/projects/a' },
+      utilityEntry: '/dist/main/debug-host.js',
+    }));
+    const handle = registerElectronRuntimeMain({
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Node defines this environment variable name.
+      env: { NODE_ENV: 'test' },
+      forkEnvAllowlist: ['TAU_PROJECT_ROOT'],
+      resolveFork,
+      utilityEntry: '/dist/main/kernel-host.js',
+    });
+
+    requestRuntimePort({ once: vi.fn(), removeListener: vi.fn() }, undefined, {
+      context: { definition: 'debug', projectRoot: '/projects/a' },
+    });
+
+    expect(resolveFork).toHaveBeenCalledExactlyOnceWith({ definition: 'debug', projectRoot: '/projects/a' });
+    const [entry, , forkOptions] = fork.mock.calls.at(-1)!;
+    expect(entry).toBe('/dist/main/debug-host.js');
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- Environment variable names are SCREAMING_SNAKE.
+    expect(forkOptions?.env).toEqual({ NODE_ENV: 'test', TAU_PROJECT_ROOT: '/projects/a' });
+    handle.dispose();
+  });
+
+  it('resolves with an empty context and the static entry when the renderer sends none', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const { utilityProcess } = await import('electron');
+    const fork = vi.mocked(utilityProcess.fork);
+    const resolveFork = vi.fn(() => ({}));
+    const handle = registerElectronRuntimeMain({ resolveFork, utilityEntry: '/dist/main/kernel-host.js' });
+
+    requestRuntimePort({ once: vi.fn(), removeListener: vi.fn() });
+
+    expect(resolveFork).toHaveBeenCalledExactlyOnceWith({});
+    expect(fork.mock.calls.at(-1)?.[0]).toBe('/dist/main/kernel-host.js');
+    handle.dispose();
+  });
+
+  it('refuses a fork context that is not a flat, bounded string record', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const { utilityProcess } = await import('electron');
+    const fork = vi.mocked(utilityProcess.fork);
+    const forkCallsBefore = fork.mock.calls.length;
+    const onError = vi.fn<(error: Error) => void>();
+    const resolveFork = vi.fn(() => ({}));
+    const handle = registerElectronRuntimeMain({ onError, resolveFork, utilityEntry: '/dist/main/kernel-host.js' });
+
+    const refused: unknown[] = [
+      'projectRoot=/a',
+      ['projectRoot'],
+      { projectRoot: 7 },
+      { projectRoot: { path: '/a' } },
+      /* An own, enumerable `__proto__` — what `JSON.parse` and `defineProperty`
+       * produce, and what a plain object literal cannot. */
+      Object.defineProperty({}, '__proto__', { enumerable: true, value: 'polluted' }),
+      Object.fromEntries(Array.from({ length: 33 }, (_, index) => [`key-${index}`, 'value'])),
+      { blob: 'x'.repeat(8193) },
+    ];
+    for (const context of refused) {
+      requestRuntimePort({ once: vi.fn(), removeListener: vi.fn() }, undefined, { context });
+    }
+
+    expect(fork).toHaveBeenCalledTimes(forkCallsBefore);
+    expect(resolveFork).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(refused.length);
+    expect('polluted' in {}).toBe(false);
+    handle.dispose();
+  });
+
+  it('refuses a resolver that throws or returns an env key outside the allowlist', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const { utilityProcess } = await import('electron');
+    const fork = vi.mocked(utilityProcess.fork);
+    const forkCallsBefore = fork.mock.calls.length;
+    const onError = vi.fn<(error: Error) => void>();
+
+    const throwing = registerElectronRuntimeMain({
+      onError,
+      resolveFork: () => {
+        throw new Error('unknown project');
+      },
+      utilityEntry: '/dist/main/kernel-host.js',
+    });
+    requestRuntimePort({ once: vi.fn(), removeListener: vi.fn() }, undefined, {
+      context: { projectRoot: '/projects/missing' },
+    });
+    throwing.dispose();
+
+    /* No allowlist at all is the strict default: every returned key is denied. */
+    const unlisted = registerElectronRuntimeMain({
+      onError,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Environment variable names are SCREAMING_SNAKE.
+      resolveFork: () => ({ env: { TAU_PROJECT_ROOT: '/projects/a' } }),
+      utilityEntry: '/dist/main/kernel-host.js',
+    });
+    requestRuntimePort({ once: vi.fn(), removeListener: vi.fn() }, undefined, {
+      context: { projectRoot: '/projects/a' },
+    });
+    unlisted.dispose();
+
+    const disallowed = registerElectronRuntimeMain({
+      forkEnvAllowlist: ['TAU_PROJECT_ROOT'],
+      onError,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Environment variable names are SCREAMING_SNAKE.
+      resolveFork: () => ({ env: { ELECTRON_RUN_AS_NODE: '1', TAU_PROJECT_ROOT: '/projects/a' } }),
+      utilityEntry: '/dist/main/kernel-host.js',
+    });
+    requestRuntimePort({ once: vi.fn(), removeListener: vi.fn() }, undefined, {
+      context: { projectRoot: '/projects/a' },
+    });
+    disallowed.dispose();
+
+    expect(fork).toHaveBeenCalledTimes(forkCallsBefore);
+    expect(onError).toHaveBeenCalledTimes(3);
+    expect(onError.mock.calls.at(-1)?.[0].message).toContain('ELECTRON_RUN_AS_NODE');
+  });
+
+  it('delivers the latest control frame of each type after the boot frame, and never to a spare', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    liveUtilities.length = 0;
+    const handle = registerElectronRuntimeMain({ utilityEntry: '/dist/main/kernel-host.js' });
+
+    handle.prewarm();
+    handle.post({ type: 'credential', token: 'first' });
+    handle.post({ type: 'credential', token: 'second' });
+    handle.post({ type: 'locale', value: 'en' });
+    const spare = liveUtilities[0];
+    expect(spare?.postMessage).not.toHaveBeenCalled();
+
+    handle.connect({ purpose: 'main-process-client' });
+
+    /* The boot frame stays first: the utility takes its first parent message as the boot frame. */
+    expect(spare?.postMessage.mock.calls.map(([frame]): unknown => frame)).toEqual([
+      expect.objectContaining({ taucadRuntime: true }),
+      { type: 'credential', token: 'second' },
+      { type: 'locale', value: 'en' },
+    ]);
+    const freshSpare = liveUtilities[1];
+    expect(freshSpare?.postMessage).not.toHaveBeenCalled();
+
+    /* A later frame reaches every adopted utility at once, and still skips the spare. */
+    handle.post({ type: 'credential', token: 'third' });
+    expect(spare?.postMessage).toHaveBeenLastCalledWith({ type: 'credential', token: 'third' });
+    expect(freshSpare?.postMessage).not.toHaveBeenCalled();
+    handle.dispose();
+    liveUtilities.length = 0;
+  });
+
+  it('replays control frames onto a utility forked after a crash and stops at its exit', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const handle = registerElectronRuntimeMain({ utilityEntry: '/dist/main/kernel-host.js' });
+    handle.post({ type: 'credential', token: 'kept' });
+
+    handle.connect({ purpose: 'main-process-client' });
+    const crashed = liveUtilities.at(-1);
+    await exitLastUtility(9);
+    handle.post({ type: 'credential', token: 'after-crash' });
+    expect(crashed?.postMessage).not.toHaveBeenCalledWith({ type: 'credential', token: 'after-crash' });
+
+    handle.connect({ purpose: 'main-process-client' });
+    expect(liveUtilities.at(-1)?.postMessage).toHaveBeenLastCalledWith({ type: 'credential', token: 'after-crash' });
+    handle.dispose();
+  });
+
+  it('refuses a control frame without a string type, and any frame after dispose', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const handle = registerElectronRuntimeMain({ utilityEntry: '/dist/main/kernel-host.js' });
+
+    expect(() => {
+      handle.post({ token: 'x' } as unknown as { type: string });
+    }).toThrow(/string `type`/u);
+    handle.dispose();
+    expect(() => {
+      handle.post({ type: 'credential' });
+    }).toThrow(/broker is disposed/u);
+  });
+
+  it('survives a destroyed frame on utility exit', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const onError = vi.fn();
+    const postMessage = vi.fn((channel: string) => {
+      if (channel.endsWith(':host-exit')) {
+        throw new Error('Render frame was disposed before host-exit');
+      }
+    });
+    const handle = registerElectronRuntimeMain({ onError, utilityEntry: '/dist/main/kernel-host.js' });
+
+    requestRuntimePort({ once: vi.fn(), removeListener: vi.fn() }, { postMessage });
+    const utility = liveUtilities.at(-1);
+
+    await exitLastUtility(3);
+
+    expect(onError).toHaveBeenCalledOnce();
+    /* The record is gone, so disposing the broker has nothing left to kill. */
+    handle.dispose();
+    expect(utility?.kill).not.toHaveBeenCalled();
+  });
+});
+
+describe('Electron main runtime memory supervision', () => {
+  it('should remove its sender lifecycle listeners once each utility is released', async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const handle = registerElectronRuntimeMain({ utilityEntry: '/dist/main/kernel-host.js' });
+    // oxlint-disable-next-line unicorn/prefer-event-target -- Electron's WebContents is a Node EventEmitter.
+    const sender = new EventEmitter();
+    const postMessage = vi.fn<(channel: string, payload: Record<string, unknown>) => void>();
+    try {
+      /* One window opens and closes many previews over its life: every lease
+       * must take its listeners with it, or the sender accumulates one pair
+       * per request until the window closes. */
+      for (let request = 0; request < 12; request += 1) {
+        requestRuntimePort(
+          sender as unknown as Parameters<typeof requestRuntimePort>[0],
+          { postMessage },
+          {
+            requestId: `request-${String(request)}`,
+          },
+        );
+        const { hostId } = postMessage.mock.calls.at(-1)![1] as { hostId: string };
+        listeners.get('taucad:connect-runtime:release')?.({ sender }, { hostId });
+      }
+      /* A utility that dies on its own takes its listeners too. */
+      requestRuntimePort(
+        sender as unknown as Parameters<typeof requestRuntimePort>[0],
+        { postMessage },
+        {
+          requestId: 'crashes',
+        },
+      );
+      await exitLastUtility(9);
+
+      expect(sender.listenerCount('destroyed')).toBe(0);
+      expect(sender.listenerCount('render-process-gone')).toBe(0);
+    } finally {
+      handle.dispose();
+    }
+  });
+
+  /* T05: the limit -1 and at the limit stay alive; only one byte past it is killed. */
+  it('should kill an adopted utility whose resident memory passes the limit and report why', async () => {
+    vi.useFakeTimers();
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const onError = vi.fn();
+    const resident = new Map<unknown, number>();
+    const handle = registerElectronRuntimeMain({
+      onError,
+      residentLimit: {
+        maxBytes: 1000,
+        intervalMilliseconds: 5000,
+        sample: (utility) => resident.get(utility),
+      },
+      utilityEntry: '/dist/main/kernel-host.js',
+    });
+    try {
+      requestRuntimePort({ once: vi.fn(), removeListener: vi.fn() }, { postMessage: vi.fn() });
+      const bloated = liveUtilities.at(-1)!;
+      requestRuntimePort(
+        { once: vi.fn(), removeListener: vi.fn() },
+        { postMessage: vi.fn() },
+        {
+          requestId: 'request-2',
+        },
+      );
+      const healthy = liveUtilities.at(-1)!;
+      requestRuntimePort(
+        { once: vi.fn(), removeListener: vi.fn() },
+        { postMessage: vi.fn() },
+        {
+          requestId: 'request-3',
+        },
+      );
+      const atLimit = liveUtilities.at(-1)!;
+      expect(new Set([bloated, healthy, atLimit]).size).toBe(3);
+      resident.set(bloated, 1001);
+      resident.set(healthy, 999);
+      resident.set(atLimit, 1000);
+
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(bloated.kill).toHaveBeenCalledOnce();
+      expect(healthy.kill).not.toHaveBeenCalled();
+      expect(atLimit.kill).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledOnce();
+      const [reported] = onError.mock.calls[0] as [Error];
+      expect(reported.message).toMatch(/resident memory 1001 bytes exceeds 1000/u);
+    } finally {
+      handle.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('should relay the limit and the peak it killed a utility for to the renderer frame', async () => {
+    vi.useFakeTimers();
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const onUtilityExit = vi.fn();
+    const handle = registerElectronRuntimeMain({
+      onError: vi.fn(),
+      onUtilityExit,
+      residentLimit: { maxBytes: 1000, intervalMilliseconds: 5000, sample: () => 1500 },
+      utilityEntry: '/dist/main/kernel-host.js',
+    });
+    try {
+      const frame = requestRuntimePort({ once: vi.fn(), removeListener: vi.fn() }, { postMessage: vi.fn() });
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(liveUtilities.at(-1)!.kill).toHaveBeenCalledOnce();
+      lastUtilityExitHandler()(1);
+      liveUtilities.at(-1)?.stderr?.end();
+      await vi.advanceTimersByTimeAsync(1000);
+
+      const exceeded = {
+        limit: 'host.utility.resident',
+        unit: 'By',
+        maximum: 1000,
+        demand: { kind: 'measured', value: 1500 },
+        origin: 'host-option',
+      };
+      expect(frame.postMessage).toHaveBeenLastCalledWith(
+        'taucad:connect-runtime:host-exit',
+        expect.objectContaining({ exitCode: 1, released: false, exceeded, peakResidentBytes: 1500 }),
+      );
+      expect(onUtilityExit).toHaveBeenCalledWith(expect.objectContaining({ exceeded, peakResidentBytes: 1500 }));
+    } finally {
+      handle.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('should not name the limit as the exit cause when its kill was refused', async () => {
+    vi.useFakeTimers();
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const onUtilityExit = vi.fn();
+    const handle = registerElectronRuntimeMain({
+      onError: vi.fn(),
+      onUtilityExit,
+      residentLimit: { maxBytes: 1000, intervalMilliseconds: 5000, sample: () => 1500 },
+      utilityEntry: '/dist/main/kernel-host.js',
+    });
+    try {
+      requestRuntimePort({ once: vi.fn(), removeListener: vi.fn() }, { postMessage: vi.fn() });
+      liveUtilities.at(-1)!.kill.mockReturnValue(false);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(liveUtilities.at(-1)!.kill).toHaveBeenCalled();
+      lastUtilityExitHandler()(1);
+      liveUtilities.at(-1)?.stderr?.end();
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(onUtilityExit).toHaveBeenCalledOnce();
+      expect(onUtilityExit.mock.calls[0]?.[0]).not.toHaveProperty('exceeded');
+    } finally {
+      handle.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('should report the largest resident sample with the utility exit', async () => {
+    vi.useFakeTimers();
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const onUtilityExit = vi.fn();
+    const samples = [300, 700, 500];
+    const handle = registerElectronRuntimeMain({
+      onUtilityExit,
+      residentLimit: { maxBytes: 1000, intervalMilliseconds: 5000, sample: () => samples.shift() },
+      utilityEntry: '/dist/main/kernel-host.js',
+    });
+    try {
+      handle.connect({ purpose: 'main-process-client' });
+      await vi.advanceTimersByTimeAsync(15_000);
+      lastUtilityExitHandler()(0);
+      liveUtilities.at(-1)?.stderr?.end();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(onUtilityExit).toHaveBeenCalledWith(expect.objectContaining({ exitCode: 0, peakResidentBytes: 700 }));
+    } finally {
+      handle.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('should stop sampling once no adopted utility remains', async () => {
+    vi.useFakeTimers();
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const sample = vi.fn(() => 1);
+    const handle = registerElectronRuntimeMain({
+      residentLimit: { maxBytes: 1000, intervalMilliseconds: 5000, sample },
+      utilityEntry: '/dist/main/kernel-host.js',
+    });
+    try {
+      /* A prewarmed spare is nobody's yet: nothing to supervise. */
+      handle.prewarm();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(sample).not.toHaveBeenCalled();
+
+      const lease = handle.connect({ purpose: 'main-process-client' });
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(sample).toHaveBeenCalled();
+      lease.dispose();
+      sample.mockClear();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(sample).not.toHaveBeenCalled();
+    } finally {
+      handle.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("should release the resolver's per-fork resources exactly once when the utility goes", async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const releases: string[] = [];
+    const handle = registerElectronRuntimeMain({
+      resolveFork: (context) => ({
+        release: () => {
+          releases.push(context['projectRoot'] ?? '');
+        },
+      }),
+      utilityEntry: '/dist/main/kernel-host.js',
+    });
+    try {
+      const released = handle.connect({ purpose: 'main-process-client', context: { projectRoot: '/projects/a' } });
+      handle.connect({ purpose: 'main-process-client', context: { projectRoot: '/projects/b' } });
+      released.dispose();
+      released.dispose();
+      expect(releases).toEqual(['/projects/a']);
+
+      /* A utility that dies on its own releases what was resolved for it, too. */
+      await exitLastUtility(9);
+      expect(releases).toEqual(['/projects/a', '/projects/b']);
+    } finally {
+      handle.dispose();
+    }
+    expect(releases).toEqual(['/projects/a', '/projects/b']);
+  });
+
+  it("should release the resolver's resources when the fork is refused after resolution", async () => {
+    const { registerElectronRuntimeMain } = await import('#electron/main.js');
+    const release = vi.fn();
+    const handle = registerElectronRuntimeMain({
+      maxUtilities: 0,
+      resolveFork: () => ({ release }),
+      utilityEntry: '/dist/main/kernel-host.js',
+    });
+    try {
+      expect(() => handle.connect({ purpose: 'main-process-client' })).toThrow(/refusing to exceed 0/u);
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      handle.dispose();
+    }
+  });
+});

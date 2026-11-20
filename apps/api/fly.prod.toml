@@ -4,38 +4,150 @@
 #
 
 app = 'tau-api'
-primary_region = 'syd'
+primary_region = 'sjc'
 kill_signal = 'SIGTERM'
-kill_timeout = '30s'
+# 120 s, not Fly's 5 s default nor the 30 s it was: the API drains in-flight model
+# steps before it stops (`@taucad/api-lifecycle` `graceful-shutdown.ts`, `shutdownPhases`), and a
+# step cut by a deploy costs the person the step. A longer window slows a rolling
+# deploy only while a step is still streaming. Change both together.
+kill_timeout = '120s'
 
 [build]
 dockerfile = 'Dockerfile'
 
+[deploy]
+# Protected one-shot migration (B7 R8 / B8 R3): runs under the DDL identity before any new
+# app machine boots; API replicas only assert schema compatibility and never migrate.
+# It also owns the tariff: with TAU_CLOUD_ENABLED=true it derives the commercial policy from
+# this image's code route table over the BILLING_COMMERCIAL_POLICY secret and publishes it
+# when the content moved, honouring the 30-day notice rule. A commercial-only change is
+# therefore a Terraform apply plus a redeploy of the serving image, with no rebuild.
+release_command = 'node /app/dist/billing-command.js migrate --environment prod-us'
+# Rolling, not bluegreen (charter W8): with `app` at two or more Machines a rolling
+# deploy replaces them one at a time and the group never reaches zero, and it replaces
+# a single-Machine group in place — so `revisions-maintenance` is never briefly two
+# Machines, which a bluegreen green set would be and D21 forbids.
+strategy = 'rolling'
+
+[processes]
+app = 'node /app/dist/main.js'
+# One Stripe/DB worker fulfils webhook-queued payment sources, charges consented automatic
+# reloads (only once BILLING_LIVE_COLLECTION_ENABLED=true), cancels closed accounts' subscriptions
+# and runs the scheduled sweeps. Without it paid purchases are never credited. Run exactly one
+# Machine: `fly scale count billing-operations=1`. It opens at most one PostgreSQL
+# connection (billing-command postgres max: 1).
+# LLM hold recovery has no process group: every `app` Machine runs it in-process
+# (`BillingRecoveryScheduler`, `BILLING_RECOVERY_INTERVAL_MS`) and emits its metrics.
+# The `billing-recovery` group was retired; `recover-llm-worker` remains as optional
+# scale-out if a backlog ever outruns the in-API clock.
+billing-operations = 'node /app/dist/billing-command.js billing-operations-worker --environment prod-us --limit 100 --poll-milliseconds 5000'
+# Charter D21: exactly one maintenance Machine, never an app replica.
+# Recovery runs every 60 seconds with a 50-second storage budget; daily heavy
+# work runs independently and processes project cleanup before tenant cleanup.
+# Each pass records durable liveness; status requires recovery within 120 seconds.
+# One connection per lane (pool cap 2); the singleton remains at 512 MiB.
+# Restore remains operator-invoked using TAU_S3_RESTORE_* secrets.
+# DC4: this group is moving to the private app in `apps/maintenance/fly.prod.toml`,
+# which holds in standby (TAU_MAINTENANCE_STANDBY) while this line exists. Do not
+# remove it here alone: the cutover scales this group to zero, deletes this line,
+# its `[[vm]]` and the standby flag there in one reviewed change, after the new
+# app is deployed and healthy (`app/maintenance-app.test.ts` enforces the pairing).
+revisions-maintenance = "node /app/dist/maintenance-command.js worker"
+
+# No TAU_STORAGE_URL (DC1): there is no production tau-storage yet, so git runs
+# inside this app (`git_execution=in_process` in the boot log), as before DC1.
+# Setting it to the production Flycast address, with the two storage secrets,
+# is the flip to forwarding.
 [env]
 NODE_ENV = 'production'
+WEB_CONCURRENCY = '1'
 TAU_FRONTEND_URL = 'https://tau.new'
-LANGSMITH_TRACING = true
-LANGSMITH_ENDPOINT = 'https://api.smith.langchain.com'
-LANGSMITH_PROJECT = 'tau-api-prod'
+# Replies to transactional email land here (OQ8); the mailbox must exist before this deploys.
+TAU_EMAIL_REPLY_TO = 'help@tau.new'
 AUTH_URL = 'https://api.tau.new'
+# Browser-facing origin of this API, used to build authenticated publication file
+# proxy URLs. Required by the env schema with no default.
+TAU_API_URL = 'https://api.tau.new'
 LOG_SERVICE = 'fly'
 LOG_LEVEL = 'info'
 OTEL_METRICS_PORT = '9464'
 OTEL_EXPORTER_OTLP_COMPRESSION = 'gzip'
-# Additional CORS origins for the Netlify-hosted UI:
-#   - https://deploy-preview-*--taucad-prod.netlify.app : per-PR Netlify deploy previews
-#   - https://taucad-prod.netlify.app                   : Netlify default domain for the `taucad-prod` site
-# The narrow `deploy-preview-*` glob is intentional — do not broaden to `*--taucad-prod.netlify.app`,
-# which would silently allow non-PR branch deploys (currently disabled per allowed_branches).
-ADDITIONAL_CORS_ORIGINS = '["https://deploy-preview-*--taucad-prod.netlify.app","https://taucad-prod.netlify.app"]'
+# Database connection audit R1/R3 (Tau Brain research/database-connection-audit.md): every `app`
+# Machine opens up to DATABASE_POOL_MAX request plus DATABASE_BACKGROUND_POOL_MAX background
+# connections, and `revisions-maintenance` up to 2, all on one pooler login. 2 × (4 + 1) + 2 = 12
+# of DATABASE_POOLER_POOL_SIZE = 15, three spare. `app/config/connection-budget.test.ts` refuses
+# a change that does not fit; a third `app` Machine needs a larger pool first.
+DATABASE_POOL_MAX = '4'
+DATABASE_BACKGROUND_POOL_MAX = '1'
+# The session pool Supavisor admits for this API's login, read from the refusal message
+# (`max clients are limited to pool_size: 15`). It mirrors the Supabase setting until
+# tau-cloud codifies it (database connection audit R6).
+DATABASE_POOLER_POOL_SIZE = '15'
+DATABASE_CONNECT_TIMEOUT_SECONDS = '10'
+DATABASE_IDLE_TIMEOUT_SECONDS = '60'
+DATABASE_STATEMENT_TIMEOUT_MS = '15000'
+DATABASE_LOCK_TIMEOUT_MS = '5000'
+DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS = '15000'
+DATABASE_RUNTIME_ROLE = 'tau_api_runtime'
+# Auth session cookie cache blueprint (Tau Brain research/auth-session-cookie-blueprint.md): seconds an
+# encrypted session snapshot may answer cookie GET/HEAD requests without a PostgreSQL read. 0 disables it;
+# 60 is the rollout value, set per environment after its acceptance checks (WP6), never by default.
+AUTH_SESSION_CACHE_MAX_AGE_SECONDS = '60'
+# Deploy-cut charter D15, operator ruling 2026-11-10: a funded model step may run up to
+# 600 s in production as on staging, so high-effort reasoning is not cut at the 300 s
+# schema default. kill_timeout stays 120 s: a step cut by a deploy still settles at zero
+# with service_restart.
+BILLING_INVOCATION_DEADLINE = '600000'
+# Additional CORS origin for the Netlify default domain of the prod-us site
+# (`taucad-prod-us.netlify.app`). Required for pre-cutover smoke-testing the
+# Netlify deploy before `tau.new` NS authority moves to Cloudflare. After
+# cutover this entry can be dropped — `https://tau.new` matches
+# `TAU_FRONTEND_URL` directly. No deploy-preview glob: prod-us is CI-only
+# (no Git integration, no PR previews — those live on staging).
+ADDITIONAL_CORS_ORIGINS = '["https://taucad-prod-us.netlify.app"]'
+# TAU_S3_BUCKET, TAU_S3_ENDPOINT, TAU_S3_ACCESS_KEY_ID, TAU_S3_SECRET_ACCESS_KEY
+# are pushed as Fly secrets by module.fly_api_secrets (repos/tau-cloud) — not set here.
+TAU_S3_PUBLIC_BASE_URL = 'https://cdn.tau.new'
+TAU_S3_REGION = 'auto'
+TAU_S3_FORCE_PATH_STYLE = 'false'
+# Files service (tau-cloud files gates): LFS downloads are links to the files
+# Worker instead of presigned R2 URLs. Needs the Fly secret
+# TAU_FILES_LINK_SIGNING_KEY, which tau-cloud's prod-us stack writes (gate 3);
+# boot refuses this line without it (`refineFilesService`), so deploy it only
+# after that apply. Remove this line and redeploy to roll back to presigned downloads.
+TAU_FILES_BASE_URL = 'https://files.tau.new'
+# Runtime Observability PR-9: production records runtime telemetry entries (on | off | paused-until:<ISO>),
+# activated by the operator 2026-11-13. Unset means off, so the value stays explicit. Set 'off' and
+# redeploy to stop recording; the policy probe then answers `off` and clients send nothing.
+TAU_RUNTIME_TELEMETRY = 'on'
+
+# No `[[mounts]]`. Charter S3/D1: the durable state of the Hosted Remote is the
+# object store, leases are ephemeral working copies under the Machine's own
+# `os.tmpdir()`, and `TAU_GIT_ROOT` now refuses boot. A volume here would attach to
+# exactly one Machine and take the `app` group back to one. The old sizing argument
+# (ruling OQ1, review C27 — a volume large enough for several Pro allowances) is
+# retired with it: bytes are the plan's quota, in a bucket that has no size.
+#
+# DG4 must delete the `tau_git_data` volumes by hand after the deploy: `fly deploy`
+# leaves an orphaned volume in place rather than destroying data.
 
 [http_service]
 internal_port = 3000
 force_https = true
 auto_stop_machines = 'stop'
 auto_start_machines = true
-min_machines_running = 1
+# Charter S2: two or more API processes serve the same repository concurrently, with
+# no shared disk and no cross-process lock. Two is also the floor a rolling deploy
+# needs to keep one Machine serving; the count itself is `fly scale count app=2`.
+min_machines_running = 2
 processes = ['app']
+
+# FR11 (DC1): a push is silent between its last body byte and tau-storage's
+# compare-and-swap for up to the 5-minute commit deadline, and the client's
+# connection to this proxy is idle for all of it. 600 s is the deadline plus
+# margin, the same value as tau-storage's Flycast service; DB2 measures it.
+[http_service.http_options]
+idle_timeout = 600
 
 [[http_service.checks]]
 interval = "10s"
@@ -44,11 +156,47 @@ method = "GET"
 path = "/health/ready"
 timeout = "2s"
 
-[metrics]
+[[metrics]]
 port = 9464
 path = "/metrics"
+# `revisions-maintenance` is deliberately absent: its command opens no metrics
+# server, so scraping it would only produce a permanently failing target.
+processes = ['app', 'billing-operations']
 
+# The rootfs is now the capacity knob the retired volume used to be: a lease is a
+# temporary working copy under `os.tmpdir()`, and admission refuses one when its
+# real-byte reservation does not fit in the free bytes `statfs` reports less what
+# admitted leases still have to write (DA3): a fetch reserves its packs plus a
+# 64 MiB floor, a push adds its quarantine bound (what is left of the plan or of
+# D20's 1 GiB ceiling, plus 64 MiB of slack). On Fly's default 8 GiB rootfs, about
+# 7.3 GiB free on staging, that is over a hundred fetches of a KiB repository, six
+# fetches of a 1 GiB one, or about six pushes at once. Admission reads the real free
+# bytes, so the numbers self-correct and the figures here are not a contract. Raise
+# the rootfs before raising the ceiling.
 [[vm]]
-memory = '2gb'
+# Match the staging API size; retain two serving Machines for rolling releases.
+memory = '1gb'
 cpu_kind = 'shared'
 cpus = 1
+processes = ['app']
+
+# F-10: 512 MB, not 256. The worker loads the API's dependency graph (Nest, the drizzle
+# schema, Stripe, react-email through EmailService, OTel auto-instrumentations) and
+# measured ~213 MiB peak RSS locally; staging OOM-killed it twice at 256 MB, once with
+# a one-shot `billing-command.js` run inside it and once on a failing pass alone. One-shot
+# `billing-command.js` runs (`recover-payments`, `lifecycle`, `pause-route`, `resume-route`
+# and the like) belong on an `app` Machine (`fly ssh console -g app`), never inside this worker.
+[[vm]]
+memory = '512mb'
+cpu_kind = 'shared'
+cpus = 1
+processes = ['billing-operations']
+
+# Restore copies packs from the source bucket to the primary as streams (DA4) and takes
+# no lease, so it needs no lease headroom; the purge and collector passes stream keys
+# and need almost none either.
+[[vm]]
+memory = '512mb'
+cpu_kind = 'shared'
+cpus = 1
+processes = ['revisions-maintenance']

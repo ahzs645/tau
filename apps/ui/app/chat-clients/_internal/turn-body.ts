@@ -1,0 +1,374 @@
+import type { CadAgentConfigInput, CadAgentExecution, TauAgentHostId } from '@taucad/chat';
+import type { CadReference } from '@taucad/chat/references';
+import { getCadSystemPrompt, getChatStateNote } from '@taucad/chat/prompts';
+import { getProviderFacingToolGrant } from '@taucad/chat/schemas';
+import type { ChatExecutionTarget } from '@taucad/chat/schemas';
+import { modelSupportsInput } from '@taucad/chat';
+import { generatePrefixedId } from '@taucad/utils/id';
+import { idPrefix } from '@taucad/types/constants';
+import { chatStateMessage, createCachedSystemPromptBlocks } from '@taucad/agent-host';
+import type { AgentChannelClient } from '@taucad/agent-host';
+import type { AgentHostClientOptions } from '#services/agent-host-client.js';
+import {
+  AgentHostPlacementError,
+  daemonPlacementOf,
+  desktopWorkspaceRoot,
+  openAgentHostChannel,
+  placementRungOf,
+  unplaceableExecutionReason,
+} from '#lib/agent-host-placement.js';
+import type { ResolvedModel } from '#hooks/use-models.js';
+import { admittedReasoning } from '#utils/model-reasoning.js';
+import type {
+  AgentHostAdmissionConfig,
+  AgentHostModel,
+  AgentHostExternalAgent,
+  AgentHostExternalContext,
+} from '#workers/agent-host.contract.js';
+import { buildBrowserAgentHostSnapshotContext } from '@taucad/chat-ui/chat-clients/_internal/browser-agent-host-snapshot-context';
+import type { TurnTrigger } from '@taucad/chat-ui/chat-clients/turn-intent';
+
+/**
+ * How one turn's wire body and host admission are composed.
+ *
+ * Extracted from `useCadChatClient` so the chat's turn host and the composer's
+ * own verbs build one body from one place, rather than a copy each.
+ */
+
+export type BrowserHostAdmissionConfig = Omit<AgentHostAdmissionConfig, 'model'> & {
+  readonly model: AgentHostModel;
+};
+
+/**
+ * The admission a host-placed turn carries, in its two shapes.
+ *
+ * A Tau turn carries the browser-host config; an external-agent turn names the
+ * agent and nothing else, because the agent brings its own model, its own tools
+ * and the user's own CLI login (W4-ACP / X6).
+ */
+export type BrowserHostAdmission = TurnTrigger &
+  (
+    | { readonly config: BrowserHostAdmissionConfig }
+    | { readonly agent: AgentHostExternalAgent; readonly context: AgentHostExternalContext }
+  );
+
+/**
+ * The wire body one dispatch carries.
+ *
+ * The run id is minted here and travels as the admission's idempotency key, so
+ * the same gesture retried with the same body is the same run end to end (V9).
+ *
+ * @param input - The turn's agent config, project, placement and host admission.
+ * @returns The frozen `body` the transport parses.
+ */
+export const createRunBody = (input: {
+  readonly agent: CadAgentConfigInput;
+  readonly projectId: string;
+  /** Which host writes this turn, and how it records what it wrote. */
+  readonly execution?: ChatExecutionTarget | undefined;
+  readonly browserHost?: ((runId: string) => BrowserHostAdmission) | undefined;
+  /** Minted by the caller when it had to do async work for this same run. */
+  readonly runId?: string | undefined;
+}): Readonly<Record<string, unknown>> => {
+  const runId = input.runId ?? generatePrefixedId(idPrefix.request);
+  return Object.freeze({
+    agent: input.agent,
+    projectId: input.projectId,
+    ...(input.execution === undefined ? {} : { execution: input.execution }),
+    admission: Object.freeze({
+      version: 1,
+      idempotencyKey: runId,
+    }),
+    ...(input.browserHost === undefined ? {} : { browserHost: Object.freeze(input.browserHost(runId)) }),
+  });
+};
+
+/**
+ * Client-authored payloads (snapshot, context) are TS objects whose optional
+ * fields surface as `undefined` properties; the admission wire and the durable
+ * log speak strict JSON, which rejects them. One JSON round-trip normalizes.
+ */
+// oxlint-disable-next-line unicorn/prefer-structured-clone -- JSON serialization intentionally drops undefined fields.
+const toStrictJson = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+type TauAgentConfigInput = CadAgentConfigInput & {
+  readonly execution: Extract<CadAgentConfigInput['execution'], { readonly kind: 'tau' }>;
+};
+
+const requireTauExecution: (agent: CadAgentConfigInput) => asserts agent is TauAgentConfigInput = (agent) => {
+  if (agent.execution.kind !== 'tau') {
+    throw new TypeError('The Tau agent host requires Tau execution.');
+  }
+};
+
+/**
+ * The kernel facts the prompt renders from: the owner and the available list the snapshot's `kernel` object carries
+ * (AKS-7), so the Tau agent's text and an external agent's snapshot come from one state frozen with the turn (D2).
+ */
+const kernelFacts = (
+  agent: CadAgentConfigInput,
+): Pick<NonNullable<Parameters<typeof getCadSystemPrompt>[3]>, 'kernelOwner' | 'kernelProfile'> => {
+  const kernel = agent.snapshot?.kernel;
+  return {
+    ...(kernel?.owner === undefined ? {} : { kernelOwner: kernel.owner }),
+    kernelProfile: { available: kernel?.available ?? [] },
+  };
+};
+
+/**
+ * The CAD system prompt and its cache blocks for one chat on one model row.
+ *
+ * Always the prompt of agent mode with testing on. The chat's mode and testing switch ride in the turn's state note
+ * (`getChatStateNote`), so changing either leaves the cached prefix, and the reasoning bound to it, as they were.
+ */
+const hostPrompt = (
+  agent: TauAgentConfigInput,
+  chatId: string,
+  model: ResolvedModel['model'],
+): Pick<BrowserHostAdmissionConfig, 'systemPrompt' | 'systemPromptBlocks'> => {
+  const prompt = getCadSystemPrompt(agent.kernel, 'agent', true, {
+    ...kernelFacts(agent),
+    /* Only Tau's own agent is told about the person; an external agent's context below never carries it. */
+    ...(agent.person === undefined ? {} : { person: agent.person }),
+    chatId,
+    modelId: agent.execution.model,
+    contextWindow: model?.details.contextWindow,
+    knowledgeCutoff: model?.details.knowledgeCutoff,
+    supportsImageInput: modelSupportsInput(model?.support, 'image'),
+  });
+  return {
+    systemPrompt: [prompt.static, prompt.dynamic].join('\n\n'),
+    // One cache breakpoint per block that carries content. The workspace slot is
+    // empty on this path, and emitting it anyway spent a breakpoint on nothing.
+    systemPromptBlocks: createCachedSystemPromptBlocks({
+      staticPrompt: prompt.static,
+      dynamicPrompt: prompt.dynamic,
+    }) as AgentHostAdmissionConfig['systemPromptBlocks'],
+  };
+};
+
+/** The model wire for the chat's model, or nothing while the catalog has not named its provider. */
+const hostModel = (agent: TauAgentConfigInput, model: ResolvedModel['model']): AgentHostModel | undefined => {
+  const providerKind = model?.provider.id;
+  if (providerKind === undefined) {
+    return undefined;
+  }
+  /* The chat's level replaces the catalog default, clamped to what this model
+   * offers — the picker reads the same helper, so what it shows is what runs. */
+  const reasoning = admittedReasoning(model, agent.execution.effort);
+  return {
+    id: agent.execution.model,
+    providerKind,
+    contextWindow: model?.details.contextWindow ?? 128_000,
+    ...(model?.details.maxTokens === undefined ? {} : { maxTokens: model.details.maxTokens }),
+    ...(reasoning === undefined ? {} : { reasoning }),
+    ...(model?.details.cost === undefined
+      ? {}
+      : {
+          cost: {
+            input: model.details.cost.inputTokens,
+            output: model.details.cost.outputTokens,
+            cacheRead: model.details.cost.cacheReadTokens,
+            cacheWrite: model.details.cost.cacheWriteTokens,
+          },
+        }),
+  };
+};
+
+/**
+ * What the browser host worker is initialised with for one chat.
+ *
+ * The model is left out while the catalog cannot name its provider — offline,
+ * or with the API down. Attaching to the chat's log, replaying it and resuming a
+ * run on the model its log committed need no catalog, so opening a chat must not
+ * fail on one; a turn still names its own model in its admission, which
+ * {@link agentHostConfig} refuses to compose without one.
+ *
+ * @param input - The agent config, chat and resolved model row.
+ * @returns The prompt blocks, the model wire when known, and the testing flag.
+ */
+export const agentHostClientConfig = (input: {
+  readonly agent: CadAgentConfigInput;
+  readonly chatId: string;
+  readonly resolvedModel: ResolvedModel;
+}): Pick<AgentHostClientOptions, 'systemPrompt' | 'systemPromptBlocks' | 'model' | 'testingEnabled'> => {
+  const { agent } = input;
+  requireTauExecution(agent);
+  const model = hostModel(agent, input.resolvedModel.model);
+  return {
+    ...hostPrompt(agent, input.chatId, input.resolvedModel.model),
+    ...(model === undefined ? {} : { model }),
+    testingEnabled: agent.testingEnabled,
+  };
+};
+
+/**
+ * The browser host's admission for one Tau turn.
+ *
+ * @param input - The turn's agent config, chat, run id, resolved model row and its message's geometry references.
+ * @returns The prompt blocks, model wire, tool grant and context the host runs with.
+ */
+export const agentHostConfig = (input: {
+  readonly agent: CadAgentConfigInput;
+  readonly chatId: string;
+  readonly runId: string;
+  readonly resolvedModel: ResolvedModel;
+  readonly references?: readonly CadReference[] | undefined;
+}): BrowserHostAdmissionConfig => {
+  const { agent, resolvedModel } = input;
+  requireTauExecution(agent);
+  const { model } = resolvedModel;
+  const hostedModel = hostModel(agent, model);
+  if (hostedModel === undefined) {
+    throw new Error('The Tau agent host requires resolved model provider metadata.');
+  }
+  const snapshotContext = buildBrowserAgentHostSnapshotContext(agent.snapshot, input.references);
+  const snapshotMessages: NonNullable<BrowserHostAdmissionConfig['contextMessages']> =
+    snapshotContext === undefined
+      ? []
+      : [
+          {
+            id: `tau:snapshot-context:${input.runId}`,
+            role: 'user',
+            content: snapshotContext,
+            metadata: { tauInternal: { kind: 'snapshot-context', anchorId: input.chatId, pruning: 'replace-by-id' } },
+          },
+        ];
+  /* Every tool this model can be given is declared on every turn; what the chat's settings turn off is masked where
+   * a call is made, so the tool list is the same bytes whatever the settings are. */
+  const grant = getProviderFacingToolGrant({
+    toolChoice: agent.toolChoice,
+    testingEnabled: agent.testingEnabled,
+    modelSupport: model?.support,
+  });
+  return {
+    ...hostPrompt(agent, input.chatId, model),
+    model: hostedModel,
+    ...grant,
+    snapshot: agent.snapshot === undefined ? undefined : toStrictJson(agent.snapshot),
+    contextPayload: agent.contextPayload === undefined ? undefined : toStrictJson(agent.contextPayload),
+    contextMessages: [
+      ...snapshotMessages,
+      /* The host says this once per change: it joins a turn's context only when the conversation's newest state
+       * note says something else, and a chat that never left its defaults never carries one. */
+      chatStateMessage(getChatStateNote(agent)),
+    ],
+  };
+};
+
+/**
+ * The CAD context one external-agent turn carries (V12).
+ *
+ * @param input - The composer's agent configuration and the chat it runs in.
+ * @returns The system prompt, skills and snapshot the daemon embeds.
+ */
+const externalAgentContext = (input: {
+  readonly agent: CadAgentConfigInput;
+  readonly chatId: string;
+}): AgentHostExternalContext => {
+  const { agent } = input;
+  const prompt = getCadSystemPrompt(agent.kernel, agent.mode, agent.testingEnabled, {
+    ...kernelFacts(agent),
+    chatId: input.chatId,
+  });
+  return {
+    systemPrompt: [prompt.static, prompt.dynamic].join('\n\n'),
+    ...(agent.snapshot === undefined ? {} : { snapshot: toStrictJson(agent.snapshot) }),
+    ...(agent.contextPayload === undefined ? {} : { contextPayload: toStrictJson(agent.contextPayload) }),
+  };
+};
+
+/**
+ * Every Tau turn is a browser-host turn: the API-coordinated placement was
+ * removed, not demoted.
+ */
+export const hostAdmission = (input: {
+  readonly agent: CadAgentConfigInput;
+  readonly chatId: string;
+  readonly resolveModel: (modelId: string) => ResolvedModel;
+  readonly trigger: TurnTrigger;
+  /** The geometry references the turn's user message carries (blueprint D6). */
+  readonly references?: readonly CadReference[] | undefined;
+}): ((runId: string) => BrowserHostAdmission) | undefined => {
+  if (input.agent.execution.kind === 'acp') {
+    const { agentId, hostId, model, config } = input.agent.execution;
+    return () => ({
+      ...input.trigger,
+      agent: {
+        kind: 'acp',
+        id: agentId,
+        hostId,
+        ...(model === undefined ? {} : { model }),
+        ...(config === undefined ? {} : { config }),
+      },
+      /* The agent brings its own model, tools and login (X6), so none of the
+       * Tau admission travels — but the CAD knowledge does. Composed by the
+       * same helper a Tau turn uses, minus the model facts an external run has
+       * no row for; the daemon sends it as embedded resources on the session's
+       * first prompt (V12). */
+      context: externalAgentContext({ agent: input.agent, chatId: input.chatId }),
+    });
+  }
+  /* Every remaining kind is Tau: the union is exhausted above. */
+  const resolvedModel = input.resolveModel(input.agent.execution.model);
+  return (runId) => ({
+    ...input.trigger,
+    config: agentHostConfig({
+      agent: input.agent,
+      chatId: input.chatId,
+      runId,
+      resolvedModel,
+      references: input.references,
+    }),
+  });
+};
+
+/**
+ * Dial one daemon placement.
+ *
+ * Launcher 2 alone needs an argument beyond the host id: it is brokered per
+ * *folder* — main grants a root and refuses everything else — so the desktop
+ * placement resolves this project's absolute node path first. Every other
+ * placement names its own workspace on the wire, and is dialled by id alone.
+ *
+ * @param hostId - The placement to dial.
+ * @param projectId - Project whose node root launcher 2 is granted.
+ * @returns An open channel client.
+ */
+export const dialAgentHost = async (hostId: TauAgentHostId, projectId: string): Promise<AgentChannelClient> =>
+  hostId === 'desktop'
+    ? openAgentHostChannel(hostId, {
+        projectId,
+        workspaceRoot: await desktopWorkspaceRoot(projectId),
+      })
+    : openAgentHostChannel(hostId);
+
+/**
+ * Dial the daemon one chat's execution is placed on, from this device.
+ *
+ * The placement is this device's ({@link daemonPlacementOf}): a Tau chat with a
+ * device-relative host runs locally, so only a paired device or a daemon this
+ * device chose is dialled. An external agent whose host this device already
+ * knows it cannot reach (`unplaceableExecutionReason`) is refused before
+ * anything is resolved or dialled.
+ *
+ * @param execution - The chat's execution, as this device places it.
+ * @param projectId - Project whose node root launcher 2 is granted.
+ * @returns An open channel client.
+ * @throws {AgentHostPlacementError} `HOST_NOT_ON_THIS_DEVICE` when this device cannot place the execution.
+ * @throws When the execution is placed on this page's own worker, which is not dialled.
+ */
+export const dialExecutionHost = async (
+  execution: CadAgentExecution,
+  projectId: string,
+): Promise<AgentChannelClient> => {
+  const hostId = daemonPlacementOf(execution);
+  if (hostId === undefined) {
+    throw new Error('This chat runs in this page’s own agent host, not on a daemon.');
+  }
+  const unplaceable = unplaceableExecutionReason(execution);
+  if (unplaceable !== undefined) {
+    throw new AgentHostPlacementError('HOST_NOT_ON_THIS_DEVICE', placementRungOf(hostId), unplaceable);
+  }
+  return dialAgentHost(hostId, projectId);
+};

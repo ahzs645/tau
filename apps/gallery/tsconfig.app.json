@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./out-tsc/app",
+    "lib": ["DOM", "DOM.Iterable", "ES2024"],
+    "types": ["vite/client", "node"],
+    "jsx": "react-jsx",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "target": "ES2022"
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts", "*.ts", "package.json"],
+  "exclude": [
+    "src/**/*.test.*",
+    "src/**/*.spec.*",
+    "scripts/**/*.test.*",
+    "vitest.config.ts",
+    "vitest.integration.config.ts",
+    "playwright.config.ts"
+  ]
+}

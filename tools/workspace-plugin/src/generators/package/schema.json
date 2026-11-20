@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/schema",
   "$id": "TauPackage",
-  "title": "Create a @taucad/* package",
-  "description": "Scaffolds a publishable @taucad/* package with dual ESM/CJS build, vitest, and all Tau conventions.",
+  "title": "Create a @taucad/* workspace project",
+  "description": "Scaffolds a policy-routed @taucad/* project with placement-owned tags, build mode, tests, and Tau conventions.",
   "type": "object",
   "properties": {
     "name": {
@@ -19,9 +19,29 @@
     },
     "scope": {
       "type": "string",
-      "enum": ["packages", "libs"],
+      "enum": ["packages", "libs", "apps/libs", "tools"],
       "default": "packages",
-      "description": "Directory scope (packages for publishable, libs for internal)"
+      "description": "Placement, which derives tags, privacy, and build defaults (packages for publishable surfaces, libs for shared capabilities, apps/libs for private application capabilities, tools for private dev-time-only tooling)"
+    },
+    "scopeTag": {
+      "type": "string",
+      "enum": ["shared", "ui", "api"],
+      "default": "shared",
+      "description": "Audience tag; packages, libs, and tools require shared, while apps/libs supports shared, ui, or api (an API server library named api-<name>, which also gets the api:<name> tag)"
+    },
+    "layer": {
+      "type": "string",
+      "enum": ["feature", "ui", "data-access", "util"],
+      "description": "Required architecture layer for apps/libs projects"
+    },
+    "react": {
+      "type": "boolean",
+      "default": false,
+      "description": "Configure React peers, JSX, jsdom, and Testing Library for an apps/libs project"
+    },
+    "build": {
+      "type": "boolean",
+      "description": "Placement-owned build mode: false for apps/libs and true for packages, libs, and tools; a supplied value must match"
     }
   },
   "required": ["name"]

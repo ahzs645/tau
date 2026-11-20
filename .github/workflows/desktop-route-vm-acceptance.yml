@@ -1,0 +1,559 @@
+# Clean-host ("vm") Mac acceptance: the only producer `desktop-receipt-provenance.mts` admits for `vm` receipts.
+#
+# Each row runs the shipping A→B→C installed-route chain (`desktop:qualify-installed-route`) in clean-host mode on a
+# self-hosted, SIP-enabled, Gatekeeper-enabled native Mac: the candidate bytes arrive through a real Chromium download
+# that keeps com.apple.quarantine, the DMG is mounted, Tau.app is copied to /Applications and the image is ejected
+# (or the ZIP is extracted with ditto and moved), Gatekeeper must accept it as Notarized Developer ID, the stapled
+# ticket must validate with network denied, and the app is launched from /Applications through LaunchServices.
+# Updates A→B and B→C run through the shipping ZIP updater against the run's loopback mirror, as in CI qualification.
+#
+# GitHub-hosted macOS reports SIP disabled (ruling X19), so it can never run this workflow: every row fails closed in
+# its preflight unless the host shows SIP and Gatekeeper enabled, native architecture (no Rosetta) and no prior Tau
+# installation, profile or ShipIt cache. `desktop-macos-vm-receipts` is uploaded only by a Mac-scoped dispatch
+# on main whose every row passed that preflight and its run. The Mac-only scope is Apple silicon only (operator ruling:
+# hosted Intel Macs cannot render, so Intel is neither qualified nor published), so the two Apple silicon rows on the
+# `local-mac` runner are the complete receipt set; `x64_runner_label` must stay empty.
+#
+# Linux scope: each of the six APT and managed-AppImage rows (Ubuntu 24.04, Ubuntu 26.04, Debian 13) runs in a
+# disposable Google Cloud T4 host from its tau-cloud `ci-gpu-*` template with stock graphics, as route qualification
+# does, but in `clean-host` mode: a standard `consumer` account without administrator rights downloads the exact
+# signed packages (and the AppImage, which it makes executable) with a real browser and runs Tau, starting the stage A
+# session from the installed desktop entry; the administrator only installs those downloads (which enrolls the signed
+# repository) and reads system state, and later updates stay with the system's unattended upgrades. Every row fails
+# closed in its preflight unless the host is the stock distribution with AppArmor, its stock user-namespace policy, a
+# hardware GL renderer and no prior Tau package, tree, repository, AppImage, desktop entry or profile. There is one GPU:
+# the Linux scope shares route qualification's Linux GPU concurrency group, so the two can never overlap. The
+# first row is a canary that runs alone; the other five wait until it passes (D-H8).
+#
+# Windows scope: the one NSIS row runs on an operator-named self-hosted Windows 11 x64 consumer host (an interactive,
+# standard-user session with UAC, Defender and SmartScreen on). As for Mac and Linux, on either channel (D-H5), the
+# collector re-admits candidate C itself and writes qualification-binding.json, and the receipts are uploaded as
+# `desktop-windows-vm-receipts`.
+name: Desktop clean-host route acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Consumer-host evidence for one platform, on either channel (D-H5)
+        required: true
+        default: macos
+        type: choice
+        options: [macos, windows, linux]
+      channel:
+        description: Exact candidate channel; all three candidates must agree (D-H5)
+        required: true
+        default: staging
+        type: choice
+        options: [staging, production]
+      candidate_a:
+        description: Successful trusted installer-candidate run for baseline A
+        required: true
+        type: string
+      candidate_b:
+        description: Successful trusted installer-candidate run for explicit update B
+        required: true
+        type: string
+      candidate_c:
+        description: Successful trusted installer-candidate run C, built from a trusted ancestor of this dispatch's main commit
+        required: true
+        type: string
+      runner_group:
+        description: 'Mac scope only: self-hosted runner group holding the clean-host Macs'
+        required: true
+        default: local-mac-trusted
+        type: string
+      arm64_runner_label:
+        description: 'Mac scope only: label of the SIP-enabled Apple silicon clean host'
+        required: true
+        default: local-mac
+        type: string
+      x64_runner_label:
+        description: 'Must stay empty: the Mac-only scope is Apple silicon only, so an Intel clean host is refused'
+        required: false
+        default: ''
+        type: string
+      windows_runner_group:
+        description: Existing trusted group for the interactive standard-user Windows 11 host
+        required: false
+        default: ''
+        type: string
+      windows_runner_label:
+        description: Existing native AMD64 consumer host; no runner is provisioned by this workflow
+        required: false
+        default: ''
+        type: string
+      reset_host:
+        description: "Mac scope only: delete Tau applications, profiles and ShipIt caches (destroys that account's Tau data); ignored for Windows"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+# One clean-host window at a time: rows share physical hosts, /Applications and the runner account's profile. The
+# Linux scope, on either channel, instead shares route qualification's Linux GPU group: both hold the project's spot T4s.
+concurrency:
+  group: ${{ inputs.scope == 'linux' && 'desktop-route-qualification-staging-linux' || 'desktop-route-vm-acceptance' }}
+  cancel-in-progress: false
+
+env:
+  TAU_DESKTOP_QUALIFICATION_SCOPE: ${{ inputs.scope }}
+  TAU_DESKTOP_ACCEPTANCE_KIND: vm
+  NX_NO_CLOUD: 'true'
+  pnpm_config_verify_deps_before_run: error
+
+jobs:
+  admission:
+    if: ${{ github.repository == 'taucad/tau' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.selection.outputs.matrix }}
+      linux_canary: ${{ steps.selection.outputs.linux_canary }}
+      windows_host: ${{ steps.selection.outputs.windows_host }}
+    steps:
+      - name: Fail closed unless this is an operator-enabled platform dispatch on main
+        env:
+          QUALIFICATION_ENABLED: ${{ vars.DESKTOP_ROUTE_QUALIFICATION_ENABLED }}
+          SCOPE: ${{ inputs.scope }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/main ] || [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || [ "$QUALIFICATION_ENABLED" != true ] || { [ "$SCOPE" != macos ] && [ "$SCOPE" != windows ] && [ "$SCOPE" != linux ]; }; then
+            echo '::error::Clean-host acceptance not run: requires a platform-scoped main dispatch and explicit operator enablement.'
+            exit 1
+          fi
+          # D-H5: each platform scope produces its own clean-host evidence on staging or production.
+          if [ "$CHANNEL" != staging ] && [ "$CHANNEL" != production ]; then
+            echo '::error::Clean-host acceptance not run: the channel must be staging or production.'
+            exit 1
+          fi
+      - name: Select the clean-host rows for the available hosts
+        id: selection
+        env:
+          SCOPE: ${{ inputs.scope }}
+          WINDOWS_GROUP: ${{ inputs.windows_runner_group }}
+          WINDOWS_LABEL: ${{ inputs.windows_runner_label }}
+          RUNNER_GROUP: ${{ inputs.runner_group }}
+          ARM64_LABEL: ${{ inputs.arm64_runner_label }}
+          X64_LABEL: ${{ inputs.x64_runner_label }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          const { RUNNER_GROUP: group, ARM64_LABEL: arm64, X64_LABEL: x64 } = process.env;
+          const label = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+          if (process.env.SCOPE === 'linux') {
+            // The same six rows (and artifact names) as Linux route qualification; each gets its own GPU host.
+            const linux = [
+              { id: 'ubuntu-apt-x11', route: 'linux-apt', distro: 'ubuntu' },
+              { id: 'ubuntu-appimage-x11', route: 'linux-appimage', distro: 'ubuntu' },
+              { id: 'ubuntu2604-apt-x11', route: 'linux-apt', distro: 'ubuntu2604' },
+              { id: 'ubuntu2604-appimage-x11', route: 'linux-appimage', distro: 'ubuntu2604' },
+              { id: 'debian-apt-x11', route: 'linux-apt', distro: 'debian' },
+              { id: 'debian-appimage-x11', route: 'linux-appimage', distro: 'debian' },
+            ];
+            // Canary first (D-H8): one row runs alone and the other five wait for it, so a defect costs one row.
+            appendFileSync(process.env.GITHUB_OUTPUT, `linux_canary=${JSON.stringify(linux.slice(0, 1))}\n`);
+            appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify(linux.slice(1))}\n`);
+            process.exit(0);
+          }
+          if (process.env.SCOPE === 'windows') {
+            if (!label.test(process.env.WINDOWS_GROUP) || !label.test(process.env.WINDOWS_LABEL)) throw new Error('Explicit Windows group and label required');
+            appendFileSync(process.env.GITHUB_OUTPUT, `windows_host=${JSON.stringify({ group: process.env.WINDOWS_GROUP, labels: ['self-hosted', 'Windows', 'X64', process.env.WINDOWS_LABEL] })}\n`);
+            process.exit(0);
+          }
+          if (!label.test(group) || !label.test(arm64)) {
+            throw new Error('Invalid runner group or label');
+          }
+          if (x64 !== '') {
+            throw new Error('The Mac-only scope is Apple silicon only; an Intel clean host cannot add rows');
+          }
+          // Self-hosted only: a GitHub-hosted image can never satisfy the clean-host contract.
+          const host = (arch, name) => ({ group, labels: ['self-hosted', 'macOS', arch === 'arm64' ? 'ARM64' : 'X64', name] });
+          const rows = [
+            { id: 'macos-zip-arm64', route: 'macos-zip', arch: 'arm64', host: host('arm64', arm64) },
+            { id: 'macos-dmg-arm64', route: 'macos-dmg', arch: 'arm64', host: host('arm64', arm64) },
+          ];
+          appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify(rows)}\n`);
+          NODE
+
+  installed:
+    if: ${{ github.repository == 'taucad/tau' && (inputs.scope == 'macos') }}
+    needs: admission
+    environment: desktop-qualification-${{ inputs.channel }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      # Rows of one architecture share one physical host and its /Applications.
+      max-parallel: 2
+      matrix:
+        include: ${{ fromJSON(needs.admission.outputs.matrix) }}
+    runs-on: ${{ matrix.host }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAU_QUALIFICATION_DIRECTORY: ${{ github.workspace }}/out/route-qualification
+      TAU_QUALIFICATION_ROUTE: ${{ matrix.route }}
+      TAU_QUALIFICATION_CHANNEL: ${{ inputs.channel }}
+      TAU_QUALIFICATION_RUN_A: ${{ inputs.candidate_a }}
+      TAU_QUALIFICATION_RUN_B: ${{ inputs.candidate_b }}
+      TAU_QUALIFICATION_RUN_C: ${{ inputs.candidate_c }}
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      # Mac rows never read Linux trust; an inert key set keeps the shared orchestrator's contract.
+      TAU_APPIMAGE_PUBLIC_KEYS: '{}'
+    steps:
+      - name: Reset prior Tau state (operator opt-in only)
+        if: inputs.reset_host
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "/Applications/Tau.app" "/Applications/Tau Staging.app"
+          find "$HOME/Library/Application Support" -maxdepth 1 -name 'Tau*' -exec rm -rf {} +
+          find "$HOME/Library/Caches" -maxdepth 1 -name 'com.taucad.tau.desktop*' -exec rm -rf {} +
+      - name: Preflight — fail closed unless SIP, Gatekeeper, native architecture and a clean host are observed
+        shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          marker="$RUNNER_TEMP/tau-clean-host-owned"
+          rm -f "$marker"
+          fail() { echo "::error::Clean-host preflight failed: $1"; exit 1; }
+          test "$(uname -s)" = Darwin || fail 'not macOS'
+          sip="$(/usr/bin/csrutil status)"
+          [ "$sip" = 'System Integrity Protection status: enabled.' ] || fail "SIP: $sip"
+          gatekeeper="$(/usr/sbin/spctl --status 2>&1 || true)"
+          [ "$gatekeeper" = 'assessments enabled' ] || fail "Gatekeeper: $gatekeeper"
+          machine="$(uname -m)"
+          arm64="$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null || echo absent)"
+          translated="$(/usr/sbin/sysctl -n sysctl.proc_translated 2>/dev/null || echo absent)"
+          if [ "$ARCH" = arm64 ]; then
+            [ "$machine" = arm64 ] && [ "$arm64" = 1 ] && [ "$translated" = 0 ] || fail "not native arm64 ($machine/$arm64/$translated)"
+          else
+            [ "$machine" = x86_64 ] && { [ "$arm64" = 0 ] || [ "$arm64" = absent ]; } && { [ "$translated" = 0 ] || [ "$translated" = absent ]; } || fail "not native Intel ($machine/$arm64/$translated)"
+          fi
+          residue="$( { ls -d /Applications/Tau.app "/Applications/Tau Staging.app" 2>/dev/null || true
+            find "$HOME/Library/Application Support" -maxdepth 1 -name 'Tau*' 2>/dev/null || true
+            find "$HOME/Library/Caches" -maxdepth 1 -name 'com.taucad.tau.desktop*' 2>/dev/null || true; } )"
+          [ -z "$residue" ] || fail "host is not clean: $residue (re-run with reset_host only on a dedicated runner account)"
+          # Anything at those paths after this point was created by this job, so the final cleanup may remove it.
+          touch "$marker"
+          {
+            echo "### Clean host ${RUNNER_NAME} (${ARCH})"
+            echo "- macOS $(sw_vers -productVersion), uname -m ${machine}, hw.optional.arm64 ${arm64}, proc_translated ${translated}"
+            echo "- ${sip}"
+            echo "- Gatekeeper: ${gatekeeper}"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-nx
+        with:
+          save-pnpm-store: 'false'
+      - name: Install the download browser
+        run: pnpm exec playwright install chromium
+      - name: Run clean-host install, shipping renderer, explicit update and latest-feed update
+        env:
+          # Authorizes only the run's own loopback TLS trust entry, granted after the preflight above passed.
+          TAU_QUALIFICATION_DISPOSABLE_HOST: '1'
+        run: pnpm nx run desktop:qualify-installed-route
+      - name: Remove only this run's temporary TLS trust even after failure
+        if: always()
+        env:
+          TAU_QUALIFICATION_DISPOSABLE_HOST: '1'
+        run: pnpm nx run desktop:cleanup-qualification-trust
+      - name: Remove only the Tau state this job created
+        if: always()
+        shell: bash
+        run: |
+          marker="$RUNNER_TEMP/tau-clean-host-owned"
+          if [ -f "$marker" ]; then
+            rm -rf "/Applications/Tau.app" "/Applications/Tau Staging.app"
+            find "$HOME/Library/Application Support" -maxdepth 1 -name 'Tau*' -exec rm -rf {} +
+            find "$HOME/Library/Caches" -maxdepth 1 -name 'com.taucad.tau.desktop*' -exec rm -rf {} +
+            rm -f "$marker"
+          fi
+      - name: Preserve diagnostic observations without private TLS keys or app profile contents
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-clean-host-diagnostics-${{ matrix.id }}
+          path: |
+            out/route-qualification/qualification-*.json
+            out/route-qualification/renderer-*.json
+            out/route-qualification/renderer-*.png
+            out/route-qualification/mirror-trust.json
+          if-no-files-found: warn
+      - name: Keep passed row separate until every required host succeeds
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-route-row-${{ matrix.id }}
+          path: out/route-qualification/route-receipts.json
+          if-no-files-found: error
+
+  receipts:
+    needs: installed
+    # Both Apple silicon rows are the complete Mac-only receipt set; collection still refuses any missing or extra row.
+    if: ${{ github.repository == 'taucad/tau' && (inputs.scope == 'macos') }}
+    environment: desktop-qualification-${{ inputs.channel }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAU_INSTALLER_CANDIDATE_RUN_ID: ${{ inputs.candidate_c }}
+      TAU_QUALIFICATION_CHANNEL: ${{ inputs.channel }}
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-nx
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: desktop-route-row-*
+          path: out/qualification-rows
+      # The collector re-admits candidate C itself and writes qualification-binding.json: C's notarized source is the
+      # newest green ancestor at build time, so it is bound to this run's main commit by authenticated S≤K≤H ancestry
+      # (the publisher adds ≤P), as the Mac-only CI receipts are, never by a caller-supplied source.
+      - name: Require both Apple silicon clean-host rows and bind every receipt to the final candidate and this run
+        run: pnpm nx run desktop:collect-qualification-rows
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-macos-vm-host-matrix
+          path: out/qualification-receipts/host-matrix.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-macos-vm-receipts
+          path: |
+            out/qualification-receipts/route-receipts.json
+            out/qualification-receipts/qualification-binding.json
+          if-no-files-found: error
+
+  windows:
+    if: ${{ github.repository == 'taucad/tau' && (inputs.scope == 'windows') }}
+    needs: admission
+    environment: desktop-qualification-${{ inputs.channel }}
+    runs-on: ${{ fromJSON(needs.admission.outputs.windows_host) }}
+    timeout-minutes: 150
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAU_QUALIFICATION_DIRECTORY: ${{ github.workspace }}/out/route-qualification
+      TAU_QUALIFICATION_ROUTE: windows-nsis
+      TAU_QUALIFICATION_CHANNEL: ${{ inputs.channel }}
+      TAU_QUALIFICATION_RUN_A: ${{ inputs.candidate_a }}
+      TAU_QUALIFICATION_RUN_B: ${{ inputs.candidate_b }}
+      TAU_QUALIFICATION_RUN_C: ${{ inputs.candidate_c }}
+      TAU_WINDOWS_PUBLISHER: ${{ vars.TAU_WINDOWS_PUBLISHER }}
+      TAU_APPIMAGE_PUBLIC_KEYS: '{}'
+    steps:
+      # Windows checkouts default to CRLF, which breaks the lockfile parse; keep the committed bytes.
+      - name: Keep committed line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-nx
+        with:
+          save-pnpm-store: 'false'
+      - name: Install the download browser
+        run: pnpm exec playwright install chromium
+      - name: Observe consumer host and run visible installation with operator evidence
+        env:
+          TAU_QUALIFICATION_DISPOSABLE_HOST: '1'
+        run: pnpm nx run desktop:qualify-installed-route
+      - name: Remove only this run's temporary TLS trust
+        if: always()
+        env:
+          TAU_QUALIFICATION_DISPOSABLE_HOST: '1'
+        run: pnpm nx run desktop:cleanup-qualification-trust
+      - name: Preserve bound observations without profile contents or TLS keys
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-clean-host-diagnostics-windows-nsis-x64
+          path: |
+            out/route-qualification/qualification-*.json
+            out/route-qualification/renderer-*.json
+            out/route-qualification/renderer-*.png
+            out/route-qualification/clean-host/**/*.json
+            out/route-qualification/clean-host/**/*.png
+            out/route-qualification/clean-host/**/*.jpg
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-route-row-windows-nsis-x64
+          path: out/route-qualification/route-receipts.json
+          if-no-files-found: error
+
+  windows-receipts:
+    needs: windows
+    if: ${{ github.repository == 'taucad/tau' && (inputs.scope == 'windows') }}
+    environment: desktop-qualification-${{ inputs.channel }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAU_INSTALLER_CANDIDATE_RUN_ID: ${{ inputs.candidate_c }}
+      TAU_QUALIFICATION_CHANNEL: ${{ inputs.channel }}
+      TAU_WINDOWS_PUBLISHER: ${{ vars.TAU_WINDOWS_PUBLISHER }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-nx
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: desktop-route-row-windows-nsis-x64
+          path: out/qualification-rows
+      # As for Mac and Linux, the collector re-admits candidate C itself and writes qualification-binding.json, binding
+      # C's ancestor source to this run by authenticated S≤K≤H ancestry (the publisher adds ≤P).
+      - name: Require the Windows clean-host row and bind its receipt to the final candidate and this run
+        run: pnpm nx run desktop:collect-qualification-rows
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-windows-vm-host-matrix
+          path: out/qualification-receipts/host-matrix.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-windows-vm-receipts
+          path: |
+            out/qualification-receipts/route-receipts.json
+            out/qualification-receipts/qualification-binding.json
+          if-no-files-found: error
+
+  # The canary row runs alone first; every other Linux row waits for it (D-H8). It shares the row steps below.
+  linux-canary:
+    if: ${{ github.repository == 'taucad/tau' && (inputs.scope == 'linux') }}
+    needs: admission
+    environment: desktop-qualification-${{ inputs.channel }}
+    timeout-minutes: 150
+    # id-token lets each row sign in to Google Cloud keylessly; tau-ci admits only this repository's main branch in the
+    # desktop qualification environment (tau-cloud stacks/gcp).
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    strategy:
+      matrix:
+        include: ${{ fromJSON(needs.admission.outputs.linux_canary) }}
+    runs-on: ubuntu-24.04
+    env: &linux-row-env
+      GH_TOKEN: ${{ github.token }}
+      TAU_QUALIFICATION_DISPOSABLE_HOST: '1'
+      TAU_QUALIFICATION_DIRECTORY: ${{ github.workspace }}/out/route-qualification
+      TAU_QUALIFICATION_ROUTE: ${{ matrix.route }}
+      TAU_QUALIFICATION_CHANNEL: ${{ inputs.channel }}
+      TAU_QUALIFICATION_GRAPHICS: stock
+      TAU_QUALIFICATION_RUN_A: ${{ inputs.candidate_a }}
+      TAU_QUALIFICATION_RUN_B: ${{ inputs.candidate_b }}
+      TAU_QUALIFICATION_RUN_C: ${{ inputs.candidate_c }}
+      TAU_APPIMAGE_PUBLIC_KEYS: ${{ vars.TAU_APPIMAGE_PUBLIC_KEYS }}
+      TAU_APPIMAGE_KEY_ID: ${{ vars.TAU_APPIMAGE_KEY_ID }}
+      TAU_APT_PRIMARY_FINGERPRINT: ${{ vars.TAU_APT_PRIMARY_FINGERPRINT }}
+      TAU_APT_SIGNING_FINGERPRINT: ${{ vars.TAU_APT_SIGNING_FINGERPRINT }}
+    steps: &linux-row-steps
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-nx
+      # Hosted runners have no GPU: the row runs on a disposable Google Cloud T4 host, as stock route qualification does.
+      - name: Sign in to Google Cloud for a disposable GPU host
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: projects/274078410041/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: ci-gpu-runner@tau-ci.iam.gserviceaccount.com
+      - name: Run the consumer's clean-host install, explicit update and latest-feed update on a GPU host
+        env:
+          TAU_VM_MODE: clean-host
+          TAU_VM_HOST: gcp
+          TAU_GCP_PROJECT: tau-ci
+          TAU_GCP_ZONES: us-central1-a us-central1-b us-central1-c us-central1-f us-east1-b us-east1-c us-east1-d us-west1-a us-west1-b us-west1-c europe-west4-a europe-west4-b europe-west4-c europe-west1-b europe-west1-c europe-west1-d
+          TAU_VM_DISTRO: ${{ matrix.distro }}
+        run: bash apps/desktop/scripts/hosted-linux-vm.sh
+      - name: Preserve diagnostic observations without private TLS keys or app profile contents
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-clean-host-diagnostics-${{ matrix.id }}
+          path: |
+            out/route-qualification/qualification-*.json
+            out/route-qualification/renderer-*.json
+            out/route-qualification/renderer-*.png
+            out/route-qualification/mirror-trust.json
+          if-no-files-found: warn
+      - name: Keep passed row separate until every required host succeeds
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-route-row-${{ matrix.id }}
+          path: out/route-qualification/route-receipts.json
+          if-no-files-found: error
+
+  linux:
+    if: ${{ github.repository == 'taucad/tau' && (inputs.scope == 'linux') }}
+    needs: [admission, linux-canary]
+    environment: desktop-qualification-${{ inputs.channel }}
+    timeout-minutes: 150
+    # id-token lets each row sign in to Google Cloud keylessly; tau-ci admits only this repository's main branch in the
+    # desktop qualification environment (tau-cloud stacks/gcp).
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      # Every row holds the project's one spot T4 (tau-cloud GPU quota), so they run one at a time.
+      max-parallel: 1
+      matrix:
+        include: ${{ fromJSON(needs.admission.outputs.matrix) }}
+    runs-on: ubuntu-24.04
+    env: *linux-row-env
+    steps: *linux-row-steps
+
+  linux-receipts:
+    needs: [linux-canary, linux]
+    # All six rows are the complete Linux receipt set; collection refuses any missing or extra row.
+    if: ${{ github.repository == 'taucad/tau' && (inputs.scope == 'linux') }}
+    environment: desktop-qualification-${{ inputs.channel }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAU_INSTALLER_CANDIDATE_RUN_ID: ${{ inputs.candidate_c }}
+      TAU_QUALIFICATION_CHANNEL: ${{ inputs.channel }}
+      TAU_APPIMAGE_KEY_ID: ${{ vars.TAU_APPIMAGE_KEY_ID }}
+      TAU_APT_PRIMARY_FINGERPRINT: ${{ vars.TAU_APT_PRIMARY_FINGERPRINT }}
+      TAU_APT_SIGNING_FINGERPRINT: ${{ vars.TAU_APT_SIGNING_FINGERPRINT }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-nx
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: desktop-route-row-*
+          path: out/qualification-rows
+      # As for Mac, the collector re-admits candidate C itself and writes qualification-binding.json, binding C's
+      # ancestor source to this run by authenticated S≤K≤H ancestry (the publisher adds ≤P).
+      - name: Require all six Linux clean-host rows and bind every receipt to the final candidate and this run
+        run: pnpm nx run desktop:collect-qualification-rows
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-linux-vm-host-matrix
+          path: out/qualification-receipts/host-matrix.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-linux-vm-receipts
+          path: |
+            out/qualification-receipts/route-receipts.json
+            out/qualification-receipts/qualification-binding.json
+          if-no-files-found: error

@@ -1,0 +1,152 @@
+{
+  "name": "picogk",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/plugins/picogk",
+  "projectType": "library",
+  "tags": ["scope:shared", "type:package", "ci:native-hosts"],
+  "targets": {
+    "test": {
+      "dependsOn": [
+        {
+          "projects": ["desktop"],
+          "target": "prepare-picogk-dotnet"
+        },
+        "prepare-layer"
+      ]
+    },
+    "test:native-darwin": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "Tier 3b of PicoGK on darwin-arm64 (charter D27, D30; the native-darwin CI job): with TAU_PICOGK_CLOSURE=pinned the native fixture prepares the checked-in manifest's closure from its pinned origins (Microsoft's runtime and the published Tau layer, about 58 MB) instead of building the layer, the closure must equal the golden receipt, and every native suite runs on it behind the global-fetch tripwire."
+      },
+      "options": {
+        "cwd": "{workspaceRoot}/packages/plugins/picogk",
+        "command": "../../../node_modules/.bin/vitest run src/picogk-closure.native.integration.test.ts src/picogk.native.integration.test.ts src/picogk.native-sandbox.integration.test.ts src/picogk.native-lifecycle.integration.test.ts src/picogk-materials.native.integration.test.ts",
+        "env": {
+          "TAU_PICOGK_CLOSURE": "pinned"
+        }
+      },
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/apps/ui/public/textures/matcap-sculpt.jpg",
+        "{workspaceRoot}/infra/seed/default-thumb.webp"
+      ]
+    },
+    "test:native-linux": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "Tier 3b of PicoGK on linux-x64 (glibc), the counterpart of test:native-darwin: with TAU_PICOGK_CLOSURE=pinned the native fixture prepares the checked-in manifest's linux-x64 closure from its pinned origins (Microsoft's runtime and the published Tau layer) instead of building the layer, the closure must equal the golden receipt's linux-x64-glibc entry, and every native suite runs on it behind the global-fetch tripwire. Until the manifest pins linux-x64 the suites skip; a sealed closure without a golden entry fails and prints the entry to record."
+      },
+      "options": {
+        "cwd": "{workspaceRoot}/packages/plugins/picogk",
+        "command": "../../../node_modules/.bin/vitest run src/picogk-closure.native.integration.test.ts src/picogk.native.integration.test.ts src/picogk.native-sandbox.integration.test.ts src/picogk.native-lifecycle.integration.test.ts src/picogk-materials.native.integration.test.ts",
+        "env": {
+          "TAU_PICOGK_CLOSURE": "pinned"
+        }
+      },
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/apps/ui/public/textures/matcap-sculpt.jpg",
+        "{workspaceRoot}/infra/seed/default-thumb.webp"
+      ]
+    },
+    "prepare-layer": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        {
+          "projects": ["desktop"],
+          "target": "prepare-picogk-dotnet"
+        }
+      ],
+      "cache": false,
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/prepare-picogk-dotnet.mts --target darwin-arm64 --layer"
+      }
+    },
+    "prepare-layer-linux": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "Build the Tau PicoGK linux-x64 layer (out/picogk-layer/linux-x64) with its engine compiled in the pinned manylinux_2_28 builder image; needs Docker and readelf. On any other host it prints why it skipped."
+      },
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/prepare-picogk-dotnet.mts --target linux-x64 --layer"
+      }
+    },
+    "check-dependency-urls": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": ".",
+        "command": "node scripts/src/check-dependency-urls.ts packages/plugins/picogk/tau-plugin.json"
+      }
+    },
+    "test-dotnet": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        {
+          "projects": ["desktop"],
+          "target": "prepare-picogk-dotnet"
+        }
+      ],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register packages/plugins/picogk/scripts/test-dotnet.mts"
+      }
+    },
+    "benchmark-native": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        {
+          "projects": ["desktop"],
+          "target": "prepare-picogk-dotnet"
+        }
+      ],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register packages/plugins/picogk/scripts/benchmark-native.mts"
+      }
+    },
+    "benchmark-reuse": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        {
+          "projects": ["desktop"],
+          "target": "prepare-picogk-dotnet"
+        }
+      ],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register packages/plugins/picogk/scripts/benchmark-reuse.mts"
+      }
+    },
+    "prepare-parity-apps": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "Build the browser apps the geometry parity gate runs, one per measured mode, from the restored package payload and the pinned author sources."
+      },
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "command": "node --import @oxc-node/core/register packages/plugins/picogk/scripts/prepare-parity-apps.mts"
+      }
+    },
+    "prepare-browser-host": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "Build serial and optional threaded browser hosts from qualified inputs and stage their immutable manifest; no research or optional repository paths are assumed."
+      },
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "command": "node --import @oxc-node/core/register packages/plugins/picogk/scripts/prepare-browser-host.mts"
+      }
+    }
+  }
+}

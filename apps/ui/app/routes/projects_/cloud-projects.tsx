@@ -1,0 +1,413 @@
+/**
+ * The projects this account holds on Tau Cloud, as rows of the one library
+ * (charter D20, W11; W18 DEF-2, architecture `:453`, AC17/AC21, D27).
+ *
+ * A second device cannot open a project it cannot name, and the name it needs
+ * is the project's id, because the id *is* the repository path on the Tau
+ * Hosted Remote. `GET /v1/projects` answers the caller's own ids **and the
+ * projects shared with them**. The library lists them beside this device's own
+ * projects in one list: a project this device holds and Tau Cloud also holds
+ * carries the Tau Cloud glyph beside its location, and one only Tau Cloud holds
+ * is a row of its own whose *Open* clones it under the remote's id.
+ *
+ * A collaboration says whose it is before it is opened: an owned row reads
+ * exactly as it always did, a shared one carries the role held on it, and a
+ * view-only one says so rather than looking like a project to change.
+ */
+
+import { useEffect, useRef, useState } from 'react';
+import { ProjectActionMenu } from '#components/project-library/project-cloud-delete.js';
+import { ProjectCard } from '#components/project-card.js';
+import { CloudProjectPreview } from '#components/project-library/cloud-project-preview.js';
+import { ArrowRight, Cloud, Users } from 'lucide-react';
+import { Badge } from '@taucad/ui/components/badge';
+import { Button } from '@taucad/ui/components/button';
+import { Loader } from '@taucad/ui/components/loader';
+import { CardFooter, CardHeader } from '@taucad/ui/components/card';
+import {
+  assertCloudProjectActive,
+  CloudProjectUnavailableError,
+  materializedCloudProjects,
+  useMaterializeOnSignInLocation,
+} from '#hooks/use-cloud-projects.js';
+import { isCloudProjectPending, getCloudDeletionState, tauCloudIntent } from '#lib/tau-cloud-intent.js';
+import { withNamedLock } from '@taucad/ui-core/lib/named-lock';
+import type { CloudProject } from '#hooks/use-cloud-projects.js';
+import { useProjectManager } from '#hooks/use-project-manager.js';
+import { getProjectFileSystemConfig } from '@taucad/files-ui/filesystem/handle-store';
+import { cloudProjectStub } from '#hooks/use-open-cloud-project.js';
+import { useResolvedAuth } from '#hooks/use-resolved-auth.js';
+import type { ProjectListItem } from '@taucad/files-ui/types/project-library.types';
+
+/** A project only Tau Cloud holds, as a library row (D20). @public */
+export type CloudOnlyRow = CloudProject & {
+  readonly cloudOnly: true;
+  /** `updatedAt`, so *Last Updated* sorts it among this device's projects. */
+  readonly lastActivityAt: number;
+  readonly description: string;
+};
+
+/** One row of the one library: this device's project (and whether Tau Cloud has it too), or Tau Cloud's alone. @public */
+export type LibraryRow =
+  | (ProjectListItem & { readonly onCloud?: boolean; readonly cloud?: CloudProject })
+  | CloudOnlyRow;
+
+/**
+ * Whether a row is Tau Cloud's alone.
+ *
+ * @param row - A library row.
+ * @returns `true` for a project this device does not hold.
+ * @public
+ */
+export const isCloudOnly = (row: LibraryRow): row is CloudOnlyRow => 'cloudOnly' in row;
+
+/**
+ * The one list (D20): this device's projects, marked when Tau Cloud also holds
+ * them, then the ones only Tau Cloud holds.
+ *
+ * @param input - The projects this view lists; every project this device holds,
+ * the Trash included, so a trashed one is never offered as Tau Cloud's alone;
+ * the account's Tau Cloud listing; and `includeCloudOnly`, `false` in the Trash.
+ * @returns The rows.
+ * @public
+ */
+export const toLibraryRows = ({
+  projects,
+  held: heldProjects,
+  cloud,
+  includeCloudOnly,
+}: Readonly<{
+  projects: readonly ProjectListItem[];
+  held: readonly ProjectListItem[];
+  cloud: readonly CloudProject[];
+  includeCloudOnly: boolean;
+}>): LibraryRow[] => {
+  const onCloud = new Set(cloud.map((entry) => entry.id));
+  const held = new Set([...heldProjects, ...projects].map((project) => project.id));
+  return [
+    ...projects.map((project): LibraryRow => {
+      if (includeCloudOnly && isCloudProjectPending(project.id)) {
+        const entry = cloud.find((candidate) => candidate.id === project.id);
+        return {
+          ...(entry ?? { id: project.id, name: project.name, role: 'owner' }),
+          cloudOnly: true,
+          lastActivityAt: entry?.updatedAt ?? project.lastActivityAt,
+          description: '',
+        };
+      }
+      return onCloud.has(project.id)
+        ? { ...project, onCloud: true, cloud: cloud.find((entry) => entry.id === project.id) }
+        : project;
+    }),
+    ...(includeCloudOnly
+      ? cloud
+          .filter((entry) => !held.has(entry.id))
+          .map(
+            (entry): CloudOnlyRow => ({
+              ...entry,
+              cloudOnly: true,
+              lastActivityAt: entry.updatedAt ?? 0,
+              description: '',
+            }),
+          )
+      : []),
+  ];
+};
+
+/** What a shared row says it is. An owned row keeps its own sentence. */
+const collaborationCopy = (role: CloudProject['role']): Readonly<{ badge: string; line: string }> | undefined => {
+  if (role === 'write') {
+    return { badge: 'Can edit', line: 'Shared with you. Not on this device yet.' };
+  }
+  if (role === 'read') {
+    return { badge: 'Can view', line: 'Shared with you. You can open it but not change it.' };
+  }
+  return undefined;
+};
+
+/**
+ * The glyph a row carries when Tau Cloud holds it too: the Sync region's own
+ * `Cloud`, beside the location glyph that says this device holds it.
+ *
+ * @returns The glyph, with its words for a screen reader.
+ * @public
+ */
+export function OnTauCloudMark(): React.JSX.Element {
+  return (
+    <span data-slot='on-tau-cloud' className='flex shrink-0 items-center'>
+      <Cloud aria-hidden className='size-3 shrink-0' />
+      <span className='sr-only'>Also in the cloud</span>
+    </span>
+  );
+}
+
+/**
+ * *Open* for a project only Tau Cloud holds: clones it under the remote's id.
+ * Drawn as the local project's *Open* beside it, with a trailing activity indicator.
+ *
+ * @param props - The row, the open verb, which reports its own failure, and
+ * whether it sits on a card.
+ * @returns The button.
+ * @public
+ */
+export function OpenCloudProjectButton({
+  entry,
+  onOpen,
+  className,
+  isCard = false,
+}: {
+  readonly entry: CloudProject;
+  readonly onOpen: (entry: CloudProject) => Promise<void>;
+  readonly className?: string;
+  readonly isCard?: boolean;
+}): React.JSX.Element {
+  const [isOpening, setIsOpening] = useState(false);
+  return (
+    <Button
+      size={isCard ? 'default' : 'sm'}
+      variant='outline'
+      className={className}
+      disabled={isOpening || entry.cloudState === 'deleting'}
+      aria-busy={isOpening}
+      onClick={async () => {
+        if (entry.cloudState === 'deleting' || getCloudDeletionState(entry.id) !== undefined) {
+          return;
+        }
+        setIsOpening(true);
+        try {
+          await onOpen(entry);
+        } finally {
+          setIsOpening(false);
+        }
+      }}
+    >
+      {entry.cloudState === 'deleting' ? 'Deleting cloud copy…' : isOpening ? 'Opening…' : 'Open'}
+      <span className='sr-only'> {entry.name}</span>
+      {isOpening ? <Loader /> : <ArrowRight aria-hidden />}
+    </Button>
+  );
+}
+
+/**
+ * Where a Tau-Cloud-only row lives and whose it is: the glyph, `Cloud`, and
+ * the role badge on a collaboration.
+ *
+ * @param props - The row.
+ * @returns The line.
+ */
+function CloudOnlyWhere({ entry }: { readonly entry: CloudProject }): React.JSX.Element {
+  const shared = collaborationCopy(entry.role);
+  const Glyph = shared === undefined ? Cloud : Users;
+  return (
+    <div className='flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground'>
+      <Glyph aria-hidden className='size-3 shrink-0' />
+      <span className='truncate' role={entry.cloudState === 'deleting' ? 'status' : undefined}>
+        {entry.cloudState === 'deleting'
+          ? entry.isCheckingDeletion
+            ? 'Checking deletion…'
+            : 'Deleting cloud copy…'
+          : 'Cloud'}
+      </span>
+      {shared === undefined ? undefined : <Badge variant='secondary'>{shared.badge}</Badge>}
+    </div>
+  );
+}
+
+/**
+ * The table's name cell for a project only Tau Cloud holds.
+ *
+ * @param props - The row.
+ * @returns The cell.
+ * @public
+ */
+export function CloudProjectNameCell({ entry }: { readonly entry: CloudProject }): React.JSX.Element {
+  return (
+    <div className='flex items-center gap-3 pr-2'>
+      <CloudProjectPreview isCompact projectId={entry.id} name={entry.name} />
+      <div className='min-w-0 pl-2'>
+        <div className='truncate font-medium'>{entry.name}</div>
+        <CloudOnlyWhere entry={entry} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The grid's cloud card uses a small saved preview without downloading project files.
+ *
+ * @param props - The row and the open verb.
+ * @returns The card.
+ * @public
+ */
+export function CloudProjectCard({
+  entry,
+  onOpen,
+}: {
+  readonly entry: CloudProject;
+  readonly onOpen: (entry: CloudProject) => Promise<void>;
+}): React.JSX.Element {
+  const [isOpening, setIsOpening] = useState(false);
+  return (
+    <ProjectCard
+      data-slot='cloud-project-card'
+      className='flex flex-col'
+      linkLabel={`${isOpening ? 'Opening…' : 'Open'} ${entry.name}`}
+      isOpening={isOpening || entry.cloudState === 'deleting'}
+      onOpen={async () => {
+        if (entry.cloudState === 'deleting' || getCloudDeletionState(entry.id) !== undefined) {
+          return;
+        }
+        setIsOpening(true);
+        try {
+          await onOpen(entry);
+        } finally {
+          setIsOpening(false);
+        }
+      }}
+    >
+      <CloudProjectPreview projectId={entry.id} name={entry.name} />
+      <CardHeader>
+        <div className='flex min-w-0 flex-col gap-1 py-1'>
+          <span className='truncate text-base font-semibold'>{entry.name}</span>
+          <CloudOnlyWhere entry={entry} />
+        </div>
+      </CardHeader>
+      <CardFooter className='mt-auto flex items-center justify-between'>
+        <Button asChild variant='outline'>
+          <span aria-hidden='true' className='pointer-events-none'>
+            {entry.cloudState === 'deleting' ? 'Deleting…' : isOpening ? 'Opening…' : 'Open'}
+            {isOpening ? <Loader /> : <ArrowRight />}
+          </span>
+        </Button>
+        <div className='relative z-20'>
+          <ProjectActionMenu name={entry.name} cloud={entry} isCloudOnly />
+        </div>
+      </CardFooter>
+    </ProjectCard>
+  );
+}
+
+/**
+ * Materialize on sign-in (D20): with the setting on, every project only Tau
+ * Cloud holds is created on this device, in the chosen workspace, under the
+ * remote's id — the first half of *Open* — and marked so its first open
+ * connects Tau Cloud and pulls, the second half.
+ *
+ * For a signed-in account, once its listing has settled (never mid-fetch, so an
+ * account switch never acts on the previous account's rows). A project this
+ * device holds (trashed included) or has brought once before — and may have
+ * deleted since — is skipped; the pass holds a Web Lock, so two tabs never run
+ * it at once, and `createProject`'s per-id lock refuses a racing *Open*. A
+ * project is marked `open` before it is created and recorded as brought once
+ * this device holds it; a creation that leaves nothing behind unmarks it and is
+ * asked again once the listing's ids change, or on the library's next visit.
+ *
+ * ponytail: files arrive on the first open's pull, not in the background — the
+ * library has no revision root of its own; give it a headless one if offline
+ * access before a first open matters.
+ *
+ * @param input - The account's Tau Cloud listing, whether it is the server's
+ * own answer and whether it is being read again; every project this device
+ * holds (the Trash included) and whether that listing is still loading.
+ * @public
+ */
+export const useMaterializeCloudProjects = ({
+  cloud,
+  isSettled,
+  isFetching,
+  held,
+  isLoading,
+}: Readonly<{
+  cloud: readonly CloudProject[];
+  isSettled: boolean;
+  isFetching: boolean;
+  held: readonly ProjectListItem[];
+  isLoading: boolean;
+}>): void => {
+  const location = useMaterializeOnSignInLocation();
+  const auth = useResolvedAuth();
+  const { createProject } = useProjectManager();
+  /* Each id asked, with the listing it was asked under: once per listing, however often the library renders. */
+  const asked = useRef(new Map<string, string>());
+  useEffect(() => {
+    if (location === undefined || auth !== 'authed' || !isSettled || isFetching || isLoading) {
+      return;
+    }
+    const heldIds = new Set(held.map((project) => project.id));
+    /* The listing's ids, not its array: `useProjects` answers a fresh one every render. */
+    const listing = cloud
+      .map((entry) => entry.id)
+      .toSorted()
+      .join(' ');
+    const wanted = cloud.filter(
+      (entry) =>
+        entry.cloudState !== 'deleting' &&
+        getCloudDeletionState(entry.id) === undefined &&
+        !heldIds.has(entry.id) &&
+        asked.current.get(entry.id) !== listing &&
+        !materializedCloudProjects.has(entry.id),
+    );
+    if (wanted.length === 0) {
+      return;
+    }
+    for (const entry of wanted) {
+      asked.current.set(entry.id, listing);
+    }
+    /* Marked before it is created (defect R): its directory, and so its library
+       card, exists before `createProject` answers, and a copy left unmarked is
+       never connected. */
+    const bring = async (entry: CloudProject): Promise<void> => {
+      const existing = tauCloudIntent.get(entry.id);
+      let hasStartedCreation = false;
+      try {
+        await assertCloudProjectActive(entry.id);
+        tauCloudIntent.set(entry.id, 'open');
+        hasStartedCreation = true;
+        await createProject({ ...cloudProjectStub(entry), location });
+        materializedCloudProjects.add(entry.id);
+        try {
+          await assertCloudProjectActive(entry.id);
+        } catch (error) {
+          // Keep a shell and any edits. A network outage keeps first-open recovery owed.
+          if (error instanceof CloudProjectUnavailableError) {
+            tauCloudIntent.set(entry.id, undefined);
+          }
+        }
+      } catch (error) {
+        if (!hasStartedCreation) {
+          console.error(`Error bringing ${entry.name} from the cloud:`, error);
+          return;
+        }
+        /* On this device all the same — refused as already held, or written and
+           then failed: brought, and whatever mark it already had stands. */
+        if ((await getProjectFileSystemConfig(entry.id).catch(() => undefined)) !== undefined) {
+          materializedCloudProjects.add(entry.id);
+          try {
+            await assertCloudProjectActive(entry.id);
+            tauCloudIntent.set(entry.id, existing ?? 'open');
+          } catch (error) {
+            if (error instanceof CloudProjectUnavailableError) {
+              tauCloudIntent.set(entry.id, undefined);
+            }
+          }
+          return;
+        }
+        /* Not created: nothing may point at it. Asked again once the listing's
+           ids change, or on the library's next visit. */
+        tauCloudIntent.set(entry.id, undefined);
+        console.error(`Error bringing ${entry.name} from the cloud:`, error);
+      }
+    };
+    /* One pass, in order, so two creations never race one directory allocation. */
+    const materialize = async (): Promise<void> => {
+      for (const entry of wanted) {
+        /* Another tab's pass, or an earlier one here, may have brought it while this one waited for the lock. */
+        if (!materializedCloudProjects.has(entry.id)) {
+          // oxlint-disable-next-line no-await-in-loop -- sequential by design: each creation allocates a directory.
+          await bring(entry);
+        }
+      }
+    };
+    void withNamedLock('tau:materialize-cloud-projects', materialize);
+  }, [auth, cloud, createProject, held, isFetching, isLoading, isSettled, location]);
+};

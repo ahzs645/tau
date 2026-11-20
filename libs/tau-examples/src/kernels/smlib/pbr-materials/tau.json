@@ -1,0 +1,12 @@
+{
+  "$schema": "https://tau.new/schemas/tau-v1.json",
+  "name": "PBR Materials Showcase",
+  "description": "Six specimens on a slate plinth, each with a standard glTF material: brushed steel, clear-coated paint, transmissive glass, polished gold, velvet sheen and an emissive ring.",
+  "tags": ["smlib", "typescript", "materials", "pbr", "rendering"],
+  "assets": {
+    "main": {
+      "entryPath": "main.ts",
+      "thumbnail": "thumbnail.webp"
+    }
+  }
+}

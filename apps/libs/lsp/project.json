@@ -1,0 +1,16 @@
+{
+  "name": "lsp",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/libs/lsp",
+  "projectType": "library",
+  "tags": ["scope:ui", "type:app-lib", "layer:data-access", "ci:browser"],
+  "targets": {
+    "verify-browser": {
+      "command": "vitest run --config src/typescript-worker/vitest.browser.config.ts",
+      "options": {
+        "cwd": "{projectRoot}"
+      },
+      "cache": false
+    }
+  }
+}

@@ -3,14 +3,18 @@
  */
 
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { mock } from 'vitest-mock-extended';
-import { wrapMessagePort } from '@taucad/rpc';
-import type { Port } from '@taucad/rpc';
+import {
+  createTransferredFileSystemBridgeProxy,
+  createFileSystemBridge,
+  exposeFileSystem,
+  fileSystemBridgeProtocolVersion,
+  filesystemBridgeConnectMessageType,
+  waitForWorkerReady,
+  workerReadyMessageType,
+} from '@taucad/fs-bridge';
+import { tauPathPolicy } from '@taucad/filesystem/path-registry';
 import { _fromMemoryFsHandle as fromMemoryFS } from '#transport/_internal/from-memory-fs-handle.js';
 import type { RuntimeFileSystemBase } from '#types/runtime-kernel.types.js';
-import { createBridgeProxy } from '#transport/_internal/runtime-filesystem-bridge.js';
-import { workerReadyMessageType } from '#framework/runtime-framework.constants.js';
-import { exposeFileSystem, createFileSystemBridge, waitForWorkerReady } from '#filesystem/filesystem-bridge.js';
 
 /**
  * Unwrap the discriminated `inline` `RuntimeFileSystemHandle` so the
@@ -25,14 +29,6 @@ function makeFs(files?: Record<string, string>): RuntimeFileSystemBase {
   return handle.create();
 }
 
-function fsBridgePort(port: MessagePort, label: string): Port<unknown> {
-  const wrapped = wrapMessagePort<unknown>(port, { label });
-  if (wrapped.start !== undefined) {
-    wrapped.start();
-  }
-  return wrapped;
-}
-
 describe('filesystem high-level wrappers', () => {
   describe('exposeFileSystem', () => {
     let activeHandle: ReturnType<typeof exposeFileSystem> | undefined;
@@ -44,16 +40,16 @@ describe('filesystem high-level wrappers', () => {
 
     it('should serve a filesystem when receiving a bridge message', async () => {
       // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem paths use non-camelCase names
-      const fs = makeFs({ '/hello.txt': 'world' });
+      const fs = makeFs({ 'hello.txt': 'world' });
 
       activeHandle = exposeFileSystem(fs);
 
       const channel = new MessageChannel();
-      const proxy = createBridgeProxy<RuntimeFileSystemBase>(fsBridgePort(channel.port2, 'fs-bridge-client'));
+      const proxy = createTransferredFileSystemBridgeProxy(channel.port2);
 
       self.dispatchEvent(
         new MessageEvent('message', {
-          data: { type: 'connect', port: channel.port1 },
+          data: { v: fileSystemBridgeProtocolVersion, type: filesystemBridgeConnectMessageType, port: channel.port1 },
         }),
       );
 
@@ -61,26 +57,26 @@ describe('filesystem high-level wrappers', () => {
         queueMicrotask(resolve);
       });
 
-      const content = await proxy.readFile('/hello.txt', 'utf8');
+      const content = await proxy.readFile('hello.txt', 'utf8');
       expect(content).toBe('world');
     });
 
     it('should buffer messages sent before server is wired (catchMessages)', async () => {
       // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem paths use non-camelCase names
-      const fs = makeFs({ '/early.txt': 'buffered' });
+      const fs = makeFs({ 'early.txt': 'buffered' });
 
       const channel = new MessageChannel();
-      const proxy = createBridgeProxy<RuntimeFileSystemBase>(fsBridgePort(channel.port2, 'fs-bridge-client'));
+      const proxy = createTransferredFileSystemBridgeProxy(channel.port2);
 
       // Send a request BEFORE exposeFileSystem processes the connect message.
       // The proxy sends immediately on port2; port1 isn't served yet.
-      const resultPromise = proxy.readFile('/early.txt', 'utf8');
+      const resultPromise = proxy.readFile('early.txt', 'utf8');
 
       activeHandle = exposeFileSystem(fs);
 
       self.dispatchEvent(
         new MessageEvent('message', {
-          data: { type: 'connect', port: channel.port1 },
+          data: { v: fileSystemBridgeProtocolVersion, type: filesystemBridgeConnectMessageType, port: channel.port1 },
         }),
       );
 
@@ -94,7 +90,7 @@ describe('filesystem high-level wrappers', () => {
 
     it('should stop listening after cleanup is called', async () => {
       // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem paths use non-camelCase names
-      const fs = makeFs({ '/test.txt': 'data' });
+      const fs = makeFs({ 'test.txt': 'data' });
       activeHandle = exposeFileSystem(fs);
       activeHandle.cleanup();
 
@@ -102,7 +98,7 @@ describe('filesystem high-level wrappers', () => {
       // Post a message after cleanup -- no server should be set up
       self.dispatchEvent(
         new MessageEvent('message', {
-          data: { type: 'connect', port: channel.port1 },
+          data: { v: fileSystemBridgeProtocolVersion, type: filesystemBridgeConnectMessageType, port: channel.port1 },
         }),
       );
 
@@ -117,15 +113,15 @@ describe('filesystem high-level wrappers', () => {
 
     it('should support custom messageType', async () => {
       // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem paths use non-camelCase names
-      const fs = makeFs({ '/custom.txt': 'custom' });
-      activeHandle = exposeFileSystem(fs, { messageType: 'myBridge' });
+      const fs = makeFs({ 'custom.txt': 'custom' });
+      activeHandle = exposeFileSystem(fs, { policy: tauPathPolicy, messageType: 'myBridge' });
 
       const channel = new MessageChannel();
 
       // Default type should be ignored
       self.dispatchEvent(
         new MessageEvent('message', {
-          data: { type: 'connect', port: channel.port1 },
+          data: { v: fileSystemBridgeProtocolVersion, type: filesystemBridgeConnectMessageType, port: channel.port1 },
         }),
       );
 
@@ -137,11 +133,11 @@ describe('filesystem high-level wrappers', () => {
 
       // Custom type should work
       const channel2 = new MessageChannel();
-      const proxy2 = createBridgeProxy<RuntimeFileSystemBase>(fsBridgePort(channel2.port2, 'fs-bridge-client'));
+      const proxy2 = createTransferredFileSystemBridgeProxy(channel2.port2);
 
       self.dispatchEvent(
         new MessageEvent('message', {
-          data: { type: 'myBridge', port: channel2.port1 },
+          data: { v: fileSystemBridgeProtocolVersion, type: 'myBridge', port: channel2.port1 },
         }),
       );
 
@@ -149,14 +145,14 @@ describe('filesystem high-level wrappers', () => {
         queueMicrotask(resolve);
       });
 
-      const content = await proxy2.readFile('/custom.txt', 'utf8');
+      const content = await proxy2.readFile('custom.txt', 'utf8');
       expect(content).toBe('custom');
     });
   });
 
   describe('waitForWorkerReady', () => {
     it('should resolve when worker posts the ready message', async () => {
-      const worker = new EventTarget() as unknown as Worker;
+      const worker = new EventTarget();
       const ready = waitForWorkerReady(worker);
 
       worker.dispatchEvent(new MessageEvent('message', { data: { type: workerReadyMessageType } }));
@@ -165,7 +161,7 @@ describe('filesystem high-level wrappers', () => {
     });
 
     it('should not resolve for unrelated messages', async () => {
-      const worker = new EventTarget() as unknown as Worker;
+      const worker = new EventTarget();
       const ready = waitForWorkerReady(worker);
       const notYet = Symbol('not-yet');
 
@@ -179,7 +175,7 @@ describe('filesystem high-level wrappers', () => {
     });
 
     it('should reject when signal is aborted before ready', async () => {
-      const worker = new EventTarget() as unknown as Worker;
+      const worker = new EventTarget();
       const controller = new AbortController();
 
       const ready = waitForWorkerReady(worker, controller.signal);
@@ -189,7 +185,7 @@ describe('filesystem high-level wrappers', () => {
     });
 
     it('should clean up listener after resolving', async () => {
-      const worker = new EventTarget() as unknown as Worker;
+      const worker = new EventTarget();
       const removeSpy = vi.spyOn(worker, 'removeEventListener');
 
       const ready = waitForWorkerReady(worker);
@@ -205,7 +201,7 @@ describe('filesystem high-level wrappers', () => {
   describe('createFileSystemBridge', () => {
     it('should post a message with port to the worker', () => {
       const postMessageSpy = vi.fn();
-      const mockWorker = mock<Worker>({ postMessage: postMessageSpy });
+      const mockWorker = { postMessage: postMessageSpy } satisfies Pick<Worker, 'postMessage'>;
 
       const { port } = createFileSystemBridge(mockWorker);
 
@@ -217,7 +213,7 @@ describe('filesystem high-level wrappers', () => {
         { type: string; port: MessagePort },
         MessagePort[],
       ];
-      expect(message.type).toBe('connect');
+      expect(message.type).toBe(filesystemBridgeConnectMessageType);
       expect(message.port).toBeInstanceOf(MessagePort);
       expect(transferables).toHaveLength(1);
       expect(transferables[0]).toBe(message.port);
@@ -225,7 +221,7 @@ describe('filesystem high-level wrappers', () => {
 
     it('should support custom messageType', () => {
       const postMessageSpy = vi.fn();
-      const mockWorker = mock<Worker>({ postMessage: postMessageSpy });
+      const mockWorker = { postMessage: postMessageSpy } satisfies Pick<Worker, 'postMessage'>;
 
       createFileSystemBridge(mockWorker, { messageType: 'customBridge' });
 
@@ -235,7 +231,7 @@ describe('filesystem high-level wrappers', () => {
 
     it('should return a different port than the one transferred', () => {
       const postMessageSpy = vi.fn();
-      const mockWorker = mock<Worker>({ postMessage: postMessageSpy });
+      const mockWorker = { postMessage: postMessageSpy } satisfies Pick<Worker, 'postMessage'>;
 
       const { port: returnedPort } = createFileSystemBridge(mockWorker);
 
@@ -245,7 +241,7 @@ describe('filesystem high-level wrappers', () => {
 
     it('should close consumer port on dispose', () => {
       const postMessageSpy = vi.fn();
-      const mockWorker = mock<Worker>({ postMessage: postMessageSpy });
+      const mockWorker = { postMessage: postMessageSpy } satisfies Pick<Worker, 'postMessage'>;
 
       const handle = createFileSystemBridge(mockWorker);
       expect(handle.port.onMessage).toBeTypeOf('function');

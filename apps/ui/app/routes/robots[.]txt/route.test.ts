@@ -18,6 +18,8 @@ describe('buildRobotsTxt', () => {
       'Disallow: /projects',
       'Disallow: /projects/',
       'Disallow: /projects_',
+      'Disallow: /w',
+      'Disallow: /w/',
       'Disallow: /files',
       'Disallow: /settings_',
       'Disallow: /usage',
@@ -29,6 +31,11 @@ describe('buildRobotsTxt', () => {
     ]) {
       expect(body).toContain(directive);
     }
+  });
+
+  // DR-C7: the examples gallery is public and ships route meta; its `/s/builtin~…` pages already index.
+  it('should let crawlers index the examples gallery in production', () => {
+    expect(buildRobotsTxt(productionOrigin)).not.toMatch(/^Disallow: \/community/mu);
   });
 
   it('normalises the frontend URL via `new URL` (trailing slash, path, query are ignored)', () => {

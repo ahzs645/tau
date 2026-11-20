@@ -1,0 +1,3175 @@
+/**
+ * One table, every adapter (VSC6).
+ *
+ * The rows below are the substrate contract: a revision id that equals its
+ * commit id, a `change-id` from creation, conflicts recorded as values with
+ * Jujutsu's exact headers, provenance that survives the engine, `objectFormat`
+ * on every receipt, `log`/`diff` that never materialize a tree, and one
+ * checkout per branch. `isomorphic-git` runs them everywhere; `native-git` runs
+ * them wherever `git` is on `PATH`, and the last test in this file is what makes
+ * the table an actual comparison rather than a promise: the same scripted edits
+ * through both adapters name the same tree (I4).
+ */
+
+import { execFileSync } from 'node:child_process';
+import { createServer } from 'node:http';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createMemoryProvider } from '@taucad/filesystem/backend';
+import { NodeFsProvider } from '@taucad/filesystem/backend/node';
+import { ImmutableRevisionTree, revisionId } from '#algorithms/index.js';
+import type { FileSystemProvider } from '@taucad/filesystem';
+import type { RevisionId } from '#algorithms/index.js';
+import type {
+  RevisionIdentity,
+  RevisionProvenance,
+  RevisionSummary,
+  RevisionTrigger,
+  RevisionUserActor,
+  RevisionVia,
+} from '#revision-authority.js';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { createInlineCompute } from '#compute-worker/compute-worker.js';
+import { encodeCommit, parseChangeId } from '#git-objects.js';
+import type { GitSignature } from '#git-objects.js';
+import { withCommitAuthor } from '#commit-author.js';
+import { deriveChangeId, revisionCommitMessage, revisionCommitterSignature } from '#revision-headers.js';
+import { createIsomorphicGitRevisionPort } from '#isomorphic-git-adapter.js';
+import type { LfsFetchReport } from '#isomorphic-git-adapter.js';
+import { createNativeGitRevisionPort } from '#native-git-port.js';
+import { lfsObjectPath, lfsPointerFor } from '#lfs.js';
+import { createRevisionHttpClient } from '#http-client.js';
+import type { Checkout, RevisionPort } from '#revision-port.js';
+import { versionNumberOfTag } from '#version-numbers.js';
+import { conflictLabels, materializeConflict, readConflictTerms } from '#revision-conflict.js';
+import { readRevisionLog } from '#revision-verbs.js';
+import { startGitHttpBackend } from '#test/git-http-backend.js';
+import { gitToolchainOnPath, nativeHarness } from '#test/native-git-harness.js';
+import { generatedGitattributesContent, generatedGitattributesPath, generatedIgnorePath } from '#workspace-config.js';
+import { recordedBy } from '#test/identity.js';
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+const author = { name: 'Tau', email: 'tau@example.com' };
+const createdAt = Date.UTC(2026, 8, 8, 12, 0, 0);
+const projectId = 'project-conformance';
+
+const gitExitCode = (cwd: string, args: readonly string[]): number => {
+  try {
+    execFileSync('git', args, { cwd, stdio: 'ignore' });
+    return 0;
+  } catch {
+    return 1;
+  }
+};
+
+const provenance = (source: RevisionProvenance['source'] = 'agent'): RevisionProvenance => ({
+  source,
+  ...recordedBy('actor-lane'),
+  runId: 'run-lane',
+  createdAt,
+});
+const summary = (generated: string): RevisionSummary => ({ generated });
+const tree = (entries: Record<string, string | Uint8Array<ArrayBuffer>>): ImmutableRevisionTree =>
+  new ImmutableRevisionTree(
+    Object.entries(entries).map(([path, content]) => [
+      path,
+      typeof content === 'string' ? encoder.encode(content) : content,
+    ]),
+  );
+/* Tau's generated attributes beside the files, as every Tau-created tree carries them: the tree's
+ * own `.gitattributes` decides which paths are pointers (D16). */
+const tauAttributes = [generatedGitattributesPath, generatedGitattributesContent(undefined)] as const;
+const tauTree = (entries: Record<string, string | Uint8Array<ArrayBuffer>>): ImmutableRevisionTree =>
+  tree({ [tauAttributes[0]]: tauAttributes[1], ...entries });
+
+/* Review 4 R6: 1.5 KiB of non-UTF-8 bytes, NUL included (index 0, 256, …), so
+ * identity covers a blob no text codec could have round-tripped by accident. */
+const binaryBlob = Uint8Array.from({ length: 1536 }, (_, index) => (index * 7) % 256);
+
+/** Every file under one checkout's root, as the host would see them. */
+const providerFiles = async (provider: FileSystemProvider, path = ''): Promise<readonly string[]> => {
+  const names = await provider.readdir(path).catch((): readonly string[] => []);
+  const nested = await Promise.all(
+    names.map(async (name) => {
+      const child = path === '' ? name : `${path}/${name}`;
+      const stat = await provider.stat(child);
+      return stat.type === 'dir' ? providerFiles(provider, child) : [child];
+    }),
+  );
+  return nested.flat().toSorted();
+};
+
+type Harness = Readonly<{
+  port: RevisionPort;
+  readGenerated: (path: string) => Promise<string>;
+  /** Where this host says the live checkout is (architecture:448). */
+  liveRoot: string;
+  /** What a checkout's root actually holds — the R3 question. */
+  checkoutFiles: (checkout: Checkout) => Promise<readonly string[]>;
+  writeCheckoutFile: (checkout: Checkout, path: string, content: string) => Promise<void>;
+  /** A second port over the same store — the next process opening this project. */
+  reopen: () => RevisionPort;
+  /**
+   * A port over the same store that can reach a remote.
+   *
+   * On a disk host the `git` binary is the transport and this is the ordinary
+   * port; in the page it is the one constructed with Tau's `HttpClient` (S24).
+   */
+  withTransport: () => RevisionPort;
+  /**
+   * Write one fully-qualified ref directly.
+   *
+   * The port publishes branches; the record set (`refs/tau/chats/*`) is written
+   * by its own effect in W17, so the transport rows put one there by hand.
+   */
+  writeRawRef: (name: string, head: RevisionId) => Promise<void>;
+  dispose: () => Promise<void>;
+}>;
+
+const isomorphicHarness = async (fetch?: typeof globalThis.fetch): Promise<Harness> => {
+  const filesystem = await createMemoryProvider();
+  /* The S4 `/checkouts/<id>` route, as the page will install it: one provider
+   * per checkout, handed to the adapter, never a path joined above the project. */
+  const roots = new Map<string, FileSystemProvider>();
+  const checkouts = {
+    projectId,
+    root: async (id: string): Promise<FileSystemProvider> => {
+      const existing = roots.get(id);
+      if (existing !== undefined) {
+        return existing;
+      }
+      const created = await createMemoryProvider();
+      roots.set(id, created);
+      return created;
+    },
+  };
+  const create = (): RevisionPort => createIsomorphicGitRevisionPort({ filesystem, checkouts });
+  return {
+    port: create(),
+    withTransport: () =>
+      createIsomorphicGitRevisionPort({
+        filesystem,
+        checkouts,
+        /* The host's credential, as a header the client resolves per request
+         * (I8). A disk host returns a bearer; the browser returns nothing here
+         * and sends the session cookie instead (`credentials: 'include'`). */
+        http: createRevisionHttpClient({
+          authorization: () => 'Bearer session-token',
+          ...(fetch === undefined ? {} : { fetch }),
+        }),
+      }),
+    writeRawRef: async (name, head) => {
+      await filesystem.mkdir(`.git/${name.slice(0, name.lastIndexOf('/'))}`, { recursive: true });
+      await filesystem.writeFile(`.git/${name}`, `${head}\n`);
+    },
+    readGenerated: async (path) => filesystem.readFile(path, 'utf8'),
+    liveRoot: `/projects/${projectId}`,
+    checkoutFiles: async (checkout) => providerFiles(await checkouts.root(checkout.id)),
+    writeCheckoutFile: async (checkout, path, content) => {
+      const provider = await checkouts.root(checkout.id);
+      await provider.writeFile(path, encoder.encode(content));
+    },
+    reopen: create,
+    dispose: async () => {
+      await Promise.resolve();
+    },
+  };
+};
+
+const createNativeHarness = async (): Promise<Harness> => nativeHarness(projectId, 'tau-revisions-conformance-');
+
+type Adapter = Readonly<{
+  name: 'isomorphic-git' | 'native-git';
+  create: () => Promise<Harness>;
+  enabled: boolean;
+}>;
+
+const adapters: readonly Adapter[] = [
+  { name: 'isomorphic-git', create: isomorphicHarness, enabled: true },
+  { name: 'native-git', create: createNativeHarness, enabled: gitToolchainOnPath },
+];
+
+/* AC23's pin on the table itself: two rows, both live, nothing skipped. `git`
+ * and `git-lfs` on `PATH` are a prerequisite of this suite — the transport rows
+ * already spawn `git http-backend`, and the native port records large objects
+ * through `git lfs` — so a red here means the comparison stopped being one. On
+ * a machine without the toolchain this is the one row that fails, and it says
+ * why, instead of every native row failing product-shaped. */
+describe('the conformance table', () => {
+  it('runs at least two enabled adapters', () => {
+    /* AC23 says "at least two", and `toHaveLength(2)` said "exactly two"
+     * (review R11) — a third adapter row would have failed the pin that exists
+     * to keep rows from going dark. */
+    expect(
+      adapters.filter((adapter) => adapter.enabled).length,
+      'the native-git row needs `git` and `git lfs` on PATH (gitToolchainOnPath)',
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  it('skips no row', async () => {
+    const source = await readFile(new URL(import.meta.url), 'utf8');
+    expect(source).not.toMatch(/describe\.skip/u);
+  });
+});
+
+const conformance = (adapter: Adapter): void => {
+  describe.runIf(adapter.enabled)(`RevisionPort conformance — ${adapter.name}`, () => {
+    let harness: Harness;
+    let port: RevisionPort;
+    let base: RevisionId;
+    let child: RevisionId;
+
+    beforeAll(async () => {
+      harness = await adapter.create();
+      port = harness.port;
+      await port.init({ author });
+      const first = await port.writeRevision({
+        parents: [],
+        tree: tree({ 'a.txt': 'a\n', 'nested/b.txt': 'b\n' }),
+        provenance: provenance('user'),
+        summary: summary('Base revision'),
+      });
+      base = revisionId(first.commitId);
+      const second = await port.writeRevision({
+        parents: [base],
+        tree: tree({ 'a.txt': 'a2\n', 'c.txt': 'c\n' }),
+        provenance: provenance('agent'),
+        summary: summary('Child revision'),
+      });
+      child = revisionId(second.commitId);
+    }, 180_000);
+
+    afterAll(async () => {
+      await harness.dispose();
+    });
+
+    it('describes a recorded object format, change ids, conflict handling and checkouts', async () => {
+      const descriptor = await port.describe();
+      expect(descriptor.engine).toBe(adapter.name);
+      expect(descriptor.objectFormat).toBe('sha1');
+      expect(descriptor.changeIds).toBe(true);
+      expect(descriptor.conflictsAsValues).toBe(true);
+      expect(descriptor.checkouts).toBe(true);
+    });
+
+    it('generates the ignore file', async () => {
+      const ignore = await harness.readGenerated(generatedIgnorePath);
+      expect(ignore).toContain('/.tau/cache/');
+      /* Unanchored and without a trailing slash: the control plane is excluded
+       * at any depth, as a directory or as a worktree pointer file (PP5, G0-8).
+       * The block's exact content is `workspace-config.test.ts`'s pin; this one
+       * is that the port wrote it. */
+      expect(ignore).toContain('**/.git');
+      expect(ignore).toContain('node_modules/');
+    });
+
+    it('gives every revision an id equal to its commit id and a change id from creation', async () => {
+      const record = await port.readRevision(child);
+      expect(record?.id).toBe(child);
+      expect(record?.receipt.commitId).toBe(child);
+      expect(record?.receipt.objectFormat).toBe('sha1');
+      expect(child).toMatch(/^[\da-f]{40}$/u);
+      expect(record?.receipt.changeId).toMatch(/^[k-z]{32}$/u);
+      expect(() => parseChangeId(record!.receipt.changeId)).not.toThrow();
+      expect(await port.changeId?.(child)).toBe(record?.receipt.changeId);
+    });
+
+    it('preserves the provenance trailer through the engine', async () => {
+      const record = await port.readRevision(child);
+      expect(record?.provenance).toStrictEqual(provenance('agent'));
+      expect(record?.summary).toStrictEqual(summary('Child revision'));
+      const baseRecord = await port.readRevision(base);
+      expect(baseRecord?.provenance.source).toBe('user');
+    });
+
+    /**
+     * The durable turn↔revision link, on this engine (W5, S9).
+     *
+     * `provenance.turnId` in the `Tau-Metadata` trailer is the **only** path by
+     * which a settled turn's card comes back after a reload: the settlement
+     * event is gone, and `log(branch)` is all the page has. So the claim that
+     * it "rides both engines free" is a row in this table, not a comment.
+     */
+    it('carries a turn id from the trailer back onto the log row', async () => {
+      const name = 'agent/tau-conformance-turn';
+      const receipt = await port.writeRevision({
+        parents: [child],
+        tree: tree({ 'a.txt': 'a3\n' }),
+        provenance: { ...provenance('agent'), turnId: 'turn-lane-1' },
+        summary: summary('Turn revision'),
+      });
+      const settled = revisionId(receipt.commitId);
+      await port.updateRef({ name, expectedHead: undefined, head: settled });
+
+      const record = await port.readRevision(settled);
+      expect(record?.provenance.turnId).toBe('turn-lane-1');
+
+      const rows = await readRevisionLog(port, { branch: name });
+      const row = rows.find((entry) => entry.revisionId === settled);
+      expect(row?.turnId).toBe('turn-lane-1');
+      /* A revision recorded outside a turn carries no turn, rather than an
+       * empty string a reader would have to know to ignore. */
+      expect(rows.find((entry) => entry.revisionId === child)?.turnId).toBeUndefined();
+    }, 180_000);
+
+    /* RM-R9: find-or-cut and adoption read the attempt and its cut back from the revision itself. */
+    it('should round-trip run, attempt, cut and held leases in the trailer', async () => {
+      const written: RevisionProvenance = {
+        ...provenance('agent'),
+        turnId: 'turn-lane-2',
+        runId: 'run-lane-2',
+        attempt: 1,
+        turnCut: 'result',
+        heldRunIds: ['run-other'],
+      };
+      const receipt = await port.writeRevision({
+        parents: [child],
+        tree: tree({ 'a.txt': 'a4\n' }),
+        provenance: written,
+        summary: summary('Turn result'),
+      });
+
+      const record = await port.readRevision(revisionId(receipt.commitId));
+      expect(record?.provenance).toStrictEqual(written);
+    }, 180_000);
+
+    /*
+     * B1: every identity kind under every capture, written as a version 2
+     * trailer and read back unchanged by the record read and the graph read,
+     * with the git author the person and never the model.
+     */
+    it('round-trips every identity kind and capture as a version 2 trailer', async () => {
+      const person = { kind: 'user', id: 'usr_lane', name: 'Lane Person' } as const;
+      const anonymous = { kind: 'user', id: 'anon:5e6f7a8b', name: 'Anonymous', anonymous: true } as const;
+      const identities: readonly RevisionIdentity[] = [
+        person,
+        anonymous,
+        { kind: 'agent', id: 'agent', runId: 'run-lane-3', onBehalfOf: person },
+        { kind: 'agent', id: 'agent', runId: 'run-lane-4', onBehalfOf: anonymous },
+      ];
+      const captures: readonly RevisionTrigger[] = [
+        'turn',
+        'save',
+        'idle',
+        'hidden',
+        'close',
+        'merge',
+        'restore',
+        'switch',
+        'create',
+        'import',
+      ];
+      const legs: readonly RevisionVia[] = ['browser', 'desktop', 'cli', 'serve', 'cloud'];
+      const cases = identities.flatMap((actor, actorIndex) =>
+        captures.map(
+          (capture, captureIndex): RevisionProvenance => ({
+            source: actor.kind === 'agent' ? 'agent' : 'user',
+            actor,
+            capture,
+            via: legs[(actorIndex + captureIndex) % legs.length]!,
+            ...(actor.kind === 'agent' ? { runId: actor.runId, attempt: 0, turnCut: 'result' } : {}),
+            createdAt: createdAt + actorIndex * 100 + captureIndex,
+          }),
+        ),
+      );
+      let parent = child;
+      for (const [index, written] of cases.entries()) {
+        // oxlint-disable-next-line no-await-in-loop -- each revision is the next one's parent.
+        const receipt = await port.writeRevision({
+          parents: [parent],
+          tree: tree({ 'a.txt': `identity ${String(index)}\n` }),
+          provenance: written,
+          summary: summary(`Identity ${String(index)}`),
+        });
+        parent = revisionId(receipt.commitId);
+        // oxlint-disable-next-line no-await-in-loop -- read back before the next write.
+        const record = await port.readRevision(parent);
+        expect(record?.provenance).toStrictEqual(written);
+      }
+      /* The graph read the pane uses parses the same trailers, newest first. */
+      const rows = await port.log({ heads: [parent], limit: cases.length });
+      expect(rows.map((row) => row.provenance).toReversed()).toStrictEqual(cases);
+    }, 180_000);
+
+    /**
+     * S31, B6: a version is an annotated tag at `refs/tags/v<number>`, on both engines.
+     *
+     * The name is free text in the tag's message and trailer, never the ref,
+     * so a name with spaces is written where neither engine would take it as
+     * a ref name. A rename rewrites the tag at the same ref and keeps the
+     * number, the entry, the time and who made it.
+     */
+    it('round-trips a version named with spaces, and renames it at the same ref', async () => {
+      const actor = { kind: 'user', id: 'user-lane', name: 'Lane Person' } as const;
+      const created = await port.tag({
+        name: 'Ready for print',
+        revisionId: child,
+        note: 'First cut of the bracket',
+        actor,
+        createdAt,
+      });
+
+      expect(created.id).toMatch(/^[\da-f]{32}$/u);
+      expect(created).toStrictEqual({
+        /* A fresh id, which a rename keeps (R1). */
+        id: created.id,
+        /* The first version after Start is V2 (B6). */
+        number: 2,
+        name: 'Ready for print',
+        revisionId: child,
+        note: 'First cut of the bracket',
+        actor,
+        createdAt,
+      });
+      expect(await port.listTags()).toStrictEqual([created]);
+      const before = await port.listRefs('refs/tags');
+      expect(before.map((ref) => ref.name)).toStrictEqual(['refs/tags/v2']);
+
+      const renamed = await port.tag({ number: 2, name: 'Final fit', revisionId: child });
+      expect(renamed).toStrictEqual({ ...created, name: 'Final fit' });
+      expect(await port.listTags()).toStrictEqual([renamed]);
+      const after = await port.listRefs('refs/tags');
+      expect(after.map((ref) => ref.name)).toStrictEqual(['refs/tags/v2']);
+      expect(after[0]?.head).not.toBe(before[0]?.head);
+      const named = await port.readRevision(child);
+      expect(named?.id).toBe(child);
+
+      /* A version never moves to another entry (Q13). */
+      await expect(port.tag({ number: 2, name: 'Moved', revisionId: base })).rejects.toMatchObject({
+        code: 'UNSUPPORTED_OPERATION',
+      });
+      /* The next version takes the next number. */
+      const next = await port.tag({ name: 'Ready for print', revisionId: base, createdAt });
+      expect(next.number).toBe(3);
+
+      /* Renumbering's own primitive: the tag for one number goes, twice is the outcome asked for. */
+      await port.deleteTag(3);
+      await port.deleteTag(2);
+      expect(await port.listTags()).toStrictEqual([]);
+      await expect(port.deleteTag(2)).resolves.toBeUndefined();
+    }, 180_000);
+
+    it('never replaces or numbers over a tag that is not a version, and refuses a bad name or number first (R2, R10)', async () => {
+      /* A lightweight v4: not a version, but it holds its number. */
+      await port.updateRef({ name: 'refs/tags/v4', expectedHead: undefined, head: base });
+      expect(await port.listTags()).toStrictEqual([]);
+      const created = await port.tag({ name: 'Lid', revisionId: child });
+      expect(created.number).toBe(5);
+      await expect(port.tag({ number: 4, name: 'Lid', revisionId: base })).rejects.toMatchObject({
+        code: 'UNSUPPORTED_OPERATION',
+      });
+      await expect(port.tag({ name: '', revisionId: child })).rejects.toMatchObject({ code: 'UNSUPPORTED_OPERATION' });
+      await expect(port.tag({ number: 1, name: 'Start', revisionId: child })).rejects.toMatchObject({
+        code: 'UNSUPPORTED_OPERATION',
+      });
+      const tagReferences = await port.listRefs('refs/tags');
+      expect(tagReferences.map((ref) => ref.name)).toStrictEqual(['refs/tags/v4', 'refs/tags/v5']);
+      expect(await port.readRef('refs/tags/v4')).toBe(base);
+    }, 180_000);
+
+    it('gives versions made at once their own numbers: choosing and claiming are one step (R3)', async () => {
+      const names = ['One', 'Two', 'Three', 'Four'];
+      const before = await port.listRefs('refs/tags');
+      const highest = Math.max(1, ...before.map((ref) => versionNumberOfTag(ref.name) ?? 1));
+      const made = await Promise.all(names.map(async (name) => port.tag({ name, revisionId: child })));
+      expect(made.map((tag) => tag.number).toSorted((left, right) => left - right)).toStrictEqual([
+        highest + 1,
+        highest + 2,
+        highest + 3,
+        highest + 4,
+      ]);
+      const listed = await port.listTags();
+      const mine = listed.filter((tag) => made.some((written) => written.number === tag.number));
+      expect(mine.map((tag) => tag.name).toSorted()).toStrictEqual(names.toSorted());
+      expect(new Set(mine.map((tag) => tag.id)).size).toBe(4);
+    }, 180_000);
+
+    /**
+     * A26/AC15: stock `git log` shows the person, not the tool.
+     *
+     * Read through the port's own decoder rather than a shell, so the row runs
+     * on both engines; the native integration row proves the same two fields
+     * with real `git log --format` on a clone.
+     */
+    it('writes the actor as the git author and Tau as the committer', async () => {
+      const receipt = await port.writeRevision({
+        parents: [child],
+        tree: tree({ 'a.txt': 'a-attributed\n' }),
+        provenance: {
+          ...provenance('user'),
+          actor: { kind: 'user', id: 'user-lane', name: 'Lane Person' },
+          capture: 'save',
+        },
+        summary: summary('Attributed revision'),
+      });
+      const attributed = revisionId(receipt.commitId);
+      const record = await port.readRevision(attributed);
+
+      expect(record?.provenance.actor).toStrictEqual({ kind: 'user', id: 'user-lane', name: 'Lane Person' });
+      expect(record?.provenance.capture).toBe('save');
+
+      /* The same fields through the graph read the pane uses. */
+      const [row] = await port.log({ heads: [attributed], limit: 1 });
+      expect(row?.provenance.actor).toStrictEqual(record?.provenance.actor);
+    }, 180_000);
+
+    /**
+     * I3 by construction (audit N4): an address an untyped caller hands the
+     * engine never reaches the record, the git author line or a tag, so it
+     * cannot come back out of the store.
+     */
+    it('records no address an untyped caller hands it, in the commit or the version tag', async () => {
+      const smuggled = {
+        kind: 'user',
+        id: 'user-lane',
+        name: 'Lane Person',
+        email: 'lane@example.com',
+      } as unknown as RevisionUserActor;
+      const receipt = await port.writeRevision({
+        parents: [child],
+        tree: tree({ 'a.txt': 'a-smuggled\n' }),
+        provenance: {
+          ...provenance('agent'),
+          actor: { kind: 'agent', id: 'agent', runId: 'run-lane', onBehalfOf: smuggled },
+          capture: 'turn',
+        },
+        summary: summary('Smuggled address'),
+      });
+      const smuggledRevision = revisionId(receipt.commitId);
+      const tagged = await port.tag({ name: 'Smuggled', revisionId: smuggledRevision, actor: smuggled, createdAt });
+      const person = { kind: 'user', id: 'user-lane', name: 'Lane Person' };
+
+      const record = await port.readRevision(smuggledRevision);
+      expect(record?.provenance.actor).toStrictEqual({
+        kind: 'agent',
+        id: 'agent',
+        runId: 'run-lane',
+        onBehalfOf: person,
+      });
+      const listed = await port.listTags();
+      expect(listed.find((tag) => tag.id === tagged.id)?.actor).toStrictEqual(person);
+      await port.deleteTag(tagged.number);
+    }, 180_000);
+
+    /**
+     * D33 and I3 together (audit N4): a project linked to GitHub authors its
+     * revisions under the account's GitHub no-reply identity, handed to the
+     * store beside the revision, and the record names the Tau person alone.
+     *
+     * The port has no raw object read, so the author line is proven by the
+     * commit id: it is the hash of the exact bytes, author line included.
+     */
+    it('authors a linked person under the forge identity it is handed, and records none of it', async () => {
+      const linked = { name: 'octo', email: '42+octo@users.noreply.github.com' };
+      const person = { kind: 'user', id: 'user-lane', name: 'Lane Person' } as const;
+      const anonymous = { kind: 'user', id: 'anon:1a2b3c4d', name: 'Anonymous', anonymous: true } as const;
+      const linkedPort = withCommitAuthor(port, (who) => (who.id === person.id ? linked : undefined));
+      const authorOf = async (
+        actor: RevisionIdentity,
+        content: string,
+      ): Promise<Readonly<{ actual: string; expected: (author: GitSignature) => string }>> => {
+        const written: RevisionProvenance = { ...provenance('agent'), actor, capture: 'turn' };
+        const receipt = await linkedPort.writeRevision({
+          parents: [child],
+          tree: tree({ 'a.txt': content }),
+          provenance: written,
+          summary: summary('Linked revision'),
+        });
+        const record = await port.readRevision(revisionId(receipt.commitId));
+        expect(JSON.stringify(record?.provenance)).not.toContain('noreply.github.com');
+        const trailer = { parents: [child], provenance: written, summary: summary('Linked revision') };
+        return {
+          actual: receipt.commitId,
+          expected: (author) =>
+            encodeCommit({
+              objectFormat: receipt.objectFormat,
+              tree: record!.treeId,
+              parents: [child],
+              author,
+              committer: revisionCommitterSignature(written),
+              message: revisionCommitMessage(trailer),
+              changeId: deriveChangeId(receipt.objectFormat, { treeId: record!.treeId, parents: [child], trailer }),
+            }).id,
+        };
+      };
+      const seconds = Math.floor(createdAt / 1000);
+
+      const forPerson = await authorOf(
+        { kind: 'agent', id: 'agent', runId: 'run-lane', onBehalfOf: person },
+        'a-linked\n',
+      );
+      expect(forPerson.actual).toBe(forPerson.expected({ ...linked, seconds, offsetMinutes: 0 }));
+
+      /* Anyone the host does not hold the identity for, and anyone anonymous, keeps the Tau no-reply address. */
+      const forAnonymous = await authorOf(anonymous, 'a-anonymous\n');
+      expect(forAnonymous.actual).toBe(
+        forAnonymous.expected({
+          name: 'Anonymous',
+          email: 'anon:1a2b3c4d@users.noreply.tau.new',
+          seconds,
+          offsetMinutes: 0,
+        }),
+      );
+    }, 180_000);
+
+    it('round-trips a tree', async () => {
+      const recovered = await port.readTree(child);
+      const entries = recovered?.entries() ?? [];
+      expect(entries.map((entry) => entry.path)).toStrictEqual(['a.txt', 'c.txt']);
+      expect(decoder.decode(recovered?.get('a.txt'))).toBe('a2\n');
+    });
+
+    it('round-trips executable mode and reports a mode-only diff', async () => {
+      const plain = await port.writeRevision({
+        parents: [child],
+        tree: new ImmutableRevisionTree([['run.sh', '#!/bin/sh\n']]),
+        provenance: provenance(),
+        summary: summary('Plain script'),
+      });
+      const executable = await port.writeRevision({
+        parents: [revisionId(plain.commitId)],
+        tree: new ImmutableRevisionTree([['run.sh', '#!/bin/sh\n', '100755']]),
+        provenance: provenance(),
+        summary: summary('Executable script'),
+      });
+
+      const recovered = await port.readTree(revisionId(executable.commitId));
+      expect(recovered?.mode('run.sh')).toBe('100755');
+      await expect(
+        port.diff({ from: revisionId(plain.commitId), to: revisionId(executable.commitId) }),
+      ).resolves.toEqual([{ path: 'run.sh', kind: 'modified' }]);
+    });
+
+    it('answers an unknown revision with undefined, not a throw', async () => {
+      expect(await port.readRevision(revisionId('0'.repeat(40)))).toBeUndefined();
+    });
+
+    it('walks nothing from an explicit empty heads list, on every adapter', async () => {
+      /* A fresh store's first `load()` asks exactly this; `ancestors()` is not a
+       * revset and the browser walk answered `[]` (8-review M1 / N5). */
+      await expect(port.log({ heads: [] })).resolves.toEqual([]);
+    });
+
+    it('logs the graph without materializing a tree', async () => {
+      const entries = await port.log({ heads: [child] });
+      const ids = entries.map((entry) => entry.id);
+      expect(ids).toContain(child);
+      expect(ids).toContain(base);
+      const head = entries.find((entry) => entry.id === child)!;
+      expect(head.parents).toStrictEqual([base]);
+      expect(head.conflicted).toBe(false);
+      expect(Object.keys(head).toSorted()).toStrictEqual([
+        'changeId',
+        'conflicted',
+        'id',
+        'parents',
+        'provenance',
+        'summary',
+        'treeId',
+      ]);
+    });
+
+    it("carries each revision's tree id on its log row, the same one readRevision names", async () => {
+      const entries = await port.log({ heads: [child] });
+      const records = await Promise.all([child, base].map(async (id) => port.readRevision(id)));
+      expect(entries.map((entry) => entry.treeId)).toStrictEqual(records.map((record) => record?.treeId));
+      expect(entries[0]?.treeId).toMatch(/^[\da-f]{40}$/u);
+    });
+
+    it('counts what each of two heads has that the other lacks, across a fork and a merge', async () => {
+      const write = async (parents: readonly RevisionId[], content: string): Promise<RevisionId> => {
+        const receipt = await port.writeRevision({
+          parents,
+          tree: tree({ 'a.txt': `${content}\n` }),
+          provenance: provenance('user'),
+          summary: summary(content),
+        });
+        return revisionId(receipt.commitId);
+      };
+      const left1 = await write([child], 'divergence left 1');
+      const left2 = await write([left1], 'divergence left 2');
+      const right1 = await write([child], 'divergence right 1');
+      const merge = await write([left2, right1], 'divergence merge');
+
+      await expect(port.divergence({ head: left2, base: right1 })).resolves.toStrictEqual({ ahead: 2, behind: 1 });
+      await expect(port.divergence({ head: right1, base: left2 })).resolves.toStrictEqual({ ahead: 1, behind: 2 });
+      await expect(port.divergence({ head: left2, base: child })).resolves.toStrictEqual({ ahead: 2, behind: 0 });
+      await expect(port.divergence({ head: child, base: left2 })).resolves.toStrictEqual({ ahead: 0, behind: 2 });
+      await expect(port.divergence({ head: merge, base: right1 })).resolves.toStrictEqual({ ahead: 3, behind: 0 });
+      await expect(port.divergence({ head: left2, base: left2 })).resolves.toStrictEqual({ ahead: 0, behind: 0 });
+      await expect(port.divergence({ head: left2, base: revisionId('0'.repeat(40)) })).rejects.toMatchObject({
+        code: 'UNKNOWN_REVISION',
+      });
+    }, 180_000);
+
+    it('never sees a tree whose path collides with a directory (review 4 R27)', () => {
+      /* `a` beside `a/b.txt` made `isomorphic-git` write a tree
+       * `git fsck --strict` reports as `duplicateEntries` while `fast-import`
+       * wrote a *different* tree — one corrupt object and an I4 divergence from
+       * the same input. Neither engine can guard it; the model both legs pass
+       * through refuses the shape, so no port ever receives it. */
+      expect(() => tree({ a: 'file\n', 'a/b.txt': 'nested\n' })).toThrow(/collides/iu);
+    });
+
+    it('logs a merge-shaped history first-parent-first, newest first', async () => {
+      /* Review 4 R12: the order was unspecified and differed per leg — a BFS in
+       * the page, `rev-list --topo-order` on disk — so a UI reading the log got
+       * a different graph depending on the host. */
+      const leftReceipt = await port.writeRevision({
+        parents: [base],
+        tree: tree({ 'a.txt': 'order-left\n' }),
+        provenance: provenance('agent'),
+        summary: summary('Order left'),
+      });
+      const left = revisionId(leftReceipt.commitId);
+      const rightReceipt = await port.writeRevision({
+        parents: [base],
+        tree: tree({ 'a.txt': 'order-right\n' }),
+        provenance: provenance('agent'),
+        summary: summary('Order right'),
+      });
+      const right = revisionId(rightReceipt.commitId);
+      const mergeReceipt = await port.writeRevision({
+        parents: [left, right],
+        tree: tree({ 'a.txt': 'order-merged\n' }),
+        provenance: provenance('merge'),
+        summary: summary('Order merge'),
+      });
+      const merge = revisionId(mergeReceipt.commitId);
+
+      const walked = await port.log({ heads: [merge] });
+      expect(walked.map((entry) => entry.id)).toStrictEqual([merge, left, right, base]);
+      // The limit cuts the same order from the front, it does not reorder it.
+      const limited = await port.log({ heads: [merge], limit: 2 });
+      expect(limited.map((entry) => entry.id)).toStrictEqual([merge, left]);
+    }, 180_000);
+
+    it('diffs two revisions as paths, never content', async () => {
+      const changes = [...(await port.diff({ from: base, to: child }))].sort((left, right) =>
+        left.path.localeCompare(right.path),
+      );
+      expect(changes).toStrictEqual([
+        { path: 'a.txt', kind: 'modified' },
+        { path: 'c.txt', kind: 'added' },
+        { path: 'nested/b.txt', kind: 'deleted' },
+      ]);
+      expect(changes.every((change) => Object.keys(change).toSorted().join(',') === 'kind,path')).toBe(true);
+    });
+
+    it('publishes a ref only from its expected old value', async () => {
+      const name = 'tau-conformance';
+      expect(await port.readRef(name)).toBeUndefined();
+      expect(await port.updateRef({ name, expectedHead: undefined, head: base })).toMatchObject({
+        status: 'updated',
+        head: base,
+      });
+      expect(await port.readRef(name)).toBe(base);
+      expect(await port.updateRef({ name, expectedHead: undefined, head: child })).toMatchObject({
+        status: 'conflicted',
+        actualHead: base,
+        proposedHead: child,
+      });
+      expect(await port.updateRef({ name, expectedHead: base, head: child })).toMatchObject({
+        status: 'updated',
+        previousHead: base,
+        head: child,
+      });
+      const references = await port.listRefs();
+      expect(references.map((reference) => reference.name)).toContain(name);
+    });
+
+    it('deletes a ref under the same expected-old check, and it leaves listRefs', async () => {
+      const name = 'tau-conformance-delete';
+      expect(await port.updateRef({ name, expectedHead: undefined, head: base })).toMatchObject({
+        status: 'updated',
+        head: base,
+      });
+      expect(await port.updateRef({ name, expectedHead: child })).toMatchObject({
+        status: 'conflicted',
+        actualHead: base,
+      });
+      expect(await port.updateRef({ name, expectedHead: base })).toMatchObject({
+        status: 'updated',
+        previousHead: base,
+        head: undefined,
+      });
+      const remaining = await port.listRefs();
+      expect(remaining.map((reference) => reference.name)).not.toContain(name);
+      expect(await port.readRef(name)).toBeUndefined();
+    }, 180_000);
+
+    it('answers listRefs in the vocabulary each prefix was asked in (I4, review 2 R10)', async () => {
+      /*
+       * The exact call that diverged between the two legs: a *qualified* prefix.
+       * `listRefs('refs/heads')` answered short branch names on the browser leg
+       * and full names on the native one, so the push effect's history set was
+       * empty in the page and complete on disk. Nothing here asserted it,
+       * because every row called `listRefs()` bare.
+       */
+      const kept = [
+        'refs/heads/prefix-branch',
+        'refs/tags/prefix-tag',
+        'refs/tau/chats/prefix-chat',
+        'refs/remotes/origin/prefix-branch',
+      ];
+      for (const name of kept) {
+        // oxlint-disable-next-line no-await-in-loop -- four refs, written in order.
+        await port.updateRef({ name, expectedHead: undefined, head: base });
+      }
+      const names = async (prefix?: string): Promise<readonly string[]> => {
+        const listed = await port.listRefs(prefix);
+        return listed.map((reference) => reference.name);
+      };
+
+      expect(await names('refs/heads')).toContain('refs/heads/prefix-branch');
+      expect(await names('refs/tags')).toContain('refs/tags/prefix-tag');
+      expect(await names('refs/tau/chats')).toContain('refs/tau/chats/prefix-chat');
+      expect(await names('refs/remotes/origin')).toContain('refs/remotes/origin/prefix-branch');
+      /* A trailing slash names the same namespace. */
+      expect(await names('refs/heads/')).toContain('refs/heads/prefix-branch');
+      /* A qualified prefix never answers a short name, and never leaks a
+       * neighbouring namespace. */
+      expect(await names('refs/heads')).not.toContain('prefix-branch');
+      expect(await names('refs/heads')).not.toContain('refs/tags/prefix-tag');
+      expect(await names('refs/tau/chats')).not.toContain('refs/heads/prefix-branch');
+      /* The bare call is branch names, unchanged. */
+      expect(await names()).toContain('prefix-branch');
+    }, 180_000);
+
+    it('refuses a publication whose expected head is stale but not empty, and leaves the ref alone', async () => {
+      /* Review 4 R9: every other refusal here expects *no* ref, so the engine's
+       * compare-and-swap was only ever measured against zero. */
+      const name = 'tau-conformance-stale';
+      await port.updateRef({ name, expectedHead: undefined, head: base });
+      await port.updateRef({ name, expectedHead: base, head: child });
+      expect(await port.readRef(name)).toBe(child);
+
+      expect(await port.updateRef({ name, expectedHead: base, head: base })).toMatchObject({
+        status: 'conflicted',
+        actualHead: child,
+        proposedHead: base,
+      });
+      expect(await port.readRef(name)).toBe(child);
+      // The delete path takes the same check, from the same stale value.
+      expect(await port.updateRef({ name, expectedHead: base })).toMatchObject({
+        status: 'conflicted',
+        actualHead: child,
+      });
+      expect(await port.readRef(name)).toBe(child);
+    }, 180_000);
+
+    it('tracks the live tree on a branch, and a reopened store reads the same head', async () => {
+      // The product's other branch shape carries a slash (c2-review N4).
+      const name = 'agent/tau-conformance-head';
+      /* `init` leaves HEAD symbolic on an unborn `main`, exactly as `git init`
+       * does — the head is a name, and the branch behind it need not exist. */
+      expect(await port.readHead()).toEqual({ branch: 'main', head: undefined });
+      // Symbolic: the head is set before the branch is born, and follows it.
+      await port.setHead(name);
+      expect(await port.readHead()).toEqual({ branch: name, head: undefined });
+      await port.updateRef({ name, expectedHead: undefined, head: base });
+      expect(await port.readHead()).toEqual({ branch: name, head: base });
+      /* The next process opening this project reads the same head, and moving
+       * it there — what a checkout does — is what this one then reads. */
+      const reopened = harness.reopen();
+      expect(await reopened.readHead()).toEqual({ branch: name, head: base });
+      await reopened.setHead('main');
+      expect(await port.readHead()).toEqual({ branch: 'main', head: undefined });
+    }, 180_000);
+
+    it('never shows a head between two concurrent moves (c2-review S2)', async () => {
+      await port.setHead('main');
+      const observed: Array<string | undefined> = [];
+      const reading = (async (): Promise<void> => {
+        for (let attempt = 0; attempt < 20; attempt++) {
+          // oxlint-disable-next-line eslint/no-await-in-loop -- the reads are the interleaving under test.
+          const seen = await port.readHead();
+          observed.push(seen?.branch);
+        }
+      })();
+      await Promise.all([port.setHead('agent/left'), port.setHead('agent/right'), reading]);
+      expect(observed).not.toContain(undefined);
+      const settled = await port.readHead();
+      expect(['agent/left', 'agent/right']).toContain(settled?.branch);
+    }, 180_000);
+
+    it('records a conflicted three-way merge as a value with Jujutsu headers in order', async () => {
+      const leftReceipt = await port.writeRevision({
+        parents: [base],
+        tree: tree({ 'a.txt': 'left\n', 'nested/b.txt': 'b\n' }),
+        provenance: provenance('agent'),
+        summary: summary('Left side'),
+      });
+      const left = revisionId(leftReceipt.commitId);
+      const rightReceipt = await port.writeRevision({
+        parents: [base],
+        tree: tree({ 'a.txt': 'right\n', 'nested/b.txt': 'b\n' }),
+        provenance: provenance('agent'),
+        summary: summary('Right side'),
+      });
+      const right = revisionId(rightReceipt.commitId);
+      /* The caller merges — `mergeRevisionTrees` on both legs — and the terms of
+       * an unresolved merge arrive here as a value, which is what keeps a
+       * conflict in the graph without either engine owning a merge algorithm. */
+      const merged = await port.writeRevision({
+        parents: [left, right],
+        provenance: provenance('merge'),
+        summary: summary('Conflicted merge'),
+        tree: tree({ 'a.txt': 'conflict\n' }),
+        conflict: {
+          trees: ['1'.repeat(40), '2'.repeat(40), '3'.repeat(40)],
+          labels: ['left', 'base', 'right'],
+        },
+      });
+      expect(merged.conflicted).toBe(true);
+      const conflict = await port.conflicts(revisionId(merged.commitId));
+      expect(conflict?.trees).toHaveLength(3);
+      expect(conflict?.labels).toHaveLength(3);
+      expect(conflict?.trees.every((id) => /^[\da-f]{40}$/u.test(id))).toBe(true);
+      const record = await port.readRevision(revisionId(merged.commitId));
+      expect(record?.receipt.conflicted).toBe(true);
+      expect(record?.provenance.source).toBe('merge');
+      expect(record?.parents).toStrictEqual([left, right]);
+    }, 180_000);
+
+    it('reads a conflicted merge back into its three terms and materializes markers (W10)', async () => {
+      /* A real conflicted merge, end to end on this engine: two lines over one
+       * base, the terms recorded in the headers, and the same marker text read
+       * back out — which is what makes *Keep mine* and the editor's conflict
+       * view answer identically on both legs (AC14, I4). */
+      const baseRecord = await port.readRevision(base);
+      const mineReceipt = await port.writeRevision({
+        parents: [base],
+        tree: tree({ 'a.txt': 'mine\n', 'settled.txt': 'mine settled it\n' }),
+        provenance: provenance('user'),
+        summary: summary('Mine'),
+      });
+      const mine = revisionId(mineReceipt.commitId);
+      const theirsReceipt = await port.writeRevision({
+        parents: [base],
+        tree: tree({ 'a.txt': 'theirs\n' }),
+        provenance: provenance('agent'),
+        summary: summary('Theirs'),
+      });
+      const theirs = revisionId(theirsReceipt.commitId);
+      const [mineRecord, theirsRecord] = await Promise.all([port.readRevision(mine), port.readRevision(theirs)]);
+
+      const conflicted = await port.writeRevision({
+        /* First parent is the branch it is minted on — the one merged *from* —
+           so that branch's own first-parent numbering keeps counting. */
+        parents: [theirs, mine],
+        tree: tree({ 'a.txt': 'theirs\n' }),
+        provenance: provenance('merge'),
+        summary: summary('Conflicted merge'),
+        conflict: {
+          trees: [mineRecord!.treeId, baseRecord!.treeId, theirsRecord!.treeId],
+          labels: conflictLabels({ ours: 'main', theirs: 'feature' }),
+        },
+      });
+
+      const terms = await readConflictTerms(port, conflicted.commitId);
+      expect(terms?.labels).toStrictEqual({ ours: 'main', theirs: 'feature' });
+      expect(terms?.revisions).toStrictEqual({ base, ours: mine, theirs });
+      /* The recorded terms and the re-derived ones are the same three trees.
+         Tau re-derives (the header stays authoritative for anything reading the
+         repository without Tau), so nothing else would ever notice the two
+         disagreeing — which is exactly how a merge and its own resolution end
+         up acting on different bases (review R6). */
+      const recordedTerms = await port.conflicts(revisionId(conflicted.commitId));
+      const termRevisions: ReadonlyArray<string | undefined> = [
+        terms!.revisions.ours,
+        terms!.revisions.base,
+        terms!.revisions.theirs,
+      ];
+      const rederived = await Promise.all(
+        termRevisions.map(async (revision) => {
+          if (revision === undefined) {
+            return undefined;
+          }
+          const record = await port.readRevision(revisionId(revision));
+          return record?.treeId;
+        }),
+      );
+      expect(recordedTerms?.trees).toStrictEqual(rederived);
+      expect(terms?.conflicts.map((conflict) => conflict.path)).toStrictEqual(['a.txt']);
+      /* `settled.txt` only one side wrote, so resolution starts from it. */
+      expect(terms?.merged.entries().map(({ path }) => path)).toStrictEqual(['settled.txt']);
+
+      expect(await materializeConflict(port, { revisionId: conflicted.commitId, path: 'a.txt' })).toBe(
+        '<<<<<<< main\nmine\n=======\ntheirs\n>>>>>>> feature\n',
+      );
+      /* A path that settled is not a conflict, so there is nothing to choose. */
+      expect(await materializeConflict(port, { revisionId: conflicted.commitId, path: 'settled.txt' })).toBeUndefined();
+    }, 180_000);
+
+    it('lists the live checkout, adds one per branch, and refuses a second on the same branch', async () => {
+      const branch = 'checkout/conformance';
+      await port.updateRef({ name: branch, expectedHead: undefined, head: base });
+      const added = await port.addCheckout!({ branch });
+      expect(added).toMatchObject({ projectId, kind: 'linked', branch, baseRevisionId: base });
+      expect(added.id).not.toBe('');
+
+      const listed = await port.listCheckouts!();
+      /* The live checkout names a root its host can open: the project route on
+       * the page (architecture:448), the repository path on disk (review 4 R24
+       * — the browser leg reported the empty string). */
+      expect(listed[0]).toMatchObject({ kind: 'live', root: harness.liveRoot });
+      expect(listed.filter((checkout) => checkout.branch === branch)).toHaveLength(1);
+      expect(listed.map((checkout) => checkout.id)).toContain(added.id);
+
+      await expect(port.addCheckout!({ branch })).rejects.toMatchObject({ code: 'CHECKOUT_CONFLICT' });
+    }, 180_000);
+
+    it("reports a linked checkout's head as its branch's head after the branch moves (S7)", async () => {
+      /* A merge that does not settle moves the source branch onto a conflicted
+       * revision while its linked checkout stays put. The registry reads the
+       * head from here, so a checkout that kept the base it was added at hid
+       * the conflict: no *Needs resolution*, on the browser leg only (W2d F1). */
+      const branch = 'checkout/moving';
+      await port.updateRef({ name: branch, expectedHead: undefined, head: base });
+      const added = await port.addCheckout!({ branch });
+      await port.updateRef({ name: branch, expectedHead: base, head: child });
+
+      const listed = await port.listCheckouts!();
+      expect(listed.find((checkout) => checkout.id === added.id)).toMatchObject({ branch, baseRevisionId: child });
+      await port.removeCheckout!(added.id);
+    }, 180_000);
+
+    it('removes a linked checkout and refuses to remove the live one', async () => {
+      const branch = 'checkout/removable';
+      await port.updateRef({ name: branch, expectedHead: undefined, head: base });
+      const added = await port.addCheckout!({ branch });
+      await port.removeCheckout!(added.id);
+      const remaining = await port.listCheckouts!();
+      expect(remaining.map((checkout) => checkout.id)).not.toContain(added.id);
+      await expect(port.removeCheckout!('live')).rejects.toMatchObject({ code: 'CHECKOUT_CONFLICT' });
+    }, 180_000);
+
+    it('clears a removed checkout, so re-adding its branch materializes exactly the new tree', async () => {
+      /* Review 4 R3: the id is a pure function of the branch, so a checkout
+       * that only forgot its record and kept its files unioned two revisions'
+       * trees the moment the same branch was checked out again. */
+      const branch = 'checkout/recycled';
+      await port.updateRef({ name: branch, expectedHead: undefined, head: base });
+      const added = await port.addCheckout!({ branch });
+      expect(await harness.checkoutFiles(added)).toStrictEqual(['a.txt', 'nested/b.txt']);
+      await harness.writeCheckoutFile(added, 'scratch/draft.txt', 'draft\n');
+
+      await port.removeCheckout!(added.id);
+      // The branch moves while nothing holds it — a merge landing, say.
+      await port.updateRef({ name: branch, expectedHead: base, head: child });
+      const readded = await port.addCheckout!({ branch });
+      expect(readded.id).toBe(added.id);
+      expect(await harness.checkoutFiles(readded)).toStrictEqual(['a.txt', 'c.txt']);
+      await port.removeCheckout!(readded.id);
+    }, 180_000);
+  });
+};
+
+for (const adapter of adapters) {
+  conformance(adapter);
+}
+
+/**
+ * I4, as a comparison rather than a promise: the charter's stop condition for
+ * this wave is `isomorphic-git` diverging from native Git on identity, and the
+ * only thing that can observe it is running the same edits through both.
+ */
+describe.runIf(gitToolchainOnPath)('cross-adapter identity (I4)', () => {
+  it('names the same tree — and the same revision — from the same scripted edits', async () => {
+    const harnesses = await Promise.all([isomorphicHarness(), createNativeHarness()]);
+    try {
+      const records = await Promise.all(
+        harnesses.map(async (harness) => {
+          await harness.port.init({ author });
+          const first = await harness.port.writeRevision({
+            parents: [],
+            /* `a.txt` beside `a/b.txt` is the ordering guard the a1 rewrite lost
+             * (review 4 R6): git sorts a directory as if its name ended with a
+             * slash, so `a/` follows `a.txt` and an engine that sorted plain
+             * names would name a different tree. */
+            tree: tree({
+              'a.txt': 'a\n',
+              'a/b.txt': 'nested-under-a\n',
+              'assets/blob.bin': binaryBlob,
+              'nested/deep/b.txt': 'b\n',
+              'z.txt': 'z\n',
+            }),
+            provenance: provenance('user'),
+            summary: summary('Base revision'),
+          });
+          const second = await harness.port.writeRevision({
+            parents: [revisionId(first.commitId)],
+            tree: tree({
+              'a.txt': 'a2\n',
+              'a/b.txt': 'nested-under-a\n',
+              'assets/blob.bin': binaryBlob,
+              'nested/deep/b.txt': 'b\n',
+              'nested/c.txt': 'c\n',
+            }),
+            provenance: provenance('agent'),
+            summary: summary('Child revision'),
+          });
+          const id = revisionId(second.commitId);
+          return { record: await harness.port.readRevision(id), tree: await harness.port.readTree(id) };
+        }),
+      );
+      const [isomorphic, native] = records;
+      const browserRecord = isomorphic!.record!;
+      const diskRecord = native!.record!;
+      const browserTree = isomorphic!.tree!;
+      const diskTree = native!.tree!;
+      expect(browserRecord.treeId).toMatch(/^[\da-f]{40}$/u);
+      expect(diskRecord.treeId).toBe(browserRecord.treeId);
+      // The commit bytes are the same encoder's on both legs, so the ids match too.
+      expect(diskRecord.id).toBe(browserRecord.id);
+      expect(diskRecord.receipt.changeId).toBe(browserRecord.receipt.changeId);
+      // The binary blob comes back byte for byte, from both object stores.
+      expect(browserTree.get('assets/blob.bin')).toStrictEqual(binaryBlob);
+      expect(diskTree.get('assets/blob.bin')).toStrictEqual(binaryBlob);
+      expect(diskTree.entries().map((entry) => entry.path)).toStrictEqual(
+        browserTree.entries().map((entry) => entry.path),
+      );
+    } finally {
+      await Promise.all(harnesses.map(async (harness) => harness.dispose()));
+    }
+  }, 180_000);
+
+  /* W9 pin (d), green since W11b: the browser leg runs the same host-neutral
+   * clean step the disk leg does (`lfs.ts`), so a tracked large object is a
+   * pointer in the tree on both legs and the two name the same tree. */
+  it('names the same tree for a large object on both legs', async () => {
+    const harnesses = await Promise.all([isomorphicHarness(), createNativeHarness()]);
+    try {
+      const large = Uint8Array.from({ length: 1024 * 1024 + 1 }, (_, index) => (index * 31) % 256);
+      const recorded = await Promise.all(
+        harnesses.map(async (harness) => {
+          await harness.port.init({ author });
+          const receipt = await harness.port.writeRevision({
+            parents: [],
+            tree: tauTree({ 'models/bracket.step': large }),
+            provenance: provenance('user'),
+            summary: summary('Large object'),
+          });
+          const id = revisionId(receipt.commitId);
+          const record = await harness.port.readRevision(id);
+          const stored = await harness.port.readTree(id);
+          return { treeId: record?.treeId, content: stored?.get('models/bracket.step') };
+        }),
+      );
+      expect(recorded[1]?.treeId).toBe(recorded[0]?.treeId);
+      /* And the pointer is invisible: both legs smudge it back to the bytes the
+       * caller wrote, which is what makes LFS invisible to the user (EQ7). */
+      expect(recorded[0]?.content).toStrictEqual(large);
+      expect(recorded[1]?.content).toStrictEqual(large);
+    } finally {
+      await Promise.all(harnesses.map(async (harness) => harness.dispose()));
+    }
+  }, 180_000);
+
+  /*
+   * `largeObjects: false` records the tree byte for byte on both legs (I4). A
+   * record ref needs it: its closed tree can carry no `.gitattributes`, so a
+   * pointer written into one is a pointer nothing could ever smudge against.
+   * The family here is a tracked one, so the default path would pointerise it
+   * however little it weighs.
+   */
+  it('records a tracked family verbatim on both legs when large objects are declined', async () => {
+    const harnesses = await Promise.all([isomorphicHarness(), createNativeHarness()]);
+    try {
+      const small = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]);
+      const recorded = await Promise.all(
+        harnesses.map(async (harness) => {
+          await harness.port.init({ author });
+          const receipt = await harness.port.writeRevision({
+            parents: [],
+            tree: tauTree({ 'attachments/photo.jpg': small }),
+            largeObjects: false,
+            provenance: provenance('user'),
+            summary: summary('Verbatim attachment'),
+          });
+          const id = revisionId(receipt.commitId);
+          const record = await harness.port.readRevision(id);
+          const stored = await harness.port.readTree(id);
+          return { treeId: record?.treeId, content: stored?.get('attachments/photo.jpg') };
+        }),
+      );
+      expect(recorded[1]?.treeId).toBe(recorded[0]?.treeId);
+      expect(recorded[0]?.content).toStrictEqual(small);
+      expect(recorded[1]?.content).toStrictEqual(small);
+      /*
+       * The decisive pin, and the reason this row is not just the one above with
+       * a smaller file: `readTree` smudges, so reading the bytes back proves
+       * nothing about what was stored. Recording the *same* bytes through the
+       * default path instead yields a different tree id — a 127-byte pointer
+       * blob rather than these eight — so an implementation that ignored the
+       * flag would make these two ids equal and fail here.
+       */
+      const [first] = harnesses;
+      const cleaned = await first.port.writeRevision({
+        parents: [],
+        tree: tauTree({ 'attachments/photo.jpg': small }),
+        provenance: provenance('user'),
+        summary: summary('Cleaned attachment'),
+      });
+      const cleanedRecord = await first.port.readRevision(revisionId(cleaned.commitId));
+      expect(cleanedRecord?.treeId).not.toBe(recorded[0]?.treeId);
+    } finally {
+      await Promise.all(harnesses.map(async (harness) => harness.dispose()));
+    }
+  }, 180_000);
+});
+
+/**
+ * Review 4 R28: `log({ limit })` must not read the whole history. The walk is
+ * lazy on both legs, and these two cases count the objects each engine actually
+ * reads — a provider proxy in the page, a `git` wrapper on disk.
+ */
+describe('log reads are bounded by the limit (review 4 R28)', () => {
+  const chainLength = 200;
+  const chainLimit = 5;
+  /** A generous ceiling: the walk needs the emitted revisions and their parents. */
+  const readCeiling = 20;
+
+  const writeChain = async (port: RevisionPort): Promise<readonly RevisionId[]> => {
+    const chain: RevisionId[] = [];
+    for (let index = 0; index < chainLength; index++) {
+      // oxlint-disable-next-line eslint/no-await-in-loop -- each revision names the one before it.
+      const receipt = await port.writeRevision({
+        parents: chain.length === 0 ? [] : [chain.at(-1)!],
+        tree: tree({ 'a.txt': `revision ${index}\n` }),
+        // Time moves forward with the chain, as it does in any real history.
+        provenance: { ...provenance('agent'), createdAt: createdAt + index * 1000 },
+        summary: summary(`Revision ${index}`),
+      });
+      chain.push(revisionId(receipt.commitId));
+    }
+    return chain;
+  };
+
+  it('reads a handful of objects for a limited log in the page', async () => {
+    const backing = await createMemoryProvider();
+    let reads = 0;
+    const filesystem = new Proxy(backing, {
+      get: (target, key, receiver): unknown => {
+        const value = Reflect.get(target, key, receiver) as unknown;
+        if (typeof value !== 'function') {
+          return value;
+        }
+        const method = value.bind(target) as (...args: readonly unknown[]) => unknown;
+        return key === 'readFile'
+          ? (...args: readonly unknown[]): unknown => {
+              reads++;
+              return method(...args);
+            }
+          : method;
+      },
+    });
+    const port = createIsomorphicGitRevisionPort({ filesystem });
+    await port.init({ author });
+    const chain = await writeChain(port);
+
+    reads = 0;
+    const limited = await port.log({ heads: [chain.at(-1)!], limit: chainLimit });
+    expect(limited.map((entry) => entry.id)).toStrictEqual(chain.slice(-chainLimit).toReversed());
+    expect(reads).toBeLessThanOrEqual(readCeiling);
+    expect(reads).toBeGreaterThan(0);
+  }, 180_000);
+
+  it.runIf(gitToolchainOnPath)(
+    'spawns a handful of object reads for a limited log on disk',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'tau-revisions-bound-'));
+      try {
+        const repositoryPath = join(root, 'project');
+        await mkdir(repositoryPath, { recursive: true });
+        const port = createNativeGitRevisionPort({ repositoryPath });
+        await port.init({ author });
+        const chain = await writeChain(port);
+
+        /* Every engine call goes through a wrapper that records its subcommand:
+         * the first argument that is neither an option nor an option's value,
+         * because the port pins configuration ahead of every subcommand. */
+        const log = join(root, 'commands.log');
+        const wrapper = join(root, 'git-counting');
+        await writeFile(
+          wrapper,
+          [
+            '#!/bin/sh',
+            'verb=',
+            'skip=0',
+            'for argument in "$@"; do',
+            '  if [ "$skip" = 1 ]; then skip=0; continue; fi',
+            '  case "$argument" in',
+            '    -C|-c) skip=1 ;;',
+            '    -*) ;;',
+            '    *) verb="$argument"; break ;;',
+            '  esac',
+            'done',
+            `echo "$verb	$*" >> ${log}`,
+            'exec git "$@"',
+            '',
+          ].join('\n'),
+          { mode: 0o755 },
+        );
+        const counted = createNativeGitRevisionPort({ repositoryPath, gitExecutable: wrapper });
+
+        const limited = await counted.log({ heads: [chain.at(-1)!], limit: chainLimit });
+        expect(limited.map((entry) => entry.id)).toStrictEqual(chain.slice(-chainLimit).toReversed());
+        const recorded = await readFile(log, 'utf8');
+        const commands = recorded.split('\n').filter((line) => line !== '');
+        /* Object reads only — no `log`, no `show`, nothing that would read a
+         * tree — and a handful of processes rather than one per revision (rule 20's log cost). */
+        expect(commands.map((command) => command.split('\t')[0])).toStrictEqual(
+          commands.map((command) => (command.startsWith('rev-list') ? 'rev-list' : 'cat-file')),
+        );
+        expect(commands.length).toBeLessThanOrEqual(readCeiling);
+        /* The bound reaches the engine, which is what keeps a limited log off
+         * the whole history now that the objects arrive in one batch: the
+         * process count alone can no longer show it (review 4 R28). */
+        const bound = Number(/--max-count=(?<count>\d+)/u.exec(recorded)?.groups?.['count']);
+        expect(bound).toBeGreaterThanOrEqual(chainLimit);
+        expect(bound).toBeLessThan(chainLength);
+      } finally {
+        await rm(root, { force: true, recursive: true });
+      }
+    },
+    180_000,
+  );
+});
+
+describe('browser ref publication under a Web Lock (8-review S4)', () => {
+  afterAll(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('queues updateRef behind the same-named lock another document holds', async () => {
+    const filesystem = await createMemoryProvider();
+    const port = createIsomorphicGitRevisionPort({ filesystem });
+    await port.init({ author: { name: 'Tau', email: 'tau@example.test' } });
+    const first = await port.writeRevision({
+      parents: [],
+      tree: tree({ 'a.txt': 'a\n' }),
+      provenance: provenance('user'),
+      summary: summary('Base revision'),
+    });
+
+    // Another document is inside the critical section for this ref.
+    const held = Promise.withResolvers<void>();
+    const requested: string[] = [];
+    vi.stubGlobal('navigator', {
+      locks: {
+        request: async (
+          name: string,
+          options: { readonly mode: 'exclusive' },
+          callback: (lock: { readonly name: string; readonly mode: 'exclusive' }) => Promise<unknown>,
+        ): Promise<unknown> => {
+          requested.push(name);
+          await held.promise;
+          return callback({ name, mode: options.mode });
+        },
+      },
+    });
+
+    const publishing = port.updateRef({ name: 'main', expectedHead: undefined, head: revisionId(first.commitId) });
+    await expect(
+      Promise.race([
+        publishing.then((): 'published' => 'published'),
+        new Promise<'waiting'>((resolve) => {
+          setTimeout(() => {
+            resolve('waiting');
+          }, 100);
+        }),
+      ]),
+    ).resolves.toBe('waiting');
+    expect(requested).toEqual([`tau:revision-ref:${filesystem.id}:.git:main`]);
+
+    held.resolve();
+    await expect(publishing).resolves.toMatchObject({ status: 'updated', name: 'main' });
+  });
+
+  it('queues setHead behind the same-named lock another document holds (c2-review S2)', async () => {
+    const filesystem = await createMemoryProvider();
+    const port = createIsomorphicGitRevisionPort({ filesystem });
+    await port.init({ author: { name: 'Tau', email: 'tau@example.test' } });
+    await port.setHead('main');
+
+    const held = Promise.withResolvers<void>();
+    const requested: string[] = [];
+    vi.stubGlobal('navigator', {
+      locks: {
+        request: async (
+          name: string,
+          options: { readonly mode: 'exclusive' },
+          callback: (lock: { readonly name: string; readonly mode: 'exclusive' }) => Promise<unknown>,
+        ): Promise<unknown> => {
+          requested.push(name);
+          await held.promise;
+          return callback({ name, mode: options.mode });
+        },
+      },
+    });
+
+    const moving = port.setHead('agent/other');
+    await expect(
+      Promise.race([
+        moving.then((): 'moved' => 'moved'),
+        new Promise<'waiting'>((resolve) => {
+          setTimeout(() => {
+            resolve('waiting');
+          }, 100);
+        }),
+      ]),
+    ).resolves.toBe('waiting');
+    expect(requested).toEqual([`tau:revision-ref:${filesystem.id}:.git:HEAD`]);
+
+    held.resolve();
+    await moving;
+    expect(await port.readHead()).toMatchObject({ branch: 'agent/other' });
+  });
+});
+
+/**
+ * R2, as its own table-free case: `git rev-parse --git-dir` succeeds from any
+ * subdirectory of any repository, so a project nested inside one must not be
+ * allowed to adopt it. The port owns the store at its own path or it creates
+ * one; it never writes a project's revisions into an enclosing repository.
+ */
+describe.runIf(gitToolchainOnPath)('native-git store isolation (review 4 R2)', () => {
+  it('creates its own repository inside an enclosing one and writes nothing into it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tau-revisions-nested-'));
+    try {
+      const outer = join(root, 'outer');
+      await mkdir(outer, { recursive: true });
+      execFileSync('git', ['init', '--quiet', '--initial-branch=main', outer], { stdio: 'ignore' });
+      const repositoryPath = join(outer, 'project');
+      await mkdir(repositoryPath, { recursive: true });
+
+      const port = createNativeGitRevisionPort({ repositoryPath });
+      await port.init({ author });
+      const receipt = await port.writeRevision({
+        parents: [],
+        tree: tree({ 'a.txt': 'a\n' }),
+        provenance: provenance('user'),
+        summary: summary('Nested base'),
+      });
+      await port.updateRef({ name: 'main', expectedHead: undefined, head: revisionId(receipt.commitId) });
+
+      // The project reads its own revision back…
+      expect(await port.readRevision(revisionId(receipt.commitId))).toBeDefined();
+      expect(await readdir(join(repositoryPath, '.git', 'refs', 'heads'))).toContain('main');
+
+      // …and the enclosing repository holds neither the ref nor the object.
+      const outerReferences = join(outer, '.git', 'refs');
+      expect(await readdir(join(outerReferences, 'heads')).catch(() => [])).toStrictEqual([]);
+      expect(await readdir(join(outerReferences, 'tau')).catch(() => [])).toStrictEqual([]);
+      expect(gitExitCode(outer, ['cat-file', '-t', receipt.commitId])).not.toBe(0);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 180_000);
+
+  it('ignores an ambient GIT_DIR and still creates its own store', async () => {
+    /* Review 4 R25: the child inherited `process.env`, so one exported
+     * `GIT_DIR` pointed every command — `git init` included — at somebody
+     * else's repository, which is the R2 failure through another door. */
+    const root = await mkdtemp(join(tmpdir(), 'tau-revisions-ambient-'));
+    const ambient = join(root, 'ambient');
+    await mkdir(ambient, { recursive: true });
+    execFileSync('git', ['init', '--quiet', '--initial-branch=main', ambient], { stdio: 'ignore' });
+    const repositoryPath = join(root, 'project');
+    await mkdir(repositoryPath, { recursive: true });
+    const restore = process.env['GIT_DIR'];
+    process.env['GIT_DIR'] = join(ambient, '.git');
+    try {
+      const port = createNativeGitRevisionPort({ repositoryPath });
+      await port.init({ author });
+      const receipt = await port.writeRevision({
+        parents: [],
+        tree: tree({ 'a.txt': 'a\n' }),
+        provenance: provenance('user'),
+        summary: summary('Ambient base'),
+      });
+      await port.updateRef({ name: 'main', expectedHead: undefined, head: revisionId(receipt.commitId) });
+
+      expect(await readdir(join(repositoryPath, '.git', 'refs', 'heads'))).toContain('main');
+      expect(await readdir(join(ambient, '.git', 'refs', 'heads')).catch(() => [])).toStrictEqual([]);
+      expect(gitExitCode(ambient, ['--git-dir', join(ambient, '.git'), 'cat-file', '-t', receipt.commitId])).not.toBe(
+        0,
+      );
+    } finally {
+      if (restore === undefined) {
+        delete process.env['GIT_DIR'];
+      } else {
+        process.env['GIT_DIR'] = restore;
+      }
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 180_000);
+
+  it('refuses a bare repository as the project path', async () => {
+    // Review 4 R26: `--show-toplevel` exits 128 in a bare repository, so the
+    // a2 gate read "not a repository" and re-initialised it in place.
+    const root = await mkdtemp(join(tmpdir(), 'tau-revisions-bare-'));
+    try {
+      execFileSync('git', ['init', '--bare', '--quiet', '--initial-branch=main', root], { stdio: 'ignore' });
+      const port = createNativeGitRevisionPort({ repositoryPath: root });
+      await expect(port.init({ author })).rejects.toMatchObject({ code: 'INVALID_REPOSITORY' });
+      /* Untouched: no nested store, and not even the generated ignore file —
+       * the refusal comes before the port writes anything (review 4 R40). */
+      const contents = await readdir(root);
+      expect(contents).not.toContain('.git');
+      expect(contents).not.toContain(generatedIgnorePath);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 180_000);
+
+  it('refuses a linked worktree as the project path and leaves it and its repository untouched', async () => {
+    /* `tau serve` from a linked worktree adopted it: the open rewrote its index
+     * from the main checkout's HEAD and wrote LFS filters into the shared
+     * config, and the close committed it onto the main checkout's branch. */
+    const root = await mkdtemp(join(tmpdir(), 'tau-revisions-worktree-'));
+    try {
+      const main = join(root, 'main');
+      const linked = join(root, 'linked');
+      execFileSync('git', ['init', '--quiet', '--initial-branch=main', main], { stdio: 'ignore' });
+      await writeFile(join(main, 'a.txt'), 'a\n');
+      const commit = (message: string): void => {
+        execFileSync('git', ['add', '--all'], { cwd: main, stdio: 'ignore' });
+        execFileSync(
+          'git',
+          ['-c', 'user.name=Ada', '-c', 'user.email=ada@example.com', 'commit', '--quiet', '-m', message],
+          {
+            cwd: main,
+            stdio: 'ignore',
+          },
+        );
+      };
+      commit('A');
+      execFileSync('git', ['worktree', 'add', '--quiet', '-b', 'side', linked], { cwd: main, stdio: 'ignore' });
+      // The main checkout moves on, so an index read from its HEAD would differ.
+      await writeFile(join(main, 'b.txt'), 'b\n');
+      commit('B');
+      const config = await readFile(join(main, '.git', 'config'), 'utf8');
+
+      const port = createNativeGitRevisionPort({ repositoryPath: linked });
+      await expect(port.init({ author })).rejects.toMatchObject({ code: 'INVALID_REPOSITORY' });
+
+      const contents = await readdir(linked);
+      expect(contents.toSorted()).toStrictEqual(['.git', 'a.txt']);
+      expect(await readFile(join(main, '.git', 'config'), 'utf8')).toBe(config);
+      expect(gitExitCode(linked, ['diff', '--cached', '--quiet'])).toBe(0);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 180_000);
+});
+
+/**
+ * The transport slice, against a real `git http-backend` (D27, P16, S24).
+ *
+ * Both legs answer the same three questions here — what does the remote have,
+ * what did each ref I offered do, and where did a fetch put it — and the row
+ * that matters most is the refusal: a server that turns down one ref must not
+ * be able to stop the branch beside it (A39).
+ */
+describe.runIf(gitToolchainOnPath)('transport against a git http-backend fixture', () => {
+  for (const adapter of adapters) {
+    describe.runIf(adapter.enabled)(adapter.name, () => {
+      let harness: Harness;
+      let port: RevisionPort;
+      let fixture: Awaited<ReturnType<typeof startGitHttpBackend>>;
+      let root: string;
+      let head: RevisionId;
+
+      beforeAll(async () => {
+        harness = await adapter.create();
+        port = harness.withTransport();
+        root = await mkdtemp(join(tmpdir(), 'tau-revisions-remote-'));
+        fixture = await startGitHttpBackend({ root, refusedRef: 'refs/tau/chats/refused' });
+        await port.init({ author });
+        const receipt = await port.writeRevision({
+          parents: [],
+          tree: tree({ 'a.txt': 'a\n' }),
+          provenance: provenance('user'),
+          summary: summary('Base revision'),
+        });
+        head = revisionId(receipt.commitId);
+        await port.updateRef({ name: 'main', expectedHead: undefined, head });
+        await port.tag({ name: 'First version', revisionId: head, note: 'First version' });
+        await port.setRemote({ name: 'tau', url: fixture.url });
+      }, 180_000);
+
+      afterAll(async () => {
+        await fixture.close();
+        await harness.dispose();
+        await rm(root, { force: true, recursive: true });
+      });
+
+      it('records the remote in git’s own remotes list', async () => {
+        expect(await port.listRemotes()).toStrictEqual([{ name: 'tau', url: fixture.url, kind: 'tau' }]);
+      });
+
+      it('refuses to offer a ref that never leaves this host', async () => {
+        await expect(port.push({ remote: 'tau', refs: [{ name: 'refs/remotes/tau/main' }] })).rejects.toMatchObject({
+          code: 'INVALID_TRANSPORT',
+        });
+        await expect(port.push({ remote: 'tau', refs: [{ name: 'refs/tau/workspaces/w1' }] })).rejects.toMatchObject({
+          code: 'INVALID_TRANSPORT',
+        });
+      });
+
+      it('pushes each ref on its own result, and a refused record ref does not stop main', async () => {
+        await harness.writeRawRef('refs/tau/chats/refused', head);
+        await harness.writeRawRef('refs/tau/chats/kept', head);
+        const before = fixture.trail().length;
+
+        const result = await port.push({
+          remote: 'tau',
+          refs: [
+            { name: 'refs/tau/chats/refused' },
+            { name: 'refs/tau/chats/kept' },
+            { name: 'refs/tags/v2' },
+            { name: 'refs/heads/main' },
+          ],
+        });
+
+        expect(result.refs.map((entry) => [entry.name, entry.status])).toStrictEqual([
+          ['refs/tau/chats/refused', 'rejected'],
+          ['refs/tau/chats/kept', 'updated'],
+          ['refs/tags/v2', 'updated'],
+          ['refs/heads/main', 'updated'],
+        ]);
+        /* One receive-pack for all four (EQ8): the per-ref report is the
+         * server's `report-status`, not one request per ref. */
+        expect(
+          fixture
+            .trail()
+            .slice(before)
+            .filter((entry) => entry.endsWith('/git-receive-pack')),
+        ).toHaveLength(1);
+        // The server is the witness, not the client's own bookkeeping.
+        expect(await fixture.git(['rev-parse', 'refs/heads/main'])).toBe(head);
+        expect(await fixture.git(['rev-parse', 'refs/tau/chats/kept'])).toBe(head);
+        expect(gitExitCode(fixture.repositoryPath, ['rev-parse', '--verify', 'refs/tau/chats/refused'])).toBe(1);
+      }, 180_000);
+
+      it('reads an address not recorded yet, under the name it would have, and records nothing (R2)', async () => {
+        const advertised = await port.listRemoteRefs({ name: 'candidate', url: fixture.url });
+
+        expect(advertised.find((entry) => entry.name === 'refs/heads/main')?.head).toBe(head);
+        expect(await port.listRemotes()).toStrictEqual([{ name: 'tau', url: fixture.url, kind: 'tau' }]);
+      }, 180_000);
+
+      it('lists the remote’s refs and re-offers an unchanged one as up to date', async () => {
+        const advertised = await port.listRemoteRefs('tau');
+
+        expect(advertised.find((entry) => entry.name === 'refs/heads/main')?.head).toBe(head);
+        const again = await port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main' }] });
+        expect(again.refs[0]?.status).toBe('upToDate');
+      }, 180_000);
+
+      it('fetches into refs/remotes/<remote>/* and leaves every branch where it was', async () => {
+        const second = await adapter.create();
+        try {
+          const reader = second.withTransport();
+          await reader.init({ author });
+          await reader.setRemote({ name: 'tau', url: fixture.url });
+
+          const fetched = await reader.fetch({ remote: 'tau' });
+
+          expect(fetched.refs.find((entry) => entry.name === 'refs/remotes/tau/main')?.head).toBe(head);
+          expect(fetched.refs.find((entry) => entry.name === 'refs/remotes/tau/tau/chats/kept')?.head).toBe(head);
+          expect(fetched.refs.find((entry) => entry.name === 'refs/remotes/tau/tags/v2')?.head).toBeDefined();
+          expect(await reader.readRef('refs/tags/v2')).toBeDefined();
+          // A fetch is not a merge: the local branch is still unborn (A22).
+          expect(await reader.readRef('main')).toBeUndefined();
+          const fetchedRecord = await reader.readRevision(head);
+          expect(fetchedRecord?.summary.generated).toBe('Base revision');
+        } finally {
+          await second.dispose();
+        }
+      }, 180_000);
+
+      it('enforces a browser fetch ceiling and refuses native budgets before remote contact', async () => {
+        const second = await adapter.create();
+        try {
+          const reader = second.withTransport();
+          await reader.init({ author });
+          await reader.setRemote({ name: 'tau', url: fixture.url });
+          const before = fixture.trail().length;
+          await expect(
+            reader.fetch({ remote: 'tau', refs: ['refs/heads/main'], maximumTransferBytes: 1 }),
+          ).rejects.toMatchObject({
+            code: adapter.name === 'isomorphic-git' ? 'FETCH_LIMIT_EXCEEDED' : 'UNSUPPORTED_OPERATION',
+          });
+          expect(await reader.readRef('refs/remotes/tau/main')).toBeUndefined();
+          if (adapter.name === 'native-git') {
+            expect(fixture.trail()).toHaveLength(before);
+          } else {
+            expect(fixture.trail().length).toBeGreaterThan(before);
+            const fetched = await reader.fetch({
+              remote: 'tau',
+              refs: ['refs/heads/main'],
+              maximumTransferBytes: 1_000_000,
+            });
+            expect(fetched.refs[0]?.head).toBe(head);
+          }
+        } finally {
+          await second.dispose();
+        }
+      }, 180_000);
+
+      /* The browser leg's request count (W13d): every wanted ref — branch,
+       * chat and tag — in one advertisement and one `upload-pack`, and nothing
+       * new costs no pack request. The native leg is `git fetch`'s own. */
+      it.runIf(adapter.name === 'isomorphic-git')(
+        'fetches every wanted ref in one upload-pack, and sends none when nothing is new',
+        async () => {
+          const second = await adapter.create();
+          const requests = (from: number, to?: number): string[] =>
+            fixture
+              .trail()
+              .slice(from, to)
+              .map((entry) => entry.replace(/ \/.*?\.git\//u, ' '));
+          try {
+            const reader = second.withTransport();
+            await reader.init({ author });
+            await reader.setRemote({ name: 'tau', url: fixture.url });
+            const wanted = ['refs/heads/main', 'refs/tau/chats/kept', 'refs/tags/v2'];
+            const first = fixture.trail().length;
+
+            const fetched = await reader.fetch({ remote: 'tau', refs: wanted });
+            const again = fixture.trail().length;
+            await reader.fetch({ remote: 'tau', refs: wanted });
+            const record = await reader.readRevision(head);
+
+            expect(fetched.refs.map((entry) => entry.name)).toStrictEqual([
+              'refs/remotes/tau/main',
+              'refs/remotes/tau/tau/chats/kept',
+              'refs/remotes/tau/tags/v2',
+            ]);
+            expect(record?.summary.generated).toBe('Base revision');
+            expect(requests(first, again)).toStrictEqual(['GET info/refs', 'POST git-upload-pack']);
+            expect(requests(again)).toStrictEqual(['GET info/refs']);
+          } finally {
+            await second.dispose();
+          }
+        },
+        180_000,
+      );
+
+      /* The lease, on both legs (A32, S24, D14 `push(expected)`). It runs last
+       * because the held half deliberately moves the remote's `main`. */
+      it('refuses a stale lease without touching the remote ref, and takes a held one', async () => {
+        const receipt = await port.writeRevision({
+          parents: [head],
+          tree: tree({ 'a.txt': 'b\n' }),
+          provenance: provenance('user'),
+          summary: summary('Second revision'),
+        });
+        const moved = revisionId(receipt.commitId);
+        await port.updateRef({ name: 'main', expectedHead: head, head: moved });
+
+        /* A lease naming a value the remote does not hold: the ref moved under
+         * this host, so the push is refused and nothing on the server changes. */
+        const stale = await port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main', expected: moved }] });
+
+        expect(stale.refs[0]?.status).toBe('rejected');
+        expect(await fixture.git(['rev-parse', 'refs/heads/main'])).toBe(head);
+
+        /* `expected: undefined` leases "must not exist" — a first push that
+         * must not quietly land on somebody else's ref. This one does exist. */
+        const exists = await port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main', expected: undefined }] });
+
+        expect(exists.refs[0]?.status).toBe('rejected');
+        expect(await fixture.git(['rev-parse', 'refs/heads/main'])).toBe(head);
+
+        // The lease that holds is the one that lets the push through.
+        const held = await port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main', expected: head }] });
+
+        expect(held.refs[0]?.status).toBe('updated');
+        expect(await fixture.git(['rev-parse', 'refs/heads/main'])).toBe(moved);
+      }, 180_000);
+
+      /* B6: a rename rewrites the version's tag at the same ref, so it reaches
+       * the remote as an update of `refs/tags/v2` under the lease on what the
+       * remote holds there; without the lease it is a tag that already exists. */
+      it('pushes a renamed version to the same ref under its lease, never unleased', async () => {
+        await port.push({ remote: 'tau', refs: [{ name: 'refs/tags/v2' }] });
+        const pushed = await fixture.git(['rev-parse', 'refs/tags/v2']);
+        await port.tag({ number: 2, name: 'Ready for print', revisionId: head });
+
+        const unleased = await port.push({ remote: 'tau', refs: [{ name: 'refs/tags/v2' }] });
+        expect(unleased.refs[0]?.status).toBe('rejected');
+        expect(await fixture.git(['rev-parse', 'refs/tags/v2'])).toBe(pushed);
+
+        const leased = await port.push({
+          remote: 'tau',
+          refs: [{ name: 'refs/tags/v2', expected: revisionId(pushed) }],
+        });
+        expect(leased.refs[0]?.status).toBe('updated');
+        expect(await fixture.git(['rev-parse', 'refs/tags/v2^{commit}'])).toBe(head);
+        expect(await fixture.git(['cat-file', 'tag', 'refs/tags/v2'])).toContain('"name":"Ready for print"');
+      }, 180_000);
+
+      /* E4 (D10, EQ8): git's floor is one advertisement and one `receive-pack`
+       * per push, whatever the ref count — every extra request is a whole
+       * lease hydrate on the Tau API. Counted off the server's own trail. */
+      it('makes one advertisement and one receive-pack for a three-ref push', async () => {
+        const names = ['refs/heads/w13-a', 'refs/heads/w13-b', 'refs/tau/chats/w13'] as const;
+        const advance = async (parent: RevisionId | undefined, body: string): Promise<RevisionId> => {
+          const receipt = await port.writeRevision({
+            parents: parent === undefined ? [] : [parent],
+            tree: tree({ 'w13.txt': body }),
+            provenance: provenance('user'),
+            summary: summary(body),
+          });
+          const next = revisionId(receipt.commitId);
+          for (const name of names) {
+            // eslint-disable-next-line no-await-in-loop -- three refs, one write each.
+            await harness.writeRawRef(name, next);
+          }
+          return next;
+        };
+        const pushCounted = async (): Promise<{ statuses: string[]; infoRefs: number; receivePacks: number }> => {
+          const before = fixture.trail().length;
+          const pushed = await port.push({ remote: 'tau', refs: names.map((name) => ({ name })) });
+          const trail = fixture.trail().slice(before);
+          return {
+            statuses: pushed.refs.map((entry) => entry.status),
+            infoRefs: trail.filter((entry) => entry === `GET ${new URL(fixture.url).pathname}/info/refs`).length,
+            receivePacks: trail.filter((entry) => entry.endsWith('/git-receive-pack')).length,
+          };
+        };
+
+        const first = await advance(undefined, 'one\n');
+        expect(await pushCounted()).toStrictEqual({
+          statuses: ['updated', 'updated', 'updated'],
+          infoRefs: 1,
+          receivePacks: 1,
+        });
+
+        const second = await advance(first, 'two\n');
+        expect(await pushCounted()).toStrictEqual({
+          statuses: ['updated', 'updated', 'updated'],
+          infoRefs: 1,
+          receivePacks: 1,
+        });
+        for (const name of names) {
+          // eslint-disable-next-line no-await-in-loop -- the server is the witness, one ref at a time.
+          expect(await fixture.git(['rev-parse', name])).toBe(second);
+        }
+
+        expect(await pushCounted()).toStrictEqual({
+          statuses: ['upToDate', 'upToDate', 'upToDate'],
+          infoRefs: 1,
+          receivePacks: 0,
+        });
+      }, 180_000);
+
+      /* R6: a fetch handed the listing it follows reuses that advertisement on
+       * the browser leg; any other value is ignored and the port asks again. */
+      it('fetches against the listing it is handed, with no second advertisement', async () => {
+        const name = 'refs/heads/r6-shared';
+        const receipt = await port.writeRevision({
+          parents: [head],
+          tree: tree({ 'a.txt': 'a\n', 'r6.txt': 'shared\n' }),
+          provenance: provenance('user'),
+          summary: summary('R6'),
+        });
+        const shared = revisionId(receipt.commitId);
+        await harness.writeRawRef(name, shared);
+        await port.push({ remote: 'tau', refs: [{ name }] });
+        await port.updateRef({ name: 'refs/remotes/tau/r6-shared', expectedHead: shared });
+        const advertisements = (trail: readonly string[]): number =>
+          trail.filter((entry) => entry === `GET ${new URL(fixture.url).pathname}/info/refs`).length;
+
+        const before = fixture.trail().length;
+        const listed = await port.listRemoteRefs('tau');
+        const fetched = await port.fetch({ remote: 'tau', refs: [name], advertised: listed });
+        const trail = fixture.trail().slice(before);
+
+        expect(fetched.refs).toStrictEqual([{ name: 'refs/remotes/tau/r6-shared', head: shared }]);
+        expect(advertisements(trail)).toBe(adapter.name === 'isomorphic-git' ? 1 : 2);
+
+        /* A listing this port did not answer is not an advertisement it kept. */
+        const copied = fixture.trail().length;
+        await port.fetch({ remote: 'tau', refs: [name], advertised: [...listed] });
+        expect(advertisements(fixture.trail().slice(copied))).toBe(1);
+      }, 180_000);
+
+      /* One request carries the whole set, so `atomic` means what it means on
+       * the disk leg: one stale lease refuses every ref, and a rewind without a
+       * lease is refused per ref, before anything is sent. */
+      it('refuses an atomic set whole on one stale lease, and a rewind without a lease', async () => {
+        const mint = async (parents: RevisionId[], body: string): Promise<RevisionId> => {
+          const receipt = await port.writeRevision({
+            parents,
+            tree: tree({ 'atomic.txt': body }),
+            provenance: provenance('user'),
+            summary: summary(body),
+          });
+          return revisionId(receipt.commitId);
+        };
+        const x = 'refs/heads/w13-x';
+        const y = 'refs/heads/w13-y';
+        const base = await mint([], 'base\n');
+        await harness.writeRawRef(x, base);
+        await harness.writeRawRef(y, base);
+        await port.push({ remote: 'tau', refs: [{ name: x }, { name: y }] });
+
+        const next = await mint([base], 'next\n');
+        await harness.writeRawRef(x, next);
+        await harness.writeRawRef(y, next);
+        const atomic = await port.push({
+          remote: 'tau',
+          atomic: true,
+          refs: [
+            { name: x, expected: base },
+            { name: y, expected: next },
+          ],
+        });
+
+        expect(atomic.refs.map((entry) => entry.status)).toStrictEqual(['rejected', 'rejected']);
+        expect(await fixture.git(['rev-parse', x])).toBe(base);
+
+        await harness.writeRawRef(x, await mint([], 'unrelated\n'));
+        const rewind = await port.push({ remote: 'tau', refs: [{ name: x }] });
+
+        expect(rewind.refs[0]?.status).toBe('rejected');
+        expect(rewind.refs[0]?.reason).toContain('non-fast-forward');
+        expect(await fixture.git(['rev-parse', x])).toBe(base);
+      }, 180_000);
+
+      /* B3 (O5 inverted): a commit Tau did not write reads as its own git author, with no identity standing in. */
+      it('reads a commit Tau did not record as its git author', async () => {
+        const cwd = fixture.repositoryPath;
+        const env = {
+          ...process.env,
+          ...Object.fromEntries([
+            ['GIT_AUTHOR_NAME', 'Octo Dev'],
+            ['GIT_AUTHOR_EMAIL', 'octo@example.com'],
+            ['GIT_COMMITTER_NAME', 'Octo Dev'],
+            ['GIT_COMMITTER_EMAIL', 'octo@example.com'],
+          ]),
+        };
+        const emptyTree = execFileSync('git', ['mktree'], { cwd, input: '', encoding: 'utf8' }).trim();
+        const upstream = execFileSync('git', ['commit-tree', emptyTree, '-m', 'Upstream change'], {
+          cwd,
+          env,
+          encoding: 'utf8',
+        }).trim();
+        execFileSync('git', ['update-ref', 'refs/heads/upstream', upstream], { cwd, stdio: 'ignore' });
+        const second = await adapter.create();
+        try {
+          const reader = second.withTransport();
+          await reader.init({ author });
+          await reader.setRemote({ name: 'tau', url: fixture.url });
+          await reader.fetch({ remote: 'tau', refs: ['refs/heads/upstream'] });
+
+          const [entry] = await reader.log({ heads: [revisionId(upstream)] });
+          expect(entry?.authorName).toBe('Octo Dev');
+          expect(entry?.provenance.source).toBe('import');
+          expect(Object.keys(entry?.provenance ?? {}).toSorted()).toStrictEqual(['createdAt', 'source']);
+          const [row] = await readRevisionLog(reader, { from: revisionId(upstream), limit: 1 });
+          expect(row).toMatchObject({ source: 'import', who: { kind: 'unrecorded', authorName: 'Octo Dev' } });
+          expect(entry?.authorAccountId).toBeUndefined();
+          /* A commit Tau recorded carries no git author name: its trailer names who made it. */
+          const [recorded] = await reader.log({ heads: [head] });
+          expect(recorded?.authorName).toBeUndefined();
+          expect(recorded?.authorAccountId).toBeUndefined();
+        } finally {
+          await second.dispose();
+        }
+      }, 180_000);
+
+      /* A commit made with stock git under the identity Tau gives a person names that person's account. */
+      it('reads a commit made with git under a Tau no-reply address as that account', async () => {
+        const cwd = fixture.repositoryPath;
+        const address = 'usr_git@users.noreply.tau.new';
+        const env = {
+          ...process.env,
+          ...Object.fromEntries([
+            ['GIT_AUTHOR_NAME', 'Git Person'],
+            ['GIT_AUTHOR_EMAIL', address],
+            ['GIT_COMMITTER_NAME', 'Git Person'],
+            ['GIT_COMMITTER_EMAIL', address],
+          ]),
+        };
+        const emptyTree = execFileSync('git', ['mktree'], { cwd, input: '', encoding: 'utf8' }).trim();
+        const made = execFileSync('git', ['commit-tree', emptyTree, '-m', 'Edited with git'], {
+          cwd,
+          env,
+          encoding: 'utf8',
+        }).trim();
+        execFileSync('git', ['update-ref', 'refs/heads/made-with-git', made], { cwd, stdio: 'ignore' });
+        const second = await adapter.create();
+        try {
+          const reader = second.withTransport();
+          await reader.init({ author });
+          await reader.setRemote({ name: 'tau', url: fixture.url });
+          await reader.fetch({ remote: 'tau', refs: ['refs/heads/made-with-git'] });
+
+          const [row] = await readRevisionLog(reader, { from: revisionId(made), limit: 1 });
+          expect(row).toMatchObject({
+            source: 'import',
+            who: { kind: 'unrecorded', authorName: 'Git Person', authorAccountId: 'usr_git' },
+          });
+        } finally {
+          await second.dispose();
+        }
+      }, 180_000);
+    });
+  }
+});
+
+describe.runIf(gitToolchainOnPath)('native remote credential transport', () => {
+  /* R2: an address *Change backup* probes before recording it is credited exactly as the recorded remote would be. */
+  it.each([{ recorded: true }, { recorded: false }])(
+    'passes the credential only through the child environment (recorded: $recorded)',
+    async ({ recorded }) => {
+      const root = await mkdtemp(join(tmpdir(), 'tau-revisions-credential-'));
+      const fixture = await startGitHttpBackend({ root });
+      const repositoryPath = join(root, 'project');
+      const argumentsLog = join(root, 'arguments.log');
+      const environmentLog = join(root, 'environment.log');
+      const wrapper = join(root, 'git-credential-check');
+      const authorization = 'Bearer github-secret-value';
+      try {
+        await mkdir(repositoryPath, { recursive: true });
+        await writeFile(
+          wrapper,
+          [
+            '#!/bin/sh',
+            `printf '%s\\n' "$@" > ${argumentsLog}`,
+            `printf '%s\n%s\n%s\n%s' "$GIT_CONFIG_KEY_0" "$GIT_CONFIG_VALUE_0" "$GIT_CONFIG_KEY_1" "$GIT_CONFIG_VALUE_1" > ${environmentLog}`,
+            'exec git "$@"',
+            '',
+          ].join('\n'),
+          { mode: 0o755 },
+        );
+        const port = createNativeGitRevisionPort({
+          repositoryPath,
+          gitExecutable: wrapper,
+          remoteCredential: () => ({ repositoryUrl: fixture.url, authorization }),
+        });
+        await port.init({ author });
+        if (recorded) {
+          await port.setRemote({ name: 'origin', url: fixture.url });
+        }
+
+        await port.listRemoteRefs(recorded ? 'origin' : { name: 'origin', url: fixture.url });
+
+        expect(await readFile(argumentsLog, 'utf8')).not.toContain(authorization);
+        expect(await readFile(environmentLog, 'utf8')).toBe(
+          `http.${fixture.url}.extraHeader\nAuthorization: ${authorization}\nlfs.url\n${fixture.url}/info/lfs`,
+        );
+        expect(await readFile(join(repositoryPath, '.git', 'config'), 'utf8')).not.toContain(authorization);
+        /* Read last: the wrapper logs only the newest git command. */
+        const remotes = await port.listRemotes();
+        expect(remotes.length).toBe(recorded ? 1 : 0);
+      } finally {
+        await fixture.close();
+        await rm(root, { force: true, recursive: true });
+      }
+    },
+    180_000,
+  );
+});
+
+/**
+ * What the native leg says a remote said (N1, C2, C66).
+ *
+ * The parity gap L8 measured: `runCommand` captures git's stderr and both throw
+ * sites discarded it, so 401, 403, 404, 413 and 500 all reached the Sync row as
+ * one sentence — *Native Git could not reach the remote.* — which is false in
+ * every one of those cases and left the only recovery path unreachable on this
+ * leg. These rows are the browser leg's `isomorphic-git-adapter.test.ts` table,
+ * asked of the binary.
+ */
+describe.runIf(gitToolchainOnPath)('native remote refusals (N1)', () => {
+  it.each([
+    { status: 401, code: 'REMOTE_UNAUTHORIZED' },
+    { status: 403, code: 'REMOTE_FORBIDDEN' },
+    { status: 404, code: 'REMOTE_NOT_FOUND' },
+    { status: 413, code: 'REMOTE_QUOTA_EXCEEDED' },
+    { status: 500, code: 'REMOTE_UNAVAILABLE' },
+  ])(
+    'answers HTTP $status with $code on every remote verb',
+    async ({ status, code }) => {
+      const root = await mkdtemp(join(tmpdir(), 'tau-revisions-native-refusal-'));
+      const server = createServer((_request, response) => {
+        response.writeHead(status, { 'Content-Type': 'application/json' });
+        response.end('{"code":"X","message":"server sentence"}');
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, '127.0.0.1', resolve);
+      });
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- `AddressInfo` on a listening TCP server.
+      const { port: listening } = server.address() as { port: number };
+      const origin = `http://127.0.0.1:${String(listening)}`;
+      const repositoryPath = join(root, 'project');
+      try {
+        await mkdir(repositoryPath, { recursive: true });
+        const port = createNativeGitRevisionPort({
+          repositoryPath,
+          tauCredential: () => ({ apiBaseUrl: origin, authorization: 'Bearer session-token' }),
+        });
+        await port.init({ author });
+        const receipt = await port.writeRevision({
+          parents: [],
+          tree: tree({ 'part.ts': 'export const a = 1;\n' }),
+          provenance: provenance('user'),
+          summary: summary('First'),
+        });
+        await port.updateRef({ name: 'main', expectedHead: undefined, head: revisionId(receipt.commitId) });
+        await port.setRemote({ name: 'tau', url: `${origin}/v1/git/p1.git` });
+
+        await expect(port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main' }] })).rejects.toMatchObject({ code });
+        await expect(port.fetch({ remote: 'tau', refs: ['refs/heads/main'] })).rejects.toMatchObject({ code });
+        await expect(port.listRemoteRefs('tau')).rejects.toMatchObject({ code });
+      } finally {
+        await new Promise<void>((resolve) => {
+          server.close(() => {
+            resolve();
+          });
+        });
+        await rm(root, { force: true, recursive: true });
+      }
+    },
+    180_000,
+  );
+
+  it('names the files a push over the storage plan could not carry (C66, Rule 13)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tau-revisions-native-quota-'));
+    const fixture = await startGitHttpBackend({
+      root,
+      quotaRefusal: {
+        message: 'Storage quota exceeded: this push needs 5242880 bytes more than the plan allows.',
+        shortfallBytes: 5_242_880,
+        remainingBytes: 0,
+      },
+    });
+    const repositoryPath = join(root, 'project');
+    const large = new Uint8Array(new ArrayBuffer(1024 * 1024 + 1));
+    for (let index = 0; index < large.length; index += 1) {
+      large[index] = (index * 31) % 256;
+    }
+    try {
+      await mkdir(repositoryPath, { recursive: true });
+      const port = createNativeGitRevisionPort({
+        repositoryPath,
+        tauCredential: () => ({ apiBaseUrl: fixture.url, authorization: 'Bearer session-token' }),
+      });
+      await port.init({ author });
+      const receipt = await port.writeRevision({
+        parents: [],
+        tree: new ImmutableRevisionTree([tauAttributes, ['models/bracket.step', large]]),
+        provenance: provenance('user'),
+        summary: summary('Large object'),
+      });
+      await port.updateRef({ name: 'main', expectedHead: undefined, head: revisionId(receipt.commitId) });
+      await port.setRemote({ name: 'tau', url: fixture.url });
+
+      /* The same class the browser leg raises, so `remote.machine` reaches
+       * `quotaRefused` on desktop and the CLI too — with the paths the port
+       * already computed, and the server's own sentence off git-lfs's
+       * `batch response:` line. */
+      await expect(port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main' }] })).rejects.toMatchObject({
+        name: 'LfsQuotaError',
+        refusal: { paths: ['models/bracket.step'] },
+      });
+      expect(fixture.trail().some((entry) => entry.endsWith('/git-receive-pack'))).toBe(false);
+    } finally {
+      await fixture.close();
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 180_000);
+
+  /* Tier 2a (R-2): a server may put the quota marker in front of the batch's sentence; the desktop files it as storage and drops the marker. */
+  it('reads a storage refusal behind the quota marker as storage, without the marker', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tau-revisions-native-quota-marker-'));
+    const sentence = 'This push needs more room than your 1 GB plan has left, so it was not backed up.';
+    const fixture = await startGitHttpBackend({
+      root,
+      quotaRefusal: { message: `Tau: storage quota exceeded — ${sentence}`, shortfallBytes: 1, remainingBytes: 0 },
+    });
+    const repositoryPath = join(root, 'project');
+    const large = new Uint8Array(new ArrayBuffer(1024 * 1024 + 1));
+    for (let index = 0; index < large.length; index += 1) {
+      large[index] = (index * 17) % 256;
+    }
+    try {
+      await mkdir(repositoryPath, { recursive: true });
+      const port = createNativeGitRevisionPort({
+        repositoryPath,
+        tauCredential: () => ({ apiBaseUrl: fixture.url, authorization: 'Bearer session-token' }),
+      });
+      await port.init({ author });
+      const receipt = await port.writeRevision({
+        parents: [],
+        tree: new ImmutableRevisionTree([tauAttributes, ['models/bracket.step', large]]),
+        provenance: provenance('user'),
+        summary: summary('Large object'),
+      });
+      await port.updateRef({ name: 'main', expectedHead: undefined, head: revisionId(receipt.commitId) });
+      await port.setRemote({ name: 'tau', url: fixture.url });
+
+      await expect(port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main' }] })).rejects.toMatchObject({
+        name: 'LfsQuotaError',
+        refusal: { message: sentence, paths: ['models/bracket.step'] },
+      });
+    } finally {
+      await fixture.close();
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 180_000);
+
+  /* RV-W8 F11: the native list reads like the server's — largest first, at most ten. */
+  it('names the largest ten files first when a push is over the storage plan', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tau-revisions-native-quota-order-'));
+    const fixture = await startGitHttpBackend({
+      root,
+      quotaRefusal: { message: 'Storage quota exceeded.', shortfallBytes: 1, remainingBytes: 0 },
+    });
+    const repositoryPath = join(root, 'project');
+    /* Eleven large files, named so alphabetical order is smallest first: the old sorted list fails this row. */
+    const files = Array.from({ length: 11 }, (_, index) => {
+      const bytes = new Uint8Array(new ArrayBuffer(1024 * 1024 + 1 + index * 4096));
+      for (let offset = 0; offset < bytes.length; offset += 1) {
+        bytes[offset] = (offset * 31 + index) % 256;
+      }
+      return [`models/${String.fromCodePoint(97 + index)}.step`, bytes] as const;
+    });
+    try {
+      await mkdir(repositoryPath, { recursive: true });
+      const port = createNativeGitRevisionPort({
+        repositoryPath,
+        tauCredential: () => ({ apiBaseUrl: fixture.url, authorization: 'Bearer session-token' }),
+      });
+      await port.init({ author });
+      const receipt = await port.writeRevision({
+        parents: [],
+        tree: new ImmutableRevisionTree([tauAttributes, ...files]),
+        provenance: provenance('user'),
+        summary: summary('Large objects'),
+      });
+      await port.updateRef({ name: 'main', expectedHead: undefined, head: revisionId(receipt.commitId) });
+      await port.setRemote({ name: 'tau', url: fixture.url });
+
+      await expect(port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main' }] })).rejects.toMatchObject({
+        name: 'LfsQuotaError',
+        refusal: {
+          paths: files
+            .toReversed()
+            .slice(0, 10)
+            .map(([path]) => path),
+        },
+      });
+    } finally {
+      await fixture.close();
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 180_000);
+});
+
+/**
+ * The browser's LFS client, end to end over the batch API (S49, V13, AC16).
+ *
+ * The disk leg gets this from the `git-lfs` binary; in the page it is Tau's, so
+ * the three claims that matter are proved against a real server: the object
+ * goes up *before* the ref that names it, it goes up *once*, and a second store
+ * that only fetched pointers reads the bytes back.
+ */
+describe.runIf(gitToolchainOnPath)('LFS clients over the batch API', () => {
+  /**
+   * What a store holds under one oid's directory: the object or a partial of it.
+   *
+   * @param files - The store's filesystem.
+   * @param oid - The large object's id.
+   * @returns The entries named for the oid.
+   */
+  const keptUnder = async (files: FileSystemProvider, oid: string): Promise<readonly string[]> => {
+    const directory = `.git/${lfsObjectPath(oid).slice(0, lfsObjectPath(oid).lastIndexOf('/'))}`;
+    let entries: readonly string[];
+    try {
+      entries = await files.readdir(directory);
+    } catch {
+      return [];
+    }
+    return entries.filter((entry) => entry.startsWith(oid));
+  };
+  const large = ((): Uint8Array<ArrayBuffer> => {
+    const bytes = new Uint8Array(new ArrayBuffer(5 * 1024 * 1024));
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = (index * 37) % 251;
+    }
+    return bytes;
+  })();
+
+  it('keeps LFS and Git bound to the approved destination when the saved remote changes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tau-revisions-lfs-bound-'));
+    const fixture = await startGitHttpBackend({ root: join(root, 'approved') });
+    const other = await startGitHttpBackend({ root: join(root, 'changed') });
+    let changeRemote: (() => Promise<void>) | undefined;
+    const writer = await isomorphicHarness(async (input, init) => {
+      const response = await globalThis.fetch(input, init);
+      if (
+        (input instanceof Request ? input.url : String(input)).includes('service=git-receive-pack') &&
+        changeRemote !== undefined
+      ) {
+        const change = changeRemote;
+        changeRemote = undefined;
+        await change();
+      }
+      return response;
+    });
+    try {
+      const port = writer.withTransport();
+      await port.init({ author });
+      const receipt = await port.writeRevision({
+        parents: [],
+        tree: tauTree({ 'models/bracket.step': large }),
+        provenance: provenance('user'),
+        summary: summary('Bound large object'),
+      });
+      await port.updateRef({ name: 'main', expectedHead: undefined, head: revisionId(receipt.commitId) });
+      await port.setRemote({ name: 'origin', url: fixture.url, provider: 'github', repositoryId: '1' });
+      changeRemote = async () =>
+        port.setRemote({ name: 'origin', url: other.url, provider: 'github', repositoryId: '2' });
+      const result = await port.push({
+        remote: 'origin',
+        repositoryUrl: fixture.url,
+        refs: [{ name: 'refs/heads/main' }],
+      });
+      expect(changeRemote).toBeUndefined();
+      expect(result.refs[0]?.status).toBe('updated');
+      expect(fixture.uploadCount()).toBe(1);
+      expect(other.trail()).toStrictEqual([]);
+    } finally {
+      await fixture.close();
+      await other.close();
+      await writer.dispose();
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 60_000);
+
+  /* P20: tracking refs outlive `setRemote`, so a remote re-pointed from an LFS
+   * host to a plain Git one still has the old host's `refs/remotes/origin/*`.
+   * The refusal reads what this host would be sent, not what the old one held. */
+  it('refuses large objects to a plain Git remote re-pointed from an LFS host, by what it would send', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tau-revisions-lfs-repointed-'));
+    const hosted = await startGitHttpBackend({ root: join(root, 'hosted') });
+    const plain = await startGitHttpBackend({ root: join(root, 'plain'), name: 'plain' });
+    const writer = await isomorphicHarness();
+    try {
+      const port = writer.withTransport();
+      await port.init({ author });
+      const first = await port.writeRevision({
+        parents: [],
+        tree: tauTree({ 'models/bracket.step': large, 'main.ts': 'one\n' }),
+        provenance: provenance('user'),
+        summary: summary('Large object'),
+      });
+      await port.updateRef({ name: 'main', expectedHead: undefined, head: revisionId(first.commitId) });
+      await port.setRemote({ name: 'origin', url: hosted.url, provider: 'github', repositoryId: '1' });
+      await port.push({ remote: 'origin', refs: [{ name: 'refs/heads/main' }] });
+      expect(hosted.uploadCount()).toBe(1);
+
+      // A text edit: against the stale tracking ref, it sends no large object.
+      const second = await port.writeRevision({
+        parents: [revisionId(first.commitId)],
+        tree: tauTree({ 'models/bracket.step': large, 'main.ts': 'two\n' }),
+        provenance: provenance('user'),
+        summary: summary('Text edit'),
+      });
+      await port.updateRef({
+        name: 'main',
+        expectedHead: revisionId(first.commitId),
+        head: revisionId(second.commitId),
+      });
+      await port.setRemote({ name: 'origin', url: plain.url });
+
+      const pushing = port.push({ remote: 'origin', refs: [{ name: 'refs/heads/main' }] });
+      await expect(pushing).rejects.toMatchObject({ code: 'LFS_REMOTE_UNSUPPORTED' });
+      await expect(pushing).rejects.toThrow(/models\/bracket\.step/u);
+      expect(plain.trail().some((entry) => entry.endsWith('/git-receive-pack'))).toBe(false);
+      expect(plain.batches()).toStrictEqual([]);
+    } finally {
+      await hosted.close();
+      await plain.close();
+      await writer.dispose();
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 60_000);
+
+  it('uploads once before the ref push, and a second store reads the bytes back', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tau-revisions-lfs-'));
+    const fixture = await startGitHttpBackend({ root });
+    const writer = await isomorphicHarness();
+    const reader = await isomorphicHarness();
+    try {
+      const port = writer.withTransport();
+      await port.init({ author });
+      const receipt = await port.writeRevision({
+        parents: [],
+        tree: tauTree({ 'models/bracket.step': large }),
+        provenance: provenance('user'),
+        summary: summary('Large object'),
+      });
+      const head = revisionId(receipt.commitId);
+      await port.updateRef({ name: 'main', expectedHead: undefined, head });
+      await port.setRemote({ name: 'tau', url: fixture.url });
+
+      const result = await port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main' }] });
+
+      expect(result.refs[0]?.status).toBe('updated');
+      expect(fixture.uploadCount()).toBe(1);
+      const trail = fixture.trail();
+      const uploaded = trail.findIndex((entry) => entry.startsWith('PUT /lfs/'));
+      const received = trail.findIndex((entry) => entry.endsWith('/git-receive-pack'));
+      // A pointer must never land ahead of its object (A39).
+      expect(uploaded).toBeGreaterThanOrEqual(0);
+      expect(uploaded).toBeLessThan(received);
+
+      /* The object was *verified*, through the Tau client: the server counts an
+       * object against the plan only when the client says it landed, and that
+       * route is behind the API's auth guard (W11a §9.6). */
+      expect(fixture.verified()).toStrictEqual([lfsPointerFor(large).pointer.oid]);
+
+      // A second push offers the same object and the remote asks for nothing.
+      await port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main' }] });
+      expect(fixture.uploadCount()).toBe(1);
+
+      const second = reader.withTransport();
+      await second.init({ author });
+      await second.setRemote({ name: 'tau', url: fixture.url });
+      await second.fetch({ remote: 'tau' });
+
+      // The fetch brought the pointer; reading the tree brings the bytes.
+      const fetchedTree = await second.readTree(head);
+      const fetchedRecord = await second.readRevision(head);
+      const writtenRecord = await port.readRevision(head);
+      expect(fetchedTree?.get('models/bracket.step')).toStrictEqual(large);
+      expect(fetchedRecord?.treeId).toBe(writtenRecord?.treeId);
+
+      const nativeReader = await createNativeHarness();
+      try {
+        const nativePort = nativeReader.withTransport();
+        await nativePort.init({ author });
+        await nativePort.setRemote({ name: 'tau', url: fixture.url });
+        await nativePort.fetch({ remote: 'tau' });
+        const nativeTree = await nativePort.readTree(head);
+        expect(nativeTree?.get('models/bracket.step')).toStrictEqual(large);
+      } finally {
+        await nativeReader.dispose();
+      }
+      expect(fixture.uploadCount()).toBe(1);
+    } finally {
+      await fixture.close();
+      await writer.dispose();
+      await reader.dispose();
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 180_000);
+
+  /* D11, S9: a push discovers its large objects from the commits it sends, so
+   * an edit after a history of large files lists only the new object in its
+   * batch, reads none of the old ones, and a push with nothing to send asks
+   * the LFS endpoint nothing at all. */
+  it('lists only the new large objects of the commits a push sends', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tau-revisions-lfs-diff-'));
+    const fixture = await startGitHttpBackend({ root });
+    const writer = await isomorphicHarness();
+    try {
+      const port = writer.withTransport();
+      await port.init({ author });
+      const variant = (seed: number): Uint8Array<ArrayBuffer> => large.map((byte) => (byte + seed) % 256);
+      let head: RevisionId | undefined;
+      const commit = async (files: Readonly<Record<string, string | Uint8Array<ArrayBuffer>>>): Promise<void> => {
+        const receipt = await port.writeRevision({
+          parents: head === undefined ? [] : [head],
+          tree: tauTree(files),
+          provenance: provenance('user'),
+          summary: summary('Revision'),
+        });
+        const next = revisionId(receipt.commitId);
+        await port.updateRef({ name: 'main', expectedHead: head, head: next });
+        head = next;
+      };
+      await commit({ 'models/a.step': large, 'main.ts': 'one\n' });
+      await commit({ 'models/a.step': large, 'models/b.step': variant(1), 'main.ts': 'two\n' });
+      await port.setRemote({ name: 'tau', url: fixture.url });
+      await port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main' }] });
+      // A remote with no history is sent every commit, so both objects.
+      expect(fixture.batches().map((batch) => batch.oids.toSorted())).toStrictEqual([
+        [lfsPointerFor(large).pointer.oid, lfsPointerFor(variant(1)).pointer.oid].toSorted(),
+      ]);
+
+      await commit({
+        'models/a.step': large,
+        'models/b.step': variant(1),
+        'models/c.step': variant(2),
+        'main.ts': 'two\n',
+      });
+      await port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main' }] });
+      expect(fixture.batches().slice(1)).toStrictEqual([
+        { operation: 'upload', oids: [lfsPointerFor(variant(2)).pointer.oid] },
+      ]);
+
+      // An edit to a text file sends no large object, so no batch call.
+      await commit({
+        'models/a.step': large,
+        'models/b.step': variant(1),
+        'models/c.step': variant(2),
+        'main.ts': 'three\n',
+      });
+      await port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main' }] });
+      // Nor does a push the remote is already up to date with.
+      await port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main' }] });
+      expect(fixture.batches()).toHaveLength(2);
+      expect(fixture.uploadCount()).toBe(3);
+      expect(await fixture.git(['rev-parse', 'refs/heads/main'])).toBe(head);
+    } finally {
+      await fixture.close();
+      await writer.dispose();
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 120_000);
+
+  /* D9, D11: a download is verified by reading back what it stored, so an
+   * object the remote serves at the right size with the wrong bytes is
+   * refused, nothing is kept under its oid, and the right bytes still land. */
+  it('refuses a same-size corrupt download, on the wire or on disk, by its read-back', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tau-revisions-lfs-readback-'));
+    const fixture = await startGitHttpBackend({ root });
+    const writer = await isomorphicHarness();
+    try {
+      const port = writer.withTransport();
+      await port.init({ author });
+      const receipt = await port.writeRevision({
+        parents: [],
+        tree: tauTree({ 'models/bracket.step': large }),
+        provenance: provenance('user'),
+        summary: summary('Large object'),
+      });
+      const head = revisionId(receipt.commitId);
+      await port.updateRef({ name: 'main', expectedHead: undefined, head });
+      await port.setRemote({ name: 'tau', url: fixture.url });
+      await port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main' }] });
+      /* Right bytes in hand, wrong bytes on disk: only the read-back sees it. */
+      const provider = await createMemoryProvider();
+      const corrupting = Object.assign(Object.create(provider) as typeof provider, {
+        writeFile: async (path: string, data: Parameters<typeof provider.writeFile>[1]) =>
+          provider.writeFile(
+            path,
+            path.endsWith('.partial') && data instanceof Uint8Array
+              ? data.map((byte, index) => (index === 0 ? (byte + 1) % 256 : byte))
+              : data,
+          ),
+      });
+      const tearing = createIsomorphicGitRevisionPort({
+        filesystem: corrupting,
+        http: createRevisionHttpClient({ authorization: () => 'Bearer session-token' }),
+      });
+      await tearing.init({ author });
+      await tearing.setRemote({ name: 'tau', url: fixture.url });
+      await tearing.fetch({ remote: 'tau' });
+      await expect(tearing.readTree(head)).rejects.toThrow(/did not hash to its own id/u);
+      const { oid } = lfsPointerFor(large).pointer;
+      await expect(keptUnder(provider, oid)).resolves.toStrictEqual([]);
+      const served = fixture.objects as Map<string, Uint8Array<ArrayBuffer>>;
+      served.set(
+        oid,
+        large.map((byte, index) => (index === 0 ? (byte + 1) % 256 : byte)),
+      );
+
+      const readerFiles = await createMemoryProvider();
+      const reader = createIsomorphicGitRevisionPort({
+        filesystem: readerFiles,
+        http: createRevisionHttpClient({ authorization: () => 'Bearer session-token' }),
+      });
+      await reader.init({ author });
+      await reader.setRemote({ name: 'tau', url: fixture.url });
+      await reader.fetch({ remote: 'tau' });
+      await expect(reader.readTree(head)).rejects.toThrow(/did not hash to its own id/u);
+      await expect(keptUnder(readerFiles, oid)).resolves.toStrictEqual([]);
+
+      served.set(oid, large);
+      const healed = await reader.readTree(head);
+      expect(healed?.get('models/bracket.step')).toStrictEqual(large);
+      await expect(keptUnder(readerFiles, oid)).resolves.toStrictEqual([oid]);
+    } finally {
+      await fixture.close();
+      await writer.dispose();
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 120_000);
+
+  /* D9: another writer's same-size copy landing mid-download does not let the
+   * download's own bytes through unread: corrupt on the wire, they are refused. */
+  it('refuses corrupt downloaded bytes when another writer stores a same-size copy meanwhile', async () => {
+    let fetchSpy: { mockRestore: () => void } | undefined;
+    const root = await mkdtemp(join(tmpdir(), 'tau-revisions-lfs-raced-'));
+    const fixture = await startGitHttpBackend({ root });
+    const writer = await isomorphicHarness();
+    try {
+      const port = writer.withTransport();
+      await port.init({ author });
+      const receipt = await port.writeRevision({
+        parents: [],
+        tree: tauTree({ 'models/bracket.step': large }),
+        provenance: provenance('user'),
+        summary: summary('Large object'),
+      });
+      const head = revisionId(receipt.commitId);
+      await port.updateRef({ name: 'main', expectedHead: undefined, head });
+      await port.setRemote({ name: 'tau', url: fixture.url });
+      await port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main' }] });
+      const { oid } = lfsPointerFor(large).pointer;
+      (fixture.objects as Map<string, Uint8Array<ArrayBuffer>>).set(
+        oid,
+        large.map((byte, index) => (index === 0 ? (byte + 1) % 256 : byte)),
+      );
+
+      const files = await createMemoryProvider();
+      const stored = `.git/${lfsObjectPath(oid)}`;
+      const reader = createIsomorphicGitRevisionPort({
+        filesystem: files,
+        http: createRevisionHttpClient({ authorization: () => 'Bearer session-token' }),
+      });
+      await reader.init({ author });
+      await reader.setRemote({ name: 'tau', url: fixture.url });
+      await reader.fetch({ remote: 'tau' });
+      /* A Tau Cloud transfer goes through the page's own fetch: the object's answer
+       * arrives, and only then does the other tab's whole copy land. */
+      const pageFetch = globalThis.fetch.bind(globalThis);
+      let raced = 0;
+      fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        const response = await pageFetch(input, init);
+        if ((input instanceof Request ? input.url : String(input)).endsWith(`/lfs/${oid}`)) {
+          raced += 1;
+          await files.mkdir(stored.slice(0, stored.lastIndexOf('/')), { recursive: true });
+          await files.writeFile(stored, large);
+        }
+        return response;
+      });
+
+      await expect(reader.readTree(head)).rejects.toThrow(/did not hash to its own id/u);
+      expect(raced).toBe(1);
+      await expect(keptUnder(files, oid)).resolves.toStrictEqual([oid]);
+    } finally {
+      fetchSpy?.mockRestore();
+      await fixture.close();
+      await writer.dispose();
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 60_000);
+
+  /* W6.4, I2: a download is streamed to its partial where the provider holds a chunk at a time, read back once and
+   * hashed once, and the read-back is what is delivered; a provider that would gather the stream is written whole. */
+  it.each([
+    { streamsWrites: true, written: 'writeFileStream object' },
+    { streamsWrites: false, written: 'writeFile object' },
+  ])(
+    'writes a download to its partial ($written), reads it back once, hashes it once, and delivers the verified bytes',
+    async ({ streamsWrites, written }) => {
+      const root = await mkdtemp(join(tmpdir(), 'tau-revisions-lfs-streamed-'));
+      const fixture = await startGitHttpBackend({ root });
+      const writer = await isomorphicHarness();
+      try {
+        const port = writer.withTransport();
+        await port.init({ author });
+        const receipt = await port.writeRevision({
+          parents: [],
+          tree: tauTree({ 'models/bracket.step': large }),
+          provenance: provenance('user'),
+          summary: summary('Large object'),
+        });
+        const head = revisionId(receipt.commitId);
+        await port.updateRef({ name: 'main', expectedHead: undefined, head });
+        await port.setRemote({ name: 'tau', url: fixture.url });
+        await port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main' }] });
+
+        const files = await createMemoryProvider();
+        const { oid } = lfsPointerFor(large).pointer;
+        const calls: string[] = [];
+        const counted = Object.assign(Object.create(files) as typeof files, {
+          /* Memory gathers a stream; it stands in here for both kinds of provider. */
+          capabilities: { ...files.capabilities, streamsWrites },
+          writeFile: async (path: string, data: Uint8Array<ArrayBuffer> | string) => {
+            calls.push(path.includes(oid) ? 'writeFile object' : 'writeFile');
+            return files.writeFile(path, data);
+          },
+          writeFileStream: async (path: string, source: ReadableStream<Uint8Array<ArrayBuffer>>) => {
+            calls.push(path.includes(oid) ? 'writeFileStream object' : 'writeFileStream');
+            return files.writeFileStream(path, source);
+          },
+          readFile: (async (path: string, encoding?: 'utf8') => {
+            if (path.includes(oid)) {
+              calls.push('readFile object');
+            }
+            return encoding === 'utf8' ? files.readFile(path, 'utf8') : files.readFile(path);
+          }) as typeof files.readFile,
+        });
+        const inline = createInlineCompute();
+        const delivered: Array<Uint8Array<ArrayBuffer>> = [];
+        const reader = createIsomorphicGitRevisionPort({
+          filesystem: counted,
+          http: createRevisionHttpClient({ authorization: () => 'Bearer session-token' }),
+          compute: {
+            ...inline,
+            sha256: async (bytes, consumed) => {
+              calls.push('sha256');
+              return inline.sha256(bytes, consumed);
+            },
+            sha256Kept: async (bytes) => {
+              calls.push('sha256Kept');
+              const kept = await inline.sha256Kept(bytes);
+              delivered.push(kept.data);
+              return kept;
+            },
+          },
+        });
+        await reader.init({ author });
+        await reader.setRemote({ name: 'tau', url: fixture.url });
+        await reader.fetch({ remote: 'tau' });
+        const read = await reader.readTree(head);
+
+        expect(calls.filter((call) => call.includes('object') || call.startsWith('sha256'))).toEqual([
+          written,
+          'readFile object',
+          'sha256Kept',
+        ]);
+        expect(delivered).toHaveLength(1);
+        expect(read?.get('models/bracket.step')).toEqual(large);
+        await expect(keptUnder(files, oid)).resolves.toStrictEqual([oid]);
+      } finally {
+        await fixture.close();
+        await writer.dispose();
+        await rm(root, { force: true, recursive: true });
+      }
+    },
+    60_000,
+  );
+
+  /* D9: a read-back that throws — here the hash itself — keeps no `.partial`. */
+  it('keeps no partial download when hashing the read-back throws', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tau-revisions-lfs-hash-throws-'));
+    const fixture = await startGitHttpBackend({ root });
+    const writer = await isomorphicHarness();
+    try {
+      const port = writer.withTransport();
+      await port.init({ author });
+      const receipt = await port.writeRevision({
+        parents: [],
+        tree: tauTree({ 'models/bracket.step': large }),
+        provenance: provenance('user'),
+        summary: summary('Large object'),
+      });
+      const head = revisionId(receipt.commitId);
+      await port.updateRef({ name: 'main', expectedHead: undefined, head });
+      await port.setRemote({ name: 'tau', url: fixture.url });
+      await port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main' }] });
+
+      const files = await createMemoryProvider();
+      const inline = createInlineCompute();
+      const reader = createIsomorphicGitRevisionPort({
+        filesystem: files,
+        http: createRevisionHttpClient({ authorization: () => 'Bearer session-token' }),
+        compute: {
+          ...inline,
+          sha256: async () => {
+            throw new Error('The hash failed.');
+          },
+          /* The read-back is hashed here, and returned: a failure leaves the partial to be swept. */
+          sha256Kept: async () => {
+            throw new Error('The hash failed.');
+          },
+        },
+      });
+      await reader.init({ author });
+      await reader.setRemote({ name: 'tau', url: fixture.url });
+      await reader.fetch({ remote: 'tau' });
+      await expect(reader.readTree(head)).rejects.toThrow(/The hash failed/u);
+      await expect(keptUnder(files, lfsPointerFor(large).pointer.oid)).resolves.toStrictEqual([]);
+    } finally {
+      await fixture.close();
+      await writer.dispose();
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 60_000);
+
+  /* Load-path audit fix 1: opening a project read its large objects one batch
+   * call and one transfer at a time. A store that fetched only pointers now
+   * hydrates the tree in one batch call, and a second read asks the remote
+   * nothing at all. */
+  it('hydrates a fetched tree in one batch call, and reads it again without the remote', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tau-revisions-lfs-hydrate-'));
+    const fixture = await startGitHttpBackend({ root });
+    const writer = await isomorphicHarness();
+    const parts = Array.from({ length: 5 }, (_, part) => {
+      const bytes = new Uint8Array(new ArrayBuffer(1024 * 1024 + part));
+      for (let index = 0; index < bytes.length; index += 1) {
+        bytes[index] = (index * 31 + part) % 256;
+      }
+      return [`models/part-${String(part)}.step`, bytes] as const;
+    });
+    const reports: LfsFetchReport[] = [];
+    try {
+      const port = writer.withTransport();
+      await port.init({ author });
+      const receipt = await port.writeRevision({
+        parents: [],
+        tree: tauTree({ ...Object.fromEntries(parts), 'main.ts': 'export {};\n' }),
+        provenance: provenance('user'),
+        summary: summary('Five large objects'),
+      });
+      const head = revisionId(receipt.commitId);
+      await port.updateRef({ name: 'main', expectedHead: undefined, head });
+      await port.setRemote({ name: 'tau', url: fixture.url });
+      await port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main' }] });
+
+      const reader = createIsomorphicGitRevisionPort({
+        filesystem: await createMemoryProvider(),
+        http: createRevisionHttpClient({ authorization: () => 'Bearer session-token' }),
+        onLfsFetch: (report) => {
+          reports.push(report);
+        },
+      });
+      await reader.init({ author });
+      await reader.setRemote({ name: 'tau', url: fixture.url });
+      await reader.fetch({ remote: 'tau' });
+
+      const before = fixture.trail().length;
+      const fetched = await reader.readTree(head);
+      for (const [path, bytes] of parts) {
+        expect(fetched?.get(path)).toStrictEqual(bytes);
+      }
+      expect(fetched?.get('main.ts')).toStrictEqual(encoder.encode('export {};\n'));
+      const hydrating = fixture.trail().slice(before);
+      expect(hydrating.filter((entry) => entry.endsWith('/info/lfs/objects/batch'))).toHaveLength(1);
+      expect(hydrating.filter((entry) => entry.startsWith('GET /lfs/'))).toHaveLength(parts.length);
+      expect(reports).toStrictEqual([
+        expect.objectContaining({
+          networkObjects: parts.length,
+          networkBytes: parts.reduce((sum, [, bytes]) => sum + bytes.byteLength, 0),
+          localObjects: 0,
+          localBytes: 0,
+        }),
+      ]);
+
+      // Every object was stored as it arrived: the second read is local.
+      const after = fixture.trail().length;
+      const again = await reader.readTree(head);
+      expect(again?.get(parts[4]![0])).toStrictEqual(parts[4]![1]);
+      expect(fixture.trail()).toHaveLength(after);
+      expect(reports).toHaveLength(1);
+    } finally {
+      await fixture.close();
+      await writer.dispose();
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 180_000);
+
+  /* Live: a linked import of a repository whose history held an LFS file could
+   * never back up — the push read the bytes of every pointer it offered, and a
+   * fetched pointer has none here until somebody opens the file. */
+  it('pushes history whose large objects it only fetched as pointers, without reading them', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tau-revisions-lfs-pointer-'));
+    const fixture = await startGitHttpBackend({ root });
+    const writer = await isomorphicHarness();
+    const reader = await isomorphicHarness();
+    try {
+      const port = writer.withTransport();
+      await port.init({ author });
+      const receipt = await port.writeRevision({
+        parents: [],
+        tree: tauTree({ 'models/bracket.step': large }),
+        provenance: provenance('user'),
+        summary: summary('Large object'),
+      });
+      const head = revisionId(receipt.commitId);
+      await port.updateRef({ name: 'main', expectedHead: undefined, head });
+      await port.setRemote({ name: 'tau', url: fixture.url });
+      await port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main' }] });
+
+      const second = reader.withTransport();
+      await second.init({ author });
+      await second.setRemote({ name: 'tau', url: fixture.url });
+      await second.fetch({ remote: 'tau' });
+      await second.updateRef({ name: 'imported', expectedHead: undefined, head });
+
+      const result = await second.push({ remote: 'tau', refs: [{ name: 'refs/heads/imported' }] });
+
+      expect(result.refs[0]?.status).toBe('updated');
+      expect(await fixture.git(['rev-parse', 'refs/heads/imported'])).toBe(head);
+      expect(fixture.uploadCount()).toBe(1);
+    } finally {
+      await fixture.close();
+      await writer.dispose();
+      await reader.dispose();
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 180_000);
+
+  it('refuses the push when the verify call carries no Tau credential', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tau-revisions-verify-'));
+    const fixture = await startGitHttpBackend({ root });
+    const filesystem = await createMemoryProvider();
+    try {
+      /* No credential resolver and no cookie: `verify` is a Tau route behind the
+       * API's auth guard, so a client that cannot authenticate it must fail the
+       * push rather than report a large object the server never counted. */
+      const port = createIsomorphicGitRevisionPort({ filesystem, http: createRevisionHttpClient() });
+      await port.init({ author });
+      const receipt = await port.writeRevision({
+        parents: [],
+        tree: tauTree({ 'models/bracket.step': large }),
+        provenance: provenance('user'),
+        summary: summary('Large object'),
+      });
+      await port.updateRef({ name: 'main', expectedHead: undefined, head: revisionId(receipt.commitId) });
+      await port.setRemote({ name: 'tau', url: fixture.url });
+
+      await expect(port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main' }] })).rejects.toThrow(/\(401\)/u);
+      expect(fixture.verified()).toStrictEqual([]);
+    } finally {
+      await fixture.close();
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 180_000);
+
+  it('sends the credential as a header and refuses a push over the storage plan', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tau-revisions-quota-'));
+    const fixture = await startGitHttpBackend({
+      root,
+      quotaRefusal: {
+        message: 'Storage quota exceeded: this push needs 5242880 bytes more than the plan allows.',
+        shortfallBytes: 5_242_880,
+        remainingBytes: 0,
+      },
+    });
+    const filesystem = await createMemoryProvider();
+    try {
+      const port = createIsomorphicGitRevisionPort({
+        filesystem,
+        http: createRevisionHttpClient({ authorization: () => 'Bearer session-token' }),
+      });
+      await port.init({ author });
+      const receipt = await port.writeRevision({
+        parents: [],
+        tree: tauTree({ 'models/bracket.step': large }),
+        provenance: provenance('user'),
+        summary: summary('Large object'),
+      });
+      await port.updateRef({ name: 'main', expectedHead: undefined, head: revisionId(receipt.commitId) });
+      await port.setRemote({ name: 'tau', url: fixture.url });
+
+      /* The server answers in object ids; the port maps them back to the paths
+       * the Sync region lists (D16, AC16). */
+      await expect(port.push({ remote: 'tau', refs: [{ name: 'refs/heads/main' }] })).rejects.toMatchObject({
+        name: 'LfsQuotaError',
+        refusal: { paths: ['models/bracket.step'], shortfallBytes: 5_242_880 },
+      });
+
+      // I8: the credential is a header on every request, never a query string.
+      expect(fixture.authorizations()).toContain('Bearer session-token');
+      expect(fixture.trail().some((entry) => entry.includes('token'))).toBe(false);
+      // Nothing landed: the refusal is before the ref push, not after it.
+      expect(fixture.trail().some((entry) => entry.endsWith('/git-receive-pack'))).toBe(false);
+    } finally {
+      await fixture.close();
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 180_000);
+});
+
+/*
+ * R14: the live checkout's index names the tree of the branch `HEAD` names.
+ *
+ * Tau never reads the index; stock Git does. Without it `git status` in a
+ * project listed every file as a staged deletion and `git commit -a` committed
+ * the whole project deleted — and in a repository Tau adopted, the person's
+ * stale index reverted Tau's revisions. Both legs over a real directory, read
+ * back with the `git` binary, so one reader judges both writers.
+ */
+describe.runIf(gitToolchainOnPath)('the live index follows HEAD (R14)', () => {
+  // Environment names, not identifiers: assigned rather than spelled as keys.
+  const gitEnvironment: NodeJS.ProcessEnv = { ...process.env };
+  gitEnvironment['GIT_CONFIG_GLOBAL'] = '/dev/null';
+  gitEnvironment['GIT_CONFIG_NOSYSTEM'] = '1';
+  delete gitEnvironment['GIT_DIR'];
+  const git = (cwd: string, args: readonly string[]): string =>
+    execFileSync('git', args, { cwd, env: gitEnvironment }).toString('utf8').trim();
+  /** `mode oid path` per blob, the same spelling for the index and a tree. */
+  const indexEntries = (cwd: string): string =>
+    git(cwd, ['ls-files', '--stage'])
+      .split('\n')
+      .map((line) => line.replace(/ 0\t/u, ' '))
+      .join('\n');
+  const treeEntries = (cwd: string, revision: string): string =>
+    git(cwd, ['ls-tree', '-r', revision])
+      .split('\n')
+      .map((line) => line.replace(/ blob /u, ' ').replace('\t', ' '))
+      .join('\n');
+
+  const legs = [
+    {
+      name: 'native-git',
+      create: (repositoryPath: string): RevisionPort => createNativeGitRevisionPort({ repositoryPath }),
+    },
+    {
+      name: 'isomorphic-git',
+      create: (repositoryPath: string): RevisionPort =>
+        createIsomorphicGitRevisionPort({ filesystem: new NodeFsProvider(repositoryPath) }),
+    },
+  ] as const;
+
+  const roots: string[] = [];
+  afterAll(async () => {
+    await Promise.all(roots.map(async (root) => rm(root, { force: true, recursive: true })));
+  });
+  const project = async (): Promise<string> => {
+    const root = await mkdtemp(join(tmpdir(), 'tau-revisions-live-index-'));
+    roots.push(root);
+    return root;
+  };
+  /** Record `files` onto `branch` the way a mint does: write, then publish. */
+  const mint = async (port: RevisionPort, branch: string, files: Record<string, string>): Promise<RevisionId> => {
+    const parent = await port.readRef(branch);
+    const receipt = await port.writeRevision({
+      parents: parent === undefined ? [] : [parent],
+      tree: tree(files),
+      provenance: provenance('user'),
+      summary: summary(`Mint onto ${branch}`),
+    });
+    const head = revisionId(receipt.commitId);
+    const updated = await port.updateRef({ name: branch, expectedHead: parent, head });
+    expect(updated.status).toBe('updated');
+    return head;
+  };
+
+  describe.each(legs)('$name', ({ create }) => {
+    it('leaves a clean status after a mint of the working copy', async () => {
+      const root = await project();
+      const port = create(root);
+      await port.init({ author });
+      /* Opening writes no attributes file (A4); this working copy carries one, as a save leaves it. */
+      await writeFile(join(root, generatedGitattributesPath), generatedGitattributesContent(undefined));
+      const files = {
+        '.gitignore': await readFile(join(root, generatedIgnorePath), 'utf8'),
+        '.gitattributes': await readFile(join(root, '.gitattributes'), 'utf8'),
+        'main.scad': 'cube(10);\n',
+        'parts/bolt.scad': 'cylinder(3);\n',
+      };
+      await mkdir(join(root, 'parts'), { recursive: true });
+      await writeFile(join(root, 'main.scad'), files['main.scad']);
+      await writeFile(join(root, 'parts/bolt.scad'), files['parts/bolt.scad']);
+
+      await mint(port, 'main', files);
+
+      expect(indexEntries(root)).toBe(treeEntries(root, 'HEAD'));
+      expect(git(root, ['status', '--porcelain'])).toBe('');
+    }, 60_000);
+
+    it('follows HEAD to another branch and ignores a branch HEAD does not name', async () => {
+      const root = await project();
+      const port = create(root);
+      await port.init({ author });
+      await mint(port, 'main', { 'a.txt': 'a\n' });
+      await mint(port, 'side', { 'b.txt': 'b\n' });
+
+      expect(indexEntries(root)).toBe(treeEntries(root, 'main'));
+
+      await port.setHead('side');
+
+      expect(indexEntries(root)).toBe(treeEntries(root, 'side'));
+    }, 60_000);
+
+    it('empties the index when the branch HEAD names is deleted', async () => {
+      const root = await project();
+      const port = create(root);
+      await port.init({ author });
+      const head = await mint(port, 'main', { 'a.txt': 'a\n' });
+
+      expect(git(root, ['ls-files'])).toBe('a.txt');
+
+      await port.updateRef({ name: 'main', expectedHead: head });
+
+      expect(git(root, ['ls-files'])).toBe('');
+    }, 60_000);
+
+    it('heals a store with no index at open and keeps an existing one', async () => {
+      const root = await project();
+      const first = create(root);
+      await first.init({ author });
+      await mint(first, 'main', { 'a.txt': 'a\n' });
+      await rm(join(root, '.git', 'index'));
+
+      await create(root).init({ author });
+
+      expect(indexEntries(root)).toBe(treeEntries(root, 'HEAD'));
+
+      // A staged path the person added survives the next open untouched.
+      await writeFile(join(root, 'staged.txt'), 'mine\n');
+      git(root, ['add', 'staged.txt']);
+      await create(root).init({ author });
+
+      expect(git(root, ['diff', '--cached', '--name-only'])).toBe('staged.txt');
+    }, 60_000);
+
+    it("moves an adopted repository's stale index to Tau's revision", async () => {
+      const root = await project();
+      git(root, ['init', '--quiet', '--initial-branch=main']);
+      await writeFile(join(root, 'main.scad'), 'size = 10;\n');
+      git(root, ['add', 'main.scad']);
+      git(root, ['-c', 'user.name=Ada', '-c', 'user.email=ada@example.com', 'commit', '--quiet', '-m', 'Mine']);
+      const port = create(root);
+      await port.init({ author });
+
+      await mint(port, 'main', { 'main.scad': 'size = 20;\n', 'part.scad': 'cube(1);\n' });
+
+      // Before R14 the index still held the person's commit: `git commit -a`
+      // then deleted `part.scad`, and a plain `git commit` undid the revision.
+      expect(indexEntries(root)).toBe(treeEntries(root, 'HEAD'));
+    }, 60_000);
+
+    it("records the mint and leaves the index to the person's own Git while it holds the lock", async () => {
+      const root = await project();
+      const port = create(root);
+      await port.init({ author });
+      const before = await readFile(join(root, '.git', 'index'));
+      await writeFile(join(root, '.git', 'index.lock'), '');
+      try {
+        const head = await mint(port, 'main', { 'a.txt': 'a\n' });
+
+        expect(await port.readRef('main')).toBe(head);
+        expect(await readFile(join(root, '.git', 'index'))).toStrictEqual(before);
+      } finally {
+        await rm(join(root, '.git', 'index.lock'), { force: true });
+      }
+    }, 60_000);
+  });
+
+  it('refreshes the index of the linked worktree that holds a moved branch (native)', async () => {
+    const harness = await nativeHarness(projectId, 'tau-revisions-linked-index-');
+    try {
+      const { port } = harness;
+      await port.init({ author });
+      const base = await mint(port, 'main', { 'a.txt': 'a\n' });
+      const linked = await port.addCheckout!({ branch: 'side', from: base });
+
+      await mint(port, 'side', { 'a.txt': 'a\n', 'b.txt': 'b\n' });
+
+      expect(indexEntries(linked.root)).toBe(treeEntries(linked.root, 'side'));
+      expect(indexEntries(harness.liveRoot)).toBe(treeEntries(harness.liveRoot, 'main'));
+    } finally {
+      await harness.dispose();
+    }
+  }, 60_000);
+});

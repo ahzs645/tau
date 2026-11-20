@@ -1,0 +1,2336 @@
+/**
+ * The registry, its sessions and the **real** project route composed together
+ * (S48, R3).
+ *
+ * The unit suites drive each machine on its own. This one renders
+ * `ProjectSessionsHost` — the component the app root mounts — over the real
+ * `sessions-store` singleton, because the invariants W19 owes are about the
+ * composition: navigating opens and never closes (I22), a session's resources
+ * die with it *including the project on screen* (I23, R1), a run reports to its
+ * own project after the person has moved on (R2), a policy never touches a
+ * running, dirty or unpushed project (I24, I25), a refusal is not permanent
+ * (R6), the budget makes room (P47), and quit completes every closing before it
+ * quiesces (D31).
+ *
+ * Only the leaves are mocked, and each one is the seam the session reads:
+ * the file-manager provider (which is what "this project's resources exist"
+ * means in the tree), the project actor, the revision client and the chat
+ * store. The app host, route gate, binding and retained-set rendering are real.
+ *
+ * The registry is a module singleton by design, so each test uses its own
+ * project ids and `afterEach` closes what it opened. The quit pin is last: a
+ * quiesced registry is final.
+ */
+
+/* oxlint-disable eslint/no-await-in-loop, eslint/no-restricted-imports -- this composition suite is the boundary where ordered machine scripts meet their real hooks. */
+
+import { createProjectFixture } from '@taucad/ui-core/lib/project.fixture';
+import { createContext, useContext, useEffect } from 'react';
+import { act, render, screen } from '@testing-library/react';
+import { Link, Route, Routes, useLocation, useNavigate } from 'react-router';
+import { DataMemoryRouter } from '#test-utils/data-memory-router.js';
+import { createActor, createCallbackLogic, createAsyncLogic } from 'xstate';
+import type { ActorRefFrom, AnyActorRef, EventObject } from 'xstate';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mock } from 'vitest-mock-extended';
+import type { ProjectRouteAccess } from '@taucad/files-ui/runtime/project-library';
+import { workbenchRecords } from '@taucad/workbench';
+import { createWorkbenchViewStore } from '#workbench-records/view-store.js';
+
+import { SessionsProvider } from '#hooks/use-sessions.js';
+import { startFocusHost, startRuntimeSlice } from '#runtime/app-runtime-focus.fixture.js';
+import type { FocusHostFixture, RuntimeSliceFixture } from '#runtime/app-runtime-focus.fixture.js';
+import { createSessionsActor } from '#services/sessions-store.js';
+import type { SessionWiring } from '#services/sessions-store.js';
+import { openSessionFileManagerStandIn } from '#runtime/session-file-manager.fixture.js';
+import { openSessionRuntimeStandIn } from '#runtime/project-runtime.session.fixture.js';
+import { sessionRuntimeWork } from '#runtime/project-runtime.session.js';
+import { startSessionRevisionsStandIn } from '#runtime/session-revisions.fixture.js';
+import { browserLiveProjectBudget, sessionsMachine } from '#machines/sessions.machine.js';
+import type { SessionsMachineEmitted } from '#machines/sessions.machine.js';
+import { projectSessionIdleWindowMilliseconds, projectSessionMachine } from '#machines/project-session.machine.js';
+import { useChatSidebarStatus, useProjectSidebarRow } from '#hooks/use-sidebar-status.js';
+import { useProjectRouteState } from '#routes/w.$workspace.$project/project-route-state.js';
+import type { graphicsMachine } from '@taucad/viewer/machines/graphics.machine';
+import { chatSessionMachine } from '#machines/chat-session.machine.js';
+
+/** The build target `@taucad/*` libraries resolve; the app's own reads still follow `TAU_TARGET`. */
+const buildTarget = vi.hoisted(() => ({ desktop: false }));
+vi.mock('@taucad/ui-core/lib/build-target', () => ({
+  get isDesktopTarget() {
+    return buildTarget.desktop;
+  },
+}));
+
+const {
+  workerFrames,
+  workerRef,
+  serviceCalls,
+  mounted,
+  getProjectRouteAccess,
+  chatStore,
+  revision,
+  revisionClient,
+  editor,
+  rootCalls,
+  revisionProjection,
+  installedCheckoutRoutes,
+  revisionClientLifecycle,
+  projectProviderInputs,
+  flushProducers,
+  runtimeShutdown,
+} = vi.hoisted(() => {
+  const frames: Array<{ type: string; projectId?: string }> = [];
+  const calls: string[] = [];
+  const revisionClientLifecycleLog: string[] = [];
+  const projected: { of: unknown; selection: unknown; value: unknown } = {
+    of: undefined,
+    selection: undefined,
+    value: undefined,
+  };
+  const revisionProjectionRef: { current: Record<string, unknown> | undefined } = { current: undefined };
+  const live: string[] = [];
+  /*
+   * The editor, as far as the route's flush gate reads it: a `flushNow` and a
+   * `storing.idle` a test decides the timing of. The route awaits this actor
+   * before it lets a person leave a project (S48(12)), so a stub that is
+   * always idle can never show that it waited.
+   */
+  const editorListeners = new Set<(snapshot: unknown) => void>();
+  const editorState = { idle: true };
+  const revisionListeners = new Set<() => void>();
+  let revisionStatus = {
+    dirty: false,
+    line: { kind: 'branch', name: 'main' } as const,
+    remote: { kind: 'none', phase: 'none', fetchOnly: false } as const,
+    sync: { state: 'noRemote' as 'backedUp' | 'checking' | 'noRemote', pendingCount: 0 },
+  };
+  const editorSnapshot = (): unknown => ({
+    context: { viewSettings: {} },
+    status: 'active',
+    /* A loaded store (A6e: a store that has not loaded owes nothing), idle once it has stored. */
+    matches: (value: unknown) => value === 'ready' || editorState.idle,
+  });
+  const editorActor = {
+    send: (event: { type: string }) => {
+      calls.push(`editor:${event.type}`);
+    },
+    getSnapshot: editorSnapshot,
+    subscribe: (observer: ((snapshot: unknown) => void) | { next?: (snapshot: unknown) => void }) => {
+      const next = typeof observer === 'function' ? observer : (observer.next ?? (() => undefined));
+      editorListeners.add(next);
+      return {
+        unsubscribe: () => {
+          editorListeners.delete(next);
+        },
+      };
+    },
+  };
+  return {
+    editor: {
+      ref: editorActor,
+      /** What the editor is doing, and who is told when it changes. */
+      setIdle: (idle: boolean) => {
+        editorState.idle = idle;
+        if (idle) {
+          calls.push('editor:stored');
+        }
+        for (const next of editorListeners) {
+          next(editorSnapshot());
+        }
+      },
+      reset: () => {
+        editorState.idle = true;
+        editorListeners.clear();
+      },
+    },
+    /** Every `setRoot` the workbench's file manager was asked for (S48(14)). */
+    rootCalls: [] as Array<{ type: string; path?: string; projectId?: string }>,
+    /** The revision projection the workbench follows; a test moves it. */
+    revisionProjection: revisionProjectionRef,
+    /** What the checkout route table currently holds. */
+    installedCheckoutRoutes: { current: '' },
+    revisionClientLifecycle: revisionClientLifecycleLog,
+    projectProviderInputs: [] as Array<{
+      projectId: string;
+      requestedChatId: string | undefined;
+      createdChatId: string | undefined;
+    }>,
+    workerFrames: frames,
+    serviceCalls: calls,
+    mounted: live,
+    workerRef: { current: undefined as Worker | undefined },
+    getProjectRouteAccess: vi.fn(),
+    /** `UnloadProvider`'s producer stage, as the quit hold reaches it; a test holds it open. */
+    flushProducers: vi.fn(async (): Promise<void> => undefined),
+    runtimeShutdown: vi.fn(async (_projectId: string): Promise<void> => undefined),
+
+    chatStore: {
+      get: () => ({
+        persistenceActorRef: {
+          getSnapshot: () => ({ matches: () => true }),
+          subscribe: () => ({ unsubscribe: () => undefined }),
+        },
+      }),
+      stopRun: vi.fn(),
+      cancelProjectedRun: vi.fn(async () => 'stopped'),
+      publishProjectHostConnector: vi.fn(() => () => undefined),
+      setRevisionFacts: vi.fn(),
+      /* The store owns each chat's root (PV-S5); a row adds one with `openChatRoot`. */
+      roots: new Map<string, Map<string, unknown>>(),
+      membership: new Set<() => void>(),
+      chatRootsOf(projectId: string) {
+        return this.roots.get(projectId) ?? new Map();
+      },
+      observedChatIdsOf: () => [],
+      getProjection: () => undefined,
+      subscribeProjection: () => () => undefined,
+      subscribeMembership(listener: () => void) {
+        this.membership.add(listener);
+        return () => {
+          this.membership.delete(listener);
+        };
+      },
+      isUnread: () => false,
+      subscribeUnread: () => () => undefined,
+    },
+    revision: {
+      reset: () => {
+        revisionStatus = {
+          dirty: false,
+          line: { kind: 'branch', name: 'main' } as const,
+          remote: { kind: 'none', phase: 'none', fetchOnly: false } as const,
+          sync: { state: 'noRemote', pendingCount: 0 },
+        };
+        revisionListeners.clear();
+      },
+      setSync: (state: typeof revisionStatus.sync.state, pendingCount = 0) => {
+        revisionStatus = { ...revisionStatus, sync: { state, pendingCount } };
+        for (const listener of revisionListeners) {
+          listener();
+        }
+      },
+      /** Tell the client's listeners the projection moved (S48(14)). */
+      publish: () => {
+        for (const listener of revisionListeners) {
+          listener();
+        }
+      },
+    },
+    /* The project's one revision client, as the session's `revisions` child drives it (A7b): opening it is the
+     * lifecycle's mount, closing it the lifecycle's close. */
+    revisionClient: {
+      /* One projection object per change, as the client publishes it. */
+      status: () => {
+        if (projected.of !== revisionStatus || projected.selection !== revisionProjectionRef.current) {
+          projected.of = revisionStatus;
+          projected.selection = revisionProjectionRef.current;
+          projected.value = {
+            ...revisionStatus,
+            projectDirty: revisionStatus.dirty,
+            checkoutRoot: undefined,
+            branches: [],
+            ...revisionProjectionRef.current,
+          };
+        }
+        return projected.value;
+      },
+      send: () => undefined,
+      setUser: async () => undefined,
+      setCredential: async () => true,
+      open: () => {
+        revisionClientLifecycleLog.push('mount');
+      },
+      close: () => {
+        revisionClientLifecycleLog.push('close');
+      },
+      focus: () => undefined,
+      saveRevision: async () => undefined,
+      subscribe: (listener: () => void) => {
+        revisionListeners.add(listener);
+        return () => {
+          revisionListeners.delete(listener);
+        };
+      },
+      quiesce: async () => {
+        calls.push('quiesce');
+      },
+    },
+  };
+});
+
+/* A0.2: a one-project device. Off by default, so the module registry below keeps the browser budget. */
+const deviceMemory = vi.hoisted(() => ({ constrained: false }));
+vi.mock('@taucad/ui-core/lib/device-memory-class', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  isMemoryConstrainedDevice: () => deviceMemory.constrained,
+}));
+
+workerRef.current = mock<Worker>({
+  postMessage: (frame: { type: string; projectId?: string }) => {
+    workerFrames.push(frame);
+  },
+});
+
+/* The registry reads the shared worker through its composition, as the runtime gives it the file-manager host's; the
+ * rows hand it this recording worker, so compute admission is the real path. */
+vi.mock('#hooks/use-publish-cloud-project-preview.js', () => ({ usePublishCloudProjectPreview: () => undefined }));
+
+vi.mock('#hooks/use-file-manager.js', () => ({
+  SharedWorkerGate: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
+  /* This subtree *is* the project's resources: mounted means they exist. */
+  SessionFileManagerProvider: ({ children, projectId }: React.PropsWithChildren<{ projectId: string }>) => {
+    useEffect(() => {
+      mounted.push(`mount:${projectId}`);
+      return () => {
+        mounted.push(`unmount:${projectId}`);
+      };
+    }, [projectId]);
+    return <div data-testid={`subtree-${projectId}`}>{children}</div>;
+  },
+  useFileManager: () => ({
+    fileManagerRef: {
+      send: (event: { type: string; path?: string; projectId?: string }) => {
+        rootCalls.push(event);
+      },
+      getSnapshot: () => ({ context: {}, matches: (value: string) => value === 'ready' }),
+      subscribe: () => ({ unsubscribe: () => undefined }),
+    },
+    workspace: {
+      syncProjectRoots: async () => {
+        rootCalls.push({ type: 'syncProjectRoots' });
+      },
+    },
+  }),
+  useOptionalFileManager: () => undefined,
+}));
+
+/* Module scope: the route's session effect is keyed on this identity, so a
+ * fresh object per render would re-run it forever. */
+const parameterService = {
+  close: async () => undefined,
+  subscribeUnsavedDrafts: () => () => undefined,
+};
+
+/* One context object and one `viewGraphics` Map per project, both for the life of the suite: the
+ * real provider is per project, and a fresh Map per snapshot read would hand React a new value on
+ * every render. A test that needs a live view puts it in `viewGraphicsOf(projectId)`. */
+const projectContexts = new Map<string, unknown>();
+const viewGraphicsByProject = new Map<string, Map<string, ActorRefFrom<typeof graphicsMachine>>>();
+/* Every close callback a live project's persistence guard registered, and each project's runtime producer flush. */
+const { closeFlushes, producerFlushes } = vi.hoisted(() => ({
+  closeFlushes: new Set<(phase: 'hidden' | 'pagehide') => Promise<void>>(),
+  producerFlushes: new Map<string, () => Promise<void>>(),
+}));
+const producerFlushOf = (projectId: string): (() => Promise<void>) => {
+  const existing = producerFlushes.get(projectId);
+  if (existing) {
+    return existing;
+  }
+  const created = vi.fn(async () => undefined);
+  producerFlushes.set(projectId, created);
+  return created;
+};
+const viewGraphicsOf = (projectId: string): Map<string, ActorRefFrom<typeof graphicsMachine>> => {
+  const existing = viewGraphicsByProject.get(projectId);
+  if (existing) {
+    return existing;
+  }
+  const created = new Map<string, ActorRefFrom<typeof graphicsMachine>>();
+  viewGraphicsByProject.set(projectId, created);
+  return created;
+};
+const StubProjectContext = createContext('');
+/** What a project's stand-in context holds, as the session's runtime work reads it (A7c). */
+type StubProjectContextValue = Readonly<{
+  parameterService: typeof parameterService;
+  flushWorkbenchRecordProducers: () => Promise<void>;
+  projectRef: AnyActorRef;
+  editorRef: AnyActorRef;
+}>;
+/* A project's runtime close refusal, cleared by a row that leaves it behind: its stores report the error too, so the
+ * session's next close flush (A7c) would refuse on it, as a real project in `runtimeCloseFailed` never stores again. */
+const runtimeRefusalResets = new Map<string, () => void>();
+const projectContextOf = (projectId: string): unknown => {
+  const existing = projectContexts.get(projectId);
+  if (existing) {
+    return existing;
+  }
+  let runtimeClosed = false;
+  let runtimeError: Error | undefined;
+  runtimeRefusalResets.set(projectId, () => {
+    runtimeError = undefined;
+  });
+  const runtimeListeners = new Set<() => void>();
+  const projectSnapshot = () => ({
+    status: 'active',
+    context: {
+      project: { id: 'p' },
+      geometryUnits: new Map(),
+      viewGraphics: viewGraphicsOf(projectId),
+      error: runtimeError,
+    },
+    matches: (value: unknown) =>
+      value === 'ready'
+        ? true
+        : value === 'runtimeClosed'
+          ? runtimeClosed
+          : value === 'runtimeCloseFailed'
+            ? runtimeError !== undefined
+            : JSON.stringify(value) === JSON.stringify({ ready: { storing: 'idle' } }),
+  });
+  const created = {
+    projectId: 'unused',
+    parameterService,
+    /* What the model gate reads of every project (T6): its main entry, its views and its geometry units. */
+    mainEntryPath: '',
+    viewRecords: new Map(),
+    geometryUnits: new Map(),
+    viewGraphics: viewGraphicsOf(projectId),
+    flushWorkbenchRecordProducers: producerFlushOf(projectId),
+    projectRef: {
+      send: (event: { type: string }) => {
+        if (event.type === 'closeRuntime') {
+          runtimeClosed = false;
+          runtimeError = undefined;
+          // async-iife: bootstrap -- this actor seam delivers its asynchronous terminal acknowledgment to subscribers
+          void (async () => {
+            try {
+              await runtimeShutdown(projectId);
+              runtimeClosed = true;
+            } catch (error) {
+              runtimeError = error instanceof Error ? error : new Error('Runtime shutdown failed');
+            }
+            for (const listener of runtimeListeners) {
+              listener();
+            }
+          })();
+          return;
+        }
+        serviceCalls.push(`project:${event.type}`);
+      },
+      getSnapshot: projectSnapshot,
+      subscribe: (observer: ((snapshot: unknown) => void) | { next?: (snapshot: unknown) => void }) => {
+        const next = typeof observer === 'function' ? observer : (observer.next ?? (() => undefined));
+        const listener = () => {
+          next(projectSnapshot());
+        };
+        runtimeListeners.add(listener);
+        return {
+          unsubscribe: () => {
+            runtimeListeners.delete(listener);
+          },
+        };
+      },
+    },
+    /* `ProjectPersistenceGuard` awaits this editor reaching `storing.idle`
+     * before the route may leave a project; an editor that never answers is a
+     * navigation that never completes. */
+    editorRef: editor.ref,
+  };
+  projectContexts.set(projectId, created);
+  return created;
+};
+vi.mock('#hooks/project-provider.js', () => ({
+  SessionProjectProvider: ({ children, projectId }: React.PropsWithChildren<{ projectId: string }>) => {
+    return (
+      <StubProjectContext.Provider value={projectId}>
+        <div>{children}</div>
+      </StubProjectContext.Provider>
+    );
+  },
+}));
+vi.mock('#hooks/use-project.js', () => ({
+  useProject: () => projectContextOf(useContext(StubProjectContext)),
+}));
+vi.mock('#routes/w.$workspace.$project/workbench-record-host.js', () => ({ WorkbenchRecordHost: () => null }));
+/* A row holds a session's close open by holding its agent host's release (A7c: the close's other steps run in the
+ * session's own children). */
+const { agentHostRelease } = vi.hoisted(() => ({ agentHostRelease: vi.fn(async (): Promise<void> => undefined) }));
+vi.mock('#services/project-agent-host-registration.js', () => ({
+  registerProjectAgentHost: async () => ({ release: async () => agentHostRelease() }),
+}));
+
+/* One object for the life of the suite: a `useProjectManager()` that returns a
+ * fresh object on every render re-runs the route's load effect forever. */
+const projectManager = { getProjectRouteAccess, restoreProject: vi.fn() };
+vi.mock('#hooks/use-project-manager.js', () => ({ useProjectManager: () => projectManager }));
+vi.mock('#hooks/use-project-slug-route.js', () => ({
+  useProjectIdBySlugs: (_workspace: string, project: string) =>
+    project === 'resolving'
+      ? { status: 'resolving' }
+      : project === '' || project === 'missing'
+        ? { status: 'not-found' }
+        : { status: 'resolved', value: project },
+  useCanonicalProjectUrlCorrection: () => undefined,
+}));
+vi.mock('@taucad/revisions-ui/services/revision-client-registry', () => ({ peekRevisionClient: () => revisionClient }));
+vi.mock('#hooks/use-revision-status.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  useRevisionClient: () => revisionClient,
+  getRevisionClient: () => revisionClient,
+  useRevisionStatus: () => revisionProjection.current,
+  useRevisionCommands: () => ({ connectRemote: async () => undefined }),
+}));
+/* The checkout routes are storage, and storage is a leaf here: what S48(14) is
+ * about is the workbench following the selection, not where the route table is
+ * persisted. */
+vi.mock('@taucad/files-ui/filesystem/handle-store', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getProjectRootConfigs: async () => ({
+    projects: [{ projectId: 'unused', providerBasePath: 'projects/unused' }],
+    roots: [],
+  }),
+  /* The real one answers *whether the set changed*, and the workbench skips the
+   * re-issue when it did not; a stub that always says yes would hide a
+   * re-issue-per-render regression. */
+  setCheckoutRootConfigs: (routes: ReadonlyArray<{ readonly checkoutId: string }>) => {
+    const next = routes.map((route) => route.checkoutId).join(' ');
+    if (next === installedCheckoutRoutes.current) {
+      return false;
+    }
+    installedCheckoutRoutes.current = next;
+    rootCalls.push({ type: 'checkoutRoutes', path: next });
+    return true;
+  },
+}));
+vi.mock('#hooks/chat-session-store-provider.js', () => ({ useChatSessionStore: () => chatStore }));
+vi.mock('#hooks/use-flush-on-close.js', async () => {
+  const { useEffect } = await import('react');
+  return {
+    // A guard's flush is registered while it is mounted and removed when it unmounts, as the real hook does.
+    useFlushOnClose: (callback: (phase: 'hidden' | 'pagehide') => Promise<void>) => {
+      useEffect(() => {
+        closeFlushes.add(callback);
+        return () => {
+          closeFlushes.delete(callback);
+        };
+      }, [callback]);
+    },
+    useFlushProducers: () => flushProducers,
+  };
+});
+vi.mock('#hooks/use-editor-document-session.js', () => ({
+  EditorDocumentSessionProvider: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
+}));
+vi.mock('@taucad/viewer/hooks/use-webgl-context-tracker', () => ({
+  WebglContextTrackerProvider: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
+}));
+vi.mock('#routes/w.$workspace.$project/revision-save-shortcut.js', () => ({ RevisionSaveShortcut: () => null }));
+vi.mock('#routes/w.$workspace.$project/revision-provider.js', () => ({
+  RevisionProvider: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
+}));
+vi.mock('#routes/w.$workspace.$project/project-command-items.js', () => ({ ProjectCommandPaletteItems: () => null }));
+vi.mock('#routes/w.$workspace.$project/project-export-action.js', () => ({ ProjectExportAction: () => null }));
+vi.mock('#routes/w.$workspace.$project/project-print-route-intent.js', () => ({ ProjectPrintRouteIntent: () => null }));
+vi.mock('#routes/w.$workspace.$project/project-share-action.js', () => ({ ProjectShareRouteIntent: () => null }));
+vi.mock('#routes/w.$workspace.$project/project-workspace-provider.js', () => ({
+  ProjectWorkspaceProvider: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
+}));
+vi.mock('#routes/w.$workspace.$project/chat-interface.js', () => ({ ChatInterface: () => null }));
+vi.mock('#routes/w.$workspace.$project/revision-conflict-chat.js', () => ({ RevisionConflictChat: () => null }));
+/* W2: the route's non-editor states all render through one notice now. This
+ * suite is about the registry, so the notice stands in as its kind. */
+vi.mock('#routes/w.$workspace.$project/project-route-notices.js', async () => {
+  const { createContext } = await import('react');
+  return {
+    ProjectRouteRetryContext: createContext<() => void>(() => undefined),
+    ProjectRouteNotice: ({ state }: { readonly state: { kind: string } }) => <p>Notice: {state.kind}</p>,
+  };
+});
+vi.mock('#routes/w.$workspace.$project/revision-restore.js', () => ({ RevisionRestore: () => null }));
+vi.mock('#routes/w.$workspace.$project/revision-outcomes.js', () => ({ RevisionOutcomes: () => null }));
+vi.mock('#providers/chat-workspace-authority-provider.js', () => ({
+  ChatWorkspaceAuthorityProvider: ({ children }: React.PropsWithChildren) => <div>{children}</div>,
+}));
+
+const routeModule = await import('#routes/w.$workspace.$project/project-route.js');
+/* The live-session subtree is behind a `lazy()` boundary (W21). Importing it here settles that
+ * boundary in the first `act` flush, so a rendered route is complete when `settle()` returns. */
+await import('#routes/w.$workspace.$project/project-live-sessions.js');
+
+const ready = (projectId: string): ProjectRouteAccess => ({
+  status: 'ready',
+  project: createProjectFixture({
+    id: projectId,
+    name: projectId,
+    description: '',
+    tags: [],
+    assets: { main: { entryPath: 'main.ts' } },
+  }),
+});
+
+/**
+ * Add one chat's root the way the store does on acquire: a started chat machine, then a membership notification.
+ *
+ * @param projectId - The chat's project.
+ * @param chatId - The chat.
+ * @returns The chat's machine.
+ */
+const openChatRoot = (projectId: string, chatId: string) => {
+  const root = createActor(chatSessionMachine, { input: { chatId, projectId } }).start();
+  const roots = chatStore.roots.get(projectId) ?? new Map<string, unknown>();
+  roots.set(chatId, root);
+  chatStore.roots.set(projectId, roots);
+  for (const listener of chatStore.membership) {
+    listener();
+  }
+  return root;
+};
+
+/* A7b: each session starts its revision client on its file manager through the real `revisions` module; the client is
+ * this suite's one, and nothing here is focused, so no checkout is followed. The connector is not this suite's. */
+const sessionWiring: SessionWiring = {
+  loadRevisions: async () => import('#runtime/session-revisions.js'),
+  loadHostConnector: async () => ({ hostConnectorCallback: () => () => () => undefined }),
+  registerCloseCut: () => () => undefined,
+  /* A7c: each live session's producer-stage flush, recorded with the React registrations a row runs on hidden. */
+  registerProducer: (flush) => {
+    closeFlushes.add(flush);
+    return () => {
+      closeFlushes.delete(flush);
+    };
+  },
+  focusedProject: { get: () => undefined, subscribe: () => () => undefined },
+  documentVisible: { get: () => true, subscribe: () => () => undefined },
+  chatSessions: chatStore as unknown as SessionWiring['chatSessions'],
+  choices: () => {
+    throw new Error('no chat attaches in these rows, so nothing reads the choices');
+  },
+  rootSync: () => ({ syncProjectRoots: async () => undefined, close: () => undefined }),
+};
+const openFileManagerWithWorker = (projectId: string) =>
+  openSessionFileManagerStandIn(projectId, workerRef.current === undefined ? {} : { worker: workerRef.current });
+
+/** The registry the rows share, composed as the app's root composes its own (MC-R4). */
+const sessionsActor = createSessionsActor({
+  sharedWorker: () => workerRef.current,
+  wiring: sessionWiring,
+  openFileManager: openFileManagerWithWorker,
+  /* A6d: each session's runtime is a stand-in; what the session asks its editor for is what these rows read. */
+  openRuntime: {
+    open: async (input) => {
+      const standIn = openSessionRuntimeStandIn(input);
+      const parts = projectContextOf(input.projectId) as StubProjectContextValue;
+      return {
+        ...standIn,
+        /* A7c: the session's flushes and close run the real work over this project's stand-in stores and producers. */
+        ...sessionRuntimeWork({
+          projectId: input.projectId,
+          producers: { flushAll: async () => parts.flushWorkbenchRecordProducers() },
+          parameterService: () => parts.parameterService,
+          projectRef: parts.projectRef,
+          editorRef: parts.editorRef,
+        }),
+        requestChat: (chat) => {
+          projectProviderInputs.push({
+            projectId: input.projectId,
+            requestedChatId: chat.chatId,
+            createdChatId: chat.createdChatId,
+          });
+          standIn.requestChat(chat);
+        },
+      };
+    },
+    onChoicesChanged: () => () => undefined,
+  },
+}).start();
+
+/* Focus and its ports over a registry, as the runtime root composes them (A5b); a fresh one per row, as each row
+ * mounted a fresh gate before. */
+const focusHosts: FocusHostFixture[] = [];
+const focusOver = (registry: ActorRefFrom<typeof sessionsMachine>): FocusHostFixture => {
+  const host = startFocusHost({
+    sessions: registry,
+    library: {
+      routeAccess: async (projectId) => getProjectRouteAccess(projectId) as Promise<ProjectRouteAccess>,
+      epoch: () => 0,
+      onEpochChanged: () => () => undefined,
+    },
+    loadModule: async () => undefined,
+  });
+  focusHosts.push(host);
+  return host;
+};
+let focusHost = focusOver(sessionsActor);
+beforeEach(() => {
+  for (const host of focusHosts.splice(0)) {
+    host.stop();
+  }
+  focusHost = focusOver(sessionsActor);
+});
+
+const emitted: SessionsMachineEmitted[] = [];
+
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+/** Let already-queued actor work reach an observable predicate. */
+const settle = async (
+  predicate: () => boolean = () =>
+    Object.values(sessionsActor.getSnapshot().context.refs).every((ref) => {
+      const snapshot = ref.getSnapshot();
+      return (
+        !snapshot.matches('opening') &&
+        !snapshot.matches({ closing: 'cancellingRuns' }) &&
+        !snapshot.matches({ closing: 'flushingProducers' }) &&
+        !snapshot.matches({ closing: 'closingParameters' }) &&
+        !snapshot.matches({ closing: 'flushing' }) &&
+        !snapshot.matches({ closing: 'closingRuntime' }) &&
+        !snapshot.matches({ closing: 'releasingAgentHost' })
+      );
+    }),
+): Promise<void> => {
+  await act(async () => {
+    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(predicate()).toBe(true);
+    });
+  });
+};
+
+/** Send to the registry the way the app does — inside React's act scope. */
+const send = async (event: Parameters<typeof sessionsActor.send>[0]): Promise<void> => {
+  await act(async () => {
+    sessionsActor.send(event);
+    await Promise.resolve();
+  });
+};
+
+const liveProjectIds = (): readonly string[] => Object.keys(sessionsActor.getSnapshot().context.refs);
+const sessionOf = (projectId: string) => sessionsActor.getSnapshot().context.refs[projectId];
+
+/** Render the real route at one project and let it open. */
+const renderRoute = async (
+  projectId: string,
+): Promise<{ rerender: (next: string) => Promise<void>; unmount: () => void }> => {
+  /* `SessionsProvider` hosts the budget dialog (R5), whose body reads the
+   * project list when a refusal fires; the app's root client is shared, so the
+   * composition needs one too. */
+  const at = (id: string): React.JSX.Element => (
+    <QueryClientProvider client={queryClient}>
+      <SessionsProvider actor={sessionsActor} focus={focusHost}>
+        <routeModule.ProjectRouteProviders projectId={id} />
+      </SessionsProvider>
+    </QueryClientProvider>
+  );
+  const view = render(at(projectId));
+  await settle();
+  return {
+    rerender: async (next: string) => {
+      view.rerender(at(next));
+      await settle();
+    },
+    unmount: () => {
+      view.unmount();
+    },
+  };
+};
+
+let navigateRoute: ReturnType<typeof useNavigate> | undefined;
+
+let currentSearch = '';
+
+function NavigationProbe(): undefined {
+  const navigate = useNavigate();
+  currentSearch = useLocation().search;
+  useEffect(() => {
+    navigateRoute = navigate;
+    return () => {
+      navigateRoute = undefined;
+    };
+  }, [navigate]);
+  return undefined;
+}
+
+/** Render the app-owned session host with real project and non-project navigation. */
+/*
+ * W2: the route component below the outlet is what picks between the editor
+ * and a notice, and it reads the one state the gate publishes. The real
+ * `ProjectChatRoute` needs the whole chat stack; this probe reads the same
+ * context, so these tests can assert what the gate derived.
+ */
+const RouteStateProbe = (): React.JSX.Element => (
+  <span data-testid='route-state'>{useProjectRouteState()?.kind ?? 'none'}</span>
+);
+
+const renderRouteFamily = async (
+  projectId: string,
+  initialEntry = `/w/workspace/${projectId}`,
+): Promise<{ navigate: (target: string) => Promise<void>; unmount: () => void }> => {
+  const view = render(
+    <DataMemoryRouter initialEntries={[initialEntry]}>
+      <NavigationProbe />
+      <QueryClientProvider client={queryClient}>
+        <SessionsProvider actor={sessionsActor} focus={focusHost}>
+          <routeModule.ProjectSessionsHost>
+            <Routes>
+              <Route path='/' element={<div>Home</div>} />
+              <Route
+                path='/w/:workspace/:project'
+                element={
+                  <>
+                    <Link to='/projects'>Projects</Link>
+                    <RouteStateProbe />
+                  </>
+                }
+              />
+              <Route path='/projects' element={<div>Project library</div>} />
+            </Routes>
+          </routeModule.ProjectSessionsHost>
+        </SessionsProvider>
+      </QueryClientProvider>
+    </DataMemoryRouter>,
+  );
+  await settle();
+  return {
+    navigate: async (target) => {
+      await act(async () => {
+        await navigateRoute?.(target);
+      });
+      await settle();
+    },
+    unmount: view.unmount,
+  };
+};
+
+beforeEach(() => {
+  closeFlushes.clear();
+  runtimeShutdown.mockReset();
+  runtimeShutdown.mockResolvedValue(undefined);
+  workerFrames.length = 0;
+  serviceCalls.length = 0;
+  mounted.length = 0;
+  rootCalls.length = 0;
+  editor.reset();
+  revision.reset();
+  revisionProjection.current = undefined;
+  installedCheckoutRoutes.current = '';
+  revisionClientLifecycle.length = 0;
+  projectProviderInputs.length = 0;
+  for (const views of viewGraphicsByProject.values()) {
+    views.clear();
+  }
+  navigateRoute = undefined;
+  emitted.length = 0;
+  getProjectRouteAccess.mockReset();
+  getProjectRouteAccess.mockImplementation(async (projectId: string) => ready(projectId));
+  for (const type of ['liveSetChanged', 'budgetRefused', 'quiesced'] as const) {
+    sessionsActor.on(type, (event) => emitted.push(event));
+  }
+});
+
+afterEach(async () => {
+  for (const roots of chatStore.roots.values()) {
+    for (const root of roots.values()) {
+      (root as ReturnType<typeof openChatRoot>).stop();
+    }
+  }
+  chatStore.roots.clear();
+  /* A row that failed with the editor busy leaves its flush owed, and the
+   * registry is a singleton: release it here, or the next row's `settle`
+   * times out on the wedged session and reports a failure that is not its own. */
+  await act(async () => {
+    editor.setIdle(true);
+    await Promise.resolve();
+  });
+  /* A refused open is remembered until somebody makes room (R8); drop it so
+   * one test's refusal cannot open a project inside the next one. */
+  if (sessionsActor.getSnapshot().status === 'active') {
+    await send({ type: 'cancelPendingOpen' });
+  }
+  for (const [projectId, ref] of Object.entries(sessionsActor.getSnapshot().context.refs)) {
+    if (ref.getSnapshot().status !== 'active') {
+      continue;
+    }
+    await send({ type: 'close', projectId, reason: 'user' });
+    if (ref.getSnapshot().status === 'active' && !ref.getSnapshot().matches('closed')) {
+      await act(async () => {
+        ref.send({ type: 'confirmClose' });
+        await Promise.resolve();
+      });
+    }
+  }
+  await settle();
+  vi.restoreAllMocks();
+});
+
+/* The registry is a module singleton, and the quit pin inside the suite below
+ * is final for it (a quiesced registry never opens again), so every row that
+ * needs a live registry runs before it. */
+/*
+ * S48(11) is not here, and is not missing.
+ *
+ * "All fifteen agent-state rows render glyph and description with `getByRole`
+ * names" is W20's `it.each` over `agentStateRows` in
+ * `apps/ui/app/hooks/use-sidebar-status.test.tsx` — eleven run × read rows,
+ * each driven through a real `chatSessionMachine` and rendered through the real
+ * `ChatStatusGlyph`; the two revision rows are that file's branch-chip and
+ * dirty-pip pins, and the two sync rows are project-row facts under P64 and are
+ * pinned on the project row there (W20-a2 §1, R11). Restating the table here
+ * would give the vocabulary two owners that could drift apart, which is the one
+ * thing a composition suite must not do.
+ */
+
+/**
+ * S48(12), seam-unit ordering half — a controlled editor seam resolves before
+ * the real route lets its project go. The real revision/port bytes half lives
+ * in `packages/revisions/src/composition.test.ts`.
+ *
+ * The route holds navigation on `ProjectPersistenceGuard`'s registration
+ * (`project-route.tsx:361`): the person may not land on the next project until
+ * this one's editor reaches `storing.idle`. The close flush that takes the
+ * `close` revision (`flushSync` → `RevisionClient.quiesce()`) comes after. What
+ * this asserts is the order, with the editor's answer under the test's control,
+ * so "it happened to be idle" cannot pass for "it was waited for".
+ *
+ * The bytes half of S48(12) — that the edit buffered last is *inside* the close
+ * revision — is host-neutral and lives in `packages/revisions/src/composition.test.ts`;
+ * the `hidden` → `saveRevision { trigger: 'close' }` and precomputed-only
+ * `pagehide` wire are pinned at their owner in
+ * `apps/ui/app/hooks/use-revision-status.test.tsx` (W13, P32, A38).
+ */
+describe('sessions composition — the quit flush order (S48(12))', () => {
+  it('should preserve runtimes when the person cancels the close question', async () => {
+    const view = await renderRoute('runtime-close-cancel');
+    const session = sessionsActor.getSnapshot().context.refs['runtime-close-cancel'];
+    try {
+      await act(async () => {
+        session?.send({ type: 'projectedRunsChanged', runs: ['chat-1'], stoppableRuns: ['chat-1'] });
+      });
+      await send({ type: 'close', projectId: 'runtime-close-cancel', reason: 'user' });
+      expect(session?.getSnapshot().matches({ closing: 'asking' })).toBe(true);
+      await act(async () => {
+        session?.send({ type: 'cancelClose' });
+      });
+      expect(session?.getSnapshot().matches('live')).toBe(true);
+      expect(runtimeShutdown).not.toHaveBeenCalled();
+      expect(serviceCalls).not.toContain('quiesce');
+    } finally {
+      view.unmount();
+    }
+  });
+
+  it('should acknowledge producers and revisions before awaiting runtime shutdown and sessionClosed', async () => {
+    const closed = Promise.withResolvers<void>();
+    runtimeShutdown.mockImplementation(async (projectId) => {
+      serviceCalls.push(`runtime:${projectId}`);
+      await closed.promise;
+    });
+    const view = await renderRoute('runtime-close-order');
+    try {
+      await send({ type: 'close', projectId: 'runtime-close-order', reason: 'user' });
+      await vi.waitFor(() => {
+        expect(runtimeShutdown).toHaveBeenCalledWith('runtime-close-order');
+      });
+      expect(serviceCalls.slice(-4)).toEqual([
+        'project:flushNow',
+        'editor:flushNow',
+        'quiesce',
+        'runtime:runtime-close-order',
+      ]);
+      expect(sessionsActor.getSnapshot().context.refs['runtime-close-order']).toBeDefined();
+      expect(mounted).not.toContain('unmount:runtime-close-order');
+      closed.resolve();
+      await settle();
+      expect(sessionsActor.getSnapshot().context.refs['runtime-close-order']).toBeUndefined();
+      expect(mounted).toContain('unmount:runtime-close-order');
+    } finally {
+      closed.resolve();
+      view.unmount();
+    }
+  });
+
+  it('should retain the exact runtime refusal without undoing the acknowledged revision flush', async () => {
+    const refusal = new Error('runtime cleanup refused');
+    runtimeShutdown.mockRejectedValueOnce(refusal);
+    const view = await renderRoute('runtime-close-refusal');
+    try {
+      await send({ type: 'close', projectId: 'runtime-close-refusal', reason: 'user' });
+      await vi.waitFor(() => {
+        const session = sessionsActor.getSnapshot().context.refs['runtime-close-refusal'];
+        expect(session?.getSnapshot().matches('failed')).toBe(true);
+        expect(session?.getSnapshot().context.failures['close']).toBe(refusal.message);
+      });
+      expect(serviceCalls).toContain('quiesce');
+      expect(sessionsActor.getSnapshot().context.closed['runtime-close-refusal']).toBeUndefined();
+      expect(mounted).not.toContain('unmount:runtime-close-refusal');
+    } finally {
+      runtimeRefusalResets.get('runtime-close-refusal')?.();
+      view.unmount();
+    }
+  });
+
+  it('holds the next project until the editor has stored, then takes the close revision', async () => {
+    const view = await renderRoute('flush-a');
+    expect(mounted).toEqual(['mount:flush-a']);
+
+    /* A write is in flight when the person navigates. */
+    editor.setIdle(false);
+    await view.rerender('flush-b');
+
+    /* Nothing of the next project exists yet: the route is still awaiting the
+     * editor, and the close flush has not run either. */
+    expect(mounted).toEqual(['mount:flush-a']);
+    expect(serviceCalls).toEqual(['editor:flushNow']);
+
+    await act(async () => {
+      editor.setIdle(true);
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(mounted).toContain('mount:flush-b');
+    /* And only now may the project be let go, which is what takes the `close`
+     * revision: the store resolves before the cut, never beside it. */
+    await send({ type: 'close', projectId: 'flush-a', reason: 'user' });
+    await settle();
+
+    expect(serviceCalls).toEqual([
+      'editor:flushNow',
+      'editor:stored',
+      'project:flushNow',
+      'editor:flushNow',
+      'quiesce',
+    ]);
+    view.unmount();
+  });
+});
+
+/**
+ * S48(13) / V24 — a row wakes on its own machine.
+ *
+ * W20 found that a render *count* cannot discriminate here: `useSyncExternalStore`
+ * bails on an unchanged key, so a row that subscribes to the whole sidebar
+ * still renders once under `act()` batching. Sibling isolation is the shape
+ * that can fail, and this is it at composition scale: eight live projects, each
+ * a real `project-session`, with real `chat-session` children — one chat moves,
+ * and every other row stays asleep.
+ */
+describe('sessions composition — sidebar rows across eight live projects (S48(13), V24)', () => {
+  it('wakes the moving chat row and its own project row, and no sibling', async () => {
+    const view = await renderRoute('row-0');
+    for (let index = 1; index < browserLiveProjectBudget; index += 1) {
+      await send({ type: 'open', projectId: `row-${String(index)}` });
+    }
+    await settle();
+    const projectIds = Array.from({ length: browserLiveProjectBudget }, (_, index) => `row-${String(index)}`);
+    expect(liveProjectIds()).toEqual(projectIds);
+
+    /* One chat per project, a root the way the store creates them. */
+    for (const projectId of projectIds) {
+      await act(async () => {
+        openChatRoot(projectId, `chat-${projectId}`);
+        await Promise.resolve();
+      });
+    }
+
+    const renders: string[] = [];
+
+    function ProjectRow({ projectId }: { readonly projectId: string }): React.JSX.Element {
+      renders.push(`project:${projectId}`);
+      const row = useProjectSidebarRow(projectId);
+      return <span>{row.glyph}</span>;
+    }
+
+    function ChatRow({ projectId }: { readonly projectId: string }): React.JSX.Element {
+      renders.push(`chat:${projectId}`);
+      const status = useChatSidebarStatus(projectId, `chat-${projectId}`);
+      return <span>{status?.state ?? 'none'}</span>;
+    }
+
+    const sidebar = render(
+      <QueryClientProvider client={queryClient}>
+        <SessionsProvider actor={sessionsActor} focus={focusHost}>
+          <ul>
+            {projectIds.map((projectId) => (
+              <li key={projectId}>
+                <ProjectRow projectId={projectId} />
+                <ChatRow projectId={projectId} />
+              </li>
+            ))}
+          </ul>
+        </SessionsProvider>
+      </QueryClientProvider>,
+    );
+    await settle();
+    renders.length = 0;
+
+    /* One chat starts streaming. */
+    const moved = chatStore.chatRootsOf('row-3').get('chat-row-3') as ReturnType<typeof openChatRoot>;
+    await act(async () => {
+      moved.send({ type: 'runLifecycle', phase: 'running' });
+      await Promise.resolve();
+    });
+
+    expect(renders.toSorted()).toEqual(['chat:row-3', 'project:row-3']);
+    sidebar.unmount();
+    view.unmount();
+  });
+});
+
+describe('sessions composition — a finished run reads Done at its terminal row (P71, PV-S9)', () => {
+  it('reads Done at the terminal row without a page finishing state', async () => {
+    const view = await renderRoute('finishing-project');
+    let chat: ReturnType<typeof openChatRoot> | undefined;
+    await act(async () => {
+      chat = openChatRoot('finishing-project', 'finishing-chat');
+      await Promise.resolve();
+    });
+
+    function ChatRow(): React.JSX.Element {
+      const status = useChatSidebarStatus('finishing-project', 'finishing-chat');
+      return <span>{status?.state ?? 'none'}</span>;
+    }
+
+    const row = render(
+      <QueryClientProvider client={queryClient}>
+        <SessionsProvider actor={sessionsActor} focus={focusHost}>
+          <ChatRow />
+        </SessionsProvider>
+      </QueryClientProvider>,
+    );
+    await act(async () => {
+      chat?.send({ type: 'runLifecycle', phase: 'running', runId: 'run-finishing' });
+      chat?.send({ type: 'runLifecycle', phase: 'completed', runId: 'run-finishing' });
+      /* A revision edit does not delay the run's terminal presentation. */
+      chat?.send({ type: 'dirtyChanged', dirty: true });
+      await Promise.resolve();
+    });
+
+    expect(chat?.getSnapshot().matches({ run: 'done' })).toBe(true);
+    expect(row.getByText('done')).toBeInTheDocument();
+    row.unmount();
+    view.unmount();
+  });
+});
+
+describe('sessions composition', () => {
+  it('keeps a project live across navigation away and back (pin a, I22)', async () => {
+    const view = await renderRoute('pin-a-1');
+    const first = sessionOf('pin-a-1');
+    const firstChildren = first?.getSnapshot().context;
+    expect(firstChildren?.computeRef).toBeDefined();
+
+    await view.rerender('pin-a-2');
+    await view.rerender('pin-a-1');
+
+    const back = sessionOf('pin-a-1');
+    expect(back).toBe(first);
+    expect(back?.getSnapshot().context.computeRef).toBe(firstChildren?.computeRef);
+    expect(back?.getSnapshot().context.fileManagerRef).toBe(firstChildren?.fileManagerRef);
+    /* The kernel is not rebooted on return: compute was admitted once and
+     * never released while the project stayed live (V21). */
+    expect(workerFrames.filter((frame) => frame.projectId === 'pin-a-1')).toEqual([
+      { type: 'computeStoreAdmission', projectId: 'pin-a-1' },
+    ]);
+    /* And the subtree that holds its file manager never unmounted. */
+    expect(mounted.filter((entry) => entry.endsWith('pin-a-1'))).toEqual(['mount:pin-a-1']);
+    expect(liveProjectIds()).toEqual(['pin-a-1', 'pin-a-2']);
+    view.unmount();
+  });
+
+  /* A7c: the view record owner is no longer a React host: the project runtime registers its sessions' flush in its
+   * producer set (`project-runtime.test.ts`), so it holds for a live project that is not focused with nothing mounted. */
+
+  /* A8b exit, A7c: a live project that is not focused keeps its session's producer-stage registration, whose `hidden`
+   * flush asks its runtime child to walk the runtime's producers, the layout child's among them (the runtime registers
+   * it; `project-runtime.test.ts` shows the layout's write). */
+  it("flushes a live project's runtime producers on hidden while it is not focused", async () => {
+    const view = await renderRoute('pin-hidden-1');
+    await view.rerender('pin-hidden-2');
+    expect(liveProjectIds()).toEqual(['pin-hidden-1', 'pin-hidden-2']);
+    const unfocused = producerFlushOf('pin-hidden-1');
+    vi.mocked(unfocused).mockClear();
+    for (const flushAtClose of closeFlushes) {
+      void flushAtClose('hidden');
+    }
+    await vi.waitFor(() => {
+      expect(unfocused).toHaveBeenCalled();
+    });
+    view.unmount();
+  });
+
+  it('unmounts the focused project when its session closes (pin f, R1/I23)', async () => {
+    const view = await renderRoute('pin-f');
+    expect(mounted).toEqual(['mount:pin-f']);
+    expect(workerFrames).toEqual([{ type: 'computeStoreAdmission', projectId: 'pin-f' }]);
+
+    /* The 30-minute idle policy, reachable with no W20 verb. */
+    await send({ type: 'idleExpired', projectId: 'pin-f' });
+    await settle();
+
+    expect(liveProjectIds()).not.toContain('pin-f');
+    /* Its resources go with it, even though the person is looking at it. */
+    expect(mounted).toEqual(['mount:pin-f', 'unmount:pin-f']);
+    expect(workerFrames).toEqual([
+      { type: 'computeStoreAdmission', projectId: 'pin-f' },
+      { type: 'computeStoreRelease', projectId: 'pin-f' },
+    ]);
+    view.unmount();
+  });
+
+  it('closes the least recently touched idle project for a ninth open (pin b, P47)', async () => {
+    const view = await renderRoute('pin-b-0');
+    for (let index = 1; index < browserLiveProjectBudget; index += 1) {
+      await send({ type: 'open', projectId: `pin-b-${index}` });
+      await send({ type: 'touch', projectId: `pin-b-${index}` });
+    }
+    await settle();
+    expect(liveProjectIds()).toHaveLength(browserLiveProjectBudget);
+
+    await send({ type: 'open', projectId: 'pin-b-ninth' });
+    await settle();
+
+    /* Room was made, not refused: the least recently touched idle project
+     * closed with `budget` on its row and the ninth is live. */
+    expect(emitted.find((event) => event.type === 'budgetRefused')).toBeUndefined();
+    expect(liveProjectIds()).toContain('pin-b-ninth');
+    expect(liveProjectIds()).not.toContain('pin-b-0');
+    expect(liveProjectIds()).toHaveLength(browserLiveProjectBudget);
+    expect(sessionsActor.getSnapshot().context.closed['pin-b-0']?.reason).toBe('budget');
+    expect(workerFrames.filter((frame) => frame.type === 'computeStoreRelease')).toEqual([
+      { type: 'computeStoreRelease', projectId: 'pin-b-0' },
+    ]);
+    view.unmount();
+  });
+
+  it('closes the least recently touched route subtree for a ninth route open', async () => {
+    const view = await renderRoute('route-budget-0');
+    for (let index = 1; index <= browserLiveProjectBudget; index += 1) {
+      await view.rerender(`route-budget-${String(index)}`);
+    }
+
+    expect(liveProjectIds()).toHaveLength(browserLiveProjectBudget);
+    expect(liveProjectIds()).not.toContain('route-budget-0');
+    expect(liveProjectIds()).toContain(`route-budget-${String(browserLiveProjectBudget)}`);
+    expect(sessionsActor.getSnapshot().context.closed['route-budget-0']?.reason).toBe('budget');
+    expect(mounted.filter((entry) => entry === 'unmount:route-budget-0')).toHaveLength(1);
+    expect(workerFrames.filter((frame) => frame.type === 'computeStoreRelease')).toContainEqual({
+      type: 'computeStoreRelease',
+      projectId: 'route-budget-0',
+    });
+    view.unmount();
+  });
+
+  it('updates an unfocused project when backup settles, then closes it as the LRU budget victim', async () => {
+    revision.setSync('checking');
+    const view = await renderRoute('projection-a');
+    await view.rerender('projection-b');
+
+    expect(sessionOf('projection-a')?.getSnapshot().context.pushed).toBe(false);
+    await act(async () => {
+      revision.setSync('backedUp');
+      await Promise.resolve();
+    });
+    expect(sessionOf('projection-a')?.getSnapshot().context.pushed).toBe(true);
+
+    for (let index = 2; index < browserLiveProjectBudget; index += 1) {
+      await send({ type: 'open', projectId: `projection-${String(index)}` });
+      await send({ type: 'touch', projectId: `projection-${String(index)}` });
+    }
+    await send({ type: 'open', projectId: 'projection-ninth' });
+    await settle();
+
+    expect(liveProjectIds()).toHaveLength(browserLiveProjectBudget);
+    expect(liveProjectIds()).not.toContain('projection-a');
+    expect(liveProjectIds()).toContain('projection-ninth');
+    expect(sessionsActor.getSnapshot().context.closed['projection-a']?.reason).toBe('budget');
+    view.unmount();
+  });
+
+  it('keeps one resource subtree and revision client across the project route family and back', async () => {
+    revision.setSync('checking');
+    const view = await renderRouteFamily('route-family-a');
+    const subtree = screen.getByTestId('subtree-route-family-a');
+
+    await view.navigate('/projects');
+    await screen.findByText('Project library');
+
+    expect(liveProjectIds()).toContain('route-family-a');
+    expect(screen.getByTestId('subtree-route-family-a')).toBe(subtree);
+    expect(mounted.filter((entry) => entry === 'mount:route-family-a')).toHaveLength(1);
+    expect(mounted).not.toContain('unmount:route-family-a');
+    expect(revisionClientLifecycle).toEqual(['mount']);
+    await act(async () => {
+      revision.setSync('backedUp');
+      await Promise.resolve();
+    });
+    expect(sessionOf('route-family-a')?.getSnapshot().context.pushed).toBe(true);
+
+    await view.navigate('/w/workspace/route-family-a');
+    await screen.findByRole('link', { name: 'Projects' });
+    expect(screen.getByTestId('subtree-route-family-a')).toBe(subtree);
+    expect(mounted.filter((entry) => entry === 'mount:route-family-a')).toHaveLength(1);
+    expect(mounted).not.toContain('unmount:route-family-a');
+    expect(revisionClientLifecycle).toEqual(['mount']);
+
+    for (let index = 1; index < browserLiveProjectBudget; index += 1) {
+      await send({ type: 'open', projectId: `route-family-${String(index)}` });
+      await send({ type: 'touch', projectId: `route-family-${String(index)}` });
+    }
+    await send({ type: 'open', projectId: 'route-family-ninth' });
+    await settle();
+
+    expect(liveProjectIds()).not.toContain('route-family-a');
+    expect(liveProjectIds()).toContain('route-family-ninth');
+    expect(sessionsActor.getSnapshot().context.closed['route-family-a']?.reason).toBe('budget');
+    view.unmount();
+  });
+
+  it.each([
+    ['/', 'Home'],
+    ['/projects', 'Project library'],
+  ])('renders a cold non-project route at %s without opening a project', async (initialEntry, content) => {
+    const view = await renderRouteFamily('cold-non-project', initialEntry);
+
+    expect(screen.getByText(content)).toBeInTheDocument();
+    expect(liveProjectIds()).not.toContain('cold-non-project');
+    expect(getProjectRouteAccess).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it('flushes the focused project before releasing a non-project route', async () => {
+    const view = await renderRouteFamily('route-flush-a');
+    editor.setIdle(false);
+
+    await view.navigate('/projects');
+
+    /* Since 8451a6dca the shell stays in the document while the flush is owed
+     * (no frame without a sidebar), so "not shown yet" is: inert behind the
+     * overlay, and released only once the editor has stored. */
+    expect(serviceCalls).toEqual(['editor:flushNow']);
+    expect(screen.getByRole('status', { name: 'Opening project' })).toBeInTheDocument();
+    expect(screen.getByText('Project library').closest('[inert]')).not.toBeNull();
+    await act(async () => {
+      editor.setIdle(true);
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => {
+      expect(screen.getByText('Project library').closest('[inert]')).toBeNull();
+    });
+    expect(screen.queryByRole('status', { name: 'Opening project' })).not.toBeInTheDocument();
+    view.unmount();
+  });
+
+  it('consumes the Tau Cloud open marker through the router (W7)', async () => {
+    /*
+     * The marker used to be stripped with `history.replaceState` from inside
+     * the session subtree, so React never saw the change and the URL and the
+     * render disagreed. It is read and cleared through the router now.
+     */
+    const view = await renderRouteFamily('route-cloud-a', '/w/workspace/route-cloud-a?cloudOpen=tau&chat=chat-keep');
+
+    expect(currentSearch).not.toContain('cloudOpen');
+    /* The write merges: the unrelated parameter survives. */
+    expect(currentSearch).toContain('chat=chat-keep');
+    view.unmount();
+  });
+
+  it('never combines a retained project with a chat from an unresolved new URL', async () => {
+    const view = await renderRouteFamily('route-chat-a');
+    await view.navigate('/w/workspace/resolving?chat=chat-new');
+
+    /* W2: an unresolved slug is the `resolving` state, and its loader lives in
+     * the notice the real route component renders below the outlet. */
+    expect(screen.getByTestId('route-state')).toHaveTextContent('resolving');
+    expect(projectProviderInputs).not.toContainEqual({
+      projectId: 'route-chat-a',
+      requestedChatId: 'chat-new',
+      createdChatId: undefined,
+    });
+
+    await view.navigate('/w/workspace/missing?chat=chat-new');
+    expect(projectProviderInputs).not.toContainEqual({
+      projectId: 'route-chat-a',
+      requestedChatId: 'chat-new',
+      createdChatId: undefined,
+    });
+    view.unmount();
+  });
+
+  it('refuses a ninth open when nothing is idle, naming the candidates (pin b2, P47/I28)', async () => {
+    const view = await renderRoute('pin-b2-0');
+    for (let index = 0; index < browserLiveProjectBudget; index += 1) {
+      const projectId = index === 0 ? 'pin-b2-0' : `pin-b2-${index}`;
+      if (index > 0) {
+        await send({ type: 'open', projectId });
+      }
+      await settle();
+      sessionOf(projectId)?.send({
+        type: 'projectedRunsChanged',
+        runs: [`chat-${index}`],
+        stoppableRuns: [`chat-${index}`],
+      });
+    }
+    await settle();
+
+    await send({ type: 'open', projectId: 'pin-b2-ninth' });
+
+    const refusal = emitted.find((event) => event.type === 'budgetRefused');
+    expect(refusal?.projectId).toBe('pin-b2-ninth');
+    expect(refusal?.suggestions).toHaveLength(browserLiveProjectBudget);
+    expect(liveProjectIds()).not.toContain('pin-b2-ninth');
+
+    /* *Not now* drops the remembered open, so the next close — whatever its
+     * reason — does not open a project nobody asked for any more. */
+    await send({ type: 'cancelPendingOpen' });
+    await send({ type: 'close', projectId: 'pin-b2-1', reason: 'user' });
+    await act(async () => {
+      sessionOf('pin-b2-1')?.send({ type: 'confirmClose' });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(liveProjectIds()).not.toContain('pin-b2-ninth');
+    view.unmount();
+  });
+
+  it.each<[string, { runs?: number; dirty?: boolean; pushed?: boolean }]>([
+    ['running', { runs: 1 }],
+    ['dirty', { dirty: true }],
+    ['unpushed', { pushed: false }],
+  ])('never closes a %s project on the idle window (pin c, I24/I25)', async (reason, facts) => {
+    const projectId = `pin-c-${reason}`;
+    const view = await renderRoute(projectId);
+    const session = sessionOf(projectId);
+    await act(async () => {
+      if (facts.runs === undefined) {
+        session?.send({ type: 'revisionState', dirty: facts.dirty === true, pushed: facts.pushed !== false });
+      } else {
+        session?.send({ type: 'projectedRunsChanged', runs: ['chat-1'], stoppableRuns: ['chat-1'] });
+      }
+      await Promise.resolve();
+    });
+
+    await send({ type: 'idleExpired', projectId });
+    await settle();
+
+    expect(liveProjectIds()).toContain(projectId);
+    expect(sessionsActor.getSnapshot().context.refusals[projectId]).toBe(reason);
+    expect(sessionsActor.getSnapshot().context.closed[projectId]).toBeUndefined();
+    expect(mounted).toEqual([`mount:${projectId}`]);
+    view.unmount();
+  });
+
+  it('offers the idle window again once the refusal is gone (pin g, R6)', async () => {
+    const view = await renderRoute('pin-g');
+    const session = sessionOf('pin-g');
+    await act(async () => {
+      session?.send({ type: 'projectedRunsChanged', runs: ['chat-1'], stoppableRuns: ['chat-1'] });
+      await Promise.resolve();
+    });
+    await send({ type: 'idleExpired', projectId: 'pin-g' });
+    expect(sessionsActor.getSnapshot().context.refusals['pin-g']).toBe('running');
+
+    /* The run settles: the reason is gone, so the row stops saying it. */
+    await act(async () => {
+      session?.send({ type: 'projectedRunsChanged', runs: [], stoppableRuns: [] });
+      await Promise.resolve();
+    });
+    expect(sessionsActor.getSnapshot().context.refusals['pin-g']).toBeUndefined();
+
+    /* And the next window closes it, rather than never asking again. */
+    await send({ type: 'idleExpired', projectId: 'pin-g' });
+    await settle();
+    expect(liveProjectIds()).not.toContain('pin-g');
+    expect(sessionsActor.getSnapshot().context.closed['pin-g']?.reason).toBe('idle');
+    view.unmount();
+  });
+
+  it('asks, cancels, flushes, releases and stops every child on Close (pin d)', async () => {
+    const view = await renderRoute('pin-d');
+    const session = sessionOf('pin-d');
+    expect(session).toBeDefined();
+    await act(async () => {
+      session?.send({ type: 'projectedRunsChanged', runs: ['chat-1'], stoppableRuns: ['chat-1'] });
+      await Promise.resolve();
+    });
+    expect(Object.keys(session?.getSnapshot().children ?? {}).length).toBeGreaterThan(0);
+
+    await send({ type: 'close', projectId: 'pin-d', reason: 'user' });
+    await settle();
+    /* A live run makes Close a question, not an action (A35). */
+    expect(session?.getSnapshot().matches({ closing: 'asking' })).toBe(true);
+    expect(liveProjectIds()).toContain('pin-d');
+
+    await act(async () => {
+      session?.send({ type: 'confirmClose' });
+      await Promise.resolve();
+    });
+    await settle();
+
+    /* The flush is W13's seam, called through the route's own registration. */
+    expect(serviceCalls).toContain('quiesce');
+    expect(Object.keys(session?.getSnapshot().children ?? {})).toEqual([]);
+    expect(liveProjectIds()).not.toContain('pin-d');
+    expect(mounted).toEqual(['mount:pin-d', 'unmount:pin-d']);
+    /* The worker count is back to baseline: every admission has its release. */
+    expect(workerFrames).toEqual([
+      { type: 'computeStoreAdmission', projectId: 'pin-d' },
+      { type: 'computeStoreRelease', projectId: 'pin-d' },
+    ]);
+    view.unmount();
+  });
+
+  it('runs every session closing before it is quiesced (pin e, D31)', async () => {
+    const view = await renderRoute('pin-e-1');
+    await send({ type: 'open', projectId: 'pin-e-2' });
+    await settle();
+    expect(liveProjectIds()).toEqual(['pin-e-1', 'pin-e-2']);
+
+    await send({ type: 'quit' });
+    await settle();
+
+    expect(sessionsActor.getSnapshot().matches('quiesced')).toBe(true);
+    expect(emitted).toContainEqual({ type: 'quiesced', forced: false });
+    /* Quit runs the closing with the sync flush, per session, before it is
+     * quiesced — never a bare stop (D31). */
+    expect(workerFrames.filter((frame) => frame.type === 'computeStoreRelease')).toHaveLength(2);
+    view.unmount();
+  });
+});
+
+/**
+ * S48(6) — the idle window is a child timer, driven by hand.
+ *
+ * The pins above reach the policy by sending `idleExpired` at the registry,
+ * which is the registry's half. This is the other half: nobody sends that
+ * event in the app — `project-session.live.idle` raises it after 30 minutes
+ * without attention, and `reenter` re-arms it (W19-a2 R6). A manual clock is
+ * the only way to assert it without waiting half an hour, and a fake global
+ * timer would also move every unrelated timeout in the document.
+ */
+describe('sessions composition — the idle window (S48(6))', () => {
+  /** Virtual time the test moves by hand; nothing here waits on the wall. */
+  const manualClock = (): Readonly<{
+    setTimeout: (callback: () => void, delay: number) => number;
+    clearTimeout: (id: number) => void;
+    advance: (milliseconds: number) => void;
+  }> => {
+    const timeouts = new Map<number, { at: number; callback: () => void }>();
+    let now = 0;
+    let nextId = 0;
+    return {
+      setTimeout: (callback, delayMilliseconds) => {
+        nextId += 1;
+        timeouts.set(nextId, { at: now + delayMilliseconds, callback });
+        return nextId;
+      },
+      clearTimeout: (id) => {
+        timeouts.delete(id);
+      },
+      advance: (milliseconds) => {
+        now += milliseconds;
+        for (const [id, entry] of [...timeouts].sort(([, left], [, right]) => left.at - right.at)) {
+          if (entry.at <= now) {
+            timeouts.delete(id);
+            entry.callback();
+          }
+        }
+      },
+    };
+  };
+
+  /* The four startup children, each reporting its region up at once: the host
+   * supplies these, and what this row is about is what happens after they are
+   * up. Everything else — the timer, the policy, the close — is the real pair
+   * of machines. */
+  const readyChild = (region: string) =>
+    createCallbackLogic<EventObject, { projectId: string }>(({ sendBack }) => {
+      sendBack({ type: 'childReady', region });
+      return undefined;
+    });
+
+  /* The runtime child reports its region up and answers the close's flush and runtime close at once (A7c). */
+  const runtimeChild = createCallbackLogic<EventObject, { projectId: string }>(({ sendBack, receive }) => {
+    sendBack({ type: 'childReady', region: 'runtime' });
+    receive((event) => {
+      const { requestId } = event as EventObject & Readonly<{ requestId: string }>;
+      switch (event.type) {
+        case 'flushRuntime': {
+          sendBack({ type: 'runtimeFlushSettled', requestId });
+          break;
+        }
+        case 'closeParameters': {
+          sendBack({ type: 'parametersClosed', requestId });
+          break;
+        }
+        case 'closeRuntime': {
+          sendBack({ type: 'runtimeClosed', requestId });
+          break;
+        }
+        default: {
+          break;
+        }
+      }
+    });
+    return undefined;
+  });
+
+  const startRegistry = () => {
+    const clock = manualClock();
+    const actor = createActor(
+      sessionsMachine.provide({
+        actors: {
+          projectSession: projectSessionMachine.provide({
+            actors: {
+              fileManager: readyChild('views'),
+              project: runtimeChild,
+              agentHost: readyChild('agentHost'),
+              compute: readyChild('compute'),
+              /* An unprovided close effect fails the close (MC-R8); these rows are about the timer, not the close. */
+              ...Object.fromEntries(
+                ['cancelRuns', 'releaseAgentHost'].map((name) => [
+                  name,
+                  createAsyncLogic({ run: async () => undefined }),
+                ]),
+              ),
+            },
+          }),
+        },
+      }),
+      { clock, input: { budget: browserLiveProjectBudget } },
+    );
+    return Object.assign(actor, { clock });
+  };
+
+  /** Let the actor reach a stable state; nothing renders here. */
+  const drain = async (registry: ReturnType<typeof startRegistry>): Promise<void> => {
+    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(
+        Object.values(registry.getSnapshot().context.refs).every((ref) => {
+          const snapshot = ref.getSnapshot();
+          return (
+            !snapshot.matches('opening') &&
+            !snapshot.matches({ closing: 'cancellingRuns' }) &&
+            !snapshot.matches({ closing: 'flushingProducers' }) &&
+            !snapshot.matches({ closing: 'closingParameters' }) &&
+            !snapshot.matches({ closing: 'flushing' }) &&
+            !snapshot.matches({ closing: 'closingRuntime' }) &&
+            !snapshot.matches({ closing: 'releasingAgentHost' })
+          );
+        }),
+      ).toBe(true);
+    });
+  };
+
+  it('closes an idle project through its own child timer', async () => {
+    const registry = startRegistry();
+    registry.start();
+    registry.send({ type: 'open', projectId: 'timer-idle' });
+    await drain(registry);
+    expect(registry.getSnapshot().context.refs['timer-idle']?.getSnapshot().value).toEqual({ live: 'idle' });
+
+    /* One minute short of the window: nothing has expired yet. */
+    registry.clock.advance(projectSessionIdleWindowMilliseconds - 60_000);
+    await drain(registry);
+    expect(registry.getSnapshot().context.closed['timer-idle']).toBeUndefined();
+
+    registry.clock.advance(60_000);
+    await drain(registry);
+
+    expect(registry.getSnapshot().context.closed['timer-idle']?.reason).toBe('idle');
+    expect(registry.getSnapshot().context.refs['timer-idle']).toBeUndefined();
+    registry.stop();
+  });
+
+  /* A run does not *refuse* the window — it removes it. `live.busy` has no
+   * `after`, so the 30 minutes are never counted while an agent is working and
+   * the registry is never asked. The refusal path the pins above drive
+   * (`refusals[projectId] = 'running'`) is the race where a run starts between
+   * the timer firing and the registry reading the facts; the steady state is
+   * this one, and it is the stronger guarantee. */
+  it('never arms the window while a run is in flight, and arms it again when the run settles', async () => {
+    const registry = startRegistry();
+    registry.start();
+    registry.send({ type: 'open', projectId: 'timer-busy' });
+    await drain(registry);
+    const session = registry.getSnapshot().context.refs['timer-busy'];
+    session?.send({ type: 'projectedRunsChanged', runs: ['chat-1'], stoppableRuns: ['chat-1'] });
+    await drain(registry);
+    expect(session?.getSnapshot().value).toEqual({ live: 'busy' });
+
+    registry.clock.advance(projectSessionIdleWindowMilliseconds * 2);
+    await drain(registry);
+    expect(registry.getSnapshot().context.refs['timer-busy']).toBeDefined();
+    expect(registry.getSnapshot().context.closed['timer-busy']).toBeUndefined();
+
+    session?.send({ type: 'projectedRunsChanged', runs: [], stoppableRuns: [] });
+    await drain(registry);
+    registry.clock.advance(projectSessionIdleWindowMilliseconds);
+    await drain(registry);
+
+    expect(registry.getSnapshot().context.closed['timer-busy']?.reason).toBe('idle');
+    registry.stop();
+  });
+
+  /* R6 — the window is re-armed by a refusal rather than spent on it. A dirty
+   * tree is the refusal that *stays* in `live.idle`, so the same child timer
+   * has to come round again once the tree is clean. */
+  it('re-arms the window after a refusal rather than asking once (R6)', async () => {
+    const registry = startRegistry();
+    registry.start();
+    registry.send({ type: 'open', projectId: 'timer-rearm' });
+    await drain(registry);
+    const session = registry.getSnapshot().context.refs['timer-rearm'];
+    session?.send({ type: 'revisionState', dirty: true, pushed: true });
+    await drain(registry);
+
+    registry.clock.advance(projectSessionIdleWindowMilliseconds);
+    await drain(registry);
+    expect(registry.getSnapshot().context.refusals['timer-rearm']).toBe('dirty');
+    expect(registry.getSnapshot().context.refs['timer-rearm']).toBeDefined();
+
+    session?.send({ type: 'revisionState', dirty: false, pushed: true });
+    await drain(registry);
+    registry.clock.advance(projectSessionIdleWindowMilliseconds);
+    await drain(registry);
+
+    expect(registry.getSnapshot().context.closed['timer-rearm']?.reason).toBe('idle');
+    registry.stop();
+  });
+});
+
+/**
+ * S48(14), seam-unit workbench half — *Switch* re-roots, it does not reload.
+ *
+ * The real selection actor is composed and asserted at the package owner. Since A7b the focused session's `revisions`
+ * child follows the selection with nothing mounted (row S23): this row runs the real child over this suite's revision
+ * client, a recording file manager and the handle store seam, and proves it installs the route once and issues one
+ * `setRoot` per move. Nothing is mounted, so nothing can remount.
+ */
+describe('sessions composition — the workbench follows the selection (S48(14))', () => {
+  const projection = (checkoutId: string, checkoutRoot: string): Record<string, unknown> => ({
+    projectId: 'unused',
+    checkoutId,
+    checkoutRoot,
+    branch: checkoutId === 'live' ? 'main' : 'bracket-fillet',
+    branches: [
+      { name: 'main', checkoutId: 'live', checkoutRoot: '/projects/unused', leaseChatIds: [] },
+      {
+        name: 'bracket-fillet',
+        checkoutId: 'checkout-fillet',
+        checkoutRoot: '/checkouts/checkout-fillet',
+        leaseChatIds: [],
+      },
+    ],
+  });
+
+  /** The file manager as the child reads it: its worker, and every event it is sent. */
+  const recordingFileManager = () =>
+    ({
+      send: (event: { type: string; path?: string; projectId?: string }) => {
+        rootCalls.push(event);
+      },
+      getSnapshot: () => ({ context: { worker: workerRef.current, rootDirectory: '/projects/unused' } }),
+      subscribe: () => ({ unsubscribe: () => undefined }),
+    }) as unknown as Parameters<typeof startSessionRevisionsStandIn>[0]['fileManagerRef'];
+
+  afterEach(() => {
+    revisionProjection.current = undefined;
+  });
+
+  it('follows the selection to a new root without remounting the workbench', async () => {
+    revisionProjection.current = projection('live', '/projects/unused');
+    const stop = startSessionRevisionsStandIn({
+      projectId: 'unused',
+      fileManagerRef: recordingFileManager(),
+      focused: true,
+      syncProjectRoots: async () => {
+        rootCalls.push({ type: 'syncProjectRoots' });
+      },
+    });
+    await settle();
+    /* The branch's route is installed before the workbench moves at all (W2
+     * review R4): a `setRoot` at a route nothing mounted answers ESTALE. */
+    await vi.waitFor(() => {
+      expect(rootCalls).toEqual([
+        { type: 'checkoutRoutes', path: 'checkout-fillet' },
+        { type: 'syncProjectRoots' },
+        { type: 'setRoot', path: '/projects/unused', projectId: 'unused' },
+      ]);
+    });
+
+    /* The selection moves to the branch's own checkout. */
+    revisionProjection.current = projection('checkout-fillet', '/checkouts/checkout-fillet');
+    revision.publish();
+    await settle();
+
+    /* The move is one `setRoot`, with no second route installation (the set did
+     * not change): no reload, for a person with a file open. */
+    await vi.waitFor(() => {
+      expect(rootCalls).toEqual([
+        { type: 'checkoutRoutes', path: 'checkout-fillet' },
+        { type: 'syncProjectRoots' },
+        { type: 'setRoot', path: '/projects/unused', projectId: 'unused' },
+        { type: 'setRoot', path: '/checkouts/checkout-fillet', projectId: 'unused' },
+      ]);
+    });
+    stop();
+  });
+});
+
+/*
+ * A0.2: the registry steps `ProjectFocus` assumes on a one-project device (B-08), and the only check of
+ * them: no conformance test is claimed for `sessions.machine`. Leaving a project closes it through the
+ * registry — the memory release the route binds (`project-route.tsx` 275 to 276) for a clean project, the
+ * switch close (`sessions.machine.ts` 396) for one the release refused — and the single `pendingOpen`
+ * slot opens the next project only once the close has finished. The route never sends `close` (I3).
+ */
+describe('sessions composition — a one-project device (A0.2 item 6, B-08)', () => {
+  type OneProjectRegistry = Readonly<{
+    actor: ActorRefFrom<typeof sessionsMachine>;
+    /** Focus and `environment` beside it, in its system: the memory release is `environment`'s (A5b). */
+    slice: RuntimeSliceFixture;
+    /** Every event the registry root processed, by type. */
+    received: string[];
+    /** Every live set the registry announced. */
+    liveSets: Array<readonly string[]>;
+    budgetRefusals: string[];
+  }>;
+
+  const createOneProjectRegistry = (): OneProjectRegistry => {
+    const received: string[] = [];
+    const liveSets: Array<readonly string[]> = [];
+    const budgetRefusals: string[] = [];
+    const root: { current: unknown } = { current: undefined };
+    /* A child never sends `close` to the registry, so a `close` the root processes came from the app. */
+    const slice = startRuntimeSlice({
+      sharedWorker: () => workerRef.current,
+      registry: { openFileManager: openFileManagerWithWorker, wiring: sessionWiring },
+      library: {
+        routeAccess: async (projectId) => getProjectRouteAccess(projectId) as Promise<ProjectRouteAccess>,
+        epoch: () => 0,
+        onEpochChanged: () => () => undefined,
+      },
+      loadModule: async () => undefined,
+      inspect: (inspection) => {
+        if (
+          inspection.type === '@xstate.transition' &&
+          root.current !== undefined &&
+          inspection.actorRef === root.current
+        ) {
+          received.push(inspection.eventType);
+        }
+      },
+    });
+    const actor = slice.sessions;
+    root.current = actor;
+    actor.on('liveSetChanged', (event) => liveSets.push(event.projectIds));
+    actor.on('budgetRefused', (event) => budgetRefusals.push(event.projectId));
+    started.push(slice);
+    return { actor, slice, received, liveSets, budgetRefusals };
+  };
+
+  const renderOn = async (
+    registry: OneProjectRegistry,
+    initialEntry: string,
+  ): Promise<{ navigate: (target: string) => Promise<void>; unmount: () => void }> => {
+    const quiet = (): boolean =>
+      Object.values(registry.actor.getSnapshot().context.refs).every((ref) => {
+        const snapshot = ref.getSnapshot();
+        return !snapshot.matches('opening') && !snapshot.matches('closing');
+      });
+    const view = render(
+      <DataMemoryRouter initialEntries={[initialEntry]}>
+        <NavigationProbe />
+        <QueryClientProvider client={queryClient}>
+          <SessionsProvider actor={registry.actor} focus={registry.slice}>
+            <routeModule.ProjectSessionsHost>
+              <Routes>
+                <Route path='/w/:workspace/:project' element={<RouteStateProbe />} />
+              </Routes>
+            </routeModule.ProjectSessionsHost>
+          </SessionsProvider>
+        </QueryClientProvider>
+      </DataMemoryRouter>,
+    );
+    unmounts.push(view.unmount);
+    await settle(quiet);
+    return {
+      navigate: async (target) => {
+        await act(async () => {
+          await navigateRoute?.(target);
+        });
+        await settle(quiet);
+        await settle(quiet);
+      },
+      unmount: view.unmount,
+    };
+  };
+
+  const liveOn = (registry: OneProjectRegistry): readonly string[] =>
+    Object.keys(registry.actor.getSnapshot().context.refs);
+
+  /* Torn down whether or not a row's assertions pass. */
+  const started: RuntimeSliceFixture[] = [];
+  const unmounts: Array<() => void> = [];
+  let restoreSpies: (() => void) | undefined;
+
+  beforeEach(() => {
+    deviceMemory.constrained = true;
+  });
+
+  afterEach(() => {
+    restoreSpies?.();
+    restoreSpies = undefined;
+    for (const unmount of unmounts.splice(0)) {
+      unmount();
+    }
+    for (const slice of started.splice(0)) {
+      slice.stop();
+    }
+    deviceMemory.constrained = false;
+  });
+
+  it('should close a clean project being left through the memory release, then open the next', async () => {
+    const registry = createOneProjectRegistry();
+    const view = await renderOn(registry, '/w/workspace/one-clean-a');
+    expect(liveOn(registry)).toEqual(['one-clean-a']);
+    mounted.length = 0;
+
+    await view.navigate('/w/workspace/one-clean-b');
+
+    expect(liveOn(registry)).toEqual(['one-clean-b']);
+    expect(registry.actor.getSnapshot().context.closed['one-clean-a']?.reason).toBe('memory');
+    expect(registry.liveSets.every((projectIds) => projectIds.length <= 1)).toBe(true);
+    expect(mounted).toEqual(['unmount:one-clean-a', 'mount:one-clean-b']);
+    expect(registry.received).toEqual(expect.arrayContaining(['open', 'releaseMemory']));
+    expect(registry.received).not.toContain('close');
+    expect(screen.getByTestId('route-state')).toHaveTextContent('editor');
+  });
+
+  it('should close an unpushed project being left as the person’s close, flush it, then open the next from the pending slot', async () => {
+    const registry = createOneProjectRegistry();
+    const view = await renderOn(registry, '/w/workspace/one-unpushed-a');
+    await act(async () => {
+      revision.setSync('checking');
+      await Promise.resolve();
+    });
+    expect(registry.actor.getSnapshot().context.status['one-unpushed-a']?.pushed).toBe(false);
+    mounted.length = 0;
+    serviceCalls.length = 0;
+    /* What had mounted when the close took its cut. */
+    let mountedAtCut: readonly string[] | undefined;
+    const push = serviceCalls.push.bind(serviceCalls);
+    const recordCut = vi.spyOn(serviceCalls, 'push').mockImplementation((...calls: string[]) => {
+      if (calls.includes('quiesce')) {
+        mountedAtCut ??= [...mounted];
+      }
+      return push(...calls);
+    });
+
+    restoreSpies = () => {
+      recordCut.mockRestore();
+    };
+
+    await view.navigate('/w/workspace/one-unpushed-b');
+    restoreSpies();
+    restoreSpies = undefined;
+
+    /* The memory release refused the unpushed project; the open then took the switch close. */
+    expect(registry.actor.getSnapshot().context.closed['one-unpushed-a']?.reason).toBe('user');
+    expect(liveOn(registry)).toEqual(['one-unpushed-b']);
+    expect(registry.actor.getSnapshot().context.pendingOpen).toBeUndefined();
+    expect(registry.liveSets.every((projectIds) => projectIds.length <= 1)).toBe(true);
+    /* The close took its cut before the next project's subtree mounted. */
+    expect(serviceCalls).toContain('quiesce');
+    expect(mountedAtCut).toEqual([]);
+    expect(mounted).toEqual(['unmount:one-unpushed-a', 'mount:one-unpushed-b']);
+    expect(registry.received).toContain('open');
+    expect(registry.received).not.toContain('close');
+  });
+
+  it('should keep a running project being left and refuse the next open, holding it in the pending slot', async () => {
+    const registry = createOneProjectRegistry();
+    const view = await renderOn(registry, '/w/workspace/one-running-a');
+    await act(async () => {
+      registry.actor.getSnapshot().context.refs['one-running-a']?.send({
+        type: 'projectedRunsChanged',
+        runs: ['chat-run'],
+        stoppableRuns: ['chat-run'],
+      });
+      await Promise.resolve();
+    });
+
+    await view.navigate('/w/workspace/one-running-b');
+
+    expect(liveOn(registry)).toEqual(['one-running-a']);
+    expect(registry.budgetRefusals).toEqual(['one-running-b']);
+    expect(registry.actor.getSnapshot().context.pendingOpen?.projectId).toBe('one-running-b');
+    expect(registry.actor.getSnapshot().context.refusals['one-running-a']).toBe('running');
+    expect(registry.received).not.toContain('close');
+  });
+  it("should show the project closed with Reopen, as on main, after the budget dialog's Not now (round 15, D14)", async () => {
+    const registry = createOneProjectRegistry();
+    const view = await renderOn(registry, '/w/workspace/one-running-a');
+    await act(async () => {
+      registry.actor.getSnapshot().context.refs['one-running-a']?.send({
+        type: 'projectedRunsChanged',
+        runs: ['chat-run'],
+        stoppableRuns: ['chat-run'],
+      });
+      await Promise.resolve();
+    });
+    await view.navigate('/w/workspace/one-running-b');
+    expect(registry.actor.getSnapshot().context.pendingOpen?.projectId).toBe('one-running-b');
+    /* `BudgetRefusedDialog`'s Not now: straight to the registry. The person chose not to open, so nothing failed. */
+    await act(async () => {
+      registry.actor.send({ type: 'cancelPendingOpen' });
+      await Promise.resolve();
+    });
+    await settle();
+    await settle();
+    expect(screen.getByTestId('route-state').textContent).toMatch(/^closed/u);
+    expect(document.body.textContent).not.toContain('could not open');
+    expect(registry.actor.getSnapshot().context.refs['one-running-b']).toBeUndefined();
+  });
+});
+
+/**
+ * S48(17), the renderer half — the quit hold, painted and cut short.
+ *
+ * `apps/desktop-e2e/src/desktop-quit-hold.spec.ts` owns the main-process half:
+ * the window is asked (`main.renderer-quiesce`) before the services utility is
+ * quiesced. What it cannot observe is the overlay — a desktop quit with
+ * nothing live is answered inside the same React commit, so nothing paints,
+ * and making a project live on the packaged shell needs an account and a turn.
+ *
+ * Composed here: the actual desktop bridge, registry/session machines, overlay
+ * and Quit-anyway verb. Not composed here: Electron main/preload and a real
+ * revision port; the desktop e2e owns the former and the Node close row owns
+ * the latter. Only the sync flush is held open (D31, P49).
+ */
+describe('sessions composition — the desktop quit hold (S48(17))', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    buildTarget.desktop = false;
+    delete (globalThis as { tau?: unknown }).tau;
+    flushProducers.mockReset();
+    for (const stop of stops.splice(0)) {
+      stop();
+    }
+  });
+
+  const stops: Array<() => void> = [];
+
+  /**
+   * The app runtime over fresh modules (the desktop bridge reads `TAU_TARGET` when it loads), with no page: the quit
+   * hold is `environment`'s (D31, A5b), and the producers it awaits are the runtime sequencer's, where this row's
+   * `flushProducers` registers as one producer.
+   */
+  const renderQuitRuntime = async () => {
+    vi.resetModules();
+    const freshSessions = await import('#hooks/use-sessions.js');
+    const freshStore = await import('#services/sessions-store.js');
+    const freshRuntime = await import('#runtime/app-runtime.js');
+    const freshRuntimeProvider = await import('#runtime/app-runtime-provider.js');
+    const runtime = freshRuntime.createAppRuntime({ environment: () => undefined });
+    const unregister = freshRuntime.selectRuntimeUnload(runtime).register('producer', async () => flushProducers());
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <freshRuntimeProvider.AppRuntimeProvider runtime={runtime}>
+          <freshSessions.SessionsProvider>
+            <span>app</span>
+          </freshSessions.SessionsProvider>
+        </freshRuntimeProvider.AppRuntimeProvider>
+      </QueryClientProvider>,
+    );
+    stops.push(() => {
+      unregister();
+      runtime.stop();
+    });
+    await settle();
+    return { view, freshStore, freshActor: freshRuntime.selectSessionsRegistry(runtime.getSnapshot()) };
+  };
+
+  it('should refuse quit for blocked workbench intent and wait for its repaired checked write', async () => {
+    vi.stubEnv('TAU_TARGET', 'desktop');
+    buildTarget.desktop = true;
+    const asks: Array<() => void> = [];
+    const answers: string[] = [];
+    (globalThis as { tau?: unknown }).tau = {
+      quit: {
+        onAsk: (handler: (attemptId: string) => void) => {
+          asks.push(() => {
+            handler('quit-test');
+          });
+          return () => undefined;
+        },
+        reportQuiesced: () => answers.push('quiesced'),
+      },
+    };
+    const encoder = new TextEncoder();
+    const initial = workbenchRecords.view.schema.parse({ version: 1, entryPath: 'main.ts' });
+    const valid = encoder.encode(workbenchRecords.view.serialize(initial));
+    let bytes = valid;
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const record = createWorkbenchViewStore({
+      root: '/projects/quit-record',
+      viewId: 'accepted-view',
+      files: {
+        exists: async () => true,
+        readFile: async () => bytes,
+        writeFileChecked: async ({ data, preconditions }) => {
+          const expected = preconditions[0]?.expected;
+          if (expected?.length !== bytes.length || !expected.every((value, index) => value === bytes[index])) {
+            return { status: 'conflict', conflicts: [{ path: 'view', actual: bytes }] };
+          }
+          entered.resolve();
+          await release.promise;
+          bytes = encoder.encode(data);
+          return { status: 'applied', content: bytes };
+        },
+      },
+      onChange: () => undefined,
+      onError: () => undefined,
+    });
+    try {
+      await record.read();
+      bytes = encoder.encode('{broken');
+      expect(await record.edit({ ...initial, name: 'Accepted intent' })).toBe(false);
+      flushProducers.mockImplementation(async () => {
+        if (!(await record.flush())) {
+          throw new Error('Workbench records could not be saved.');
+        }
+      });
+      const { view, freshActor } = await renderQuitRuntime();
+      await act(async () => {
+        asks[0]?.();
+        await Promise.resolve();
+      });
+      await settle();
+      expect(view.getByRole('status')).toHaveTextContent('Workbench records could not be saved.');
+      expect(freshActor.getSnapshot().matches('ready')).toBe(true);
+      expect(answers).toEqual([]);
+      bytes = valid;
+      await record.read();
+      await act(async () => {
+        view.getByRole('button', { name: 'Try again' }).click();
+        await entered.promise;
+      });
+      expect(answers).toEqual([]);
+      expect(freshActor.getSnapshot().matches('quiesced')).toBe(false);
+      await act(async () => {
+        release.resolve();
+        await Promise.resolve();
+      });
+      await settle();
+      expect(workbenchRecords.view.read(bytes)).toMatchObject({
+        status: 'current',
+        record: { name: 'Accepted intent' },
+      });
+      expect(answers).toEqual(['quiesced']);
+      expect(freshActor.getSnapshot().matches('quiesced')).toBe(true);
+      view.unmount();
+    } finally {
+      release.resolve();
+      record.dispose();
+    }
+  });
+
+  /*
+   * W15: a Home draft still inside its debounce lives only in memory, and its
+   * write goes through the services utility main disposes once this renderer
+   * answers. `hidden` comes at window teardown — after that — so the quit hold
+   * runs the unload producers itself, before any session closes (A38's order).
+   */
+  it('should flush every producer before it closes a session or answers main', async () => {
+    vi.stubEnv('TAU_TARGET', 'desktop');
+    buildTarget.desktop = true;
+    const asks: Array<() => void> = [];
+    const order: string[] = [];
+    (globalThis as { tau?: unknown }).tau = {
+      quit: {
+        onAsk: (handler: (attemptId: string) => void) => {
+          asks.push(() => {
+            handler('quit-test');
+          });
+          return () => undefined;
+        },
+        reportQuiesced: () => order.push('quiesced'),
+      },
+    };
+    const producers = Promise.withResolvers<void>();
+    flushProducers.mockImplementationOnce(async () => {
+      order.push('producers');
+      await producers.promise;
+    });
+
+    const { view, freshActor } = await renderQuitRuntime();
+
+    await act(async () => {
+      asks[0]?.();
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(order).toEqual(['producers']);
+    expect(freshActor.getSnapshot().matches('ready')).toBe(true);
+
+    await act(async () => {
+      producers.resolve();
+      await Promise.resolve();
+    });
+    await settle(() => order.length === 2);
+
+    expect(order).toEqual(['producers', 'quiesced']);
+    expect(freshActor.getSnapshot().matches('quiesced')).toBe(true);
+    view.unmount();
+  });
+
+  it('answers a quit ask buffered before the renderer mounted', async () => {
+    vi.stubEnv('TAU_TARGET', 'desktop');
+    buildTarget.desktop = true;
+    const answers: string[] = [];
+    let ready = false;
+    (globalThis as { tau?: unknown }).tau = {
+      quit: {
+        isReady: () => ready,
+        onAsk: (handler: (attemptId: string) => void) => {
+          ready = true;
+          handler('buffered-quit');
+          return () => {
+            ready = false;
+          };
+        },
+        reportQuiesced: () => answers.push('quiesced'),
+      },
+    };
+
+    expect(ready).toBe(false);
+
+    vi.resetModules();
+    const freshSessions = await import('#hooks/use-sessions.js');
+    const freshRuntime = await import('#runtime/app-runtime.js');
+    const freshRuntimeProvider = await import('#runtime/app-runtime-provider.js');
+
+    /* The registry is the app runtime's (A1a): the provider reads it, and the runtime's boundary starts it. No page
+     * listeners: this row is about the quit ask. */
+    const runtime = freshRuntime.createAppRuntime({ environment: () => undefined });
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <freshRuntimeProvider.AppRuntimeProvider runtime={runtime}>
+          <freshSessions.SessionsProvider>
+            <span>app</span>
+          </freshSessions.SessionsProvider>
+        </freshRuntimeProvider.AppRuntimeProvider>
+      </QueryClientProvider>,
+    );
+    await settle();
+
+    expect(ready).toBe(true);
+    expect(answers).toEqual(['quiesced']);
+    /* The runtime's `environment` holds the quit seam, not the tree: unmounting leaves it in, stopping removes it. */
+    view.unmount();
+    expect(ready).toBe(true);
+    runtime.stop();
+    expect(ready).toBe(false);
+  });
+
+  it('paints what is being waited for, and Quit anyway answers main', async () => {
+    vi.stubEnv('TAU_TARGET', 'desktop');
+    buildTarget.desktop = true;
+    const asks: Array<() => void> = [];
+    const answers: string[] = [];
+    (globalThis as { tau?: unknown }).tau = {
+      quit: {
+        onAsk: (handler: (attemptId: string) => void) => {
+          asks.push(() => {
+            handler('quit-test');
+          });
+          return () => undefined;
+        },
+        reportQuiesced: () => answers.push('quiesced'),
+      },
+    };
+
+    /* A registry of this row's own: the module singleton the rows above share
+     * is quiesced by pin e, and a quiesced registry never opens again. */
+    const { view, freshActor } = await renderQuitRuntime();
+    expect(asks).toHaveLength(1);
+
+    /* One session whose close never finishes — the only reason a quit is ever held open. Since A7c a session's flushes
+     * run in its own children; here its agent host's release never answers. */
+    agentHostRelease.mockImplementationOnce(
+      async () =>
+        new Promise<void>(() => {
+          /* Never answers: a flush that settles would not hold a quit open. */
+        }),
+    );
+    await act(async () => {
+      freshActor.send({ type: 'open', projectId: 'quit-hold' });
+      await Promise.resolve();
+    });
+    await settle();
+
+    /* Main asks. */
+    await act(async () => {
+      asks[0]?.();
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(view.getByRole('status').textContent).toContain('Closing your projects');
+    /* On the shared overlay layer, portalled as it appears so it covers any overlay already open. */
+    expect(view.getByRole('status')).toHaveClass('z-50');
+    expect(view.getByRole('status').parentElement).toBe(document.body);
+    expect(answers).toEqual([]);
+    expect(freshActor.getSnapshot().matches('quiesced')).toBe(false);
+
+    /* The one way out. It answers main rather than leaving the shell to time
+     * the renderer out; the packaged-shell ordering is the desktop spec's. */
+    await act(async () => {
+      view.getByRole('button', { name: 'Quit anyway' }).click();
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(freshActor.getSnapshot().matches('forced')).toBe(true);
+    expect(answers).toEqual(['quiesced']);
+    expect(view.queryByRole('status')).toBeNull();
+
+    view.unmount();
+  });
+
+  it('shows a failed producer flush, keeps sessions live, then retries before answering quit', async () => {
+    vi.stubEnv('TAU_TARGET', 'desktop');
+    buildTarget.desktop = true;
+    const asks: Array<() => void> = [];
+    const answers: string[] = [];
+    (globalThis as { tau?: unknown }).tau = {
+      quit: {
+        onAsk: (handler: (attemptId: string) => void) => {
+          asks.push(() => {
+            handler('quit-test');
+          });
+          return () => undefined;
+        },
+        reportQuiesced: () => answers.push('quiesced'),
+      },
+    };
+    flushProducers
+      .mockRejectedValueOnce(new Error('checked workbench write unavailable'))
+      .mockResolvedValueOnce(undefined);
+    const { view, freshActor } = await renderQuitRuntime();
+    await act(async () => {
+      asks[0]?.();
+      await Promise.resolve();
+    });
+    await settle();
+    expect(view.getByRole('status').textContent).toContain('checked workbench write unavailable');
+    expect(freshActor.getSnapshot().matches('ready')).toBe(true);
+    expect(answers).toEqual([]);
+    await act(async () => {
+      view.getByRole('button', { name: 'Try again' }).click();
+      await Promise.resolve();
+    });
+    await settle();
+    expect(flushProducers).toHaveBeenCalledTimes(2);
+    expect(freshActor.getSnapshot().matches('quiesced')).toBe(true);
+    expect(answers).toEqual(['quiesced']);
+    view.unmount();
+  });
+});

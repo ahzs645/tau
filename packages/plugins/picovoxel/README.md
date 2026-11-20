@@ -1,0 +1,308 @@
+# @taucad/picovoxel
+
+[![npm](https://img.shields.io/npm/v/@taucad/picovoxel)](https://www.npmjs.com/package/@taucad/picovoxel)
+[![downloads](https://img.shields.io/npm/dm/@taucad/picovoxel)](https://www.npmjs.com/package/@taucad/picovoxel)
+[![size](https://img.shields.io/npm/unpacked-size/@taucad/picovoxel)](https://www.npmjs.com/package/@taucad/picovoxel)
+[![license](https://img.shields.io/npm/l/@taucad/picovoxel)](./LICENSE)
+[![provenance](https://img.shields.io/badge/provenance-npm-blue)](https://docs.npmjs.com/generating-provenance-statements)
+
+PicoVoxel WebAssembly voxel, implicit and lattice geometry kernel
+
+## Why @taucad/picovoxel?
+
+- **One call composes it** — `picovoxel()` registers this package's capabilities with `defineRuntime`.
+- **Role factories** — `picovoxelKernel()` support direct authoring, isolated tests, and whole-role ordering outside plugin expansion.
+- **No module-scope work** — backends load in `initialize()` and stay in capability context, one payload per worker.
+
+## Install
+
+```bash
+npm i @taucad/picovoxel @taucad/runtime
+```
+
+`@taucad/runtime` is a required peer — one install must hold one runtime. A capability with an
+options schema adds `zod` as a second required peer.
+
+## Quick start
+
+```typescript
+import { defineRuntime } from '@taucad/runtime/worker';
+import { picovoxel } from '@taucad/picovoxel';
+
+const runtime = defineRuntime({ plugins: [picovoxel()] });
+```
+
+Picovoxel source files export `default main(pico, params)` and return a `Mesh`, `Voxels`, or a flat
+array of those values, or `{ shape, name?, material? }` descriptors. A model envelope supplies
+`{ shapes, images?, textures?, samplers? }`; `[]` is an empty scene. Tau owns the selected session lifecycle:
+
+```typescript
+import type { Pico } from 'picovoxel';
+
+export const defaultParams = { voxelSize: 0.5, radius: 10 };
+
+export default function main(pico: Pico, params = defaultParams) {
+  return pico.createVoxels({ shape: 'sphere', radius: params.radius });
+}
+```
+
+### Part names
+
+Name each independently delivered part at the return boundary. Geometry operations still use raw
+`Mesh`/`Voxels` values; the descriptor is display metadata.
+
+```typescript
+import type { Pico } from 'picovoxel';
+import type { PicovoxelResult } from '@taucad/picovoxel';
+
+export default function main(pico: Pico): PicovoxelResult {
+  const housing = pico.createVoxels({ shape: 'sphere', radius: 10 });
+  const pins = [0, 1, 2].map((index) => ({
+    shape: pico.createVoxels({
+      shape: 'sphere',
+      center: [20 + index * 8, 0, 0],
+      radius: 2,
+    }),
+    name: `Pin ${index + 1}`,
+  }));
+  return [{ shape: housing, name: 'Housing / 蓋' }, ...pins];
+}
+```
+
+Raw values retain `Shape N` names by their one-based output position. Descriptor names are trimmed;
+blank or omitted names use the same fallback. Duplicate labels and Unicode are preserved. Rename
+or reorder descriptors deliberately: labels follow their parts, while viewer IDs remain addresses
+within each payload. Naming does not create hierarchy, stable identity or assembly occurrences.
+Nested arrays, `children`, invalid shapes and non-string names fail with an indexed diagnostic.
+
+Wrap the final geometry after transforms, booleans or cloning. In multiple files, helpers can return
+raw geometry or descriptors; import `PicovoxelResult` with `import type` only. No runtime naming
+helper is required. Both preview and exact export execute the same author code; avoid lane-dependent
+names. Cached/restored snapshots retain labels. GLB node and mesh names match viewer labels; STL
+has no part-label field, so per-part filenames are sanitized and deduplicated independently. Direct
+upstream `Mesh.toGlb()` calls bypass Tau's descriptor handling.
+
+### Materials and textures
+
+Part descriptors accept standard glTF materials. `Material`, `Image`, `Resources`,
+`PicovoxelPart`, `PicovoxelModel` and `PicovoxelResult` are type-only exports from the package root.
+Return shared indexed resources on a model envelope:
+Omitted `material` retains the legacy CAD appearance; explicit `material: {}` uses
+standard glTF defaults. Author changes before return apply; later mutations cannot
+change the captured snapshot.
+
+```typescript
+import type { Pico } from 'picovoxel';
+import type { PicovoxelModel } from '@taucad/picovoxel';
+
+export function mappedHousing(pico: Pico, png: Uint8Array<ArrayBuffer>): PicovoxelModel {
+  return {
+    images: [{ name: 'Finish', mimeType: 'image/png', data: png }],
+    textures: [{ source: 0 }],
+    shapes: [
+      {
+        shape: pico.createVoxels({ shape: 'sphere', radius: 10 }),
+        name: 'Housing',
+        material: {
+          pbrMetallicRoughness: {
+            metallicFactor: 0.8,
+            roughnessFactor: 0.35,
+            baseColorTexture: { index: 0 },
+          },
+          extensions: { KHR_materials_clearcoat: { clearcoatFactor: 0.7 } },
+        },
+      },
+    ],
+  };
+}
+```
+
+All 17 standard map slots and 11 physical material extensions are supported, including
+normal, clearcoat, transmission/volume, specular, sheen, iridescence and anisotropy.
+Resources use encoded PNG/JPEG/WebP bytes; WebP textures reference images through
+`EXT_texture_webp.source`. Texture info accepts UV0 and `KHR_texture_transform`.
+Materials and image bytes are deeply snapshotted before the session is disposed.
+
+Color factors are linear. Texture/anisotropy rotations are radians; volume thickness and
+attenuation distance are metres; iridescence thickness is nanometres. Geometry stays in
+millimetres. Invalid factors, missing resource indexes, invalid samplers and unsupported
+UV sets produce authoring diagnostics. See the [material authoring reference](agent/materials-reference.md)
+for the complete slot table and a mapped example.
+
+The adapter creates normalized six-chart box UV0 on final returned geometry, and derives
+tangents from those UVs while retaining source smooth normals and ordered triangles.
+Render vertices may split at seams; this mapping does not promise matching texture phase
+between independently tessellated fast and exact geometry.
+
+Fast previews retain materials. Exact GLB and **single-file JSON glTF** preserve names,
+materials and embedded image bytes. STL preserves geometry only. Upstream `Mesh.toGlb()`
+bypasses Tau's material/resources path.
+
+### Mechanisms
+
+Alongside `main`, optionally export a plain `mechanism` value or a synchronous or asynchronous
+`mechanism(params)` function. It receives the same resolved parameters as `main`. Import
+`MechanismSource` and `LinkSource` from `@taucad/kinematics` with `import type`; their optional
+string-name generic constrains link bindings to a shared `as const` palette also used for geometry
+labels, for example `MechanismSource<'Base' | 'Carriage'>`.
+
+Bind links to unique, explicitly authored part names. Blank, omitted, generated-only or ambiguous
+names cannot bind a mechanism. Invalid metadata produces warnings while valid geometry remains
+available; inspect the issues and fix the mechanism before relying on motion. Unnamed and
+material-only outputs keep their existing behavior.
+
+Preview includes mechanism topology and uses the shared viewer joint, clip, reset and playback
+controls. Fast preview and exact replay capture an owned JSON snapshot before disposing the
+PicoVoxel session; cache restore preserves that snapshot. Default GLB/glTF exports are static.
+Opt in with `content: { includeTopology: true }` to carry Tau mechanism metadata; STL has no
+motion metadata. This is Tau topology, not standard glTF animation channels.
+
+See the [mechanism authoring reference](agent/kinematics-reference.md) for a complete model,
+all seven joint families, couplings, clips, units and frame conventions.
+
+### Lanes
+
+Every build runs in one of two lanes. The viewer renders in the **fast** lane (render option
+`lane`, default `'fast'`); exports default to the **exact** lane (export option `lane`, default
+`'exact'`), so an export after a fast render replays the model exactly. Exact always runs on the
+serial build, so exact output is identical in every host.
+
+- STL: an explicit `lane: 'fast'` export writes a `LANE=fast` STL header.
+- GLB/glTF: a fast-lane export is refused with a typed `REPRESENTATION_UNSUPPORTED` issue.
+- An exact build that reads fast-lane data (a `LANE=fast` STL or `.vdb`, or a `fastRenorm: true`
+  offset) is refused with a typed `REPRESENTATION_UNSUPPORTED` issue naming the remedy.
+- Exactly-zero-area triangles are dropped from every snapshot; area, volume and every other triangle
+  are unchanged. An adaptive view keeps the ones whose three corners are distinct and in line, and
+  drops only those that repeat an index or place two corners at one position: adaptive meshes use
+  in-line triangles to stitch merged cells to their neighbours, and dropping them would open cracks.
+
+The render option `meshAdaptivity` (0 to below 1) asks for an adaptive display mesh in the fast lane. The
+viewer's settings menu shows it, since it is an evaluate option every view shares; a change re-evaluates the
+model. OpenVDB's relax pass for adaptive meshes stays off: measured, it moved vertices further from the surface
+and added slivers, so it is not an option. Exports take the same option and mesh uniformly (0) unless they
+set it; an adaptive export needs `lane: 'fast'`, and as every fast export, only STL is written. An exact render that asks for adaptivity is
+refused with a typed `REPRESENTATION_UNSUPPORTED` issue. PicoVoxel 0.1.0, whose `toMesh()` takes no
+options, refuses every adaptive request with `KERNEL_CAPABILITY_MISSING`; the pinned 0.3.0 meshes them.
+An unset `meshAdaptivity` never refuses: it meshes uniformly on the exact lane and under 0.1.0, and at
+0.25 (Balanced) on the fast lane of a release whose `toMesh()` takes options, as the pinned 0.3.0 does.
+An explicitly fast STL export of such a view therefore replays a uniform fast build of its own.
+
+### Runtime lifetime
+
+Each kernel worker compiles each build's WebAssembly module once (or instantiates the module its host
+compiled for the same URL) and keeps one warm PicoVoxel runtime per build (the multi build's thread
+pool included); every render opens a fresh session on it and disposes it, together with any session
+the model created itself, when the render ends. A runtime is replaced after a WebAssembly trap or once
+its heap, plus what the grid pager parked outside it, passes `recycleHeapBytes` (1.5 GiB by default; a phone
+host passes less); the replacement instantiates the module already compiled. Renders are
+cancelled cooperatively: a superseded render stops at its next PicoVoxel call.
+
+The binaries and the pthread worker script load from explicit URLs of picovoxel's asset subpaths
+(`picovoxel/wasm`, `picovoxel/multi/wasm`, `picovoxel/multi/worker`), which Tau's runtime asset plugin
+emits as files; in Node the worker script is passed as a filesystem path.
+
+If the multi build runs out of memory, the render is rebuilt once on the serial build and the result
+carries a `RESOURCE_LIMIT` warning naming the remedy (a coarser `voxelSize`). If it cannot start, the
+same rebuild carries a `KERNEL_CAPABILITY_MISSING` warning.
+
+### Memory
+
+Each PicoVoxel build has one 32-bit WebAssembly heap of at most 4 GiB. Three things keep a model inside it:
+
+- **Grid pager.** PicoVoxel's pager runs at its default budget: when a runtime's resident Voxels grids
+  exceed 2 GiB, the heap's headroom, the least recently used are compressed into memory outside the heap
+  and restored on their next use. Below the budget nothing is parked, and exact bytes are the same with it
+  on or off. Parked grids go to RAM, never to disk. Each session's memory log reports `heap=` and `far=`
+  (the bytes parked outside the heap), and the recycle threshold counts both.
+- **Streamed meshing.** A uniform mesh, which every exact build and so every export uses, is read out of
+  the heap in batches of 128³-voxel nodes (`voxels.streamMesh`) rather than built whole beside its grid.
+  The joined arrays are `toMesh()`'s, element for element. An adaptive mesh has no streamed form: it is
+  built whole, copied out and freed at once.
+- **Out of memory.** Every out-of-memory failure, the pager's included, arrives as `PICO_OUT_OF_MEMORY`.
+  It is reported as `RESOURCE_LIMIT` with the code in `details.picoCode`, and the runtime is recycled.
+
+Exports have no fixed triangle cap. Each STL file is one buffer of 84 + 50 bytes per triangle, so the
+largest `ArrayBuffer` a host allows bounds a part: 2,145,386,496 bytes, or 42,907,728 triangles, in
+Chromium. GLB and glTF write the whole model into one buffer, so the same limit applies to the model.
+
+### WebAssembly build
+
+The `wasm` kernel option selects the build for the fast lane:
+
+```typescript
+picovoxel({ kernels: { default: { wasm: 'auto' } } }); // the default
+```
+
+`'auto'` resolves in the worker: the multi-threaded build when the realm is cross-origin isolated with
+`SharedArrayBuffer` and can reserve the build's shared memory, otherwise serial with the reason
+logged. Node reports isolated, so `'auto'` selects multi there; pin
+`wasm: 'serial'` for single-threaded, deterministic headless hosts. An explicit `'multi'` that cannot
+run fails the fast build with a `KERNEL_CAPABILITY_MISSING` issue rather than silently downgrading;
+exact builds still work. GLB is normalized through Tau's geometry pipeline; STL is emitted by
+PicoVoxel's pure serializer.
+
+## Dependency provenance
+
+| Field     | Value                                                                                                                      |
+| --------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Specifier | `picovoxel@0.3.0` (exact workspace catalog pin)                                                                            |
+| Source    | `taucad/picovoxel` release `v0.3.0`, commit `cacb49206a8f6f8f04d09a631ff12fe52b55de7f`                                     |
+| Version   | `0.3.0`                                                                                                                    |
+| CI run    | [44195820692](https://github.com/taucad/picovoxel/actions/runs/44195820692) (attempt 2), green (23 jobs passed, 2 skipped) |
+| Size      | 13,413,210 bytes unpacked                                                                                                  |
+| Integrity | `sha512-j7GLp6yPEgzZ2jE5XnHLXp0G4j+R/ULDbU17XCW6visu8cMbiBXMXF99ILC4rwQLwffAjueKwrRM+Z72t2CnWg==`                          |
+
+Both WebAssembly binaries are CI-built. The kernel version carries the package version, both binary
+digests and one digest over every shipped script; `picovoxel.asset-ownership.test.ts` recomputes all
+four, so moving the dependency fails that test until the kernel's constants follow it.
+
+Hand the definition to a client — `createNodeClient`, `createRuntimeWorker`, or your own host. See
+[`@taucad/runtime`](https://www.npmjs.com/package/@taucad/runtime) for the client lifecycle.
+
+## API
+
+| Export                           | Kind            | Use                                                                           |
+| -------------------------------- | --------------- | ----------------------------------------------------------------------------- |
+| `picovoxel`                      | toolkit factory | package-named authoring factory; presets select capabilities                  |
+| `plugin`                         | toolkit factory | the same factory under its mechanical name, for loaders that read a fixed key |
+| `PicovoxelResult`                | type            | raw parts, descriptors, flat lists or shared-resource model envelopes         |
+| `PicovoxelPart`                  | type            | delivered shape, optional name and material                                   |
+| `PicovoxelModel`                 | type            | flat shapes with indexed images, textures and samplers                        |
+| `Material`, `Image`, `Resources` | types           | shared glTF authoring contracts                                               |
+| `picovoxelKernel`                | kernel factory  | direct `kernels` composition, with options                                    |
+
+One preset, `default`, selecting `kernels.default`.
+
+## Environment
+
+| Host           | Supported | Notes                                            |
+| -------------- | --------- | ------------------------------------------------ |
+| Browser worker | Yes       | multi requires COOP/COEP and `SharedArrayBuffer` |
+| Node.js        | Yes       | `>=24`; serial and multi supported               |
+
+## Versioning and stability
+
+Pre-1.0: a minor version may break. Pin `~0.1.0` rather than `^0.1.0`. This package releases in the
+fixed version group with `@taucad/runtime`, so the peer range always matches a published runtime.
+See [version-policy.md](https://github.com/taucad/tau/blob/main/docs/policy/version-policy.md).
+
+## Security and provenance
+
+Every release is published from GitHub Actions with npm trusted publishing and
+[provenance](https://docs.npmjs.com/generating-provenance-statements). Verify a downloaded tree:
+
+```bash
+npm audit signatures
+```
+
+## License
+
+Apache-2.0 — see [LICENSE](./LICENSE). The `picovoxel` dependency is Apache-2.0 and ships its own
+`license` and `NOTICE`.
+
+## Links
+
+- [Documentation](https://tau.new/docs/runtime)
+- [Source](https://github.com/taucad/tau/tree/main/packages/plugins/picovoxel)
+- [Changelog](https://github.com/taucad/tau/blob/main/packages/plugins/picovoxel/CHANGELOG.md)
+- [Issues](https://github.com/taucad/tau/issues)

@@ -1,0 +1,229 @@
+import { toolName } from '#constants/tool.constants.js';
+import { arrangeWorkbenchDescription } from '#schemas/tools/arrange-workbench.tool.schema.js';
+import { printOptionKeys } from '#schemas/tools/machine.tool.schema.js';
+
+const parameterUnitRule =
+  'When current.entry.groups[g].units[pointer] exists, it is the unit of the stored number and of native-value writes; use unit-value with inputUnit to be explicit.';
+
+/** R8/I5/I9: what every kernel-backed read promises about the bytes it answered for. */
+const sourceRevisionRule =
+  'Computed from the bytes on disk at call time; `sourceRevision` names the digests it read. Compare it with the `revision.digest` of your last write; a result answering for superseded bytes returns as a `STALE_EVALUATION` error naming both digests, never as a result.';
+
+/** C-2: per-call parameter values never touch the person's parameter record. */
+const parameterOverrideRule =
+  "Pass `parameters` to use other parameter values for this call only (e.g. a print variant at a finer `voxelSize`): they merge over the active parameter group, are checked against the model's parameter schema, and are never saved. Use apply_parameter_operation only to change what the person sees.";
+
+/** R8/I5: what every write promises about the bytes it left behind. */
+const writeRevisionRule =
+  'Returns `revision`: the path and the digest now at it (`"missing"` once deleted), comparable with the `sourceRevision` of any later kernel result.';
+
+/**
+ * VER-2: how to read a `test_model` failure row, in the native description and the MCP one alike.
+ *
+ * @public
+ */
+export const testModelStatusRule =
+  "Only a failure row with status failed is a failure, and only category geometry is a claim decided false; inconclusive, unsupported and not-run requirements are undecided, never passes: keep the assertion and follow the row's suggestion.";
+
+/** Canonical provider-facing descriptions shared by API and portable browser hosts. @public */
+export const toolDescriptions = {
+  [toolName.testModel]: `Run GeoSpec tests against the current 3D model(s).
+
+No input recursively runs all *.geospec.ts or *.geospec.js files. Tests load
+Tau model files and assert measurable geometry requirements.
+
+Filter examples:
+- Run one file: { files: ['main.geospec.ts'] }
+- Run one directory subtree: { files: ['lib'] }
+- Select a named requirement: { testNamePattern: 'intended envelope' }
+- Exclude an explicitly out-of-scope fixture: { exclude: ['**/fixtures/**'] }
+
+A project's \`geospec.config.*\` sets defaults: its include, exclude, testNamePattern, testTimeout and bail apply unless the input gives that field, and \`config\` in the result names the file or why it was not applied.
+
+Returns compact rows tagged by targetFile, plus \`sourceRevisions\` for loaded models. Check \`runStatus\`, \`accounting\`, discovery completion and \`lineageStatus\`; empty failures alone do not qualify a run. A skipped requirement is not a pass. ${testModelStatusRule} A run that outlives its host budget returns \`timeout\` (\`OPERATION_TIMEOUT\`) with only the requirements it completed. Filters qualify only the selected scope, never excluded requirements. Read the retained \`fullResult\` when compact details are omitted. ${sourceRevisionRule}
+
+When NOT to use:
+- NOT as a substitute for \`evaluate_model\` when you only need build status; \`test_model\` measures geometry against requirements.`,
+  [toolName.evaluateModel]: `Evaluate one CAD source file (\`targetFile\`) and its default view, then list what this build can show and export.
+
+Call it after every \`edit_file\`, \`create_file\` or \`delete_file\`. ${parameterOverrideRule} Returns \`status\`, \`kernelIssues\`, offered \`views\`, per-view \`instances\`, and an export-id-to-extension map. A ready build may still report error-severity design issues; inspect them. A default-view render failure is an error, and a valid export-only build can offer zero views. Set \`includeCapabilities: true\` to inspect view/export option schemas, defaults and reachable export targets. ${sourceRevisionRule}
+
+Once 'ready', use \`test_model\` to measure the geometry against requirements.`,
+  [toolName.exportModel]: `Export one model artifact set and write its files under \`.tau/artifacts/\` in the active project workspace.
+
+Give explicit \`targetFile\` and \`to\`: a declared export ID (such as \`bom\`) or an unambiguous reachable extension (such as \`stl\` or \`3mf\`), without a dot. IDs win over extensions. ${parameterOverrideRule} Use \`evaluate_model({ targetFile, includeCapabilities: true })\` to discover targets and options. An unavailable or ambiguous target returns the available choices.
+
+For a design question, text/JSON exports may be used as evidence only when both the declaration and every actual output file are text/JSON: call \`export_model\`, then \`read_file\` on the returned artifact path, and compare \`sourceRevision\` with the current source. A binary or mixed deliverable requires the person's export request.
+
+Returns the resolved \`exportId\`, pinned \`sourceRevision\`, and ordered \`files\` with producer names, persisted paths, MIME types and byte lengths. The first file is primary; later files are required companions. Report \`warnings\` about limits of the written result.
+
+For deterministic measurement runs, create or edit \`*.geospec.ts\` tests and use \`${toolName.testModel}\` instead.`,
+  [toolName.getParameters]: `Read the parameters of one geometry source file and the person's checked parameter record.
+
+By default (detail "values") the result lists \`parameters\` keyed by pointer, each with its effective \`value\` in the active group, \`default\`, \`unit\`, constraints and description, plus \`current\`: the stored record and the identity apply_parameter_operation requires as expected. A field marked \`unitInferred\` has a unit Tau guessed from its name. Request detail "full" for the whole admitted manifest with bindings and unit provenance: before trusting or changing an inferred unit, and to build a source-unit operation. Use resolutionMode "declared-only" when inferred semantics are not acceptable. To evaluate, capture or export other values without saving them, pass \`parameters\` to that tool instead. ${sourceRevisionRule} ${parameterUnitRule} Reading in the same mode never disturbs a pending source-unit plan; reading in a different mode rejects it. An "unresolved" result carries a diagnostic code: INVALID_RECORD means the saved values cannot be read and are preserved untouched, and RESOLUTION_SUPERSEDED means a concurrent read changed the mode.`,
+  [toolName.applyParameterOperation]: `Propose one checked parameter operation, or confirm/cancel a plan a previous propose returned.
+
+Every call names an action:
+- action "propose" with targetFile, requestId, expected, pressure and operation.
+- action "confirm" with targetFile, the proposal's requestId and its planFingerprint.
+- action "cancel" with targetFile and the proposal's requestId.
+
+Pass no other fields: confirm and cancel carry no operation, and propose carries no planFingerprint.
+
+Call get_parameters first and pass its exact identity as expected. ${parameterUnitRule} Reuse requestId only for an identical retry. The returned outcome distinguishes committed, rejected, cancelled, known-not-applied, and indeterminate operations; inspect it before continuing. An outcome of "confirmation-required" carries a planFingerprint and applies nothing until you follow it with a confirm naming that fingerprint and the same requestId, or a cancel.
+
+A value operation names its field by group and pointer, exactly as get_parameters lists them: native-value carries the number, unit-value carries text plus the inputUnit it was typed in. Nothing else identifies a field. Rejections: UNKNOWN_FIELD — fix the pointer, the manifest did not change; REPRESENTATION_UNSUPPORTED — address a scalar member, or send native-value for a field with no unit; STALE_MANIFEST — call get_parameters again.
+
+A source-unit operation changes the unit the source interprets a value in, and is the operation that asks for confirmation. Only a binding with sourceUnitCapability admits it. Build it from get_parameters with detail "full", with binding = manifest.bindings[pointer]: producerCapability is { producer: manifest.source.id, sourceRevision: manifest.source.revision, capability: binding.sourceUnitCapability }.`,
+  [toolName.screenshot]: `Capture a declared model view for visual inspection.
+
+Pass \`targetFile\` explicitly, or \`workbenchView\` alone. Choose a kernel \`view\`, optional sheet/drawing \`instance\`, and that view's \`options\` from \`evaluate_model\`; omit \`view\` for the default. A 2D view produces one image. Each result echoes its view, instance and, for 3D, camera \`angle\`. The call fails for a missing source, unavailable view or instance, render failure, timeout or invalid image. ${sourceRevisionRule}
+
+Modes (\`mode\`, default \`single\`):
+- single: one deterministic perspective isometric image for a 3D view
+- multi_angle: six orthographic camera angles for a 3D view (front, back, right, left, top, bottom)
+
+Section (\`section\`, 3D views only) cuts the model with one axis plane to show its inside, e.g. { plane: 'xy', offset: 0.006 } for a horizontal cut 6 mm above the origin. The kept half defaults to the one whose cut face looks at the single-mode camera; \`keep\` names the side to retain instead, and the result \`message\` states what was kept. Cuts are capped.
+
+Workbench view (\`workbenchView\`) captures a view \`arrange_workbench\` saved, by its id: its file, kernel view and options, camera, field of view, cuts and display, as the viewer shows them, in one image. It takes no \`view\`, \`instance\`, \`options\`, \`section\` or multi_angle; the result \`message\` says what the viewer draws that the image does not.
+
+Pose (\`pose\`, a 3D view with a mechanism) moves the parts first: { animation: { id, time } } samples an animation from \`evaluate_model\` mechanism.animations at a time in seconds, { coordinates } sets driver joints; the result \`message\` lists every coordinate.
+
+${parameterOverrideRule}
+
+Annotated 3D images include:
+- an in-image view label; canonical axis-aligned labels name the camera position as View From ±axis
+- a camera-aligned red-X, green-Y, blue-Z orientation indicator with dot/cross depth notation
+- a physical scale bar; orthographic scale is depth-invariant, while perspective scale is measured at the subject-center plane and marked @ center
+
+Use these annotations when reasoning about orientation, handedness, opposite faces, and size.`,
+  [toolName.editFile]: `Replace text in one existing file. Read the file first and copy oldString with enough context to be unique. The edit tolerates only trailing whitespace and common Unicode punctuation differences. Set replaceAll only when every match should change. ${writeRevisionRule} Use create_file or delete_file for file lifecycle operations.`,
+  [toolName.arrangeWorkbench]: arrangeWorkbenchDescription,
+  [toolName.useSkill]: `Activate one available workspace skill by name and read its full SKILL.md instructions.
+
+Use this tool when the user's task matches a skill listed in the system prompt or selected by the user. The tool resolves the selected skill through the client skill resolver, reads only that skill's instructions, records skill usage through the use_skill tool call, and returns raw markdown for you to follow.
+
+When NOT to use:
+- Do not call for every available skill up front.
+- Do not use read_file to activate a skill; use this tool so skill usage is visible in the transcript.
+- Do not call for unknown skills unless the user explicitly named a newly installed skill.`,
+  [toolName.readFile]: `Read the contents of a file from the project filesystem.
+
+You can optionally specify a line offset and limit (especially handy for long files), but it's recommended to read the whole file by not providing these parameters.
+
+Lines in the output are prefixed with a cat -n gutter ("   <line>\\t<content>"). Files >2000 lines require explicit \`offset\` and \`limit\`.
+
+Use this tool when you need to:
+- Examine the contents of a specific file
+- Understand existing code before making modifications
+- Review configuration files or documentation`,
+  [toolName.listDirectory]: `List files and directories in a given path within the project.
+
+Use this tool to:
+- Explore the project structure
+- Find files in specific directories
+- Understand the organization of the codebase
+
+Omit the path to list the project root.`,
+  [toolName.createFile]: `Create a file in the project filesystem, with the path relative to the project root.
+
+Missing parent directories are created. An existing file at the path is overwritten without warning — read_file first when that matters. ${writeRevisionRule}`,
+  [toolName.deleteFile]: `Delete a file from the project filesystem.
+
+Fails gracefully when the file does not exist, when the operation is rejected for security reasons, or when the file cannot be deleted. ${writeRevisionRule}`,
+  [toolName.grep]: `Search for text patterns in files using regular expressions.
+
+This is a powerful search tool for finding exact matches in file contents.
+
+Usage:
+- Supports full regex syntax, e.g. "function\\s+\\w+", "import.*from"
+- Escape special characters for exact matches, e.g. "functionCall\\("
+- Use the glob parameter to filter by file type, e.g. "*.scad", "*.ts"
+- Results show file path, line number, and matching line content
+- Pass \`context\` to also return the lines around each match, e.g. a doc comment or a multi-line signature
+- Defaults to first 50 matches; pass \`headLimit\` (1-1000) to widen, \`offset\` to paginate.
+
+Use this tool when you need to:
+- Find specific code patterns or function calls
+- Locate variable or function definitions
+- Search for text across multiple files
+
+For finding files by name pattern, use \`glob\`.`,
+  [toolName.globSearch]: `Find files matching a glob pattern in the project.
+
+Use this tool to:
+- Find all files of a certain type (e.g., "**/*.scad", "**/*.ts")
+- Locate files in specific directories (e.g., "lib/**/*.scad")
+- Discover files by name pattern (e.g., "**/test_*.scad")
+
+Common glob patterns:
+- "**/*.ext" - All files with extension in any directory
+- "dir/**/*" - All files under a specific directory
+- "**/prefix_*" - Files starting with a prefix in any directory
+
+For searching file contents, use \`grep\`.`,
+  [toolName.updateTodos]: `Replace this chat's task list, the one the person watches above the composer while you work.
+
+Send the whole list every time: an item you leave out is removed. Keep one item \`in_progress\` at a time and mark items \`done\` as they finish. Titles are short and outcome-shaped ("Slice the pyramid"), not step narration.
+
+Returns the written path (\`.tau/chats/<chatId>/todo.yaml\`) and a count per status.`,
+  [toolName.askQuestions]: `Ask the person 1–3 multiple-choice questions at a hard fork, keep the turn moving, and get their answers back.
+
+Ask only what the person alone can decide and what changes the work: what to build, scope, intent, or a trade-off with no conventional default, especially a costly or irreversible one. Look up discoverable facts in files, the model and tools instead. Never ask for permission or "should I continue?". Usually ask one question; add another only when it is a second hard fork. Do not ask about what has a sensible default you can state and change later, such as size, detail or print settings.
+
+Ask early, before investing in a direction. Put your recommendation first: it is adopted if nobody answers within waitSeconds. The person can always answer in their own words. Use waitSeconds 0 when you can start on the recommendation now.
+
+Returns each answer and who settled it. Unless status is "answered", proceed with the recommended option and say once which you assumed; a later answer arrives as a message. Never repeat a question or write a multiple-choice question as prose.`,
+  [toolName.installPackages]: `Install the project's npm packages: edit package.json dependencies, write package-lock.json, and unpack each package into node_modules.
+
+Call it when a JavaScript or TypeScript model imports an npm package that package.json does not list (pass it in add), when an import fails with package-not-locked or package-not-installed, or when the person asks to add, remove or upgrade a package. Until it runs, those imports fail or fall back to a CDN bundle; building never installs.
+
+add sets dependencies[name] to a range ("^4.0.3"), as \`npm install name@range\`; remove deletes names, as \`npm uninstall\`; upgrade re-resolves the named packages to the newest version their ranges allow. With none of them it installs what package.json and the lock already say. Only the npm registry is used, and package scripts never run. A Python or C# project declares its packages in pyproject.toml or its .csproj instead; there it refuses with manifest-conflict, naming that file, and writes nothing.
+
+Returns whether each file changed, the direct dependencies as locked, and issues whose messages name the fix. When resolution is refused (no-matching-version, peer-conflict, manifest-conflict) nothing is written; a package that fails to download is reported and the rest still install.`,
+  [toolName.listMachines]:
+    'List every machine bound on this computer, one line each: id, name, model, connection, state and any run. Read-only.',
+  [toolName.getMachine]: `Read one bound machine as it last reported: state, run and progress, components, activities and the questions they ask, alerts and checks with remedies, recent jobs and operations, what stop does, and every declared action with its parameters, what it does, who may use it and whether you may use it now. Read-only.
+
+Read it before machine_action, and to follow an action or a job. Omit machineId when exactly one machine is bound.`,
+  [toolName.machineAction]: `Apply one declared action that get_machine lists, by componentId, action and parameters.
+
+An action you may use now runs at once; one that needs approval pauses for the person to approve exactly this request in a Tau chat, and elsewhere returns needs-approval for the person to do it in Tau; one only a person at the machine may use is refused with what the person must do. Report the message as it states it. Never resend an action that is confirming or unknown, and never work around a refusal with other tools. To halt the machine, use stop_machine.`,
+  [toolName.stopMachine]:
+    'Stop the machine now: its fastest halt, open to you at any time without approval, and not an emergency stop. Returns what the machine is left doing and how a person recovers it. To pause a run that can continue, use machine_action with run.pause.',
+  [toolName.requestJob]: `The only way to start a program on a machine. Name targetFile, a CAD source Tau slices (3D printers only), or artifact, a finished program in the project run as is (get_machine lists what the machine accepts). Nothing starts until a person accepts. A Tau-hosted turn waits for the answer; otherwise, or when only the person can confirm something, the job awaits approval in Tau's Print pane. Report the outcome as nextStep states it; an unconfirmed start is unknown, never "started". Request a job once; after an approval reminder, repeat the same call to read the answer.
+
+For targetFile, first run test_model, fit get_machine's build volume and read get_print_profiles. When get_machine reports no plate, ask which is installed and pass plate. Under engine "bambu-studio" use bambuStudio.profiles and .settings as get_print_profiles names them; under the reference engine options accept only ${printOptionKeys.join(', ')}.`,
+  [toolName.checkJob]:
+    'Prepare exactly as request_job would (slice targetFile, or read artifact) and ask the machine whether it is ready for the program: ready, blocked (with the checks that fail and their remedies) or refused. Records no job and sends nothing to the machine.',
+  [toolName.getPrintProfiles]: `List the slicing presets and settings request_job can use for a bound machine with an fff process (a 3D printer); other machines take a finished program and have none. Read-only.
+
+For a Bambu printer with Bambu Studio available it returns engine "bambu-studio": defaults (the presets chosen from the printer's model, nozzle, loaded filament and reported plate), the compatible printers, processes and filaments (source "user" marks the person's own), plates, and every setting's current value by group with enum choices. Pass profiles to read another selection, and keys for full descriptors. Otherwise it returns engine "reference" and why. The project's .tau/machines/settings/<typeId>.json keeps named profiles shared by machines of that type; savedProfiles lists their ids and the active one. Pass profileId to read another without changing the selection. machinePreferences reports the profile and source versions used; request_job arguments override its sparse values.`,
+  [toolName.shell]: `Run one command in a contained shell on this computer and return its exit code and bounded output. The host's language and version follow below.
+
+The command runs in a fresh process in the project folder (or cwd) with stdin closed, a private HOME and temporary folder, and no network. It can read and write the project's files, read Tau's records under .tau and exports, and never sees .git, other projects, credentials or Tau's own data. Nothing persists between calls but the files it writes.
+
+Use it for what the file tools cannot do: run a project's scripts, compilers and tests, or batch-rename and search with standard tools. Prefer read_file, edit_file and grep for single files, and evaluate_model, test_model and export_model for geometry: a command's output is never a geometry verdict.
+
+For more, set access with a one-sentence reason: exact absolute folders to read or write, or exact host names to reach. The person may be asked to allow it once; a denial means do not retry it. A nonzero exitCode is a completed command and returns as an error; timed-out, cancelled and not-started say why. Output beyond 64 KiB keeps each stream's tail, and log names the full output to read with read_file. An interrupted command may have changed files: check before running it again.`,
+  [toolName.history]: `Read this project's history. Read-only.
+
+Actions:
+- describe: which branch the project is on, and every branch it holds
+- log: that branch's history entries, newest first ({ action: 'log', limit: 10 }); a version carries its number (V3) and name
+- diff: the files that changed between two entries ({ action: 'diff', from, to })
+- conflict: both sides of a conflict waiting for a decision ({ action: 'conflict', revision }); your files hold only "ours"
+
+Use this to find out what changed and when — before rewriting a file someone
+else just changed, when a user refers to "the last version", or to check whether
+your own turn's edits were recorded.
+
+Tau records history itself, never you: there is no action here that creates a
+branch, merges, restores, discards or syncs anything. Ask the user to do those.`,
+  [toolName.webSearch]: `Search the web and return up to five results, each with its title, URL and a content excerpt. Use it for external facts the project files cannot answer: standards, part dimensions, datasheets, current events. Input is one search query.
+
+To read the full body of a result or a known URL, use \`${toolName.webBrowser}\`.`,
+  [toolName.webBrowser]: `Extract the text content of up to five web pages in one call. Supports HTML pages, PDF documents and plain text. Use it after \`${toolName.webSearch}\` to read promising results in full, or on a URL the user gave. A page that cannot be read returns an "[Extraction failed]" entry while the others still return; long pages are truncated and say so.
+
+To find URLs in the first place, use \`${toolName.webSearch}\`.`,
+} as const;

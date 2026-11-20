@@ -1,0 +1,76 @@
+{
+  "name": "@taucad/geometry-core",
+  "version": "0.1.0-beta.9",
+  "description": "Shared geometry import, export, and inventory helpers",
+  "type": "module",
+  "sideEffects": false,
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/taucad/tau.git",
+    "directory": "packages/core/geometry"
+  },
+  "homepage": "https://github.com/taucad/tau/tree/main/packages/core/geometry#readme",
+  "bugs": {
+    "url": "https://github.com/taucad/tau/issues"
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "files": [
+    "dist",
+    "schema",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "cad",
+    "core",
+    "typescript"
+  ],
+  "author": "Richard Fontein",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./schema/tau-cad-topology": "./schema/tau-cad-topology.schema.json",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "import": "./dist/index.mjs",
+        "default": "./dist/index.mjs"
+      },
+      "./schema/tau-cad-topology": "./schema/tau-cad-topology.schema.json",
+      "./package.json": "./package.json"
+    },
+    "imports": {}
+  },
+  "imports": {
+    "#*.js": "./src/*.ts",
+    "#*": "./src/*"
+  },
+  "dependencies": {
+    "@gltf-transform/core": "catalog:",
+    "@gltf-transform/extensions": "catalog:",
+    "@gltf-transform/functions": "catalog:",
+    "@taucad/kinematics": "workspace:*",
+    "@taucad/spatial": "workspace:*",
+    "manifold-3d": "catalog:"
+  },
+  "peerDependencies": {
+    "@taucad/runtime": "^0.1.0-beta.0"
+  },
+  "devDependencies": {
+    "@taucad/runtime": "workspace:*",
+    "ajv": "catalog:"
+  },
+  "taucad": {
+    "hostTarget": "browser"
+  }
+}

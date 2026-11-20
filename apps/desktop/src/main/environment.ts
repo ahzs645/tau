@@ -1,0 +1,250 @@
+/* eslint-disable @typescript-eslint/naming-convention -- Environment names are SCREAMING_SNAKE. */
+/**
+ * The `window.ENV` payload main hands the preload (work item E4).
+ *
+ * The desktop renderer bundle bakes in **nothing** — `ui:build:desktop` emits
+ * `window.ENV = { ...{}, ...(window.ENV ?? {}) }`, so whatever preload installs
+ * first is what the app sees. These are exactly the keys `apps/ui`'s
+ * `clientEnvironmentKeys` allowlist publishes; anything outside it would be
+ * both unread and a leak.
+ */
+
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+/** Names copied into `window.ENV`, mirroring `apps/ui`'s client allowlist. */
+export const clientEnvironmentNames = [
+  'TAU_API_URL',
+  'TAU_WEBSOCKET_URL',
+  'TAU_FRONTEND_URL',
+  /* The billing screens read this one; without it a cloud build renders an
+   * empty Billing tab because the renderer never resolves an owner identity. */
+  'TAU_BILLING_ENVIRONMENT',
+  'TAU_DEBUG',
+  'TAU_MACHINES_ENABLED',
+  /* The managed acquisition profile: `locked` keeps the editor's type acquisition static. */
+  'TAU_ACQUISITION',
+  'NODE_ENV',
+  /* Desktop product analytics run whenever the build carries a key; `desktopEnvironment` fills these. */
+  'POSTHOG_API_HOST',
+  'POSTHOG_UI_HOST',
+  'POSTHOG_CLIENT_KEY',
+] as const;
+
+/** Names without which the renderer throws on its first API call. */
+export const requiredClientEnvironmentNames = ['TAU_API_URL', 'TAU_WEBSOCKET_URL', 'TAU_FRONTEND_URL'] as const;
+
+/**
+ * The release channel a packaged build was assembled for.
+ *
+ * A `staging` package (`TAU_DESKTOP_CHANNEL=staging` at packaging time) talks to
+ * taucad.dev and never takes production updates; everything else is `production`.
+ */
+export type DesktopChannel = 'production' | 'staging';
+
+const channelClientEnvironment = {
+  production: {
+    TAU_S3_ENDPOINT: 'https://tau-prod-content-private.271cffba9907a76320b6a4993f756601.r2.cloudflarestorage.com',
+    TAU_FILES_ORIGIN: 'https://files.tau.new',
+    TAU_API_URL: 'https://api.tau.new',
+    TAU_WEBSOCKET_URL: 'wss://api.tau.new',
+    TAU_FRONTEND_URL: 'https://tau.new',
+  },
+  staging: {
+    TAU_S3_ENDPOINT: 'https://tau-staging-au-content-private.271cffba9907a76320b6a4993f756601.r2.cloudflarestorage.com',
+    TAU_FILES_ORIGIN: 'https://files.taucad.dev',
+    TAU_API_URL: 'https://api.taucad.dev',
+    TAU_WEBSOCKET_URL: 'wss://api.taucad.dev',
+    TAU_FRONTEND_URL: 'https://taucad.dev',
+  },
+} as const satisfies Record<
+  DesktopChannel,
+  Record<(typeof requiredClientEnvironmentNames)[number] | 'TAU_S3_ENDPOINT' | 'TAU_FILES_ORIGIN', string>
+>;
+
+/** PostHog hosts for the renderer's analytics, matching `apps/ui`'s web defaults. */
+const desktopAnalyticsHosts = {
+  POSTHOG_API_HOST: 'https://us.i.posthog.com',
+  POSTHOG_UI_HOST: 'https://us.posthog.com',
+} as const;
+
+/**
+ * Names a locked packaged build never takes from its environment.
+ *
+ * Each one redirects where the signed app sends the session bearer, which
+ * origins it trusts with the preload bridge, what it serves as the SPA or what
+ * it executes, or where its analytics (which identify the signed-in user) go — so a
+ * value planted by the launcher (or, before the login-shell prefix deny-list, by an
+ * rc file) must not reach a release build.
+ */
+export const packagedLockedEnvironmentNames = [
+  'TAU_API_URL',
+  'TAU_WEBSOCKET_URL',
+  'TAU_FRONTEND_URL',
+  'TAU_S3_ENDPOINT',
+  'TAU_FILES_ORIGIN',
+  'ELECTRON_RENDERER_URL',
+  'TAU_DESKTOP_CLIENT_ROOT',
+  'TAU_BAMBU_STUDIO_PATH',
+  'TAU_MACHINES_ENABLED',
+  'POSTHOG_API_HOST',
+  'POSTHOG_CLIENT_KEY',
+] as const;
+
+/** Test-only switches (`TAU_E2E_*`) a locked packaged build ignores as well. */
+const packagedLockedEnvironmentPrefix = 'TAU_E2E_';
+
+/**
+ * Remove every packaged-locked name from an environment, in place.
+ *
+ * @param target - The environment to scrub; main passes `process.env` before anything reads it.
+ */
+export const stripPackagedOverrides = (target: NodeJS.ProcessEnv): void => {
+  for (const name of Object.keys(target)) {
+    if (
+      (packagedLockedEnvironmentNames as readonly string[]).includes(name) ||
+      name.startsWith(packagedLockedEnvironmentPrefix)
+    ) {
+      Reflect.deleteProperty(target, name);
+    }
+  }
+};
+
+type PackagedOptions = { readonly environmentOverrides?: unknown; readonly channel?: unknown };
+
+/** The packaged manifest's `tauDesktop` block, or `undefined` when it is missing or unreadable. */
+const readPackagedOptions = (appPath: string): PackagedOptions | undefined => {
+  try {
+    const manifest = JSON.parse(readFileSync(join(appPath, 'package.json'), 'utf8')) as {
+      readonly tauDesktop?: PackagedOptions;
+    };
+    return manifest.tauDesktop;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Whether a packaged app was assembled to honour environment overrides.
+ *
+ * The packaging script writes `tauDesktop.environmentOverrides: true` into the
+ * staged `package.json` (inside the ASAR) for ad-hoc and unsigned packages only,
+ * which is what the packaged e2e lane launches against local services. A
+ * release package never carries it, so a release build ignores the overrides
+ * whatever its environment says. A missing or unreadable manifest locks.
+ *
+ * @param appPath - `app.getAppPath()`, the directory holding the packaged `package.json`.
+ * @returns True only when the packaged manifest opts in.
+ */
+export const packagedOverridesEnabled = (appPath: string): boolean =>
+  readPackagedOptions(appPath)?.environmentOverrides === true;
+
+/**
+ * The channel a packaged app was assembled for.
+ *
+ * The packaging scripts write `tauDesktop.channel: 'staging'` into the staged
+ * `package.json` for a staging package; any other value, or a missing or
+ * unreadable manifest, is `production`.
+ *
+ * @param appPath - `app.getAppPath()`, the directory holding the packaged `package.json`.
+ * @returns The packaged channel.
+ */
+export const packagedChannel = (appPath: string): DesktopChannel =>
+  readPackagedOptions(appPath)?.channel === 'staging' ? 'staging' : 'production';
+
+/**
+ * Resolve the desktop main-process environment.
+ *
+ * @param source - Main's inherited environment.
+ * @param options - `locked` drops every packaged-locked name first (a packaged build without the override opt-in);
+ *   `channel` picks the endpoints that fill the gaps (`production` when omitted).
+ *   `postHogClientKey` replaces the build's baked analytics key (tests).
+ * @returns A copy with the channel's endpoints, and the analytics defaults, wherever a value was absent or blank.
+ */
+export const desktopEnvironment = (
+  source: NodeJS.ProcessEnv = process.env,
+  options: {
+    readonly locked?: boolean | undefined;
+    readonly channel?: DesktopChannel | undefined;
+    readonly postHogClientKey?: string | undefined;
+  } = {},
+): NodeJS.ProcessEnv => {
+  const environment = { ...source };
+  if (options.locked) {
+    stripPackagedOverrides(environment);
+  }
+  const defaults = channelClientEnvironment[options.channel ?? 'production'];
+  for (const [name, value] of Object.entries(defaults)) {
+    if (!environment[name]?.trim()) {
+      environment[name] = value;
+    }
+  }
+  /* Analytics need a project key; a build without one (local, unsigned) leaves them out entirely. */
+  const configuredKey = environment['POSTHOG_CLIENT_KEY']?.trim() ?? '';
+  const postHogClientKey = configuredKey === '' ? (options.postHogClientKey ?? tauPostHogClientKey) : configuredKey;
+  if (postHogClientKey) {
+    environment['POSTHOG_CLIENT_KEY'] = postHogClientKey;
+    for (const [name, value] of Object.entries(desktopAnalyticsHosts)) {
+      if (!environment[name]?.trim()) {
+        environment[name] = value;
+      }
+    }
+  }
+  return environment;
+};
+
+/**
+ * Whether an environment switch is on: `'1'` or `'true'`, case-insensitive.
+ *
+ * The same rule `apps/ui`'s environment schema applies to `TAU_DEBUG`, so the
+ * desktop shell and the web server agree on what turns a switch on.
+ *
+ * @param value - The raw environment value.
+ * @returns True only for the canonical truthy strings.
+ */
+const isEnvironmentSwitchOn = (value: string | undefined): boolean => /^(1|true)$/iu.test(value ?? '');
+
+/**
+ * Select the renderer-visible environment.
+ *
+ * `TAU_DEBUG` crosses as the boolean the renderer's `ClientEnvironment`
+ * declares, as the web server's parsed `window.ENV` does: a raw `'false'`
+ * would be truthy to every `ENV.TAU_DEBUG` reader.
+ *
+ * @param source - Main's own environment.
+ * @returns A flat record of the defined allowlisted names.
+ */
+export const clientEnvironment = (source: NodeJS.ProcessEnv = process.env): Record<string, string | boolean> => {
+  const resolved = desktopEnvironment(source);
+  const environment: Record<string, string | boolean> = {};
+  for (const name of clientEnvironmentNames) {
+    const value = resolved[name];
+    if (value !== undefined) {
+      environment[name] = name === 'TAU_DEBUG' ? isEnvironmentSwitchOn(value) : value;
+    }
+  }
+  return environment;
+};
+
+/**
+ * Base URL the services utility's agent host hangs its gateway calls off.
+ *
+ * The **API origin**, never a path: `createGatewayModelTransport` appends
+ * `v1/llm/openai/v1` and `v1/llm/anthropic` itself, so any prefix added here is
+ * sent twice and the API answers 404 before a guard ever runs. Every other
+ * caller (`tau serve`, the host daemon, the e2e fixtures) passes an origin too.
+ *
+ * There is no override any more. `TAU_DESKTOP_AGENT_GATEWAY_URL` used to point
+ * the utility at the desktop e2e mock; D19 moved that stub behind the real API
+ * (`TAU_LLM_PROVIDER_UPSTREAM_URL`), so the suite exercises this default rather
+ * than replacing it.
+ *
+ * @param source - Main's own environment.
+ * @returns The gateway origin, without a trailing slash.
+ */
+export const desktopAgentGatewayBaseUrl = (source: NodeJS.ProcessEnv = process.env): string =>
+  desktopEnvironment(source)['TAU_API_URL']!.replace(/\/$/u, '');
+
+/** System prompt for the services-utility agent host. */
+export const desktopAgentSystemPrompt =
+  'You are Tau, a CAD assistant running inside the Tau desktop application. Answer concisely.';

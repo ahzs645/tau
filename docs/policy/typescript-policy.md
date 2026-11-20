@@ -3,7 +3,7 @@ title: 'TypeScript Policy'
 description: 'Type assertion rules, mock typing patterns, generic inference, and common gotchas for safe TypeScript usage across the Tau monorepo.'
 status: active
 created: '2026-03-09'
-updated: '2026-04-10'
+updated: '2026-09-25'
 related:
   - docs/policy/testing-policy.md
   - docs/research/typescript-overloads.md
@@ -115,9 +115,9 @@ const loadDataActor = fromSafeAsync<LoadedEvent, LoadInput>(async () => {
 
 ### 5. Match Mock Types Exactly in `provide()`
 
-When providing actor implementations via `machine.provide()`, the mock's input and return types must exactly match the placeholder actor's types. Use generic parameters on the mock's `fromSafeAsync` call.
+When providing actor implementations via `machine.provide()`, the mock's input and return types must exactly match the placeholder actor's types. Use generic parameters on the mock's `fromSafeAsync` call, and check the map with `satisfies Partial<MachineActors<typeof machine>>` (`@taucad/ui-core/lib/xstate.lib`).
 
-**Why**: XState's `provide()` type system performs exact structural matching. Even subtle differences (e.g., `false` vs `boolean`, `string` vs `string | undefined`) cause type errors.
+**Why**: XState's `provide()` type system performs exact structural matching. Even subtle differences (e.g., `false` vs `boolean`, `string` vs `string | undefined`) cause type errors. Since XState v6, `provide()` infers the actors map from its own argument, so an inline logic gets no contextual input or output type; without explicit generics and the `satisfies` check, a mismatched stub surfaces far from the call.
 
 CORRECT — generic parameters match the original actor:
 
@@ -127,7 +127,7 @@ machine.provide({
     loadDataActor: fromSafeAsync<LoadedEvent, LoadInput>(async ({ input }) => {
       return { type: 'loaded', data: await fetchData(input.id) };
     }),
-  },
+  } satisfies Partial<MachineActors<typeof machine>>,
 });
 ```
 
@@ -145,7 +145,7 @@ machine.provide({
 
 ### 6. Preserve Generic Type Information
 
-Generic-aware libraries (notably `@taucad/runtime`'s `RuntimeClient`/`CapabilitiesManifest`/`ExportRoute`/`KernelRenderSchema` and the `KernelPlugin`/`TranscoderPlugin` carrier types) propagate phantom plugin tuples through every leaf field. Four common patterns silently erode that propagation; this rule blocks all four.
+Generic-aware libraries (notably `@taucad/runtime`'s `RuntimeClient`/`CapabilitiesManifest`/`ExportRoute` and the `KernelPlugin`/`MiddlewarePlugin`/`TranscoderPlugin` carrier types) propagate phantom plugin tuples through every leaf field. Four common patterns silently erode that propagation; this rule blocks all four.
 
 **Why**: Type information lost at one seam cascades — every downstream consumer falls back to wide-default unions (`FileExtension`, `string`, `Record<string, unknown>`), and the loss is invisible at the call site. Sentinel tests in [`packages/runtime/src/types/define-plugin.test-d.ts`](../../packages/runtime/src/types/define-plugin.test-d.ts) (`describe('Type-info preservation invariants (audit-R4)')`) lock in the invariants. Violations of any sub-rule below will trip those sentinels.
 
@@ -158,10 +158,13 @@ When a TypeScript variance failure blocks a structural assignment between a narr
 CORRECT — inline expansion at the carrier:
 
 ```typescript
-renderSchemas: {
+renderCapabilities: {
   [K in CollectKernelIds<Kernels>]?: {
-    schema: JSONSchema7;
-    defaults: RenderOptionsFor<Kernels, K>;
+    renderOptions: {
+      schema: JSONSchema7;
+      defaults: RenderOptionsFor<Kernels, K>;
+    };
+    content?: ContentCapability<RenderContentFor<Kernels, Middleware, K>>;
   };
 };
 ```
@@ -169,7 +172,12 @@ renderSchemas: {
 INCORRECT — `unknown`/`any` fallback that erases the per-kernel narrowing:
 
 ```typescript
-renderSchemas: { [K in string]?: { schema: JSONSchema7; defaults: unknown } };
+renderCapabilities: {
+  [K in string]?: {
+    renderOptions: { schema: JSONSchema7; defaults: unknown };
+    content?: ContentCapability<Record<string, boolean>>;
+  };
+};
 ```
 
 #### 6b. Never use `ReturnType<typeof genericFn>` for long-lived bindings
@@ -332,6 +340,26 @@ INCORRECT:
 ```typescript
 return { done: true, value: undefined as never };
 ```
+
+### 12. Preserve Consumer Input and Project Boundaries
+
+Use `z.input<typeof schema>` for caller-supplied values when defaults, coercions or transforms make the accepted input differ from parsed output. Use the schema's output type only after parsing. Keep the runtime schema and public consumer type under one owner.
+
+Keep one path-alias convention within a project; migrate its consumers instead of layering another parallel scheme. Resolve module/declaration errors at the owning source export, tsconfig inclusion or package boundary. Verify public isolated-declaration output with the package's actual type/build checks rather than patching emitted files or masking missing type information downstream.
+
+Runtime app/lib/spec configurations checked by tsgo must not reference another workspace project or its emitted `out-tsc` declarations. Same-project app/spec references remain valid; separate declaration build configurations retain their own purpose. Use source exports across project boundaries and verify with `pnpm nx run scripts:validate-tsgo-runtime-references`.
+
+Browser-delivered syntax must work in the supported browsers after the actual production transform. Verify lowering, required helpers and disposal behavior before introducing `using` or `await using`; use explicit `try/finally` disposal when that pipeline cannot provide them. Do not turn a historical bundler limitation into a permanent syntax ban: the current UI targets ES2022, and installed Rolldown can lower both forms, while end-to-end browser acceptance remains required for a changed use site.
+
+Declaration emit can reveal TS90xx diagnostics hidden behind earlier semantic errors in a standalone typecheck. If isolated declaration emit reports TS9010 on an inline `as const satisfies` expression, separate the declaration and compatibility check or give the declaration an explicit type. This diagnostic is conditional on the actual emit configuration, not a blanket syntax prohibition.
+
+### 13. Implementation and Diagnostic Conventions
+
+Describe source comments, JSDoc and consumer-facing documentation through the behavior and rationale readers need. Do not use private Tau research row identifiers or plan shorthand as their explanation. Internal research, charters and execution records retain stable decision/work IDs under their own workflow contract; that is distinct from publishing opaque internal references in product code or prose.
+
+Prefer early returns to reduce nesting, composition over inheritance, functional patterns, and const-bound functions over function declarations. Keep functions to at most three parameters; group additional related data in an options object and follow the public API policy's operation-envelope rules.
+
+When removing temporary investigation logs, retain structured error reporting at the owning boundaries. WASM parse failures (including relaxed SIMD), OpenCascade.js initialization, render/network failures and FileManager worker errors must expose named, useful error fields instead of opaque or `undefined` messages. Preserve the concrete failure information needed to diagnose the affected layer.
 
 ## Anti-Patterns
 

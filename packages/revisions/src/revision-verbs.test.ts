@@ -1,0 +1,509 @@
+/**
+ * The read verbs, over a real port.
+ *
+ * `Rev N` is the claim under test: it is the first-parent ordinal on the branch
+ * and nothing else, so a revision merged in from another branch appears in the
+ * history with no number of its own, and deleting nothing renumbers anything.
+ */
+
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import type * as isomorphicGit from 'isomorphic-git';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { MemoryProvider } from '@taucad/filesystem/backend';
+import { NodeFsProvider } from '@taucad/filesystem/backend/node';
+import { ImmutableRevisionTree, revisionId } from '#algorithms/index.js';
+import type { RevisionId } from '#algorithms/index.js';
+
+import { createIsomorphicGitRevisionPort } from '#isomorphic-git-adapter.js';
+import type { RevisionLogEntry, RevisionPort } from '#revision-port.js';
+import { readRevisionDiff, readRevisionLog, readRevisionPlace } from '#revision-verbs.js';
+import { gitToolchainOnPath } from '#test/native-git-harness.js';
+import { recordedBy } from '#test/identity.js';
+import { generatedGitattributesPath, generatedIgnorePath } from '#workspace-config.js';
+
+/* Every commit object the browser leg reads goes through `readObject`. */
+const objectReads = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock('isomorphic-git', async (importOriginal) => {
+  const original = await importOriginal<typeof isomorphicGit>();
+  return {
+    ...original,
+    // oxlint-disable-next-line typescript/no-deprecated -- the adapter's raw commit read is `readObject`, so the count is taken there.
+    readObject: async (...arguments_: Parameters<typeof original.readObject>) => {
+      objectReads.count += 1;
+      // oxlint-disable-next-line typescript/no-deprecated -- as above.
+      return original.readObject(...arguments_);
+    },
+  };
+});
+
+const roots: string[] = [];
+const createdAt = Date.UTC(2026, 8, 12, 9, 0, 0);
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map(async (root) => rm(root, { recursive: true, force: true })));
+});
+
+const openPort = async (): Promise<RevisionPort> => {
+  const root = await mkdtemp(join(tmpdir(), 'tau-revision-verbs-'));
+  roots.push(root);
+  const port = createIsomorphicGitRevisionPort({ filesystem: new NodeFsProvider(root) });
+  await port.init({ author: { name: 'Tau', email: 'noreply@tau.new' } });
+  return port;
+};
+
+const record = async (
+  port: RevisionPort,
+  options: Readonly<{ parents: readonly RevisionId[]; content: string; actorId: string; summary: string }>,
+): Promise<RevisionId> => {
+  const receipt = await port.writeRevision({
+    parents: options.parents,
+    tree: new ImmutableRevisionTree([['part.ts', options.content]]),
+    provenance: { source: 'user', ...recordedBy(options.actorId), createdAt },
+    summary: { generated: options.summary },
+  });
+  return revisionId(receipt.commitId);
+};
+
+describe('revision verbs', () => {
+  it('numbers the first-parent line and says where the reader is', async () => {
+    const port = await openPort();
+    await port.setHead('main');
+    const first = await record(port, { parents: [], content: 'one', actorId: 'ada', summary: 'First' });
+    await port.updateRef({ name: 'main', expectedHead: undefined, head: first });
+    const second = await record(port, { parents: [first], content: 'two', actorId: 'grace', summary: 'Second' });
+    await port.updateRef({ name: 'main', expectedHead: first, head: second });
+
+    const rows = await readRevisionLog(port);
+    expect(rows.map((row) => [row.revisionNumber, row.summary, row.who])).toStrictEqual([
+      [2, 'Second', { kind: 'recorded', identity: { kind: 'user', id: 'grace' } }],
+      [1, 'First', { kind: 'recorded', identity: { kind: 'user', id: 'ada' } }],
+    ]);
+
+    const place = await readRevisionPlace(port);
+    expect(place.line).toBe('main');
+    expect(place.branch).toBe('main');
+    expect(place.revisionId).toBe(second);
+    expect(place.branches).toStrictEqual([{ name: 'main', revisionNumber: 2, revisionId: second }]);
+  });
+
+  /* W6-a2 R3: History folds consecutive autosaves into one row (A20), and the
+   * capture is the only thing that tells one from a save a person asked for. */
+  it('carries what asked for each revision onto its row', async () => {
+    const port = await openPort();
+    await port.setHead('main');
+    const saved = await port.writeRevision({
+      parents: [],
+      tree: new ImmutableRevisionTree([['part.ts', 'one']]),
+      provenance: { source: 'user', ...recordedBy('ada'), capture: 'save', createdAt },
+      summary: { generated: 'Saved' },
+    });
+    const savedId = revisionId(saved.commitId);
+    const idle = await port.writeRevision({
+      parents: [savedId],
+      tree: new ImmutableRevisionTree([['part.ts', 'two']]),
+      provenance: { source: 'user', ...recordedBy('ada'), capture: 'idle', createdAt },
+      summary: { generated: 'Autosaved' },
+    });
+    await port.updateRef({ name: 'main', expectedHead: undefined, head: revisionId(idle.commitId) });
+
+    const rows = await readRevisionLog(port);
+    expect(rows.map((row) => row.capture)).toStrictEqual(['idle', 'save']);
+
+    /* B5 through B2: the row's trailer is the trailer block the commit carries, byte for byte. */
+    const root = roots.at(-1) ?? '';
+    const { readCommit } = await vi.importActual<typeof isomorphicGit>('isomorphic-git');
+    const { commit } = await readCommit({ fs: await import('node:fs'), dir: root, oid: savedId });
+    expect(rows[1]?.trailer).toBe(commit.message.slice(commit.message.indexOf('\n\n') + 2).trimEnd());
+  });
+
+  /* A5, fixture B4: a turn's base cut is the person's, read from the trailer an earlier build wrote. */
+  it('reads a turn base cut as the person’s and leaves the result the agent’s', async () => {
+    const port = await openPort();
+    await port.setHead('main');
+    const turn = { runId: 'run-1', attempt: 1, turnId: 'u1', capture: 'turn', via: 'browser', createdAt } as const;
+    const ada = { kind: 'user', id: 'ada' } as const;
+    const base = await port.writeRevision({
+      parents: [],
+      tree: new ImmutableRevisionTree([['part.ts', 'mine']]),
+      /* What a build before A5 recorded: source `agent`, the person as actor. */
+      provenance: { ...turn, source: 'agent', actor: ada, turnCut: 'base' },
+      summary: { generated: 'Agent change' },
+    });
+    const baseId = revisionId(base.commitId);
+    const result = await port.writeRevision({
+      parents: [baseId],
+      tree: new ImmutableRevisionTree([['part.ts', 'agent']]),
+      provenance: {
+        ...turn,
+        source: 'agent',
+        actor: { kind: 'agent', id: 'agent', runId: 'run-1', onBehalfOf: ada },
+        turnCut: 'result',
+      },
+      summary: { generated: 'Agent change' },
+    });
+    const saved = await port.writeRevision({
+      parents: [revisionId(result.commitId)],
+      tree: new ImmutableRevisionTree([['part.ts', 'later']]),
+      provenance: { source: 'user', ...recordedBy('ada'), createdAt },
+      summary: { generated: 'Saved' },
+    });
+    await port.updateRef({ name: 'main', expectedHead: undefined, head: revisionId(saved.commitId) });
+
+    const rows = await readRevisionLog(port);
+    const agent = { kind: 'agent', id: 'agent', runId: 'run-1', onBehalfOf: ada };
+    expect(rows.map((row) => [row.source, row.who, row.turnCut, row.turnId])).toStrictEqual([
+      ['user', { kind: 'recorded', identity: ada }, undefined, undefined],
+      ['agent', { kind: 'recorded', identity: agent }, 'result', 'u1'],
+      ['user', { kind: 'recorded', identity: ada }, 'base', 'u1'],
+    ]);
+    expect(rows.map((row) => Object.hasOwn(row, 'turnCut'))).toStrictEqual([false, true, true]);
+  });
+
+  /* B2: a row's who is typed, the trailer rides with it for diagnostics, and a commit Tau did not write names its git author. */
+  it('carries a typed who and the trailer, and a git author for a commit Tau did not record', async () => {
+    const ada = { kind: 'user', id: 'ada', anonymous: true } as const;
+    const entries: readonly RevisionLogEntry[] = [
+      {
+        id: revisionId('2'.repeat(40)),
+        changeId: 'change-2',
+        parents: [revisionId('1'.repeat(40))],
+        treeId: 'b'.repeat(40),
+        summary: { generated: 'Saved' },
+        provenance: { source: 'user', actor: ada, capture: 'save', via: 'desktop', createdAt },
+        conflicted: false,
+      },
+      {
+        id: revisionId('1'.repeat(40)),
+        changeId: 'change-1',
+        parents: [],
+        treeId: 'c'.repeat(40),
+        summary: { generated: 'Initial commit' },
+        provenance: { source: 'import', createdAt },
+        authorName: 'octo-dev',
+        conflicted: false,
+      },
+    ];
+    const port: Partial<RevisionPort> = {
+      readHead: async () => ({ branch: 'main', head: revisionId('2'.repeat(40)) }),
+      log: async () => entries,
+      listTags: async () => [],
+      firstParentChanges: async (ids) => new Map(ids.map((id) => [id, ['part.ts']] as const)),
+    };
+
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- the log read asks only these four methods.
+    const [saved, imported] = await readRevisionLog(port as RevisionPort);
+
+    expect(saved?.who).toStrictEqual({ kind: 'recorded', identity: ada });
+    expect(saved?.capture).toBe('save');
+    expect(saved?.trailer?.split('\n')).toStrictEqual([
+      `Tau-Metadata: {"version":2,"parents":["${'1'.repeat(40)}"],"provenance":{"source":"user","actor":{"kind":"user","id":"ada","anonymous":true},"capture":"save","via":"desktop","createdAt":${String(createdAt)}},"summary":{"generated":"Saved"}}`,
+      'Tau-Actor: user ada',
+      'Tau-Trigger: save',
+    ]);
+    expect(imported?.who).toStrictEqual({ kind: 'unrecorded', authorName: 'octo-dev' });
+    expect(imported?.trailer).toBeUndefined();
+  });
+
+  /* A9: only the revision a restore minted names what it restored; the cut before it does not. */
+  it('carries restoredFrom onto the row a restore minted and onto no other', async () => {
+    const port = await openPort();
+    await port.setHead('main');
+    const first = await record(port, { parents: [], content: 'one', actorId: 'ada', summary: 'First' });
+    const before = await port.writeRevision({
+      parents: [first],
+      tree: new ImmutableRevisionTree([['part.ts', 'late']]),
+      provenance: { source: 'user', ...recordedBy('ada'), capture: 'restore', createdAt },
+      summary: { generated: 'Saved changes (restore)' },
+    });
+    const restored = await port.writeRevision({
+      parents: [revisionId(before.commitId)],
+      tree: new ImmutableRevisionTree([['part.ts', 'one']]),
+      provenance: { source: 'restore', ...recordedBy('ada'), capture: 'restore', restoredFrom: first, createdAt },
+      summary: { generated: 'Restored Rev 1' },
+    });
+    await port.updateRef({ name: 'main', expectedHead: undefined, head: revisionId(restored.commitId) });
+
+    const rows = await readRevisionLog(port);
+    expect(rows.map((row) => [row.revisionNumber, row.restoredFrom])).toStrictEqual([
+      [3, first],
+      [2, undefined],
+      [1, undefined],
+    ]);
+  });
+
+  /* W1 Details: a row names the revision it follows, its first parent, and the first revision none. */
+  it("carries each revision's first parent onto its row", async () => {
+    const port = await openPort();
+    await port.setHead('main');
+    const first = await record(port, { parents: [], content: 'one', actorId: 'ada', summary: 'First' });
+    const second = await record(port, { parents: [first], content: 'two', actorId: 'ada', summary: 'Second' });
+    await port.updateRef({ name: 'main', expectedHead: undefined, head: second });
+
+    const rows = await readRevisionLog(port);
+    expect(rows.map((row) => [row.revisionNumber, row.parent])).toStrictEqual([
+      [2, first],
+      [1, undefined],
+    ]);
+  });
+
+  /* W1 Details: the Tree row reads the id the log already carries, never a second read per row. */
+  it("carries each revision's tree id onto its row", async () => {
+    const port = await openPort();
+    await port.setHead('main');
+    const first = await record(port, { parents: [], content: 'one', actorId: 'ada', summary: 'First' });
+    await port.updateRef({ name: 'main', expectedHead: undefined, head: first });
+
+    const [row] = await readRevisionLog(port);
+    const recorded = await port.readRevision(first);
+    expect(row?.treeId).toBe(recorded?.treeId);
+  });
+
+  it('gives a merged-in revision no number of its own on this branch', async () => {
+    const port = await openPort();
+    await port.setHead('main');
+    const base = await record(port, { parents: [], content: 'base', actorId: 'ada', summary: 'Base' });
+    const side = await record(port, { parents: [base], content: 'side', actorId: 'ada', summary: 'Side' });
+    const merge = await record(port, { parents: [base, side], content: 'merged', actorId: 'ada', summary: 'Merge' });
+    await port.updateRef({ name: 'main', expectedHead: undefined, head: merge });
+
+    const rows = await readRevisionLog(port);
+    const numbers = new Map(rows.map((row) => [row.summary, row.revisionNumber]));
+    expect(numbers.get('Merge')).toBe(2);
+    expect(numbers.get('Base')).toBe(1);
+    // On the merged side, not on this branch's first-parent line.
+    expect(numbers.get('Side')).toBeUndefined();
+    expect(rows.find((row) => row.summary === 'Merge')?.otherParents).toEqual([side]);
+    expect(rows.find((row) => row.summary === 'Side')?.otherParents).toBeUndefined();
+  });
+
+  it('takes the newest rows when a limit is given, and reads a path diff', async () => {
+    const port = await openPort();
+    await port.setHead('main');
+    let head: RevisionId | undefined;
+    const ids: RevisionId[] = [];
+    for (let index = 1; index <= 4; index += 1) {
+      // oxlint-disable-next-line no-await-in-loop -- a chain is ordered by construction.
+      const next = await record(port, {
+        parents: head === undefined ? [] : [head],
+        content: `v${String(index)}`,
+        actorId: 'ada',
+        summary: `Rev ${String(index)}`,
+      });
+      ids.push(next);
+      head = next;
+    }
+    await port.updateRef({ name: 'main', expectedHead: undefined, head: head! });
+
+    const limited = await readRevisionLog(port, { limit: 2 });
+    expect(limited.map((row) => row.revisionNumber)).toStrictEqual([4, 3]);
+    expect(await readRevisionDiff(port, ids[0], ids[1]!)).toStrictEqual([{ path: 'part.ts', kind: 'modified' }]);
+    expect(await readRevisionDiff(port, undefined, ids[0]!)).toStrictEqual([{ path: 'part.ts', kind: 'added' }]);
+  });
+
+  /* Review a1 R8: the fix for an epoch-dated import was made on both legs and
+   * asserted on one. This is the browser leg's decode, over a history stock
+   * `git` wrote — the same thing a person clones. */
+  it.runIf(gitToolchainOnPath)('dates a revision it did not write by the revision itself', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tau-revision-verbs-stock-'));
+    roots.push(root);
+    /* Environment names, not identifiers: assigned rather than spelled as keys,
+     * so the fixture's commits never pick up the operator's own git config. */
+    const environment: NodeJS.ProcessEnv = { ...process.env };
+    environment['GIT_CONFIG_GLOBAL'] = '/dev/null';
+    environment['GIT_CONFIG_SYSTEM'] = '/dev/null';
+    const git = (...args: readonly string[]): void => {
+      execFileSync('git', ['-C', root, ...args], { stdio: 'ignore', env: environment });
+    };
+    git('init', '--quiet', '--initial-branch=main', '.');
+    await writeFile(join(root, 'part.ts'), 'export const part = 1;\n');
+    git('add', 'part.ts');
+    git('-c', 'user.name=ada', '-c', 'user.email=ada@tau.invalid', 'commit', '--quiet', '-m', 'Imported');
+
+    /* The browser leg reading a stock history: same objects, its own store
+     * directory pointed at the `.git` git wrote. */
+    const port = createIsomorphicGitRevisionPort({ filesystem: new NodeFsProvider(root), gitDirectory: '.git' });
+    const rows = await readRevisionLog(port);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.source).toBe('import');
+    expect(rows[0]?.createdAt).toBeGreaterThan(Date.UTC(2020, 0, 1));
+    /* B2: no capture, no trailer, and no identity stood in for the one it lacks. */
+    expect(rows[0]?.who.kind).toBe('unrecorded');
+    expect(
+      rows[0] === undefined ? [] : [Object.hasOwn(rows[0], 'capture'), Object.hasOwn(rows[0], 'trailer')],
+    ).toStrictEqual([false, false]);
+  });
+
+  it('answers a project that has no history yet without inventing one', async () => {
+    const port = await openPort();
+    expect(await readRevisionLog(port)).toStrictEqual([]);
+    const place = await readRevisionPlace(port);
+    expect(place.revisionNumber).toBeUndefined();
+    expect(place.line).toBe('No history yet');
+  });
+
+  /**
+   * A linear history of `count` revisions, one second apart so a bounded walk
+   * can stop (the port's committer-time rule), under an actor no other row uses
+   * so no id is shared with another test's store.
+   */
+  const history = async (port: RevisionPort, count: number, actorId: string): Promise<RevisionId> => {
+    await port.setHead('main');
+    let head: RevisionId | undefined;
+    for (let index = 0; index < count; index += 1) {
+      // oxlint-disable-next-line no-await-in-loop -- each revision is the next one's parent.
+      const receipt = await port.writeRevision({
+        parents: head === undefined ? [] : [head],
+        tree: new ImmutableRevisionTree([['part.ts', `export const part = ${String(index)};\n`]]),
+        provenance: { source: 'user', ...recordedBy(actorId), createdAt: createdAt + index * 1000 },
+        summary: { generated: `Rev ${String(index + 1)}` },
+      });
+      // oxlint-disable-next-line no-await-in-loop -- the ref follows each revision.
+      await port.updateRef({ name: 'main', expectedHead: head, head: revisionId(receipt.commitId) });
+      head = revisionId(receipt.commitId);
+    }
+    return head!;
+  };
+
+  /* In memory: these rows count object reads, and a disk only makes them slow. */
+  const openMemoryPort = async (): Promise<RevisionPort> => {
+    const port = createIsomorphicGitRevisionPort({ filesystem: new MemoryProvider() });
+    await port.init({ author: { name: 'Tau', email: 'noreply@tau.new' } });
+    return port;
+  };
+
+  it('reads at most 51 commits for a 50-row page after a mint, numbered from the parent it remembers (E6)', async () => {
+    const port = await openMemoryPort();
+    const head = await history(port, 80, 'e6-page');
+    await readRevisionLog(port, { limit: 50 });
+    const receipt = await port.writeRevision({
+      parents: [head],
+      tree: new ImmutableRevisionTree([['part.ts', 'export const part = "minted";\n']]),
+      provenance: { source: 'user', ...recordedBy('e6-page'), createdAt: createdAt + 200_000 },
+      summary: { generated: 'Minted' },
+    });
+    await port.updateRef({ name: 'main', expectedHead: head, head: revisionId(receipt.commitId) });
+    objectReads.count = 0;
+
+    const rows = await readRevisionLog(port, { limit: 50 });
+
+    expect(objectReads.count).toBeLessThanOrEqual(51);
+    expect(rows).toHaveLength(50);
+    expect(rows.map((row) => row.revisionNumber)).toEqual(Array.from({ length: 50 }, (_, index) => 81 - index));
+  });
+
+  /* B4: a surface holding one page reads an older revision on its own, numbered as the whole history numbers it. */
+  it('reads one revision older than the page by id, with its Rev N, in a bounded read', async () => {
+    const port = await openMemoryPort();
+    await history(port, 80, 'e6-from');
+    const whole = await readRevisionLog(port);
+    const old = whole.find((row) => row.revisionNumber === 12)!;
+    objectReads.count = 0;
+
+    const rows = await readRevisionLog(port, { from: old.revisionId, limit: 1 });
+
+    expect(rows).toStrictEqual([old]);
+    expect(objectReads.count).toBeLessThanOrEqual(2);
+    await expect(readRevisionLog(port, { from: 'f'.repeat(40), limit: 1 })).resolves.toStrictEqual([]);
+  });
+
+  it('numbers a bounded page read cold exactly as the whole history does', async () => {
+    const port = await openMemoryPort();
+    await history(port, 30, 'e6-cold');
+
+    const page = await readRevisionLog(port, { limit: 5 });
+    const whole = await readRevisionLog(port);
+
+    expect(page.map((row) => row.revisionNumber)).toEqual([30, 29, 28, 27, 26]);
+    expect(page).toEqual(whole.slice(0, 5));
+  });
+});
+
+/* A4: a page longer than the setup-verdict cache still flags every setup entry it holds. */
+describe('setup entries on a long page', () => {
+  it('flags every setup entry of a page longer than the verdict cache', async () => {
+    const length = 4100;
+    const idOf = (index: number): RevisionId => revisionId(index.toString(16).padStart(40, '0'));
+    const entries: RevisionLogEntry[] = Array.from({ length }, (_, offset) => {
+      const index = length - offset;
+      return {
+        id: idOf(index),
+        changeId: `change-${String(index)}`,
+        parents: index === 1 ? [] : [idOf(index - 1)],
+        treeId: 'a'.repeat(40),
+        summary: { generated: 'Saved changes (idle)' },
+        provenance: { source: 'user', ...recordedBy('ada'), capture: 'idle', createdAt },
+        conflicted: false,
+      };
+    });
+    const head = idOf(length);
+    const port: Partial<RevisionPort> = {
+      readHead: async () => ({ branch: 'main', head }),
+      log: async () => entries,
+      listTags: async () => [],
+      firstParentChanges: async (ids) => new Map(ids.map((id) => [id, [generatedIgnorePath]] as const)),
+    };
+
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- the log read asks only these four methods.
+    const rows = await readRevisionLog(port as RevisionPort);
+
+    expect(rows).toHaveLength(length);
+    /* Every entry but the root, which has no first parent to change against. */
+    expect(rows.filter((row) => row.isSetup === true)).toHaveLength(length - 1);
+  });
+
+  /* A6 beside A4: the Start entry records Tau's setup files, yet it is V1 and never folds into the setup line. */
+  it('reads the Start entry as V1, never as setup, though it changed only the setup files', async () => {
+    const idOf = (index: number): RevisionId => revisionId(index.toString(16).padStart(40, '0'));
+    const entries: RevisionLogEntry[] = [
+      {
+        id: idOf(3),
+        changeId: 'change-3',
+        parents: [idOf(2)],
+        treeId: 'a'.repeat(40),
+        summary: { generated: 'Saved changes (idle)' },
+        provenance: { source: 'user', ...recordedBy('ada'), capture: 'idle', createdAt },
+        conflicted: false,
+      },
+      {
+        id: idOf(2),
+        changeId: 'change-2',
+        parents: [idOf(1)],
+        treeId: 'b'.repeat(40),
+        summary: { generated: 'Start' },
+        provenance: { source: 'user', ...recordedBy('ada'), capture: 'create', createdAt },
+        conflicted: false,
+      },
+      {
+        id: idOf(1),
+        changeId: 'change-1',
+        parents: [],
+        treeId: 'c'.repeat(40),
+        summary: { generated: 'Initial commit' },
+        /* A commit Tau did not write: no actor, capture or leg (B1). */
+        provenance: { source: 'import', createdAt },
+        conflicted: false,
+      },
+    ];
+    const port: Partial<RevisionPort> = {
+      readHead: async () => ({ branch: 'main', head: idOf(3) }),
+      log: async () => entries,
+      listTags: async () => [],
+      firstParentChanges: async (ids) =>
+        new Map(ids.map((id) => [id, [generatedIgnorePath, generatedGitattributesPath]] as const)),
+    };
+
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- the log read asks only these four methods.
+    const rows = await readRevisionLog(port as RevisionPort);
+    const byId = new Map(rows.map((row) => [row.revisionId, row]));
+
+    expect(byId.get(idOf(2))?.start).toBe('created');
+    expect(byId.get(idOf(2))?.isSetup).toBeUndefined();
+    expect(byId.get(idOf(3))?.isSetup).toBe(true);
+  });
+});

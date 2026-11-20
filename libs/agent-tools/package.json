@@ -1,0 +1,75 @@
+{
+  "name": "@taucad/agent-tools",
+  "version": "0.1.0",
+  "description": "Host-neutral chat tool environment: registry, skills, GeoSpec adapter, capture recipe",
+  "type": "module",
+  "private": true,
+  "sideEffects": false,
+  "license": "Apache-2.0",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./registry": {
+      "types": "./src/registry/index.ts",
+      "import": "./src/registry/index.ts",
+      "default": "./src/registry/index.ts"
+    },
+    "./skills": {
+      "types": "./src/skills/index.ts",
+      "import": "./src/skills/index.ts",
+      "default": "./src/skills/index.ts"
+    },
+    "./geospec": {
+      "types": "./src/geospec/index.ts",
+      "import": "./src/geospec/index.ts",
+      "default": "./src/geospec/index.ts"
+    },
+    "./geospec/exporter": {
+      "types": "./src/geospec/tau-client-exporter.ts",
+      "import": "./src/geospec/tau-client-exporter.ts",
+      "default": "./src/geospec/tau-client-exporter.ts"
+    },
+    "./capture": {
+      "types": "./src/capture/index.ts",
+      "import": "./src/capture/index.ts",
+      "default": "./src/capture/index.ts"
+    },
+    "./runtime": {
+      "types": "./src/runtime/index.ts",
+      "import": "./src/runtime/index.ts",
+      "default": "./src/runtime/index.ts"
+    }
+  },
+  "dependencies": {
+    "@taucad/agent-host": "workspace:*",
+    "@taucad/bambu": "workspace:*",
+    "@taucad/chat": "workspace:*",
+    "@taucad/filesystem": "workspace:*",
+    "@taucad/kinematics": "workspace:*",
+    "@taucad/parameters": "workspace:*",
+    "@taucad/slicer": "workspace:*",
+    "@taucad/types": "workspace:*",
+    "@taucad/units": "workspace:*",
+    "@taucad/utils": "workspace:*",
+    "@taucad/workbench": "workspace:*",
+    "geospec": "catalog:"
+  },
+  "imports": {
+    "#*.js": "./src/*.ts",
+    "#*": "./src/*"
+  },
+  "peerDependencies": {
+    "xstate": "^6.0.0-alpha.59"
+  },
+  "devDependencies": {
+    "@gltf-transform/core": "catalog:",
+    "@taucad/esbuild": "workspace:*",
+    "@taucad/runtime": "workspace:*",
+    "geospec-engine": "catalog:",
+    "xstate": "catalog:",
+    "zod": "catalog:"
+  }
+}

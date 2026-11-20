@@ -1,15 +1,38 @@
-import { useNameGeneratorClient } from '#chat-clients/_internal/name-generator-client.js';
-import type { NameGeneratorClient } from '#chat-clients/_internal/name-generator-client.js';
+import { useCallback } from 'react';
+import type { MyUIMessage } from '@taucad/chat';
+import { useNameGeneratorPartsClient } from '#chat-clients/_internal/name-generator-client.js';
 
-/**
- * Profile-scoped chat client for the **project-name** generator profile.
- *
- * Hits `POST /v1/chat` with `{ agent: { profile: 'project_name' }, messages: [singleUserMessage] }`
- * and resolves with the assistant's accumulated text. UI sites call
- * `generate(prompt)` rather than building a wire body or calling the AI SDK
- * `Chat` instance directly — the indirection is what stops the
- * `agent` block from being re-typed at every site.
- *
- * @public
- */
-export const useProjectNameClient = (): NameGeneratorClient => useNameGeneratorClient('project_name');
+export type ProjectNameInput = {
+  readonly projectId: string;
+  readonly text: string;
+  /**
+   * Image `data:` URLs. The naming profile is reached over HTTP, so the caller
+   * resolves stored attachments to bytes first (D14); anything that is not an
+   * image data URL — a document, an `attachments/` reference — is not sent.
+   */
+  readonly imageUrls?: readonly string[];
+};
+
+const imageDataUrlPattern = /^data:(image\/[^,;]+)[,;]/;
+
+export type ProjectNameClient = {
+  readonly generate: (input: ProjectNameInput) => Promise<string>;
+};
+
+/** Multimodal project-name client. Commit naming intentionally remains text-only. */
+export const useProjectNameClient = (): ProjectNameClient => {
+  const { generateFromParts } = useNameGeneratorPartsClient('project_name');
+  const generate = useCallback(
+    async (input: ProjectNameInput): Promise<string> => {
+      const files = (input.imageUrls ?? []).flatMap((url): MyUIMessage['parts'] => {
+        const mediaType = imageDataUrlPattern.exec(url)?.[1];
+        return mediaType === undefined ? [] : [{ type: 'file', url, mediaType }];
+      });
+      const text = input.text.trim();
+      const textParts: MyUIMessage['parts'] = text ? [{ type: 'text', text }] : [];
+      return generateFromParts([...files, ...textParts], input.projectId);
+    },
+    [generateFromParts],
+  );
+  return { generate };
+};

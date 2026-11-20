@@ -1,6 +1,6 @@
 import { getEnvironment } from '#environment.config.js';
 import { canonicalProductionUrl, isCanonicalProductionUrl } from '#lib/canonical-url.js';
-import { listStaticPrerenderPaths } from '#lib/static-paths.js';
+import { listSitemapPaths } from '#lib/static-paths.js';
 
 const sitemapExcludePathSet = new Set(['/robots.txt', '/sitemap.xml', '/manifest.webmanifest']);
 
@@ -36,16 +36,13 @@ function buildUrlEntry(fields: UrlEntryFields): string {
 
 type PathClassification = {
   readonly changefreq: 'weekly' | 'monthly';
-  readonly priority: '1.0' | '0.7' | '0.5';
+  readonly priority: '1.0' | '0.5';
 };
 
-/** Per-path crawl hints. Home is the highest-value page; docs are mid-value. */
+/** Per-path crawl hints. Home is the highest-value page. */
 function classifyPath(path: string): PathClassification {
   if (path === '/') {
     return { changefreq: 'weekly', priority: '1.0' };
-  }
-  if (path.startsWith('/docs')) {
-    return { changefreq: 'monthly', priority: '0.7' };
   }
   return { changefreq: 'monthly', priority: '0.5' };
 }
@@ -53,7 +50,7 @@ function classifyPath(path: string): PathClassification {
 type BuildSitemapXmlInput = {
   /** Live frontend URL. Non-canonical origins emit an empty `<urlset>`. */
   readonly frontendUrl: string;
-  /** Static prerender paths from {@link listStaticPrerenderPaths}. */
+  /** Public crawlable paths from {@link listSitemapPaths}. */
   readonly paths: readonly string[];
   /** ISO-8601 date (`YYYY-MM-DD`) used for every `<lastmod>`. */
   readonly lastmod: string;
@@ -101,7 +98,7 @@ function todayIsoDate(): string {
 
 export async function loader(): Promise<Response> {
   const environment = await getEnvironment();
-  const paths = await listStaticPrerenderPaths();
+  const paths = listSitemapPaths();
   const xml = buildSitemapXml({
     frontendUrl: environment.TAU_FRONTEND_URL,
     paths,

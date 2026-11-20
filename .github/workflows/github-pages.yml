@@ -2,19 +2,17 @@ name: GitHub Pages
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write
-  pages: write
+  actions: read
 
-# The Pages build doesn't need the upstream Nx Cloud workspace (nxCloudId in nx.json),
-# and unauthenticated access to it is rejected, which aborts every nx command.
 env:
-  NX_NO_CLOUD: 'true'
+  ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+  NX_DAEMON: 'false'
+  pnpm_config_verify_deps_before_run: error
 
 concurrency:
   group: github-pages
@@ -22,142 +20,46 @@ concurrency:
 
 jobs:
   build:
-    name: Build static UI
+    name: Build static gallery
+    if: ${{ github.repository == 'ahzs645/tau' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
-    # Fail fast on a hung build instead of holding the concurrency slot for the 6h default.
-    # The build step retries internally, so allow headroom for up to three 5-minute attempts
-    # plus dependency install and artifact upload.
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          # 24.18.0 segfaults during Nx startup on ubuntu-latest before copy-assets runs.
-          # Keep Pages on the last known-good Node 24 patch until Nx/Node catches up.
-          node-version: '24.16.0'
-
-      - name: Enable corepack
-        run: corepack enable
-
-      - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
-
+          fetch-depth: 0
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+      - name: Validate fork workflow boundaries
+        run: pnpm nx run scripts:validate-fork-workflows
       - name: Configure Pages
-        uses: actions/configure-pages@v6
-
-      - name: Set build metadata
-        run: |
-          echo "VITE_COMMIT_SHA=${GITHUB_SHA}" >> "$GITHUB_ENV"
-          echo "VITE_BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "$GITHUB_ENV"
-
-      - name: Build React Router app
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - name: Validate gallery
+        run: pnpm nx run-many -p gallery -t typecheck,test --parallel=1
+      - name: Build gallery
         env:
-          GITHUB_PAGES: 'true'
-          TAU_API_URL: https://api.taucad.dev
-          TAU_FRONTEND_URL: https://3dd.ahmadjalil.com
-          TAU_WEBSOCKET_URL: wss://api.taucad.dev
-          TAU_DISABLE_CODE_EDITOR: 'true'
-          # Match the canonical Nx build (apps/ui/project.json): the client bundle
-          # needs >default heap, and full client source maps cause OOM/GC-thrash hangs.
-          NODE_OPTIONS: '--max-old-space-size=8192'
-        # Keep a bounded retry guard around the static Pages build. A healthy build finishes
-        # well under 5 minutes; if this regresses, print the failing command log outside the
-        # collapsed retry group so the Actions summary contains the actual build error.
-        run: |
-          set -euo pipefail
-
-          for attempt in 1 2 3; do
-            log_file="${RUNNER_TEMP}/react-router-build-${attempt}.log"
-
-            echo "::group::React Router build attempt ${attempt}/3"
-            set +e
-            timeout 300 pnpm nx build ui 2>&1 | tee "${log_file}"
-            status=${PIPESTATUS[0]}
-            set -e
-
-            if [ "$status" -eq 0 ]; then
-              echo "::endgroup::"
-              echo "Build succeeded on attempt ${attempt}."
-              exit 0
-            fi
-
-            echo "::endgroup::"
-            echo "::warning::Build attempt ${attempt} failed or timed out (exit ${status}); retrying."
-            echo "Last 200 lines from failed React Router build attempt ${attempt}:"
-            tail -n 200 "${log_file}"
-            rm -rf build
-          done
-
-          echo "::error::React Router build failed after 3 attempts."
-          exit 1
-
-      # The gallery used to live under /tau (basename era). Old links redirect
-      # client-side: /tau/<path> maps to /<path>, and the legacy
-      # /tau/playground?model=<id> form maps to the root-level /<id> model page.
-      # 404.html covers every stale /tau deep link GitHub Pages can't match; the
-      # physical /tau/ and /tau/playground/ pages serve the two shapes that were
-      # actually shared around with a 200 instead of a 404.
-      - name: Add legacy /tau redirects and 404 page
-        working-directory: apps/ui
-        run: |
-          cat > build/client/404.html <<'HTML'
-          <!doctype html>
-          <html lang="en">
-            <head>
-              <meta charset="utf-8">
-              <meta name="viewport" content="width=device-width, initial-scale=1">
-              <title>Tau CAD Gallery</title>
-              <script>
-                (function () {
-                  var url = new URL(globalThis.location.href);
-                  if (!/^\/tau(\/|$)/.test(url.pathname)) {
-                    return;
-                  }
-                  var path = url.pathname.replace(/^\/tau/, '') || '/';
-                  var params = url.searchParams;
-                  var model = params.get('model') || params.get('example');
-                  if (/^\/playground\/?$/.test(path)) {
-                    params.delete('model');
-                    params.delete('example');
-                    path = model ? '/' + model : '/';
-                  }
-                  var query = params.toString();
-                  globalThis.location.replace(path + (query ? '?' + query : '') + url.hash);
-                })();
-              </script>
-            </head>
-            <body>
-              <p>Page not found. <a href="/">Open Tau CAD Gallery</a></p>
-            </body>
-          </html>
-          HTML
-          mkdir -p build/client/tau/playground
-          cp build/client/404.html build/client/tau/index.html
-          cp build/client/404.html build/client/tau/playground/index.html
-
-      - name: Prepare Pages artifact
-        run: |
-          node --import @oxc-node/core/register apps/ui/scripts/check-client-bundle-budget.mts
-          find apps/ui/build/client -type f -name '*.map' -delete
-          touch apps/ui/build/client/.nojekyll
-          printf '3dd.ahmadjalil.com\n' > apps/ui/build/client/CNAME
-
+          VITE_COMMIT_SHA: ${{ github.sha }}
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: pnpm nx run gallery:build
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v5
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          path: apps/ui/build/client
+          path: apps/gallery/dist
 
   deploy:
     name: Deploy to GitHub Pages
+    if: ${{ github.repository == 'ahzs645/tau' && github.ref == 'refs/heads/main' }}
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      pages: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Deploy
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

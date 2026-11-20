@@ -7,33 +7,163 @@
  */
 
 type DirectoryEntry = { kind: 'directory'; handle: MockDirectoryHandle };
-type FileEntry = { kind: 'file'; content: Uint8Array<ArrayBuffer>; lastModified: number };
+type FileEntry = {
+  kind: 'file';
+  content: Uint8Array<ArrayBuffer>;
+  lastModified: number;
+  /** OPFS allows one sync access handle per file at a time. */
+  syncHandleOpen?: boolean;
+  /** Modern File System Access allows one exclusive writable at a time. */
+  exclusiveWritableOpen?: boolean;
+};
 type Entry = DirectoryEntry | FileEntry;
 
-class MockWritableStream {
-  private readonly _chunks: Array<Uint8Array<ArrayBuffer>> = [];
-  private readonly _onClose: (data: Uint8Array<ArrayBuffer>) => void;
+/**
+ * Test-visible knobs for {@link createMockRootHandle}.
+ *
+ * @public
+ */
+export type MockRootHandleOptions = {
+  /**
+   * Expose `createSyncAccessHandle()` on file handles (OPFS-only API).
+   * Set `false` to model a browser/test environment without it. Default `true`.
+   */
+  syncAccess?: boolean;
+  /** Maximum bytes one sync-handle write accepts, for short-write tests. */
+  syncWriteLimit?: number;
+  /** Model support for `createWritable({ mode: 'exclusive' })`. Default `true`. */
+  exclusiveWritable?: boolean;
+  /** Called on every write-API acquisition *attempt*, including ones that throw. */
+  onAcquireWriteApi?: (api: 'sync' | 'writable') => void;
+  /**
+   * Expose OPFS's native `FileSystemFileHandle.move(directory, name)`. Default
+   * `false`, the File System Access shape for user-picked roots.
+   */
+  nativeMove?: boolean;
+  /** Called on every native `move()` call, before it resolves or throws. */
+  onMove?: (from: string, to: string) => void;
+};
 
-  public constructor(onClose: (data: Uint8Array<ArrayBuffer>) => void) {
+/** Each directory's child table, so a file handle can move itself between directories. */
+const childrenOf = new WeakMap<MockDirectoryHandle, Map<string, Entry>>();
+
+class MockWritableStream {
+  private _content: Uint8Array<ArrayBuffer>;
+  private _position = 0;
+  private readonly _onClose: (data: Uint8Array<ArrayBuffer>) => void;
+  private readonly _onRelease: () => void;
+
+  public constructor(
+    initial: Uint8Array<ArrayBuffer>,
+    onClose: (data: Uint8Array<ArrayBuffer>) => void,
+    onRelease: () => void,
+  ) {
+    this._content = new Uint8Array(initial);
     this._onClose = onClose;
+    this._onRelease = onRelease;
   }
 
-  public async write(data: Uint8Array<ArrayBuffer> | BufferSource): Promise<void> {
-    const view = ArrayBuffer.isView(data)
-      ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
-      : new Uint8Array(data);
-    this._chunks.push(view);
+  public async write(data: FileSystemWriteChunkType): Promise<void> {
+    const command =
+      typeof data === 'object' &&
+      'type' in data &&
+      (data.type === 'write' || data.type === 'seek' || data.type === 'truncate')
+        ? (data as WriteParams)
+        : undefined;
+    if (command?.type === 'seek') {
+      if (typeof command.position !== 'number') {
+        throw new TypeError('seek requires a position');
+      }
+      this._position = command.position;
+      return;
+    }
+    if (command?.type === 'truncate') {
+      if (typeof command.size !== 'number') {
+        throw new TypeError('truncate requires a size');
+      }
+      this._resize(command.size);
+      return;
+    }
+    const payload = command?.type === 'write' ? command.data : data;
+    const view = ArrayBuffer.isView(payload)
+      ? new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength)
+      : payload instanceof Blob
+        ? new Uint8Array(await payload.arrayBuffer())
+        : typeof payload === 'string'
+          ? new TextEncoder().encode(payload)
+          : payload instanceof ArrayBuffer
+            ? new Uint8Array(payload)
+            : (() => {
+                throw new TypeError('write requires data');
+              })();
+    const position =
+      command?.type === 'write' && typeof command.position === 'number' ? command.position : this._position;
+    if (position + view.byteLength > this._content.byteLength) {
+      this._resize(position + view.byteLength);
+    }
+    this._content.set(view, position);
+    this._position = position + view.byteLength;
   }
 
   public async close(): Promise<void> {
-    const totalLength = this._chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-    const merged = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const chunk of this._chunks) {
-      merged.set(chunk, offset);
-      offset += chunk.byteLength;
+    this._onClose(this._content);
+    this._onRelease();
+  }
+
+  public async abort(): Promise<void> {
+    this._onRelease();
+  }
+
+  private _resize(size: number): void {
+    const next = new Uint8Array(size);
+    next.set(this._content.subarray(0, Math.min(size, this._content.byteLength)));
+    this._content = next;
+  }
+}
+
+class MockSyncAccessHandle {
+  private readonly _entry: FileEntry;
+  private readonly _writeLimit: number;
+
+  public constructor(entry: FileEntry, writeLimit: number) {
+    this._entry = entry;
+    this._writeLimit = writeLimit;
+    entry.syncHandleOpen = true;
+  }
+
+  public getSize(): number {
+    return this._entry.content.byteLength;
+  }
+
+  public truncate(size: number): void {
+    const next = new Uint8Array(size);
+    next.set(this._entry.content.subarray(0, Math.min(size, this._entry.content.byteLength)));
+    this._entry.content = next;
+  }
+
+  public write(data: BufferSource, options?: { at?: number }): number {
+    const view = ArrayBuffer.isView(data)
+      ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+      : new Uint8Array(data);
+    const written = Math.min(view.byteLength, this._writeLimit);
+    const at = options?.at ?? 0;
+    if (at + written > this._entry.content.byteLength) {
+      const grown = new Uint8Array(at + written);
+      grown.set(this._entry.content);
+      this._entry.content = grown;
     }
-    this._onClose(merged);
+    this._entry.content.set(view.subarray(0, written), at);
+    if (written > 0) {
+      this._entry.lastModified = Date.now();
+    }
+    return written;
+  }
+
+  // oxlint-disable-next-line no-empty-function -- Mock storage is already coherent; flush has nothing to push.
+  public flush(): void {}
+
+  public close(): void {
+    this._entry.syncHandleOpen = false;
   }
 }
 
@@ -44,24 +174,96 @@ class MockFileHandle {
 
   // oxlint-disable-next-line @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties
   public readonly name: string;
+  /**
+   * Own property, present only when the mock models OPFS. Providers
+   * feature-detect with `typeof handle.createSyncAccessHandle === 'function'`,
+   * so absence has to be real absence, not a stubbed method.
+   */
+  public createSyncAccessHandle?: () => Promise<MockSyncAccessHandle>;
+  /** Own property, present only when {@link MockRootHandleOptions.nativeMove} is set. */
+  public move?: (destination: MockDirectoryHandle, name: string) => Promise<void>;
   private readonly _entry: FileEntry;
+  private readonly _options: MockRootHandleOptions;
+  private readonly _parent: Map<string, Entry>;
 
-  public constructor(name: string, entry: FileEntry) {
+  public constructor(
+    name: string,
+    entry: FileEntry,
+    { options, parent }: { options: MockRootHandleOptions; parent: Map<string, Entry> },
+  ) {
     this.name = name;
     this._entry = entry;
+    this._options = options;
+    this._parent = parent;
+    if (options.nativeMove === true) {
+      this.move = async (destination, newName): Promise<void> => {
+        options.onMove?.(name, newName);
+        const target = childrenOf.get(destination);
+        if (target === undefined) {
+          throw new TypeError('move() requires a directory handle');
+        }
+        if (parent.get(name) !== entry) {
+          throw new DOMException(`File not found: ${name}`, 'NotFoundError');
+        }
+        if (entry.syncHandleOpen === true || entry.exclusiveWritableOpen === true) {
+          throw new DOMException(`File is locked: ${name}`, 'NoModificationAllowedError');
+        }
+        if (target.get(newName)?.kind === 'directory') {
+          throw new DOMException(`Is a directory: ${newName}`, 'InvalidModificationError');
+        }
+        // Chromium's OPFS move replaces an existing file at the destination.
+        parent.delete(name);
+        target.set(newName, entry);
+      };
+    }
+    if (options.syncAccess !== false) {
+      this.createSyncAccessHandle = async (): Promise<MockSyncAccessHandle> => {
+        options.onAcquireWriteApi?.('sync');
+        if (entry.syncHandleOpen === true || entry.exclusiveWritableOpen === true) {
+          throw new DOMException(`Sync access handle already open: ${name}`, 'NoModificationAllowedError');
+        }
+        return new MockSyncAccessHandle(entry, options.syncWriteLimit ?? Number.POSITIVE_INFINITY);
+      };
+    }
   }
 
   public async getFile(): Promise<File> {
+    if (this._parent.get(this.name) !== this._entry) {
+      throw new DOMException(`File not found: ${this.name}`, 'NotFoundError');
+    }
     return new File([this._entry.content], this.name, {
       lastModified: this._entry.lastModified,
     });
   }
 
-  public async createWritable(): Promise<MockWritableStream> {
-    return new MockWritableStream((data) => {
-      this._entry.content = data;
-      this._entry.lastModified = Date.now();
-    });
+  public async createWritable(options?: {
+    keepExistingData?: boolean;
+    mode?: 'exclusive' | 'siloed';
+  }): Promise<MockWritableStream> {
+    this._options.onAcquireWriteApi?.('writable');
+    if (this._entry.syncHandleOpen === true || this._entry.exclusiveWritableOpen === true) {
+      throw new DOMException(`Exclusive writable already open: ${this.name}`, 'NoModificationAllowedError');
+    }
+    const exclusive = options?.mode === 'exclusive' && this._options.exclusiveWritable !== false;
+    if (exclusive) {
+      this._entry.exclusiveWritableOpen = true;
+    }
+    return new MockWritableStream(
+      options?.keepExistingData ? this._entry.content : new Uint8Array(),
+      (data) => {
+        this._entry.content = data;
+        this._entry.lastModified = Date.now();
+      },
+      () => {
+        if (exclusive) {
+          this._entry.exclusiveWritableOpen = false;
+        }
+      },
+    );
+  }
+
+  public async isSameEntry(other: FileSystemHandle): Promise<boolean> {
+    return other instanceof MockFileHandle && other._entry === this._entry;
   }
 }
 
@@ -72,16 +274,26 @@ class MockDirectoryHandle {
 
   // oxlint-disable-next-line @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties
   public readonly name: string;
-  private readonly _children = new Map<string, Entry>();
+  private readonly _children: Map<string, Entry>;
+  private readonly _identity: Record<string, never>;
+  private readonly _options: MockRootHandleOptions;
 
-  public constructor(name: string) {
+  public constructor(
+    name: string,
+    options: MockRootHandleOptions = {},
+    shared: { identity?: Record<string, never>; children?: Map<string, Entry> } = {},
+  ) {
     this.name = name;
+    this._options = options;
+    this._identity = shared.identity ?? {};
+    this._children = shared.children ?? new Map<string, Entry>();
+    childrenOf.set(this, this._children);
   }
 
   public async getFileHandle(name: string, options?: { create?: boolean }): Promise<MockFileHandle> {
     const existing = this._children.get(name);
     if (existing?.kind === 'file') {
-      return new MockFileHandle(name, existing);
+      return new MockFileHandle(name, existing, { options: this._options, parent: this._children });
     }
     if (existing) {
       throw new DOMException('Is a directory', 'TypeMismatchError');
@@ -89,7 +301,7 @@ class MockDirectoryHandle {
     if (options?.create) {
       const entry: FileEntry = { kind: 'file', content: new Uint8Array(0), lastModified: Date.now() };
       this._children.set(name, entry);
-      return new MockFileHandle(name, entry);
+      return new MockFileHandle(name, entry, { options: this._options, parent: this._children });
     }
     throw new DOMException(`File not found: ${name}`, 'NotFoundError');
   }
@@ -103,30 +315,56 @@ class MockDirectoryHandle {
       throw new DOMException('Is a file', 'TypeMismatchError');
     }
     if (options?.create) {
-      const handle = new MockDirectoryHandle(name);
+      const handle = new MockDirectoryHandle(name, this._options);
       this._children.set(name, { kind: 'directory', handle });
       return handle;
     }
     throw new DOMException(`Directory not found: ${name}`, 'NotFoundError');
   }
 
-  public async removeEntry(name: string, _options?: { recursive?: boolean }): Promise<void> {
-    if (!this._children.has(name)) {
+  public async removeEntry(name: string, options?: { recursive?: boolean }): Promise<void> {
+    const entry = this._children.get(name);
+    if (!entry) {
       throw new DOMException(`Entry not found: ${name}`, 'NotFoundError');
+    }
+    if (entry.kind === 'directory' && !options?.recursive && entry.handle._children.size > 0) {
+      throw new DOMException(`Directory not empty: ${name}`, 'InvalidModificationError');
     }
     this._children.delete(name);
   }
 
   public async *entries(): AsyncGenerator<[string, MockFileHandle | MockDirectoryHandle]> {
     for (const [name, entry] of this._children) {
-      yield entry.kind === 'file' ? [name, new MockFileHandle(name, entry)] : [name, entry.handle];
+      yield entry.kind === 'file'
+        ? [name, new MockFileHandle(name, entry, { options: this._options, parent: this._children })]
+        : [name, entry.handle];
     }
+  }
+
+  public async *keys(): AsyncGenerator<string> {
+    for (const name of this._children.keys()) {
+      yield name;
+    }
+  }
+
+  public async isSameEntry(other: FileSystemHandle): Promise<boolean> {
+    return other instanceof MockDirectoryHandle && other._identity === this._identity;
+  }
+
+  /**
+   * Create another JS wrapper for the same in-memory directory entry.
+   *
+   * @returns A handle wrapper sharing this directory's identity and children.
+   */
+  public clone(): MockDirectoryHandle {
+    return new MockDirectoryHandle(this.name, this._options, { identity: this._identity, children: this._children });
   }
 }
 
 /**
  * Create a mock `FileSystemDirectoryHandle` root for testing.
  *
+ * @param options - Sync-access-handle availability and write-API observation.
  * @returns A root handle that implements the File System Access API
  *          contract using in-memory storage.
  *
@@ -136,6 +374,6 @@ class MockDirectoryHandle {
  * const provider = new FileSystemAccessProvider(root as unknown as FileSystemDirectoryHandle);
  * ```
  */
-export function createMockRootHandle(): MockDirectoryHandle {
-  return new MockDirectoryHandle('root');
+export function createMockRootHandle(options: MockRootHandleOptions = {}): MockDirectoryHandle {
+  return new MockDirectoryHandle('root', options);
 }

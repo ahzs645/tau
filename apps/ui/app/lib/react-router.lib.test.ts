@@ -1,28 +1,85 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { throwRedirectIfSubdomain } from '#lib/react-router.lib.js';
 
+/**
+ * The homepage is the one SSR route whose CDN policy lives in `netlify.toml`
+ * rather than in a route `headers` export — React Router SPA mode (the
+ * `ui:build:desktop` config) bans that export and `_index/route.tsx` is shared
+ * by both builds. This test prevents shared caching from replaying the wrong
+ * app/website document after the visitor's entry preference changes.
+ */
+const readNetlifyHomepageHeaders = (): Record<string, string> => {
+  const toml = readFileSync(resolve(import.meta.dirname, '../../netlify.toml'), 'utf8');
+  const block = toml
+    .split('[[headers]]')
+    .slice(1)
+    .find((chunk) => /^for = "\/"$/mu.test(chunk));
+  if (block === undefined) {
+    throw new Error('netlify.toml has no [[headers]] block for "/"');
+  }
+
+  const headers: Record<string, string> = {};
+  for (const line of block.slice(block.indexOf('[headers.values]')).split('\n').slice(1)) {
+    const match = /^([\w-]+) = "(.*)"$/u.exec(line);
+    if (!match) {
+      break;
+    }
+    headers[match[1]!] = match[2]!;
+  }
+  return headers;
+};
+
+describe('netlify.toml homepage cache policy', () => {
+  it('prevents browser and shared CDN caching of either root document', () => {
+    expect(readNetlifyHomepageHeaders()).toStrictEqual({
+      'Cache-Control': 'private, no-store',
+      'CDN-Cache-Control': 'no-store',
+      'Netlify-CDN-Cache-Control': 'no-store',
+    });
+  });
+});
+
+describe('Netlify vendored licence hold', () => {
+  it.each(['build', 'context.production', 'context.deploy-preview', 'context.branch-deploy'])(
+    'should check licences before building artifacts in %s',
+    (context) => {
+      const toml = readFileSync(resolve(import.meta.dirname, '../../netlify.toml'), 'utf8');
+      const section = toml.split(`\n[${context}]\n`)[1]?.split('\n[')[0];
+      expect(section).toContain('pnpm nx run tscircuit:check-vendored-licenses && pnpm nx build ui');
+    },
+  );
+  it('should retain ordinary local development without a distribution check', () => {
+    const toml = readFileSync(resolve(import.meta.dirname, '../../netlify.toml'), 'utf8');
+    const section = toml.split('\n[dev]\n')[1]?.split('\n[')[0];
+    expect(section).toContain('command = "pnpm nx dev ui"');
+    expect(section).not.toContain('check-vendored-licenses');
+  });
+});
+
 describe('redirectIfSubdomain', () => {
   it('should throw a redirect when subdomain matches', () => {
-    const request = new Request('https://www.tau.new/some/path?query=1');
+    const url = new URL('https://www.tau.new/some/path?query=1');
 
     expect(() => {
-      throwRedirectIfSubdomain(request, 'www');
+      throwRedirectIfSubdomain(url, 'www');
     }).toThrow();
   });
 
   it('should not throw when subdomain does not match', () => {
-    const request = new Request('https://tau.new/some/path');
+    const url = new URL('https://tau.new/some/path');
 
     expect(() => {
-      throwRedirectIfSubdomain(request, 'www');
+      throwRedirectIfSubdomain(url, 'www');
     }).not.toThrow();
   });
 
   it('should redirect to apex domain with correct path and query', () => {
-    const request = new Request('https://www.tau.new/some/path?query=1');
+    const url = new URL('https://www.tau.new/some/path?query=1');
 
     try {
-      throwRedirectIfSubdomain(request, 'www');
+      throwRedirectIfSubdomain(url, 'www');
     } catch (error) {
       const response = error as Response;
       expect(response.status).toBe(301);
@@ -31,10 +88,10 @@ describe('redirectIfSubdomain', () => {
   });
 
   it('should use 301 status code by default', () => {
-    const request = new Request('https://www.example.com/');
+    const url = new URL('https://www.example.com/');
 
     try {
-      throwRedirectIfSubdomain(request, 'www');
+      throwRedirectIfSubdomain(url, 'www');
     } catch (error) {
       const response = error as Response;
       expect(response.status).toBe(301);
@@ -42,10 +99,10 @@ describe('redirectIfSubdomain', () => {
   });
 
   it('should use custom status code when provided', () => {
-    const request = new Request('https://www.example.com/');
+    const url = new URL('https://www.example.com/');
 
     try {
-      throwRedirectIfSubdomain(request, 'www', 302);
+      throwRedirectIfSubdomain(url, 'www', 302);
     } catch (error) {
       const response = error as Response;
       expect(response.status).toBe(302);
@@ -53,29 +110,38 @@ describe('redirectIfSubdomain', () => {
   });
 
   it('should handle multi-level subdomains correctly', () => {
-    const request = new Request('https://www.sub.example.com/path');
+    const url = new URL('https://www.sub.example.com/path');
 
     try {
-      throwRedirectIfSubdomain(request, 'www');
+      throwRedirectIfSubdomain(url, 'www');
     } catch (error) {
       const response = error as Response;
       expect(response.headers.get('Location')).toBe('https://sub.example.com/path');
     }
   });
 
-  it('should not redirect when a different subdomain is specified', () => {
-    const request = new Request('https://www.example.com/');
+  it('should leave the URL it was given unchanged', () => {
+    const url = new URL('https://www.tau.new/some/path');
 
     expect(() => {
-      throwRedirectIfSubdomain(request, 'api');
+      throwRedirectIfSubdomain(url, 'www');
+    }).toThrow();
+    expect(url.href).toBe('https://www.tau.new/some/path');
+  });
+
+  it('should not redirect when a different subdomain is specified', () => {
+    const url = new URL('https://www.example.com/');
+
+    expect(() => {
+      throwRedirectIfSubdomain(url, 'api');
     }).not.toThrow();
   });
 
   it('should redirect other subdomains when specified', () => {
-    const request = new Request('https://api.example.com/v1/users');
+    const url = new URL('https://api.example.com/v1/users');
 
     try {
-      throwRedirectIfSubdomain(request, 'api');
+      throwRedirectIfSubdomain(url, 'api');
     } catch (error) {
       const response = error as Response;
       expect(response.headers.get('Location')).toBe('https://example.com/v1/users');

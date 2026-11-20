@@ -1,0 +1,20 @@
+{
+  "title": "Replicad tray",
+  "entry": "main.ts",
+  "kernel": "Replicad",
+  "language": "typescript",
+  "description": "Editable rounded tray using Tau’s Replicad kernel.",
+  "exportFormats": [
+    "step",
+    "stl",
+    "glb"
+  ],
+  "initialParameters": {
+    "width": 90,
+    "depth": 55,
+    "height": 18,
+    "wall": 3,
+    "radius": 6,
+    "style": "open"
+  }
+}

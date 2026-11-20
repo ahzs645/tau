@@ -1,36 +1,16 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
+import { appStartUrl, homeAppEntry } from '#lib/route-classes.js';
 import { loader } from '#routes/manifest[.webmanifest].js';
 
-describe('webmanifest route', () => {
-  it('uses root-relative asset paths for root deployments', async () => {
-    const manifest = await loadManifest('https://tau.test/manifest.webmanifest');
+describe('manifest.webmanifest', () => {
+  it('should launch the installed app into Home under a stable identity (PL7)', async () => {
+    const response = (await loader({} as Parameters<typeof loader>[0])) as Response;
+    const manifest = (await response.json()) as Record<string, unknown>;
 
-    expect(manifest.start_url).toBe('/');
-    expect(manifest.icons[0]?.src).toBe('/android-chrome-192x192.png');
-    expect(manifest.icons[1]?.src).toBe('/android-chrome-512x512.png');
-  });
-
-  it('uses basename-relative asset paths for GitHub Pages deployments', async () => {
-    const manifest = await loadManifest('https://3dd.ahmadjalil.com/tau/manifest.webmanifest');
-
-    expect(manifest.start_url).toBe('/tau/');
-    expect(manifest.icons[0]?.src).toBe('/tau/android-chrome-192x192.png');
-    expect(manifest.icons[1]?.src).toBe('/tau/android-chrome-512x512.png');
+    expect([manifest['start_url'], manifest['id'], manifest['scope']]).toStrictEqual([appStartUrl, '/', '/']);
+    // The start URL is Home even for a visitor with no `tau-entry` preference, so the worker answers it offline.
+    expect(homeAppEntry(new URL(appStartUrl, 'https://tau.new').searchParams, undefined)).toBe(true);
+    expect(response.headers.get('content-type')).toBe('application/manifest+json');
   });
 });
-
-async function loadManifest(url: string): Promise<{
-  start_url: string;
-  icons: Array<{ src: string }>;
-}> {
-  const response = loader({
-    request: new Request(url),
-    params: {},
-    context: {},
-  } as Parameters<typeof loader>[0]);
-
-  return (await response.json()) as {
-    start_url: string;
-    icons: Array<{ src: string }>;
-  };
-}

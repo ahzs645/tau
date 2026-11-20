@@ -1,49 +1,28 @@
-import { Link, Outlet, redirect, useLocation, useNavigate } from 'react-router';
-import { useEffect } from 'react';
-import type { LoaderFunction } from 'react-router';
-import { Button } from '#components/ui/button.js';
+/**
+ * `/projects` — the project library (blueprint L3). It used to redirect to `/`
+ * and host the library one level down under a `library` child; the page grammar
+ * collapsed onto this route and `/projects/new` is the only child left.
+ */
+import { Outlet, useLocation } from 'react-router';
+import type { MetaFunction } from 'react-router';
+import { NewProjectLink, ProjectLibrary } from '#components/project-library/project-library.js';
 import type { Handle } from '#types/matches.types.js';
-import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
-import { KeyShortcut } from '#components/ui/key-shortcut.js';
-import { formatKeyCombination } from '#utils/keys.utils.js';
+
+export const meta: MetaFunction = () => [{ title: 'Projects · Tau' }];
 
 export const handle: Handle = {
-  breadcrumb() {
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button asChild variant='ghost'>
-            <Link to='/projects/library'>Projects</Link>
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent className='flex items-center gap-2 align-baseline'>
-          View all projects{` `}
-          <KeyShortcut variant='tooltip'>{formatKeyCombination({ key: 'b', ctrlKey: true })}</KeyShortcut>
-        </TooltipContent>
-      </Tooltip>
-    );
-  },
+  title: 'Projects',
+  // D11 (PG-PROJ-1): New project in the phone top bar at 40px; from `md` up it stays in the title row.
+  actions: () => <NewProjectLink size='lg' />,
+  actionsScope: 'phone',
 };
 
-export const loader: LoaderFunction = async ({ request }) => {
-  const url = new URL(request.url);
-  if (url.pathname === '/projects') {
-    return redirect('/');
-  }
-
-  return null;
-};
-
-// We want to redirect to the new project page if the user navigates to the projects route
 export default function Projects(): React.JSX.Element {
-  const navigate = useNavigate();
   const location = useLocation();
-
-  useEffect(() => {
-    if (location.pathname === '/projects') {
-      void navigate('/');
-    }
-  }, [navigate, location.pathname]);
-
-  return <Outlet />;
+  if (location.pathname !== '/projects') {
+    return <Outlet />;
+  }
+  /* One list (D20): the library lists this account's Tau Cloud projects beside
+     this device's own, so there is no second *From Tau Cloud* section. */
+  return <ProjectLibrary />;
 }

@@ -1,52 +1,154 @@
 /* oxlint-disable new-cap -- NestJS decorators use PascalCase */
-import { Body, Controller, Post, HttpCode, UseGuards } from '@nestjs/common';
-import { IngestEntryName, AttributeKey } from '@taucad/telemetry';
-import type { ClientMetricEntry } from '@taucad/telemetry';
-import { AuthGuard } from '#auth/auth.guard.js';
-import { MetricsService } from '#telemetry/metrics.js';
+import { Body, Controller, Get, Post, Req, Res, UseGuards } from '@nestjs/common';
+import {
+  IngestEntryName,
+  AttributeKey,
+  knownAgentIds,
+  retiredIngestEntryNames,
+  runtimeEntryNames,
+  workerTimingSpanNames,
+} from '@taucad/telemetry';
+import type { AgentTurnContext, ClientMetricEntry, IngestReceipt, TelemetryPolicyAnswer } from '@taucad/telemetry';
+import type { FastifyReply, FastifyRequest } from 'fastify';
+import { AuthGuard, OptionalAuth, OptionalUser, PublicAuth } from '@taucad/api-auth';
+import { MetricsService } from '@taucad/api-observability/metrics';
 import { IngestPayloadDto } from '#api/telemetry/telemetry.dto.js';
+import { RuntimeIngestService } from '#api/telemetry/runtime-ingest.service.js';
+
+const maximumSyncLagMilliseconds = 24 * 60 * 60 * 1000;
+const maximumSyncPending = 10_000;
+/* A push or pull is aborted at its 15-minute deadline; an hour bounds a skewed client clock. */
+const maximumSyncAttemptMilliseconds = 60 * 60 * 1000;
+/* The batch API's ceiling per call is a thousand objects; no tree read a browser can hold is a hundred times that. */
+const maximumLfsObjects = 100_000;
+/* A tree read holds every byte it returns in memory, so 64 GiB bounds a corrupt report, not a real one. */
+const maximumLfsBytes = 64 * 1024 * 1024 * 1024;
 
 /**
  * Receives batched telemetry from the client runtime (web workers).
- * Metrics are reported directly from the observability middleware via fetch().
+ * Kernel metrics arrive as runtime operation entries (`RuntimeIngestService`); the other entry kinds keep their own handlers.
  */
 @UseGuards(AuthGuard)
 @Controller({ path: 'telemetry', version: '1' })
 export class TelemetryController {
-  public constructor(private readonly metrics: MetricsService) {}
+  public constructor(
+    private readonly metrics: MetricsService,
+    private readonly runtimeIngest: RuntimeIngestService,
+  ) {}
 
+  /**
+   * Record a batch of client metrics and runtime entries.
+   *
+   * Legacy client metric entries keep today's behaviour exactly: recorded only
+   * for a signed-in request, untouched by the runtime gate, budgets and dedupe
+   * (AR-W5-09). A batch with no runtime entries and no batch id answers 204 as
+   * before. Runtime entries go through the runtime ingest, which records
+   * signed-out batches too under its own abuse controls, and answer 200 with a
+   * receipt (or 400, 413, 425, 429). A retired entry (`retiredIngestEntryNames`)
+   * is dropped unrecorded, so a batch of only retired entries answers 204.
+   *
+   * @param body - The validated batch.
+   * @param userId - The signed-in user, when there is one.
+   * @param request - The request (address and body size).
+   * @param reply - The reply, for the status and `Retry-After`.
+   * @returns The receipt, for a batch that carries runtime entries.
+   */
+  // eslint-disable-next-line max-params-no-constructor/max-params-no-constructor -- Nest parameter decorators bind body, session user, request and reply independently.
   @Post('ingest')
-  @HttpCode(204)
-  public ingest(@Body() body: IngestPayloadDto): void {
+  @OptionalAuth()
+  public async ingest(
+    @Body() body: IngestPayloadDto,
+    @OptionalUser('id') userId: string | undefined,
+    @Req() request: FastifyRequest,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ): Promise<IngestReceipt | undefined> {
+    const legacy: ClientMetricEntry[] = [];
+    const runtime: unknown[] = [];
     for (const entry of body.entries) {
-      this.recordEntry(entry, entry.duration / 1000);
+      if (retiredNames.has(entry.name)) {
+        /* A stale client's retired entry is admitted so its batch is not refused, and dropped unrecorded. */
+        continue;
+      }
+      if (isLegacyEntry(entry)) {
+        legacy.push(entry);
+      } else {
+        runtime.push(entry);
+      }
     }
+    if (userId !== undefined) {
+      for (const entry of legacy) {
+        this.recordEntry(entry, entry.duration / 1000);
+      }
+    }
+    if (runtime.length === 0 && body.batch === undefined) {
+      void reply.status(204);
+      return undefined;
+    }
+    const declared = Number(request.headers['content-length']);
+    const result = await this.runtimeIngest.ingest({
+      batch: body.batch,
+      entries: runtime,
+      principal: userId,
+      ip: request.ip,
+      requestId: request.id,
+      bodyBytes: Number.isFinite(declared) ? declared : Buffer.byteLength(JSON.stringify(body)),
+      now: new Date(),
+    });
+    void reply.status(result.status);
+    if (result.retryAfterSeconds !== undefined) {
+      void reply.header('retry-after', String(result.retryAfterSeconds));
+    }
+    return result.receipt;
+  }
+
+  /**
+   * The entry-free policy probe (AR-W17-02): what this deployment does with runtime entries and how long a client may
+   * cache the answer. No body, no entry and no session: the answer is the same for everyone, so the route is public
+   * and its shared `max-age` never accompanies a session cookie.
+   *
+   * @param reply - The reply, for `Cache-Control`.
+   * @returns The policy answer.
+   */
+  @Get('policy')
+  @PublicAuth()
+  public policy(@Res({ passthrough: true }) reply: FastifyReply): TelemetryPolicyAnswer {
+    const answer = this.runtimeIngest.policy(new Date());
+    void reply.header('cache-control', `max-age=${String(answer.maxAge)}`);
+    return answer;
   }
 
   private recordEntry(entry: ClientMetricEntry, durationSeconds: number): void {
     switch (entry.name) {
-      case IngestEntryName.KERNEL_CREATE_GEOMETRY: {
-        this.recordKernelCreate(entry, durationSeconds);
+      case IngestEntryName.AGENT_SESSION: {
+        this.recordAgentSession(entry);
         return;
       }
-      case IngestEntryName.KERNEL_EXPORT_GEOMETRY: {
-        this.recordKernelExport(entry, durationSeconds);
+      case IngestEntryName.AGENT_TURN: {
+        this.recordAgentTurn(entry, durationSeconds);
         return;
       }
-      case IngestEntryName.WEBSOCKET_RECONNECTION: {
-        this.recordWebsocketReconnection(entry, durationSeconds);
+      case IngestEntryName.SYNC_ATTEMPT: {
+        this.recordSyncAttempt(entry);
         return;
       }
-      case IngestEntryName.EDITOR_LOAD: {
-        this.recordEditorLoad(entry, durationSeconds);
+      case IngestEntryName.LFS_FETCH: {
+        this.recordLfsFetch(entry);
         return;
       }
-      case IngestEntryName.WASM_MODULE_LOAD: {
-        this.recordWasmModuleLoad(entry, durationSeconds);
+      case IngestEntryName.PROJECT_OPEN: {
+        this.recordProjectOpen(entry);
         return;
       }
-      case IngestEntryName.INDEXEDDB_OPERATION: {
-        this.recordIndexedDbOperation(entry, durationSeconds);
+      case IngestEntryName.KERNEL_AUTO_RESOLVED: {
+        this.recordKernelAutoResolved(entry);
+        return;
+      }
+      case IngestEntryName.KERNEL_OVERRIDE: {
+        this.recordKernelOverride(entry);
+        return;
+      }
+      case IngestEntryName.KERNEL_FIRST_OUTCOME: {
+        this.recordKernelFirstOutcome(entry);
         return;
       }
       default: {
@@ -56,61 +158,264 @@ export class TelemetryController {
     }
   }
 
-  private recordKernelCreate(
-    entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.KERNEL_CREATE_GEOMETRY }>,
-    durationSeconds: number,
-  ): void {
-    const status = entry.detail?.status ?? 'unknown';
-    this.metrics.kernelExecutionDuration.record(durationSeconds, { [AttributeKey.KERNEL_STATUS]: status });
-    this.metrics.kernelExecutions.add(1, { [AttributeKey.KERNEL_STATUS]: status });
-  }
-
-  private recordKernelExport(
-    entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.KERNEL_EXPORT_GEOMETRY }>,
-    durationSeconds: number,
-  ): void {
-    const status = entry.detail?.status ?? 'unknown';
-    const format = entry.detail?.exportFormat ?? 'unknown';
-    this.metrics.kernelExportDuration.record(durationSeconds, {
-      [AttributeKey.KERNEL_STATUS]: status,
-      [AttributeKey.EXPORT_FORMAT]: format,
+  private recordAgentSession(entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.AGENT_SESSION }>): void {
+    const { agentId, placement, outcome } = entry.detail;
+    this.metrics.agentSessions.add(1, {
+      [AttributeKey.AGENT_ID]: recordedAgentId(agentId),
+      [AttributeKey.AGENT_PLACEMENT]: placement,
+      [AttributeKey.AGENT_OUTCOME]: outcome,
     });
   }
 
-  private recordWebsocketReconnection(
-    entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.WEBSOCKET_RECONNECTION }>,
+  private recordAgentTurn(
+    entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.AGENT_TURN }>,
     durationSeconds: number,
   ): void {
-    this.metrics.wsReconnectionDuration.record(durationSeconds, {
-      [AttributeKey.WS_RECONNECTION_ATTEMPT]: entry.detail?.attempt ?? 0,
+    const {
+      placement,
+      outcome,
+      errorCode,
+      timeToFirstUpdate,
+      toolCalls,
+      tokens,
+      safeguards,
+      compactions,
+      prefixBreaks,
+      context,
+    } = entry.detail;
+    const agent = { [AttributeKey.AGENT_ID]: recordedAgentId(entry.detail.agentId) };
+    const placed = { ...agent, [AttributeKey.AGENT_PLACEMENT]: placement };
+    const turn = { ...placed, [AttributeKey.AGENT_OUTCOME]: outcome };
+    /* Q7: only the turn counter gains the kernel; a context-less turn keeps today's label set. */
+    this.metrics.agentTurns.add(1, context ? { ...turn, [AttributeKey.KERNEL_ID]: context.kernelId } : turn);
+    this.metrics.agentTurnDuration.record(durationSeconds, turn);
+    if (timeToFirstUpdate !== undefined) {
+      this.metrics.agentTimeToFirstUpdate.record(timeToFirstUpdate / 1000, placed);
+    }
+    for (const call of toolCalls ?? []) {
+      this.metrics.agentToolCalls.add(call.count, {
+        ...agent,
+        [AttributeKey.AGENT_TOOL_KIND]: call.kind,
+        ...(call.tool === undefined ? {} : { [AttributeKey.AGENT_TOOL_NAME]: call.tool }),
+        [AttributeKey.AGENT_TOOL_STATUS]: call.status,
+      });
+    }
+    if (tokens !== undefined) {
+      const byType = [
+        ['input', tokens.input],
+        ['output', tokens.output],
+        ['cache_read', tokens.cacheRead],
+        ['cache_write', tokens.cacheWrite],
+      ] as const;
+      for (const [tokenType, count] of byType) {
+        /* A type the agent never uses (Codex reports no cache writes) mints no series. */
+        if (count > 0) {
+          this.metrics.agentTokens.add(count, { ...agent, [AttributeKey.AGENT_TOKEN_TYPE]: tokenType });
+        }
+      }
+    }
+    for (const { pattern, action, count } of safeguards ?? []) {
+      this.metrics.agentSafeguardInterventions.add(count, {
+        ...agent,
+        [AttributeKey.AGENT_SAFEGUARD_PATTERN]: pattern,
+        [AttributeKey.AGENT_SAFEGUARD_ACTION]: action,
+      });
+    }
+    for (const { lane, tier, outcome: compactionOutcome, count } of compactions ?? []) {
+      this.metrics.agentCompactions.add(count, {
+        ...agent,
+        [AttributeKey.AGENT_COMPACTION_LANE]: lane,
+        [AttributeKey.AGENT_COMPACTION_TIER]: tier,
+        [AttributeKey.AGENT_COMPACTION_OUTCOME]: compactionOutcome,
+      });
+    }
+    for (const { cause, provider, outcome: cacheOutcome, count, reasoningOmitted } of prefixBreaks ?? []) {
+      const broken = { ...agent, [AttributeKey.AGENT_PREFIX_BREAK_CAUSE]: cause };
+      this.metrics.agentPrefixBreaks.add(count, {
+        ...broken,
+        [AttributeKey.GEN_AI_PROVIDER_NAME]: provider,
+        'tau.prompt_cache.outcome': cacheOutcome ?? 'unreported',
+      });
+      if (reasoningOmitted > 0) {
+        this.metrics.agentReasoningOmittedBlocks.add(reasoningOmitted, broken);
+      }
+    }
+    if (errorCode !== undefined && (outcome === 'error' || outcome === 'refused')) {
+      this.metrics.agentErrors.add(1, { ...agent, [AttributeKey.AGENT_ERROR_CODE]: errorCode });
+    }
+    if (context !== undefined) {
+      this.recordAgentContext(agent, context);
+    }
+  }
+
+  private recordAgentContext(agent: Readonly<Record<string, string>>, context: AgentTurnContext): void {
+    const kernel = { ...agent, [AttributeKey.KERNEL_ID]: context.kernelId };
+    if (context.callsBeforeFirstModelWrite !== undefined) {
+      this.metrics.agentCallsBeforeFirstWrite.record(context.callsBeforeFirstModelWrite, kernel);
+    }
+    if (context.timeToFirstModelWrite !== undefined) {
+      this.metrics.agentTimeToFirstWrite.record(context.timeToFirstModelWrite / 1000, kernel);
+    }
+    for (const { outcome, count } of context.referenceLookups) {
+      this.metrics.agentReferenceLookups.add(count, { ...kernel, [AttributeKey.AGENT_LOOKUP_OUTCOME]: outcome });
+    }
+    if (context.referenceBytesRead !== undefined) {
+      this.metrics.agentReferenceBytes.record(context.referenceBytesRead, kernel);
+    }
+    for (const skill of new Set(context.skillsActivated)) {
+      this.metrics.agentSkillActivations.add(1, { ...agent, [AttributeKey.AGENT_SKILL]: skill });
+    }
+    for (const evaluation of context.evaluations) {
+      this.metrics.agentEvaluations.add(evaluation.count, {
+        ...kernel,
+        [AttributeKey.AGENT_EVALUATION_CLASS]: evaluation.class,
+      });
+    }
+    this.metrics.agentCorrectionsAfterError.record(context.correctionsAfterError, kernel);
+    if (context.geospec !== undefined) {
+      const { passed, failed, runStatuses } = context.geospec;
+      for (const [result, count] of [
+        ['passed', passed],
+        ['failed', failed],
+      ] as const) {
+        if (count > 0) {
+          this.metrics.agentGeospecAssertions.add(count, { ...agent, [AttributeKey.AGENT_ASSERTION_RESULT]: result });
+        }
+      }
+      for (const { status, count } of runStatuses) {
+        this.metrics.agentGeospecRuns.add(count, { ...agent, [AttributeKey.AGENT_RUN_STATUS]: status });
+      }
+    }
+  }
+
+  private recordSyncAttempt(entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.SYNC_ATTEMPT }>): void {
+    const { direction, outcome, placement, lagMilliseconds, lagSince, pending } = entry.detail;
+    const attributes = { 'agent.placement': placement };
+    this.metrics.syncClientAttempts.add(1, { direction, outcome, ...attributes });
+    /* A client clock or a corrupt queue must not stretch the histograms: clamp to an hour, a day and a bounded depth. */
+    this.metrics.syncClientAttemptDuration.record(Math.min(entry.duration, maximumSyncAttemptMilliseconds) / 1000, {
+      direction,
+      outcome,
+      ...attributes,
+    });
+    if (lagMilliseconds !== undefined) {
+      /* A client older than `lagSince` reported lag only from a change or a queued entry. */
+      this.metrics.syncClientLag.record(Math.min(lagMilliseconds, maximumSyncLagMilliseconds) / 1000, {
+        ...attributes,
+        'sync.lag.since': lagSince ?? 'change',
+      });
+    }
+    if (pending !== undefined) {
+      this.metrics.syncClientPending.record(Math.min(pending, maximumSyncPending), attributes);
+    }
+  }
+
+  private recordLfsFetch(entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.LFS_FETCH }>): void {
+    const { placement, networkObjects, networkBytes, localObjects, localBytes, transport, spans } = entry.detail;
+    this.recordWorkerSpans('lfs_fetch', spans);
+    const attributes = { 'agent.placement': placement };
+    this.metrics.syncClientLfsDuration.record(Math.min(entry.duration, maximumSyncAttemptMilliseconds) / 1000, {
+      ...attributes,
+      cache: localObjects === 0 ? 'cold' : 'partial',
+      /* Files service blueprint §4: p75 by transport compares the files host with presigned R2. */
+      ...(transport === undefined ? {} : { [AttributeKey.LFS_TRANSPORT]: transport }),
+    });
+    for (const [source, objects, bytes] of [
+      ['network', networkObjects, networkBytes],
+      ['local', localObjects, localBytes],
+    ] as const) {
+      /* A source the read never used mints no series. */
+      if (objects > 0) {
+        this.metrics.syncClientLfsObjects.add(Math.min(objects, maximumLfsObjects), { ...attributes, source });
+        this.metrics.syncClientLfsBytes.add(Math.min(bytes, maximumLfsBytes), { ...attributes, source });
+      }
+    }
+  }
+
+  /** Each worker span's total over one entry's window, as its own sample; a span that never ran mints nothing. */
+  private recordWorkerSpans(
+    stage: 'first_view' | 'fully_fetched' | 'lfs_fetch',
+    spans: Readonly<Partial<Record<(typeof workerTimingSpanNames)[number], number>>> | undefined,
+  ): void {
+    for (const span of workerTimingSpanNames) {
+      const milliseconds = spans?.[span];
+      if (milliseconds !== undefined) {
+        this.metrics.projectOpenSpanDuration.record(Math.min(milliseconds, maximumSyncAttemptMilliseconds) / 1000, {
+          stage,
+          span,
+        });
+      }
+    }
+  }
+
+  private recordProjectOpen(entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.PROJECT_OPEN }>): void {
+    const { phase, cache, transport, spans } = entry.detail;
+    this.recordWorkerSpans(phase, spans);
+    /* An open waits on the same pull and transfers as a sync attempt, so the same hour bounds a skewed clock. */
+    this.metrics.projectOpenDuration.record(Math.min(entry.duration, maximumSyncAttemptMilliseconds) / 1000, {
+      phase,
+      cache,
+      ...(transport === undefined ? {} : { [AttributeKey.LFS_TRANSPORT]: transport }),
     });
   }
 
-  private recordEditorLoad(
-    entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.EDITOR_LOAD }>,
-    durationSeconds: number,
+  private recordKernelAutoResolved(
+    entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.KERNEL_AUTO_RESOLVED }>,
   ): void {
-    this.metrics.editorLoadDuration.record(durationSeconds, {
-      [AttributeKey.EDITOR_KERNEL]: entry.detail?.kernel ?? 'unknown',
+    const { hostProfile, agentId, kernel, hadOwner, model, rubricVersion } = entry.detail;
+    const agent = recordedAgentId(agentId);
+    this.metrics.kernelAutoResolutions.add(1, {
+      'tau.host.profile': hostProfile,
+      [AttributeKey.AGENT_ID]: agent,
+      [AttributeKey.KERNEL_ID]: kernel ?? 'none',
+      'tau.kernel.had_owner': hadOwner ? 'true' : 'false',
+      /* Only Tau's own turns name a model: an ACP agent's model is the vendor's. */
+      ...(model === undefined || agent !== 'tau' ? {} : { [AttributeKey.GEN_AI_REQUEST_MODEL]: model }),
+      'tau.kernel.rubric_version': String(rubricVersion),
     });
   }
 
-  private recordWasmModuleLoad(
-    entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.WASM_MODULE_LOAD }>,
-    durationSeconds: number,
+  private recordKernelOverride(
+    entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.KERNEL_OVERRIDE }>,
   ): void {
-    this.metrics.wasmModuleLoadDuration.record(durationSeconds, {
-      [AttributeKey.WASM_MODULE]: entry.detail?.module ?? 'unknown',
+    const { hostProfile, resolved, manual, turnsSince, rubricVersion } = entry.detail;
+    const pair = { 'tau.kernel.resolved': resolved ?? 'none', 'tau.kernel.manual': manual } as const;
+    this.metrics.kernelOverrides.add(1, {
+      'tau.host.profile': hostProfile,
+      ...pair,
+      'tau.kernel.rubric_version': String(rubricVersion),
     });
+    this.metrics.kernelOverrideTurns.record(turnsSince, pair);
   }
 
-  private recordIndexedDbOperation(
-    entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.INDEXEDDB_OPERATION }>,
-    durationSeconds: number,
+  private recordKernelFirstOutcome(
+    entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.KERNEL_FIRST_OUTCOME }>,
   ): void {
-    this.metrics.indexeddbOperationDuration.record(durationSeconds, {
-      [AttributeKey.INDEXEDDB_OPERATION]: entry.detail?.operation ?? 'unknown',
-      [AttributeKey.INDEXEDDB_STORE]: entry.detail?.store ?? 'unknown',
+    const { hostProfile, kernel, outcome, turnsToFirstRender, rubricVersion } = entry.detail;
+    this.metrics.kernelFirstOutcomes.add(1, {
+      'tau.host.profile': hostProfile,
+      [AttributeKey.KERNEL_ID]: kernel ?? 'none',
+      outcome,
+      'tau.kernel.rubric_version': String(rubricVersion),
     });
+    if (outcome === 'ready' && kernel !== undefined) {
+      this.metrics.kernelTurnsToFirstRender.record(turnsToFirstRender, { [AttributeKey.KERNEL_ID]: kernel });
+    }
   }
 }
+
+const runtimeNames: ReadonlySet<string> = new Set(runtimeEntryNames);
+const retiredNames: ReadonlySet<string> = new Set(retiredIngestEntryNames);
+
+/**
+ * Whether an entry is a legacy client metric, not one of the four runtime entries (validated by the runtime ingest) nor
+ * a retired entry.
+ *
+ * @param entry - The entry.
+ * @returns `true` for a client metric entry.
+ */
+const isLegacyEntry = (entry: IngestPayloadDto['entries'][number]): entry is ClientMetricEntry =>
+  !runtimeNames.has(entry.name) && !retiredNames.has(entry.name);
+
+/** The ingest validates an id's shape; only known agents are recorded as themselves (bounded cardinality). */
+const recordedAgentId = (agentId: string): string => (knownAgentIds.has(agentId) ? agentId : 'other');

@@ -1,7 +1,10 @@
+import { Topic } from '#topic.js';
+import { z } from 'zod';
 import type { Port } from '#port.js';
 import type {
   WireMessage,
   WireRequestCancel,
+  WireRequestProgress,
   WireBye,
   WireNotify,
   WireError,
@@ -10,8 +13,14 @@ import type {
   WireStreamNext,
   WireStreamComplete,
   WireStreamError,
+  WireFlowAck,
+  WireFlowWindow,
+  WireVersionMismatchHandler,
 } from '#wire.js';
-import { isWireMessage } from '#wire.js';
+import { isWireMessage, unreadableAnswer } from '#wire.js';
+import { ChannelClosedError } from '#channel-closed-error.js';
+import type { ChannelCloseCode, CloseInfo } from '#channel-closed-error.js';
+import type { RpcProtocol } from '#protocol.js';
 import { WireValidationError } from '#wire-validation-error.js';
 import type {
   WireProtocolSchemas,
@@ -46,11 +55,20 @@ const validateWireFrame = (input: ValidateWireFrameInput): unknown => {
   if (outcome.success) {
     return outcome.data;
   }
-  const issues: readonly WireValidationIssue[] = outcome.error.issues.map((issue) => ({
-    path: issue.path,
-    message: issue.message,
-    code: issue.code,
-  }));
+  const issues: readonly WireValidationIssue[] = outcome.error.issues.flatMap((issue) => {
+    // A failed z.union reports one opaque "Invalid input"; surface the closest
+    // branch (fewest issues) so the message names the actual failing path.
+    const branches = (issue as { errors?: ReadonlyArray<readonly z.core.$ZodIssue[]> }).errors;
+    if (issue.code === 'invalid_union' && branches !== undefined && branches.length > 0) {
+      const closest = [...branches].sort((left, right) => left.length - right.length)[0] ?? [];
+      return closest.slice(0, 5).map((sub) => ({
+        path: [...issue.path, ...sub.path],
+        message: sub.message,
+        code: sub.code,
+      }));
+    }
+    return [{ path: issue.path, message: issue.message, code: issue.code }];
+  });
   throw new WireValidationError(site, entry, issues);
 };
 
@@ -62,6 +80,43 @@ const validateWireFrame = (input: ValidateWireFrameInput): unknown => {
 export type ChannelContext = {
   readonly sessionKey: string;
 };
+
+/**
+ * What a {@link ChannelServer.call} handler receives: the session context plus
+ * this one call's progress sink.
+ *
+ * @public
+ */
+export type ChannelCallContext = ChannelContext & {
+  /**
+   * Report progress for this call as one `rp` frame carrying `data`. Dropped once
+   * the call has settled, been cancelled or the channel has closed, so a late
+   * report never reaches a caller that has moved on.
+   */
+  readonly progress: (data: unknown) => void;
+};
+
+/**
+ * Per-call client options for {@link Channel.call}.
+ *
+ * @public
+ */
+export type ChannelCallOptions = {
+  /** Receive each progress report the server sends for this call. A throwing handler is ignored. */
+  readonly onProgress?: (data: unknown) => void;
+  /**
+   * Milliseconds. Reject this call with code `PEER_UNRESPONSIVE` when no frame for
+   * it (`rp` heartbeat, `rp` progress or the `rs` reply) has arrived for this long,
+   * measured on `performance.now()`. The bound replaces a wall-clock deadline for
+   * calls whose duration grows with their input: the call lives as long as the
+   * server keeps saying it is working on it. The server must send heartbeats
+   * (`callHeartbeatInterval`) more often than this, or a long call expires.
+   */
+  readonly livenessTimeout?: number;
+};
+
+/** Code of the rejection a call's {@link ChannelCallOptions.livenessTimeout} produces. */
+const callUnresponsiveCode = 'PEER_UNRESPONSIVE';
 
 /**
  * Envelope for binary payloads that need zero-copy transfer over a {@link Port}.
@@ -77,31 +132,17 @@ export type WithTransferables<T> = {
   readonly transferables: readonly Transferable[];
 };
 
-const isWithTransferables = (value: unknown): value is WithTransferables<unknown> => {
-  if (value === null || typeof value !== 'object') {
-    return false;
-  }
-  const o = value as { value?: unknown; transferables?: unknown };
-  return 'value' in o && 'transferables' in o && Array.isArray(o.transferables);
-};
+const withTransferablesSchema: z.ZodType<WithTransferables<unknown>> = z.object({
+  value: z.unknown(),
+  transferables: z.array(z.custom<Transferable>()),
+});
 
 const unwrapTransferables = (payload: unknown): { value: unknown; transfer: readonly Transferable[] | undefined } => {
-  if (isWithTransferables(payload)) {
-    return { value: payload.value, transfer: payload.transferables };
+  const parsed = withTransferablesSchema.safeParse(payload);
+  if (parsed.success) {
+    return { value: parsed.data.value, transfer: parsed.data.transferables };
   }
   return { value: payload, transfer: undefined };
-};
-
-/**
- * Typed RPC protocol contract carried as a phantom type parameter on {@link Channel} and
- * {@link ChannelServer}. Each member describes the args/return/event shape for one operation.
- *
- * @public
- */
-export type RpcProtocol = {
-  readonly calls: Readonly<Record<string, { args: unknown; result: unknown }>>;
-  readonly notifies: Readonly<Record<string, { args: unknown }>>;
-  readonly listens: Readonly<Record<string, { args: unknown; event: unknown }>>;
 };
 
 /**
@@ -121,16 +162,16 @@ type CallResult<P extends RpcProtocol, N extends CallNames<P>> = P['calls'][N]['
 type NotifyArgs<P extends RpcProtocol, N extends NotifyNames<P>> = P['notifies'][N]['args'];
 type ListenArgs<P extends RpcProtocol, N extends ListenNames<P>> = P['listens'][N]['args'];
 type ListenEvent<P extends RpcProtocol, N extends ListenNames<P>> = P['listens'][N]['event'];
+type ProtocolHello<P extends RpcProtocol> = P extends { readonly hello: infer Hello } ? Hello : unknown;
 
-/**
- * Information passed to `onClose` listeners. `origin` indicates which side initiated the close,
- * and `reason` carries the optional human-readable reason from the lifecycle bye frame.
- *
- * @public
- */
-export type CloseInfo = {
-  readonly origin: 'local' | 'remote' | 'timeout';
-  readonly reason?: string;
+/** Bounds applied to every server-pushed stream. @public */
+export type StreamFlowControlOptions = {
+  /** Frames granted when a subscription opens. Defaults to 16. */
+  readonly initialCredits?: number;
+  /** Maximum estimated bytes owned by one stream frame. Defaults to 16 MiB. */
+  readonly maxFrameBytes?: number;
+  /** Maximum estimated bytes retained between producer and consumer. Defaults to 64 MiB. */
+  readonly maxOwnedBytes?: number;
 };
 
 /**
@@ -139,7 +180,10 @@ export type CloseInfo = {
  * @public
  */
 export type Channel<P extends RpcProtocol = EmptyRpcProtocol> = {
-  /** Resolves once the server's `lh` (hello) frame has been received. Pre-ready calls queue. */
+  /**
+   * Resolves once the server's `lh` (hello) frame has been received, and rejects
+   * when no hello arrives within the client's hello deadline. Pre-ready calls queue.
+   */
   readonly ready: Promise<void>;
   /** Resolves once the channel is fully closed (remote ack or timeout fallback). */
   readonly closed: Promise<void>;
@@ -154,7 +198,7 @@ export type Channel<P extends RpcProtocol = EmptyRpcProtocol> = {
    * consumers must `await channel.ready` before reading. Carries the server's
    * advertised capability set in the handshake.
    */
-  readonly hello: { readonly payload: unknown };
+  readonly hello: { readonly payload: ProtocolHello<P> };
   /**
    * Invoke a remote procedure. With a typed {@link RpcProtocol}, `args` and the resolved
    * type are inferred by name. With the default {@link EmptyRpcProtocol} the result is
@@ -164,6 +208,7 @@ export type Channel<P extends RpcProtocol = EmptyRpcProtocol> = {
     name: N,
     args?: CallArgs<P, N> | WithTransferables<CallArgs<P, N>>,
     signal?: AbortSignal,
+    options?: ChannelCallOptions,
   ): Promise<CallResult<P, N>>;
   /** Send a fire-and-forget notification. */
   notify<N extends NotifyNames<P>>(name: N, args?: NotifyArgs<P, N> | WithTransferables<NotifyArgs<P, N>>): void;
@@ -196,7 +241,7 @@ export type Channel<P extends RpcProtocol = EmptyRpcProtocol> = {
  */
 export type ChannelServer<P extends RpcProtocol = EmptyRpcProtocol> = {
   call<N extends CallNames<P>>(
-    context: ChannelContext,
+    context: ChannelCallContext,
     name: N,
     args: CallArgs<P, N>,
     signal: AbortSignal,
@@ -217,7 +262,7 @@ export type ChannelServer<P extends RpcProtocol = EmptyRpcProtocol> = {
  *
  * @public
  */
-export type ChannelClientOptions = {
+export type ChannelClientOptions<P extends RpcProtocol = EmptyRpcProtocol> = {
   port: Port<unknown>;
   sessionKey: string;
   /**
@@ -235,7 +280,15 @@ export type ChannelClientOptions = {
    * Omit to trust the wire (used for transports within the same trust
    * boundary, e.g. in-process for tests).
    */
-  protocolSchemas?: WireProtocolSchemas;
+  protocolSchemas?: WireProtocolSchemas<P>;
+  /** Bounded stream-window and byte-ownership policy. */
+  streamFlowControl?: StreamFlowControlOptions;
+  /**
+   * Close with `PEER_UNRESPONSIVE` when no frame has arrived for this many milliseconds,
+   * measured on `performance.now()`. The first `lk` keepalive received arms the bound, so a
+   * server that never sends one stays unbounded. Off by default.
+   */
+  livenessTimeout?: number;
 };
 
 /**
@@ -243,15 +296,10 @@ export type ChannelClientOptions = {
  *
  * @public
  */
-export type ChannelServerOptions<P extends RpcProtocol = EmptyRpcProtocol> = {
+type ChannelServerOptionsBase<P extends RpcProtocol> = {
   port: Port<unknown>;
   sessionKey: string;
   impl: ChannelServer<P>;
-  /**
-   * Optional payload to attach to the server hello frame (`lh`). Lets the server publish a
-   * protocol/capability descriptor that the client can read once `ready` resolves.
-   */
-  hello?: unknown;
   /** Fallback timeout for the symmetric close handshake. Defaults to 5000ms. */
   closeTimeout?: number;
   /**
@@ -264,8 +312,30 @@ export type ChannelServerOptions<P extends RpcProtocol = EmptyRpcProtocol> = {
    * Omit to trust the wire (used for transports within the same trust
    * boundary, e.g. in-process for tests).
    */
-  protocolSchemas?: WireProtocolSchemas;
+  protocolSchemas?: WireProtocolSchemas<P>;
+  /** Bounded stream-window and byte-ownership policy. */
+  streamFlowControl?: StreamFlowControlOptions;
+  /**
+   * Send an `lk` keepalive once the hello is posted, then every this many milliseconds until
+   * the channel closes, so a client's `livenessTimeout` can tell a slow server from a dead
+   * one. Off by default.
+   */
+  keepaliveInterval?: number;
+  /**
+   * Send an `rp` heartbeat for every call still running, every this many
+   * milliseconds, so a client's per-call `livenessTimeout` can tell a long call
+   * from a dead server. Off by default.
+   */
+  callHeartbeatInterval?: number;
 };
+
+type ChannelServerHelloOption<P extends RpcProtocol> = P extends { readonly hello: infer Hello }
+  ? { readonly hello: Hello }
+  : { readonly hello?: unknown };
+
+/** Options for creating a typed channel server. @public */
+export type ChannelServerOptions<P extends RpcProtocol = EmptyRpcProtocol> = ChannelServerOptionsBase<P> &
+  ChannelServerHelloOption<P>;
 
 /**
  * Server handle returned by {@link createChannelServer}.
@@ -287,13 +357,12 @@ export type ChannelServerHandle<P extends RpcProtocol = EmptyRpcProtocol> = {
   notify<N extends NotifyNames<P>>(name: N, args?: NotifyArgs<P, N> | WithTransferables<NotifyArgs<P, N>>): void;
 };
 
-const createId: () => string = () => {
-  const g = globalThis as { crypto?: Crypto };
-  if (g.crypto && typeof g.crypto.randomUUID === 'function') {
-    return g.crypto.randomUUID();
-  }
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-};
+/**
+ * A call or subscription id: 16 random bytes in hex. Not `randomUUID`, which insecure browser contexts lack; ids are
+ * only compared, never parsed.
+ */
+const createId = (): string =>
+  Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('');
 
 const toWireError = (error: unknown): WireError => {
   if (error instanceof Error) {
@@ -305,6 +374,22 @@ const toWireError = (error: unknown): WireError => {
     };
   }
   return { m: String(error) };
+};
+
+/**
+ * A progress report as it crosses the wire. A binary codec (msgpack) turns an
+ * `undefined` field into `null`, which a report's schema then refuses, so a
+ * plain object's undefined fields are left out here, for every report sent.
+ */
+const progressForWire = (data: unknown): unknown => {
+  if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+    return data;
+  }
+  const prototype: unknown = Object.getPrototypeOf(data);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return data;
+  }
+  return Object.fromEntries(Object.entries(data).filter(([, value]) => value !== undefined));
 };
 
 const fromWireError = (error: WireError): Error => {
@@ -322,6 +407,35 @@ type PendingCall = {
   resolve: (v: unknown) => void;
   reject: (reason: unknown) => void;
   cleanup: () => void;
+  /** An `rp` frame for this call arrived: re-arm its liveness bound and deliver any progress. */
+  progress?: (frame: WireRequestProgress) => void;
+};
+
+type ListenQueueValue = {
+  readonly value: unknown;
+  readonly ownedBytes: number;
+};
+
+type ListenSink = {
+  readonly name: string;
+  accept: (value: unknown, ownedBytes: number) => void;
+  fail: (error: Error) => void;
+  cleanup: () => void;
+};
+
+type StreamFlowState = {
+  credits: number;
+  ownedBytes: number;
+  readonly sentFrameBytes: number[];
+  readonly waiters: Set<() => void>;
+  error: Error | undefined;
+};
+
+const wakeStreamFlow = (state: StreamFlowState): void => {
+  for (const wake of state.waiters) {
+    wake();
+  }
+  state.waiters.clear();
 };
 
 const listenEnd = Symbol('listenEnd');
@@ -338,6 +452,155 @@ const resolveListenIterable = async (result: unknown): Promise<AsyncIterable<unk
 };
 
 const defaultCloseTimeout = 5000;
+/**
+ * A client whose server never sends its hello has no wire, and every caller
+ * awaiting `ready` — or queued behind it — waits forever. Matches the bridge's
+ * own call deadline so a dead peer fails the same way at both layers.
+ */
+const defaultHelloTimeout = 30_000;
+/** Keep a pending deadline from holding a Node process open; browsers have no `unref`. */
+const unrefTimer = (timer: ReturnType<typeof setTimeout>): void => {
+  const maybeUnref = (timer as { unref?: () => void }).unref;
+  if (typeof maybeUnref === 'function') {
+    maybeUnref.call(timer);
+  }
+};
+
+const defaultInitialStreamCredits = 16;
+const defaultMaxStreamFrameBytes = 16 * 1024 * 1024;
+const defaultMaxStreamOwnedBytes = 64 * 1024 * 1024;
+
+type ResolvedStreamFlowControl = {
+  readonly initialCredits: number;
+  readonly maxFrameBytes: number;
+  readonly maxOwnedBytes: number;
+};
+
+const positiveSafeInteger = (value: number, name: string): number => {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new RangeError(`${name} must be a positive safe integer.`);
+  }
+  return value;
+};
+
+const resolveStreamFlowControl = (options?: StreamFlowControlOptions): ResolvedStreamFlowControl => {
+  const initialCredits = positiveSafeInteger(
+    options?.initialCredits ?? defaultInitialStreamCredits,
+    'streamFlowControl.initialCredits',
+  );
+  const maxFrameBytes = positiveSafeInteger(
+    options?.maxFrameBytes ?? defaultMaxStreamFrameBytes,
+    'streamFlowControl.maxFrameBytes',
+  );
+  const maxOwnedBytes = positiveSafeInteger(
+    options?.maxOwnedBytes ?? defaultMaxStreamOwnedBytes,
+    'streamFlowControl.maxOwnedBytes',
+  );
+  if (maxOwnedBytes < maxFrameBytes) {
+    throw new RangeError('streamFlowControl.maxOwnedBytes must be at least maxFrameBytes.');
+  }
+  return { initialCredits, maxFrameBytes, maxOwnedBytes };
+};
+
+/**
+ * Deterministic structured-clone payload estimate used for stream ownership bounds.
+ * @param value - Owned structured-clone payload.
+ * @returns The charge against the existing stream ownership budget.
+ */
+const estimateOwnedBytes = (value: unknown): number => {
+  // TextEncoder replaces unpaired UTF-16 surrogates with the three-byte U+FFFD.
+  // Count that exact representation without allocating a payload-sized encoded copy.
+  const utf8ByteLength = (text: string): number => {
+    let bytes = 0;
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.codePointAt(index)!;
+      if (code < 0x80) {
+        bytes += 1;
+      } else if (code < 0x8_00) {
+        bytes += 2;
+      } else if (code <= 0xff_ff) {
+        bytes += 3;
+      } else {
+        bytes += 4;
+        index += 1;
+      }
+    }
+    return bytes;
+  };
+  const seenObjects = new Set<unknown>();
+  const seenBuffers = new Set<ArrayBufferLike>();
+  // oxlint-disable-next-line eslint/complexity -- every structured-clone collection kind must share cycle tracking.
+  const visit = (item: unknown): number => {
+    if (typeof item === 'string') {
+      return utf8ByteLength(item);
+    }
+    if (typeof item === 'number' || typeof item === 'bigint') {
+      return 8;
+    }
+    if (typeof item === 'boolean') {
+      return 4;
+    }
+    if (item === null || item === undefined || typeof item === 'symbol' || typeof item === 'function') {
+      return 0;
+    }
+    if (ArrayBuffer.isView(item)) {
+      if (seenBuffers.has(item.buffer)) {
+        return 0;
+      }
+      seenBuffers.add(item.buffer);
+      return item.buffer.byteLength;
+    }
+    if (
+      item instanceof ArrayBuffer ||
+      (typeof SharedArrayBuffer !== 'undefined' && item instanceof SharedArrayBuffer)
+    ) {
+      if (seenBuffers.has(item)) {
+        return 0;
+      }
+      seenBuffers.add(item);
+      return item.byteLength;
+    }
+    if (seenObjects.has(item)) {
+      return 0;
+    }
+    seenObjects.add(item);
+    if (item instanceof Date) {
+      return 8;
+    }
+    if (item instanceof RegExp) {
+      return utf8ByteLength(item.source) + utf8ByteLength(item.flags);
+    }
+    if (typeof Blob !== 'undefined' && item instanceof Blob) {
+      return item.size;
+    }
+    if (item instanceof Map) {
+      let total = 0;
+      for (const [key, entry] of item) {
+        total += visit(key) + visit(entry);
+      }
+      return total;
+    }
+    if (item instanceof Set) {
+      let total = 0;
+      for (const entry of item) {
+        total += visit(entry);
+      }
+      return total;
+    }
+    if (Array.isArray(item)) {
+      let total = 0;
+      for (const entry of item as unknown[]) {
+        total += visit(entry);
+      }
+      return total;
+    }
+    return Object.entries(item as Record<string, unknown>).reduce(
+      (total, [key, entry]) => total + utf8ByteLength(key) + visit(entry),
+      0,
+    );
+  };
+  return visit(value);
+};
 
 /**
  * Widened call/listen/notify handler shapes used internally by the server dispatch loop. They
@@ -347,33 +610,36 @@ const defaultCloseTimeout = 5000;
  * inspects formal parameter count, not tuple arity.
  */
 type WidenedCallImpl = (
-  ...args: [context: ChannelContext, name: string, args: unknown, signal: AbortSignal]
+  ...args: [context: ChannelCallContext, name: string, args: unknown, signal: AbortSignal]
 ) => Promise<unknown>;
 type WidenedListenImpl = (
   ...args: [context: ChannelContext, event: string, args: unknown, signal: AbortSignal]
 ) => AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>;
 type WidenedNotifyImpl = (...args: [context: ChannelContext, name: string, args: unknown]) => void;
 
-type CloseOrigin = 'local' | 'remote' | 'timeout';
+type CloseOrigin = CloseInfo['origin'];
 
 type CloseController = {
   readonly closed: Promise<void>;
   onClose: (handler: (info: CloseInfo) => void) => () => void;
   initiateLocal: (reason?: string) => void;
-  acceptRemote: (reason?: string) => void;
+  acceptRemote: (reason?: string, code?: ChannelCloseCode) => void;
+  /** A bound expired: tear down as `PEER_UNRESPONSIVE` and finalize without awaiting the peer. */
+  expire: (reason: string) => void;
+  /** The close as recorded so far; `undefined` while the channel is open. */
+  info: () => CloseInfo | undefined;
   isClosed: () => boolean;
 };
 
 const createCloseController = (options: {
   postClose: (reason?: string) => void;
-  onTeardown: (origin: CloseOrigin) => void;
-  onFinalize: (origin: CloseOrigin) => void;
+  onTeardown: (info: CloseInfo) => void;
+  onFinalize: () => void;
   closeHandshakeTimeout: number;
 }): CloseController => {
   const { postClose, onTeardown, onFinalize, closeHandshakeTimeout } = options;
-  const handlers = new Set<(info: CloseInfo) => void>();
+  const closeTopic = new Topic<CloseInfo>({ name: 'rpc-close', onError: () => undefined });
   let resolved = false;
-  let teardownDone = false;
   let resolveClosed: () => void = (): void => undefined;
   const closed = new Promise<void>((resolve) => {
     resolveClosed = resolve;
@@ -382,16 +648,21 @@ const createCloseController = (options: {
   let remoteSeen = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let storedReason: string | undefined;
+  /** Set at teardown, then replaced by the final close once it resolves. */
+  let current: CloseInfo | undefined;
 
-  const teardownOnce = (origin: CloseOrigin): void => {
-    if (teardownDone) {
+  const describe = (origin: CloseOrigin, code: ChannelCloseCode): CloseInfo =>
+    storedReason === undefined ? { origin, code } : { origin, code, reason: storedReason };
+
+  const teardownOnce = (origin: CloseOrigin, code: ChannelCloseCode): void => {
+    if (current !== undefined) {
       return;
     }
-    teardownDone = true;
-    onTeardown(origin);
+    current = describe(origin, code);
+    onTeardown(current);
   };
 
-  const finalize = (origin: CloseOrigin): void => {
+  const finalize = (origin: CloseOrigin, code: ChannelCloseCode): void => {
     if (resolved) {
       return;
     }
@@ -400,47 +671,33 @@ const createCloseController = (options: {
       clearTimeout(timer);
       timer = undefined;
     }
-    teardownOnce(origin);
-    onFinalize(origin);
-    const info: CloseInfo = storedReason === undefined ? { origin } : { origin, reason: storedReason };
-    for (const handler of handlers) {
-      try {
-        handler(info);
-      } catch {
-        // Ignore listener errors so cleanup proceeds.
-      }
-    }
-    handlers.clear();
+    teardownOnce(origin, code);
+    onFinalize();
+    current = describe(origin, code);
+    closeTopic.emit(current);
+    closeTopic.dispose();
     resolveClosed();
   };
 
   const armTimer = (): void => {
     timer = setTimeout(() => {
-      finalize('timeout');
+      finalize('timeout', 'PEER_UNRESPONSIVE');
     }, closeHandshakeTimeout);
-    const maybeUnref = (timer as { unref?: () => void }).unref;
-    if (typeof maybeUnref === 'function') {
-      maybeUnref.call(timer);
-    }
+    unrefTimer(timer);
   };
 
   return {
     closed,
     onClose(handler) {
-      if (resolved) {
+      if (resolved && current !== undefined) {
         try {
-          const info: CloseInfo =
-            storedReason === undefined ? { origin: 'local' } : { origin: 'local', reason: storedReason };
-          handler(info);
+          handler(current);
         } catch {
           // Ignore listener errors.
         }
         return (): void => undefined;
       }
-      handlers.add(handler);
-      return (): void => {
-        handlers.delete(handler);
-      };
+      return closeTopic.subscribe(handler);
     },
     initiateLocal(reason) {
       if (localSent) {
@@ -450,20 +707,20 @@ const createCloseController = (options: {
       if (reason !== undefined) {
         storedReason = reason;
       }
-      teardownOnce('local');
+      teardownOnce('local', 'CHANNEL_CLOSED');
       try {
         postClose(reason);
       } catch {
-        finalize('timeout');
+        finalize('timeout', 'CHANNEL_CLOSED');
         return;
       }
       if (remoteSeen) {
-        finalize('local');
+        finalize('local', 'CHANNEL_CLOSED');
         return;
       }
       armTimer();
     },
-    acceptRemote(reason) {
+    acceptRemote(reason, code = 'PEER_CLOSED') {
       if (remoteSeen) {
         return;
       }
@@ -472,26 +729,39 @@ const createCloseController = (options: {
         storedReason = reason;
       }
       if (localSent) {
-        finalize('local');
+        finalize('local', 'CHANNEL_CLOSED');
         return;
       }
       localSent = true;
-      teardownOnce('remote');
+      teardownOnce('remote', code);
       try {
         postClose(reason);
       } catch {
         // Best-effort echo; ignore.
       }
-      finalize('remote');
+      finalize('remote', code);
     },
-    isClosed() {
-      return resolved || teardownDone;
+    expire(reason) {
+      if (localSent) {
+        return;
+      }
+      localSent = true;
+      storedReason = reason;
+      teardownOnce('timeout', 'PEER_UNRESPONSIVE');
+      try {
+        postClose(reason);
+      } catch {
+        // The peer is unresponsive; the bye is a courtesy.
+      }
+      finalize('timeout', 'PEER_UNRESPONSIVE');
     },
+    info: () => current,
+    isClosed: () => current !== undefined,
   };
 };
 
 /* ============================================================================ *
- * Reserved flow-control logging                                                *
+ * Unexpected flow-control direction logging                                   *
  * ============================================================================ */
 
 let flowAckWarned = false;
@@ -501,14 +771,38 @@ const warnFlowAckOnce = (): void => {
     return;
   }
   flowAckWarned = true;
-  console.warn('[@taucad/rpc] flow-ack frame received; flow control is reserved for a future revision and ignored');
+  console.warn('[@taucad/rpc] flow-ack frame received by a stream consumer; frame ignored');
 };
 const warnFlowWindowOnce = (): void => {
   if (flowWindowWarned) {
     return;
   }
   flowWindowWarned = true;
-  console.warn('[@taucad/rpc] flow-window frame received; flow control is reserved for a future revision and ignored');
+  console.warn('[@taucad/rpc] flow-window frame received by a stream consumer; frame ignored');
+};
+
+const createWireVersionMismatchReporter = (): WireVersionMismatchHandler => {
+  let warned = false;
+  return ({ expected, received, kind }) => {
+    if (warned) {
+      return;
+    }
+    warned = true;
+    console.warn(
+      `[@taucad/rpc] wire version mismatch: expected ${expected}, received ${String(received)} for "${kind}"; frame dropped`,
+    );
+  };
+};
+
+const createUnknownNotifyReporter = (receiver: 'client' | 'server'): ((name: string) => void) => {
+  const warned = new Set<string>();
+  return (name) => {
+    if (warned.has(name)) {
+      return;
+    }
+    warned.add(name);
+    console.warn(`[@taucad/rpc] unknown notify "${name}" received by ${receiver}; frame dropped`);
+  };
 };
 
 /**
@@ -529,7 +823,12 @@ export const __resetFlowControlWarnings = (): void => {
  * @returns The same `config` reference, narrowed to its literal type.
  * @public
  */
-export const createChannelClientOptions: <T extends ChannelClientOptions>(config: T) => T = (config) => config;
+export const createChannelClientOptions = <
+  P extends RpcProtocol = EmptyRpcProtocol,
+  T extends ChannelClientOptions<P> = ChannelClientOptions<P>,
+>(
+  config: T,
+): T => config;
 
 /**
  * Passthrough for {@link createChannelServer} options; keeps literal parameter types in signatures.
@@ -543,16 +842,28 @@ export const createChannelServerOptions = <P extends RpcProtocol, T extends Chan
 
 /**
  * Create an RPC client over a {@link Port}. Resolves {@link Channel.ready} after the server's
- * hello frame is observed; calls made before `ready` are queued.
+ * hello frame is observed; calls made before `ready` are queued. A server that sends no hello
+ * rejects `ready` and closes the channel rather than leaving its callers pending.
  *
  * @param options - Channel client construction options (port, sessionKey, optional schemas, ...).
  * @returns A typed {@link Channel} bound to the supplied port.
  * @public
  */
 export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
-  options: ChannelClientOptions,
+  options: ChannelClientOptions<P>,
 ): Channel<P> => {
-  const { port, sessionKey: _sessionKey, closeTimeout = defaultCloseTimeout, protocolSchemas } = options;
+  const {
+    port,
+    sessionKey: _sessionKey,
+    closeTimeout = defaultCloseTimeout,
+    protocolSchemas,
+    streamFlowControl: streamFlowControlOptions,
+    livenessTimeout,
+  } = options;
+  const streamFlowControl = resolveStreamFlowControl(streamFlowControlOptions);
+  if (livenessTimeout !== undefined) {
+    positiveSafeInteger(livenessTimeout, 'livenessTimeout');
+  }
   void _sessionKey;
   /**
    * Pending-call book maps id → name so the response handler can look
@@ -560,21 +871,61 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
    */
   const callPendingNames = new Map<string, string>();
   const callPending = new Map<string, PendingCall>();
-  const listenSinks = new Map<
-    string,
-    { push: (v: unknown) => void; fail: (error: Error) => void; cleanup: () => void }
-  >();
-  const notifyHandlers = new Map<string, Array<(args: unknown) => void>>();
+  const listenSinks = new Map<string, ListenSink>();
+  const notifyTopics = new Map<string, Topic<unknown>>();
   type PendingFrame = { frame: WireMessage; transfer?: readonly Transferable[] };
   const sendQueue: PendingFrame[] = [];
+  const reportWireVersionMismatch = createWireVersionMismatchReporter();
+  const reportUnknownNotify = createUnknownNotifyReporter('client');
 
   let isReady = false;
   let resolveReady: () => void = (): void => undefined;
   let rejectReady: (reason: Error) => void = (): void => undefined;
+  /* A server that never sends its hello closes the channel instead of leaving
+   * `ready` — and every call queued behind it — pending for the session. The
+   * deadline is the *server's* to meet: a port that connects reports when its
+   * wire is carrying (`Port.opened`), and arming before that spent the budget
+   * on DNS, TCP, TLS and the upgrade instead — a false expiry no reconnect
+   * undoes. A hello that beat the arming clears nothing: `helloSettled` keeps
+   * the timer from being armed at all. */
+  let helloTimer: ReturnType<typeof setTimeout> | undefined;
+  let helloSettled = false;
+  const armHelloDeadline = (): void => {
+    if (helloSettled) {
+      return;
+    }
+    helloTimer = setTimeout(() => {
+      rejectReady(new Error(`Channel server sent no hello within ${defaultHelloTimeout}ms.`));
+      closeController.expire('hello-timeout');
+    }, defaultHelloTimeout);
+    unrefTimer(helloTimer);
+  };
   const ready = new Promise<void>((resolve, reject) => {
-    resolveReady = resolve;
-    rejectReady = reject;
+    resolveReady = (): void => {
+      helloSettled = true;
+      clearTimeout(helloTimer);
+      resolve();
+    };
+    rejectReady = (reason): void => {
+      helloSettled = true;
+      clearTimeout(helloTimer);
+      reject(reason);
+    };
   });
+  if (port.opened === undefined) {
+    armHelloDeadline();
+  } else {
+    /* async-iife: bootstrap — the deadline starts when the wire is carrying. A
+     * wire that dies before it opens is reported by `onClose`, not by this. */
+    void (async (): Promise<void> => {
+      try {
+        await port.opened;
+      } catch {
+        // A port that cannot report its open still gets the deadline.
+      }
+      armHelloDeadline();
+    })();
+  }
   // async-iife: bootstrap — silence unhandledrejection when consumers never await ready;
   // the public `ready` promise itself remains unwrapped so consumers can handle errors.
   void (async (): Promise<void> => {
@@ -585,20 +936,58 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
     }
   })();
   // Captured atomically with `isReady = true`; readers must `await ready`.
-  const hello: { payload: unknown } = { payload: undefined };
+  let helloPayload: ProtocolHello<P>;
+  const hello = {
+    get payload(): ProtocolHello<P> {
+      return helloPayload;
+    },
+  };
+
+  /**
+   * Post one frame. A frame the port refuses — an uncloneable or detached
+   * payload throws `DataCloneError` — fails its own call or listen instead of
+   * stranding it; any other refused frame throws to the sender.
+   */
+  const send = (frame: WireMessage, transfer?: readonly Transferable[]): void => {
+    try {
+      port.postMessage(frame, transfer);
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      const pending = frame.k === 'rq' ? callPending.get(frame.i) : undefined;
+      if (frame.k === 'rq' && pending) {
+        callPending.delete(frame.i);
+        callPendingNames.delete(frame.i);
+        pending.reject(failure);
+        return;
+      }
+      const sink = frame.k === 'ss' ? listenSinks.get(frame.i) : undefined;
+      if (frame.k === 'ss' && sink) {
+        listenSinks.delete(frame.i);
+        sink.fail(failure);
+        return;
+      }
+      throw failure;
+    }
+  };
 
   const post = (frame: WireMessage, transfer?: readonly Transferable[]): void => {
     if (!isReady) {
       sendQueue.push({ frame, transfer });
       return;
     }
-    port.postMessage(frame, transfer);
+    send(frame, transfer);
   };
 
+  /* Runs inside the port's message listener: one refused frame must neither
+   * throw out of it nor strand the frames queued behind it. */
   const flushSendQueue = (): void => {
     while (sendQueue.length > 0) {
       const item = sendQueue.shift()!;
-      port.postMessage(item.frame, item.transfer);
+      try {
+        send(item.frame, item.transfer);
+      } catch {
+        // A queued notify has no caller left to tell; its frame is dropped.
+      }
     }
   };
 
@@ -607,7 +996,18 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
       return;
     }
     if (frame.o === 1) {
-      hello.payload = frame.d;
+      try {
+        helloPayload = validateWireFrame({
+          validator: protocolSchemas?.hello,
+          site: 'client-hello',
+          entry: 'hello',
+          payload: frame.d,
+        }) as ProtocolHello<P>;
+      } catch (validationError) {
+        rejectReady(validationError instanceof Error ? validationError : new Error(String(validationError)));
+        closeController.initiateLocal('hello-error');
+        return;
+      }
       isReady = true;
       resolveReady();
       flushSendQueue();
@@ -631,7 +1031,7 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
     }
     try {
       const validated = validateWireFrame({
-        validator: callName ? protocolSchemas?.calls[callName]?.result : undefined,
+        validator: callName ? protocolSchemas?.calls[callName as keyof P['calls']]?.result : undefined,
         site: 'client-call-result',
         entry: callName ?? '<unknown>',
         payload: frame.d,
@@ -648,26 +1048,47 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
       return;
     }
     if (frame.k === 'sn') {
-      sink.push(frame.d);
+      try {
+        const frameBytes = estimateOwnedBytes(frame.d);
+        const validated = validateWireFrame({
+          validator: protocolSchemas?.listens[sink.name as keyof P['listens']]?.event,
+          site: 'client-listen-event',
+          entry: sink.name,
+          payload: frame.d,
+        });
+        sink.accept(validated, frameBytes);
+      } catch (validationError) {
+        listenSinks.delete(frame.i);
+        try {
+          port.postMessage({ v: 1, k: 'su', i: frame.i });
+        } catch {
+          // The peer may already be gone; the local iterator still fails deterministically.
+        }
+        sink.fail(validationError instanceof Error ? validationError : new Error(String(validationError)));
+      }
       return;
     }
     listenSinks.delete(frame.i);
     if (frame.k === 'sc') {
-      sink.push(listenEnd);
+      sink.accept(listenEnd, 0);
       return;
     }
     sink.fail(fromWireError(frame.e));
   };
 
   const handleNotifyFrame = (frame: WireNotify): void => {
-    const handlers = notifyHandlers.get(frame.n);
-    if (!handlers) {
+    if (protocolSchemas && !Object.hasOwn(protocolSchemas.notifies, frame.n)) {
+      reportUnknownNotify(frame.n);
+      return;
+    }
+    const topic = notifyTopics.get(frame.n);
+    if (!topic) {
       return;
     }
     let payload: unknown;
     try {
       payload = validateWireFrame({
-        validator: protocolSchemas?.notifies[frame.n],
+        validator: protocolSchemas?.notifies[frame.n as keyof P['notifies']],
         site: 'client-notify-args',
         entry: frame.n,
         payload: frame.a,
@@ -680,17 +1101,80 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
        * call instead. */
       return;
     }
-    for (const h of handlers) {
-      try {
-        h(payload);
-      } catch {
-        // Drop listener errors so other handlers still run.
+    topic.emit(payload);
+  };
+
+  /* Liveness bound: the first `lk` arms it; afterwards any inbound frame proves the peer
+   * alive. Checked lazily when the timer fires, so a frame costs two assignments. */
+  let lastFrameAt: number | undefined;
+  let lastKeepaliveAt: number | undefined;
+  /** Observed keepalive interval; measured between `lk` frames so a frame burst cannot shrink it. */
+  let keepaliveGap: number | undefined;
+  let forgaveFreeze = false;
+  let livenessTimer: ReturnType<typeof setTimeout> | undefined;
+  const scheduleLiveness = (livenessBound: number, checkDelay: number): void => {
+    const due = performance.now() + checkDelay;
+    livenessTimer = setTimeout(() => {
+      const now = performance.now();
+      const idle = now - (lastFrameAt ?? now);
+      if (idle < livenessBound) {
+        scheduleLiveness(livenessBound, livenessBound - idle);
+        return;
       }
+      /* A frozen page's timers fire late while its peer could not reach it: frozen time
+       * is not the peer's silence (RV7-F1), so re-arm once for a full window. */
+      if (!forgaveFreeze && now - due > (keepaliveGap ?? livenessBound / 4)) {
+        forgaveFreeze = true;
+        scheduleLiveness(livenessBound, livenessBound);
+        return;
+      }
+      closeController.expire('liveness-timeout');
+    }, checkDelay);
+    unrefTimer(livenessTimer);
+  };
+  const observeKeepalive = (livenessBound: number): void => {
+    const now = performance.now();
+    if (lastKeepaliveAt !== undefined) {
+      keepaliveGap = now - lastKeepaliveAt;
+    }
+    lastKeepaliveAt = now;
+    if (livenessTimer === undefined && !closeController.isClosed()) {
+      scheduleLiveness(livenessBound, livenessBound);
+    }
+  };
+
+  /** Fail the call or listen an unreadable frame names instead of leaving it pending. */
+  const failUnreadable = (raw: unknown): void => {
+    const answer = unreadableAnswer(raw);
+    if (answer === undefined) {
+      return;
+    }
+    if (answer.k === 'rs') {
+      const pending = callPending.get(answer.i);
+      callPending.delete(answer.i);
+      callPendingNames.delete(answer.i);
+      pending?.reject(fromWireError(answer.e));
+      return;
+    }
+    const sink = answer.k === 'sn' || answer.k === 'sc' || answer.k === 'se' ? listenSinks.get(answer.i) : undefined;
+    if (sink) {
+      listenSinks.delete(answer.i);
+      try {
+        port.postMessage({ v: 1, k: 'su', i: answer.i });
+      } catch {
+        // The peer may already be gone; the local iterator still fails deterministically.
+      }
+      sink.fail(fromWireError(answer.e));
     }
   };
 
   const onWire = (raw: unknown): void => {
-    if (!isWireMessage(raw)) {
+    if (livenessTimeout !== undefined) {
+      lastFrameAt = performance.now();
+      forgaveFreeze = false;
+    }
+    if (!isWireMessage(raw, reportWireVersionMismatch)) {
+      failUnreadable(raw);
       return;
     }
     switch (raw.k) {
@@ -698,8 +1182,18 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
         handleHelloFrame(raw);
         return;
       }
+      case 'lk': {
+        if (livenessTimeout !== undefined) {
+          observeKeepalive(livenessTimeout);
+        }
+        return;
+      }
       case 'rs': {
         handleResponseFrame(raw);
+        return;
+      }
+      case 'rp': {
+        callPending.get(raw.i)?.progress?.(raw);
         return;
       }
       case 'sn':
@@ -731,23 +1225,35 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
 
   let off: () => void = (): void => undefined;
 
-  const cleanupPendingState = (origin: CloseOrigin): void => {
-    for (const [, p] of callPending) {
-      p.reject(new Error('Channel closed'));
+  const cleanupPendingState = (info: CloseInfo): void => {
+    clearTimeout(livenessTimer);
+    const closedError = new ChannelClosedError(info);
+    /* A request still queued behind the hello never reached the server; its
+     * rejection says so (`requestSent: false`), as a liveness expiry's does. */
+    const queuedRequests = new Set(sendQueue.flatMap(({ frame }) => (frame.k === 'rq' ? [frame.i] : [])));
+    for (const [id, p] of callPending) {
+      p.reject(
+        queuedRequests.has(id) ? Object.assign(new ChannelClosedError(info), { requestSent: false }) : closedError,
+      );
     }
     callPending.clear();
     callPendingNames.clear();
+    /* A peer that said goodbye ends its listens gracefully; a wire that died
+     * under them never finished them. Ending a truncated stream normally told
+     * the consumer a short read was the whole answer (RC8 collision 2: `ws`
+     * kills the socket over an oversized frame, and every in-flight iterator
+     * completed empty instead of rejecting). */
     for (const [sid, s] of listenSinks) {
-      if (origin === 'local') {
-        s.fail(new Error('Channel closed'));
+      if (info.code === 'PEER_CLOSED') {
+        s.accept(listenEnd, 0);
       } else {
-        s.push(listenEnd);
+        s.fail(closedError);
       }
       listenSinks.delete(sid);
     }
     sendQueue.length = 0;
     if (!isReady) {
-      rejectReady(new Error('Channel closed before ready'));
+      rejectReady(new ChannelClosedError(info));
     }
   };
 
@@ -756,8 +1262,8 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
       const frame: WireBye = reason === undefined ? { v: 1, k: 'lb' } : { v: 1, k: 'lb', r: reason };
       port.postMessage(frame);
     },
-    onTeardown: (origin) => {
-      cleanupPendingState(origin);
+    onTeardown: (info) => {
+      cleanupPendingState(info);
     },
     onFinalize: () => {
       off();
@@ -765,14 +1271,26 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
     closeHandshakeTimeout: closeTimeout,
   });
 
-  off = port.onMessage(onWire);
+  const offWire = port.onMessage(onWire);
+  /* A port that can report its own death is the only thing standing between a
+   * killed peer and permanently pending calls: treat the death as the bye
+   * frame the peer never got to send. Unlike a bye, it truncates in-flight
+   * listens rather than ending them. */
+  const offPortClose = port.onClose?.(() => {
+    closeController.acceptRemote('port-closed', 'PEER_GONE');
+  });
+  off = (): void => {
+    offWire();
+    offPortClose?.();
+  };
   if (port.start) {
     port.start();
   }
 
   const ensureOpen = (): void => {
-    if (closeController.isClosed()) {
-      throw new Error('Channel is closed');
+    const info = closeController.info();
+    if (info !== undefined) {
+      throw new ChannelClosedError(info);
     }
   };
 
@@ -784,15 +1302,83 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
     port,
     hello,
 
-    call: (async (name: CallNames<P>, args?: unknown, signal?: AbortSignal): Promise<unknown> => {
+    // oxlint-disable-next-line max-params -- Channel.call keeps its positional (name, args, signal) and adds options last
+    call: (async (
+      name: CallNames<P>,
+      args?: unknown,
+      signal?: AbortSignal,
+      callOptions?: ChannelCallOptions,
+    ): Promise<unknown> => {
       ensureOpen();
       if (signal?.aborted) {
         throw new DOMException('The operation was aborted.', 'AbortError');
       }
+      const callLiveness = callOptions?.livenessTimeout;
+      if (callLiveness !== undefined) {
+        positiveSafeInteger(callLiveness, 'livenessTimeout');
+      }
+      const onProgress = callOptions?.onProgress;
       const id = createId();
       return new Promise<unknown>((resolve, reject) => {
+        /* Per-call liveness: any `rp` or the `rs` proves the server is still on it.
+         * Checked lazily when the timer fires, so a heartbeat costs one assignment. */
+        let lastCallFrameAt = performance.now();
+        let callLivenessTimer: ReturnType<typeof setTimeout> | undefined;
+        let forgaveCallFreeze = false;
+        const expireCall = (): void => {
+          const pending = callPending.get(id);
+          if (!pending) {
+            return;
+          }
+          callPending.delete(id);
+          callPendingNames.delete(id);
+          /* A request still queued behind the hello never reached the server:
+           * drop it, as an abort does, so the server never runs it after the
+           * caller was told it failed. `requestSent` says which case this was. */
+          const queued = sendQueue.findIndex((item) => item.frame.k === 'rq' && item.frame.i === id);
+          const requestSent = queued === -1;
+          if (requestSent) {
+            try {
+              port.postMessage({ v: 1, k: 'rc', i: id, e: { m: 'unresponsive' } } satisfies WireRequestCancel);
+            } catch {
+              // The peer may already be gone; the rejection below is the answer.
+            }
+          } else {
+            sendQueue.splice(queued, 1);
+          }
+          pending.reject(
+            Object.assign(
+              new Error(`Call '${name}' received no frame for ${String(callLiveness)}ms; the server is unresponsive.`),
+              { code: callUnresponsiveCode, requestSent },
+            ),
+          );
+        };
+        const scheduleCallLiveness = (bound: number, checkDelay: number): void => {
+          const due = performance.now() + checkDelay;
+          callLivenessTimer = setTimeout(() => {
+            const now = performance.now();
+            const idle = now - lastCallFrameAt;
+            if (idle < bound) {
+              scheduleCallLiveness(bound, bound - idle);
+              return;
+            }
+            /* A frozen page's timers fire late while its peer could not reach it (RV7-F1). */
+            if (!forgaveCallFreeze && now - due > bound / 4) {
+              forgaveCallFreeze = true;
+              scheduleCallLiveness(bound, bound);
+              return;
+            }
+            expireCall();
+          }, checkDelay);
+          unrefTimer(callLivenessTimer);
+        };
         const onAbort = (): void => {
-          if (callPending.has(id)) {
+          /* A request still queued behind the hello never reached the server:
+           * drop it rather than let the server run it after the caller left. */
+          const queued = sendQueue.findIndex((item) => item.frame.k === 'rq' && item.frame.i === id);
+          if (queued !== -1) {
+            sendQueue.splice(queued, 1);
+          } else if (callPending.has(id)) {
             const cancelFrame: WireRequestCancel = { v: 1, k: 'rc', i: id, e: { m: 'aborted' } };
             try {
               port.postMessage(cancelFrame);
@@ -810,6 +1396,7 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
           signal.addEventListener('abort', onAbort, { once: true });
         }
         const cleanup = (): void => {
+          clearTimeout(callLivenessTimer);
           if (signal) {
             signal.removeEventListener('abort', onAbort);
           }
@@ -825,7 +1412,22 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
             cleanup();
             reject(reason instanceof Error ? reason : new Error(String(reason)));
           },
+          progress: (frame) => {
+            lastCallFrameAt = performance.now();
+            forgaveCallFreeze = false;
+            if (frame.d === undefined || onProgress === undefined) {
+              return;
+            }
+            try {
+              onProgress(frame.d);
+            } catch {
+              // A failing progress observer must not settle or strand the call.
+            }
+          },
         });
+        if (callLiveness !== undefined) {
+          scheduleCallLiveness(callLiveness, callLiveness);
+        }
         const { value, transfer } = unwrapTransferables(args);
         post({ v: 1, k: 'rq', i: id, n: name, a: value ?? null }, transfer);
       });
@@ -839,19 +1441,15 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
     },
 
     onNotify<N extends NotifyNames<P>>(name: N, handler: (args: NotifyArgs<P, N>) => void): () => void {
-      const list = notifyHandlers.get(name) ?? [];
-      const next = [...list, handler as (args: unknown) => void];
-      notifyHandlers.set(name, next);
+      const topic =
+        notifyTopics.get(name) ?? new Topic<unknown>({ name: `rpc-notify:${name}`, onError: () => undefined });
+      notifyTopics.set(name, topic);
+      const unsubscribe = topic.subscribe(handler as (args: unknown) => void);
       return () => {
-        const current = notifyHandlers.get(name);
-        if (!current) {
-          return;
-        }
-        const remaining = current.filter((h) => h !== handler);
-        if (remaining.length === 0) {
-          notifyHandlers.delete(name);
-        } else {
-          notifyHandlers.set(name, remaining);
+        unsubscribe();
+        if (topic.size === 0) {
+          topic.dispose();
+          notifyTopics.delete(name);
         }
       };
     },
@@ -863,20 +1461,23 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
         throw new DOMException('The operation was aborted.', 'AbortError');
       }
 
-      const values: unknown[] = [];
-      const waiters: Array<(v: unknown) => void> = [];
+      const values: ListenQueueValue[] = [];
+      const waiters: Array<(v: ListenQueueValue) => void> = [];
       let failError: Error | undefined;
+      let grantedCredits = streamFlowControl.initialCredits;
+      let ownedBytes = 0;
+      let delivered: ListenQueueValue | undefined;
 
-      const waitNext = async (): Promise<unknown> => {
+      const waitNext = async (): Promise<ListenQueueValue> => {
         if (values.length > 0) {
           return values.shift()!;
         }
-        return new Promise<unknown>((resolve) => {
+        return new Promise<ListenQueueValue>((resolve) => {
           waiters.push(resolve);
         });
       };
 
-      const deliver = (v: unknown): void => {
+      const deliver = (v: ListenQueueValue): void => {
         if (waiters.length > 0) {
           const w = waiters.shift()!;
           w(v);
@@ -894,17 +1495,53 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
           }
         }
         listenSinks.delete(subId);
+        values.length = 0;
+        ownedBytes = delivered?.ownedBytes ?? 0;
         failError = new DOMException('The operation was aborted.', 'AbortError');
-        deliver(listenFail);
+        deliver({ value: listenFail, ownedBytes: 0 });
       };
 
-      const sink = {
-        push: (v: unknown): void => {
-          deliver(v);
+      const acknowledge = (item: ListenQueueValue, replenish: boolean): void => {
+        if (item.value === listenEnd || item.value === listenFail) {
+          return;
+        }
+        ownedBytes -= item.ownedBytes;
+        const ack: WireFlowAck = { v: 1, k: 'fa', i: subId };
+        try {
+          port.postMessage(ack);
+          if (replenish) {
+            grantedCredits += 1;
+            const window: WireFlowWindow = { v: 1, k: 'fw', i: subId, s: 1 };
+            port.postMessage(window);
+          }
+        } catch {
+          // Port teardown is handled by the surrounding iterator cleanup.
+        }
+      };
+
+      const sink: ListenSink = {
+        name: event,
+        accept: (value: unknown, frameBytes: number): void => {
+          if (value !== listenEnd) {
+            if (frameBytes > streamFlowControl.maxFrameBytes) {
+              throw new Error(`RPC stream frame exceeds ${String(streamFlowControl.maxFrameBytes)} bytes.`);
+            }
+            if (grantedCredits <= 0) {
+              throw new Error('RPC stream producer exceeded the granted frame window.');
+            }
+            if (ownedBytes + frameBytes > streamFlowControl.maxOwnedBytes) {
+              throw new Error(`RPC stream owned-byte budget exceeds ${String(streamFlowControl.maxOwnedBytes)} bytes.`);
+            }
+            grantedCredits -= 1;
+            ownedBytes += frameBytes;
+          }
+          deliver({ value, ownedBytes: frameBytes });
         },
         fail: (error: Error): void => {
+          values.length = 0;
+          ownedBytes = delivered?.ownedBytes ?? 0;
           failError = error;
-          deliver(listenFail);
+          deliver({ value: listenFail, ownedBytes: 0 });
         },
         cleanup: (): void => {
           if (signal) {
@@ -919,21 +1556,31 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
       listenSinks.set(subId, sink);
       const { value: listenArgs, transfer: listenTransfer } = unwrapTransferables(args);
       post({ v: 1, k: 'ss', i: subId, n: event, a: listenArgs ?? null }, listenTransfer);
+      post({ v: 1, k: 'fw', i: subId, s: streamFlowControl.initialCredits });
 
       try {
         // oxlint-disable-next-line no-constant-condition -- event loop until end/fail/return
         for (;;) {
+          if (delivered) {
+            acknowledge(delivered, true);
+            delivered = undefined;
+          }
           // oxlint-disable-next-line no-await-in-loop -- async generator requires sequential awaits
-          const v = await waitNext();
-          if (v === listenEnd) {
+          const item = await waitNext();
+          if (item.value === listenEnd) {
             return;
           }
-          if (v === listenFail) {
+          if (item.value === listenFail) {
             throw failError ?? new Error('listen failed');
           }
-          yield v;
+          delivered = item;
+          yield item.value;
         }
       } finally {
+        if (delivered) {
+          acknowledge(delivered, false);
+          delivered = undefined;
+        }
         if (listenSinks.has(subId)) {
           listenSinks.delete(subId);
           if (!signal?.aborted) {
@@ -968,14 +1615,44 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
  */
 export const createChannelServer = <P extends RpcProtocol = EmptyRpcProtocol>(
   options: ChannelServerOptions<P>,
-): ChannelServerHandle => {
-  const { port, sessionKey, impl, hello, closeTimeout = defaultCloseTimeout, protocolSchemas } = options;
+): ChannelServerHandle<P> => {
+  const {
+    port,
+    sessionKey,
+    impl,
+    hello,
+    closeTimeout = defaultCloseTimeout,
+    protocolSchemas,
+    streamFlowControl: streamFlowControlOptions,
+    keepaliveInterval,
+    callHeartbeatInterval,
+  } = options;
+  const streamFlowControl = resolveStreamFlowControl(streamFlowControlOptions);
+  if (keepaliveInterval !== undefined) {
+    positiveSafeInteger(keepaliveInterval, 'keepaliveInterval');
+  }
+  if (callHeartbeatInterval !== undefined) {
+    positiveSafeInteger(callHeartbeatInterval, 'callHeartbeatInterval');
+  }
   const context: ChannelContext = { sessionKey };
   const inFlightCalls = new Map<string, AbortController>();
   const inFlightStreams = new Map<string, AbortController>();
+  const streamFlows = new Map<string, StreamFlowState>();
+  const reportWireVersionMismatch = createWireVersionMismatchReporter();
+  const reportUnknownNotify = createUnknownNotifyReporter('server');
 
+  // oxlint-disable-next-line eslint/complexity -- one discriminated dispatcher keeps every protocol transition auditable.
   const onWire = (raw: unknown): void => {
-    if (!isWireMessage(raw)) {
+    if (!isWireMessage(raw, reportWireVersionMismatch)) {
+      // Answer a request or subscribe that names its return address rather than leave it pending.
+      const answer = unreadableAnswer(raw);
+      if (answer !== undefined && !closeController.isClosed()) {
+        if (answer.k === 'rq') {
+          port.postMessage({ v: 1, k: 'rs', i: answer.i, o: 0, e: answer.e });
+        } else if (answer.k === 'ss') {
+          port.postMessage({ v: 1, k: 'se', i: answer.i, e: answer.e });
+        }
+      }
       return;
     }
     if (raw.k === 'rq') {
@@ -983,7 +1660,7 @@ export const createChannelServer = <P extends RpcProtocol = EmptyRpcProtocol>(
       let validatedArgs: unknown;
       try {
         validatedArgs = validateWireFrame({
-          validator: protocolSchemas?.calls[raw.n]?.args,
+          validator: protocolSchemas?.calls[raw.n as keyof P['calls']]?.args,
           site: 'server-call-args',
           entry: raw.n,
           payload: raw.a,
@@ -998,11 +1675,46 @@ export const createChannelServer = <P extends RpcProtocol = EmptyRpcProtocol>(
       const ac = new AbortController();
       inFlightCalls.set(id, ac);
       const callImpl = impl.call as WidenedCallImpl;
+      /* A call is still being served while it is in flight and the channel is open:
+       * a cancelled call (`rc` removed it) or a closed channel sends nothing more. */
+      const serving = (): boolean => inFlightCalls.get(id) === ac && !closeController.isClosed();
+      const postCallProgress = (frame: WireRequestProgress): void => {
+        if (!serving()) {
+          return;
+        }
+        try {
+          port.postMessage(frame);
+        } catch {
+          // An uncloneable report is dropped; the call's own reply still settles it.
+        }
+      };
+      const callContext: ChannelCallContext = {
+        sessionKey,
+        progress: (data) => {
+          postCallProgress({ v: 1, k: 'rp', i: id, d: progressForWire(data) });
+        },
+      };
+      let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+      if (callHeartbeatInterval !== undefined) {
+        heartbeatTimer = setInterval(() => {
+          postCallProgress({ v: 1, k: 'rp', i: id });
+        }, callHeartbeatInterval);
+        unrefTimer(heartbeatTimer);
+        /* Cancelled (`rc`) or torn down while the handler still runs: nobody is
+         * listening, and a handler that never settles must not keep a timer. */
+        ac.signal.addEventListener(
+          'abort',
+          () => {
+            clearInterval(heartbeatTimer);
+          },
+          { once: true },
+        );
+      }
       // async-iife: bootstrap — wire handlers are sync per Port contract; per-frame
       // dispatch is tracked via inFlightCalls AbortController registry below.
       void (async () => {
         try {
-          const out = await callImpl(context, raw.n, validatedArgs, ac.signal);
+          const out = await callImpl(callContext, raw.n, validatedArgs, ac.signal);
           if (closeController.isClosed()) {
             return;
           }
@@ -1014,6 +1726,7 @@ export const createChannelServer = <P extends RpcProtocol = EmptyRpcProtocol>(
           }
           port.postMessage({ v: 1, k: 'rs', i: id, o: 0, e: toWireError(error) });
         } finally {
+          clearInterval(heartbeatTimer);
           inFlightCalls.delete(id);
         }
       })();
@@ -1028,10 +1741,14 @@ export const createChannelServer = <P extends RpcProtocol = EmptyRpcProtocol>(
       return;
     }
     if (raw.k === 'nt') {
+      if (protocolSchemas && !Object.hasOwn(protocolSchemas.notifies, raw.n)) {
+        reportUnknownNotify(raw.n);
+        return;
+      }
       let validatedArgs: unknown;
       try {
         validatedArgs = validateWireFrame({
-          validator: protocolSchemas?.notifies[raw.n],
+          validator: protocolSchemas?.notifies[raw.n as keyof P['notifies']],
           site: 'server-notify-args',
           entry: raw.n,
           payload: raw.a,
@@ -1052,30 +1769,95 @@ export const createChannelServer = <P extends RpcProtocol = EmptyRpcProtocol>(
     }
     if (raw.k === 'ss') {
       const subId = raw.i;
+      if (inFlightStreams.has(subId)) {
+        port.postMessage({ v: 1, k: 'se', i: subId, e: { m: `Duplicate stream id: ${subId}` } });
+        return;
+      }
+      let validatedArgs: unknown;
+      try {
+        validatedArgs = validateWireFrame({
+          validator: protocolSchemas?.listens[raw.n as keyof P['listens']]?.args,
+          site: 'server-listen-args',
+          entry: raw.n,
+          payload: raw.a,
+        });
+      } catch (validationError) {
+        if (!closeController.isClosed()) {
+          port.postMessage({ v: 1, k: 'se', i: subId, e: toWireError(validationError) });
+        }
+        return;
+      }
       const ac = new AbortController();
+      const flow: StreamFlowState = {
+        credits: 0,
+        ownedBytes: 0,
+        sentFrameBytes: [],
+        waiters: new Set(),
+        error: undefined,
+      };
       inFlightStreams.set(subId, ac);
+      streamFlows.set(subId, flow);
+      ac.signal.addEventListener(
+        'abort',
+        () => {
+          wakeStreamFlow(flow);
+        },
+        { once: true },
+      );
       const listenImpl = impl.listen as WidenedListenImpl;
       // async-iife: bootstrap — wire handlers are sync per Port contract; per-stream
       // dispatch is tracked via inFlightStreams AbortController registry below.
       void (async () => {
         let iterable: AsyncIterable<unknown>;
         try {
-          const listenResult = listenImpl(context, raw.n, raw.a, ac.signal);
+          const listenResult = listenImpl(context, raw.n, validatedArgs, ac.signal);
           iterable = await resolveListenIterable(listenResult);
         } catch (error) {
           inFlightStreams.delete(subId);
+          streamFlows.delete(subId);
+          wakeStreamFlow(flow);
           if (closeController.isClosed()) {
             return;
           }
           port.postMessage({ v: 1, k: 'se', i: subId, e: toWireError(error) });
           return;
         }
+        const iterator = iterable[Symbol.asyncIterator]();
+        const waitForCapacity = async (): Promise<void> => {
+          while (
+            !ac.signal.aborted &&
+            !flow.error &&
+            (flow.credits <= 0 || flow.ownedBytes + streamFlowControl.maxFrameBytes > streamFlowControl.maxOwnedBytes)
+          ) {
+            // oxlint-disable-next-line no-await-in-loop -- capacity changes are observed sequentially.
+            await new Promise<void>((resolve) => {
+              flow.waiters.add(resolve);
+            });
+          }
+          if (flow.error) {
+            throw flow.error;
+          }
+          ac.signal.throwIfAborted();
+        };
         try {
-          for await (const item of iterable) {
-            if (ac.signal.aborted || closeController.isClosed()) {
+          // oxlint-disable-next-line no-constant-condition -- terminal iterator state exits the loop.
+          for (;;) {
+            // Credits gate iterator.next(), so expensive producers cannot run ahead of the consumer.
+            // oxlint-disable-next-line no-await-in-loop -- producer pulls are intentionally serialized by flow control.
+            await waitForCapacity();
+            // oxlint-disable-next-line no-await-in-loop -- an async iterator is consumed in order.
+            const next = await iterator.next();
+            if (next.done === true || ac.signal.aborted || closeController.isClosed()) {
               break;
             }
-            const { value, transfer } = unwrapTransferables(item);
+            const { value, transfer } = unwrapTransferables(next.value);
+            const frameBytes = estimateOwnedBytes(value);
+            if (frameBytes > streamFlowControl.maxFrameBytes) {
+              throw new Error(`RPC stream frame exceeds ${String(streamFlowControl.maxFrameBytes)} bytes.`);
+            }
+            flow.credits -= 1;
+            flow.ownedBytes += frameBytes;
+            flow.sentFrameBytes.push(frameBytes);
             port.postMessage({ v: 1, k: 'sn', i: subId, d: value }, transfer);
           }
           if (!closeController.isClosed()) {
@@ -1086,7 +1868,10 @@ export const createChannelServer = <P extends RpcProtocol = EmptyRpcProtocol>(
             port.postMessage({ v: 1, k: 'se', i: subId, e: toWireError(error) });
           }
         } finally {
+          await iterator.return?.();
           inFlightStreams.delete(subId);
+          streamFlows.delete(subId);
+          wakeStreamFlow(flow);
         }
       })();
       return;
@@ -1104,18 +1889,35 @@ export const createChannelServer = <P extends RpcProtocol = EmptyRpcProtocol>(
       return;
     }
     if (raw.k === 'fa') {
-      warnFlowAckOnce();
+      const flow = streamFlows.get(raw.i);
+      const frameBytes = flow?.sentFrameBytes.shift();
+      if (flow && frameBytes !== undefined) {
+        flow.ownedBytes -= frameBytes;
+        wakeStreamFlow(flow);
+      }
       return;
     }
     if (raw.k === 'fw') {
-      warnFlowWindowOnce();
+      const flow = streamFlows.get(raw.i);
+      if (!flow) {
+        return;
+      }
+      if (flow.credits + flow.sentFrameBytes.length + raw.s > streamFlowControl.initialCredits) {
+        flow.error = new Error(`RPC stream window exceeds ${String(streamFlowControl.initialCredits)} frames.`);
+        wakeStreamFlow(flow);
+        return;
+      }
+      flow.credits += raw.s;
+      wakeStreamFlow(flow);
     }
-    // Unhandled known kinds (rs/sn/sc/se/lh) for server side: drop.
+    // Unhandled known kinds (rs/sn/sc/se/lh/lk) for server side: drop.
   };
 
   let off: () => void = (): void => undefined;
+  let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
 
   const cleanupInFlight = (): void => {
+    clearInterval(keepaliveTimer);
     for (const ac of inFlightCalls.values()) {
       ac.abort();
     }
@@ -1124,6 +1926,10 @@ export const createChannelServer = <P extends RpcProtocol = EmptyRpcProtocol>(
       ac.abort();
     }
     inFlightStreams.clear();
+    for (const flow of streamFlows.values()) {
+      wakeStreamFlow(flow);
+    }
+    streamFlows.clear();
   };
 
   const closeController = createCloseController({
@@ -1140,7 +1946,16 @@ export const createChannelServer = <P extends RpcProtocol = EmptyRpcProtocol>(
     closeHandshakeTimeout: closeTimeout,
   });
 
-  off = port.onMessage(onWire);
+  const offWire = port.onMessage(onWire);
+  /* Symmetric with the client: a dead port aborts every in-flight call rather
+   * than leaving the server dispatching into a disentangled wire. */
+  const offPortClose = port.onClose?.(() => {
+    closeController.acceptRemote('port-closed', 'PEER_GONE');
+  });
+  off = (): void => {
+    offWire();
+    offPortClose?.();
+  };
   if (port.start) {
     port.start();
   }
@@ -1153,6 +1968,18 @@ export const createChannelServer = <P extends RpcProtocol = EmptyRpcProtocol>(
   } catch {
     // Port not ready: dispose immediately.
     closeController.initiateLocal('hello-failed');
+  }
+  if (keepaliveInterval !== undefined && !closeController.isClosed()) {
+    const sendKeepalive = (): void => {
+      try {
+        port.postMessage({ v: 1, k: 'lk' });
+      } catch {
+        closeController.initiateLocal('keepalive-failed');
+      }
+    };
+    keepaliveTimer = setInterval(sendKeepalive, keepaliveInterval);
+    unrefTimer(keepaliveTimer);
+    sendKeepalive();
   }
 
   return {

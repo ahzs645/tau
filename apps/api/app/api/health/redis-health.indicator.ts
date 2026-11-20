@@ -2,7 +2,7 @@
 import { Injectable } from '@nestjs/common';
 import { HealthIndicatorService } from '@nestjs/terminus';
 import type { HealthIndicatorResult } from '@nestjs/terminus';
-import { RedisService } from '#redis/redis.service.js';
+import { RedisService } from '@taucad/api-redis';
 
 @Injectable()
 export class RedisHealthIndicator {
@@ -29,7 +29,10 @@ export class RedisHealthIndicator {
 
       return indicator.up({ responseTimeMs });
     } catch (error) {
-      return indicator.down({ message: error instanceof Error ? error.message : String(error) });
+      return indicator.down({
+        responseTimeMs: Math.round(performance.now() - start),
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 }

@@ -1,8 +1,12 @@
 import { ArrowLeft, Home, Search, MapPin } from 'lucide-react';
 import { useNavigate, Link, useLocation } from 'react-router';
-import { Button, buttonVariants } from '#components/ui/button.js';
-import { cn } from '#utils/ui.utils.js';
-import { InlineCode } from '#components/code/code-block.js';
+import { Button, buttonVariants } from '@taucad/ui/components/button';
+import { cn } from '@taucad/ui/utils/cn';
+import { InlineCode } from '@taucad/ui/components/inline-code';
+import { PageHeader } from '#components/layout/page-header.js';
+
+/** The not-found page's one `h1`, and the name its document title carries. */
+export const pageNotFoundTitle = 'Page not found';
 
 export function PageNotFound(): React.JSX.Element {
   const navigate = useNavigate();
@@ -22,8 +26,8 @@ export function PageNotFound(): React.JSX.Element {
               <MapPin className='size-6 text-muted-foreground' />
             </div>
           </div>
-          <h1 className='mb-2 text-6xl font-bold text-muted-foreground'>404</h1>
-          <h2 className='text-2xl font-semibold'>Page Not Found</h2>
+          <p className='mb-2 text-6xl font-semibold text-muted-foreground'>404</p>
+          <PageHeader title={pageNotFoundTitle} className='justify-center' />
         </div>
 
         {/* Content Card */}
@@ -66,7 +70,10 @@ export function PageNotFound(): React.JSX.Element {
         <div className='mt-6 text-center'>
           <p className='text-sm text-muted-foreground'>
             Still need help?{' '}
-            <Link to='/docs' className={cn(buttonVariants({ variant: 'link' }), 'h-auto p-0 text-sm underline')}>
+            <Link
+              to='https://docs.tau.new'
+              className={cn(buttonVariants({ variant: 'link' }), 'h-auto p-0 text-sm underline')}
+            >
               Check our docs
             </Link>{' '}
             or{' '}

@@ -1,0 +1,188 @@
+import type { EmailTemplate } from '#email.types.js';
+
+const authEmailPaths = {
+  'magic-link': '/auth/magic-link/verify',
+  'reset-password': '/auth/reset-password',
+  'password-changed': '/auth/forgot-password',
+  'verify-email': '/auth/verify-email',
+  'account-exists': '/auth/sign-in',
+} as const satisfies Record<
+  Extract<
+    EmailTemplate['kind'],
+    'magic-link' | 'reset-password' | 'password-changed' | 'verify-email' | 'account-exists'
+  >,
+  string
+>;
+
+/** Where a collaborator invitation is accepted; the token is the one segment after it. */
+const projectInvitationPath = '/invitations/';
+
+export const sanitizeFrontendRedirectPath = ({
+  callbackURL,
+  frontendURL,
+}: {
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- URLSearchParams.get returns null for a missing key
+  readonly callbackURL?: string | null;
+  readonly frontendURL: string;
+}): string => {
+  if (!callbackURL) {
+    return '/';
+  }
+
+  // Resolved against the frontend rather than matched by prefix: browsers read `/\host` as `//host`, so a
+  // prefix check let it through (web UI security assessment F-6). Only a same-origin result is kept.
+  try {
+    const frontendOrigin = new URL(frontendURL).origin;
+    const callback = new URL(callbackURL, frontendOrigin);
+
+    if (callback.origin !== frontendOrigin) {
+      return '/';
+    }
+
+    // Dot segments normalise `/.//host` to the path `//host`, which a browser would again read as another origin.
+    const path = `${callback.pathname}${callback.search}${callback.hash}`;
+    return path.startsWith('//') ? '/' : path || '/';
+  } catch {
+    return '/';
+  }
+};
+
+export const buildFrontendVerificationUrl = ({
+  frontendURL,
+  generatedUrl,
+  token,
+}: {
+  readonly frontendURL: string;
+  readonly generatedUrl: string;
+  readonly token: string;
+}): string => {
+  const verificationUrl = new URL(authEmailPaths['verify-email'], frontendURL);
+  const generatedVerificationUrl = new URL(generatedUrl);
+  const redirectTo = sanitizeFrontendRedirectPath({
+    callbackURL: generatedVerificationUrl.searchParams.get('callbackURL'),
+    frontendURL,
+  });
+
+  verificationUrl.searchParams.set('token', token);
+  verificationUrl.searchParams.set('redirectTo', redirectTo);
+
+  return verificationUrl.toString();
+};
+
+export const buildFrontendResetPasswordUrl = ({
+  frontendURL,
+  token,
+}: {
+  readonly frontendURL: string;
+  readonly token: string;
+}): string => {
+  const resetUrl = new URL(authEmailPaths['reset-password'], frontendURL);
+  resetUrl.searchParams.set('token', token);
+  return resetUrl.toString();
+};
+
+/** The sign-in page an existing account holder is sent to when they try to sign up again. */
+export const buildFrontendSignInUrl = ({ frontendURL }: { readonly frontendURL: string }): string =>
+  new URL(authEmailPaths['account-exists'], frontendURL).toString();
+
+/** Where a recipient who did not change their password goes to take the account back. */
+export const buildFrontendForgotPasswordUrl = ({ frontendURL }: { readonly frontendURL: string }): string =>
+  new URL(authEmailPaths['password-changed'], frontendURL).toString();
+
+export const buildFrontendMagicLinkVerifyUrl = ({
+  frontendURL,
+  generatedUrl,
+  token,
+}: {
+  readonly frontendURL: string;
+  readonly generatedUrl: string;
+  readonly token: string;
+}): string => {
+  const magicLinkUrl = new URL(authEmailPaths['magic-link'], frontendURL);
+  const generatedMagicLinkUrl = new URL(generatedUrl);
+  const redirectTo = sanitizeFrontendRedirectPath({
+    callbackURL: generatedMagicLinkUrl.searchParams.get('callbackURL'),
+    frontendURL,
+  });
+
+  magicLinkUrl.searchParams.set('token', token);
+  magicLinkUrl.searchParams.set('redirectTo', redirectTo);
+
+  return magicLinkUrl.toString();
+};
+
+/** A project's stable cloud link, `/s/tau~<shareId>` (stable cloud link blueprint C3). */
+export const buildCloudLinkUrl = ({
+  frontendURL,
+  shareId,
+}: {
+  readonly frontendURL: string;
+  readonly shareId: string;
+}): string => new URL(`/s/tau~${shareId}`, frontendURL).toString();
+
+/** The accept page of a collaborator invitation, `/invitations/<token>`. */
+export const buildProjectInvitationUrl = ({
+  frontendURL,
+  token,
+}: {
+  readonly frontendURL: string;
+  readonly token: string;
+}): string => new URL(`${projectInvitationPath}${encodeURIComponent(token)}`, frontendURL).toString();
+
+export const assertEmailTemplateUrlAllowed = ({
+  template,
+  frontendURL,
+}: {
+  readonly template: EmailTemplate;
+  readonly frontendURL: string;
+}): void => {
+  const rawUrl = 'billingUrl' in template ? template.billingUrl : template.url;
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error(`Invalid ${template.kind} email URL`);
+  }
+
+  const frontendOrigin = new URL(frontendURL).origin;
+  if (url.origin !== frontendOrigin) {
+    throw new Error(`Invalid ${template.kind} email URL origin`);
+  }
+
+  if (template.kind === 'publication-invite') {
+    if (!url.pathname.startsWith('/s/') || url.pathname.length <= '/s/'.length) {
+      throw new Error('Invalid publication-invite email URL path');
+    }
+
+    return;
+  }
+
+  if (template.kind === 'project-invite') {
+    const token = url.pathname.slice(projectInvitationPath.length);
+    if (!url.pathname.startsWith(projectInvitationPath) || token === '' || token.includes('/') || url.search !== '') {
+      throw new Error('Invalid project-invite email URL path');
+    }
+
+    return;
+  }
+
+  if (template.kind === 'account-exists') {
+    const resetUrl = new URL(template.resetUrl);
+    if (resetUrl.origin !== frontendOrigin || resetUrl.pathname !== authEmailPaths['password-changed']) {
+      throw new Error('Invalid account-exists email reset URL');
+    }
+  }
+
+  if ('billingUrl' in template) {
+    if (url.pathname !== '/' || url.searchParams.get('settings') !== 'billing') {
+      throw new Error(`Invalid ${template.kind} email URL path`);
+    }
+
+    return;
+  }
+
+  const expectedPath = authEmailPaths[template.kind];
+  if (url.pathname !== expectedPath) {
+    throw new Error(`Invalid ${template.kind} email URL path`);
+  }
+};

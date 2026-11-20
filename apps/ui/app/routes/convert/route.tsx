@@ -1,14 +1,15 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router';
-import { importToGlb, supportedImportFormats, supportedExportFormats, formatConfigurations } from '@taucad/converter';
-import type { SupportedImportFormat, SupportedExportFormat } from '@taucad/converter';
-import { Download, Upload, RotateCcw, Package, Code2 } from 'lucide-react';
-import { fromSafeAsync } from '#lib/xstate.lib.js';
-import type { Geometry, Project } from '@taucad/types';
-import { Button } from '#components/ui/button.js';
-import { toast } from '#components/ui/sonner.js';
+import { Heading } from '@taucad/ui/components/heading';
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import type { MetaFunction } from 'react-router';
 import type { Handle } from '#types/matches.types.js';
-import { CadViewer } from '#components/geometry/cad/cad-viewer.js';
+import { formatConfigurations } from '@taucad/types/constants';
+import { asKnownArtifact } from '@taucad/runtime';
+import { Cpu, Download, Upload, RotateCcw } from 'lucide-react';
+import { fromSafeAsync } from '@taucad/ui-core/lib/xstate.lib';
+import { projectToManifest } from '@taucad/types';
+import type { ProjectLoadInput, ProjectRetrievedEvent } from '#machines/project.machine.js';
+import { Button } from '@taucad/ui/components/button';
+import { CadViewer } from '@taucad/viewer/cad/cad-viewer';
 import {
   FloatingPanel,
   FloatingPanelContent,
@@ -16,61 +17,44 @@ import {
   FloatingPanelContentTitle,
   FloatingPanelContentBody,
 } from '#components/ui/floating-panel.js';
-import { Dropzone, DropzoneEmptyState } from '#components/ui/dropzone.js';
+import { Dropzone, DropzoneEmptyState } from '@taucad/ui-kit/components/dropzone';
 import { FormatsList } from '#routes/convert/formats-list.js';
-import { FormatsListMobile } from '#routes/convert/formats-list-mobile.js';
-import {
-  CodeBlock,
-  CodeBlockHeader,
-  CodeBlockTitle,
-  CodeBlockAction,
-  CodeBlockContent,
-  Pre,
-} from '#components/code/code-block.js';
-import { CopyButton } from '#components/copy-button.js';
-import { ExternalLink } from '#components/external-link.js';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '#components/ui/card.js';
-import { InfoTooltip } from '#components/ui/info-tooltip.js';
+import { InfoTooltip } from '@taucad/ui/components/info-tooltip';
 import {
   getFormatFromFilename,
   formatDisplayName,
   formatFileSize,
+  isConfiguredConverterFormat,
 } from '#components/geometry/converter/converter-utils.js';
 import { Converter } from '#components/geometry/converter/converter.js';
-import { FovControl } from '#components/geometry/cad/fov-control.js';
-import { GridSizeIndicator } from '#components/geometry/cad/grid-control.js';
-import { SectionViewControl } from '#components/geometry/cad/section-view-control.js';
-import { MeasureControl } from '#components/geometry/cad/measure-control.js';
-import { ResetCameraControl } from '#components/geometry/cad/reset-camera-control.js';
-import { ViewerSettings } from '#components/geometry/cad/viewer-settings.js';
-import { ChatInterfaceGraphics } from '#routes/projects_.$id/chat-interface-graphics.js';
+import { ChatViewerControls } from '#routes/w.$workspace.$project/chat-viewer-controls.js';
 import { useCookie } from '#hooks/use-cookie.js';
-import { cookieName } from '#constants/cookie.constants.js';
-import { cn } from '#utils/ui.utils.js';
-import { Loader } from '#components/ui/loader.js';
-import { ProjectProvider, useProject } from '#hooks/use-project.js';
-import { GraphicsProvider, useGraphicsSelector } from '#hooks/use-graphics.js';
-import { metaConfig } from '#constants/meta.constants.js';
-import { SidebarOffset } from '#components/layout/sidebar-offset.js';
+import { cookieName } from '@taucad/ui-core/constants/cookie.constants';
+import { cn } from '@taucad/ui/utils/cn';
+import { Loader } from '@taucad/ui/components/loader';
+import { ProjectProvider } from '#hooks/project-provider.js';
+import { useProject } from '#hooks/use-project.js';
+import { GraphicsProvider, useGraphics, useGraphicsSelector } from '@taucad/viewer/hooks/use-graphics';
+import { PageContent } from '#components/layout/page-content.js';
+import { PageHeader } from '#components/layout/page-header.js';
+import { PageNotice } from '#components/layout/page-notice.js';
+import { createConverterSource } from '@taucad/converter/contracts';
+import type { ConverterExportFormat, ConverterImportFormat, ConverterRuntimeClient } from '@taucad/converter/runtime';
+import { createConverterClient } from '#runtime/converter-client-options.js';
+import { beginConverterOperation, createActiveConverterClient } from '#routes/convert/converter-client-lifecycle.js';
 
-export const handle: Handle = {
-  breadcrumb() {
-    return (
-      <Button asChild variant='ghost'>
-        <Link to='/converter'>Converter</Link>
-      </Button>
-    );
-  },
-  enableFloatingSidebar: true,
-};
+export const meta: MetaFunction = () => [{ title: 'Convert · Tau' }];
+
+export const handle: Handle = { title: 'Convert' };
 
 type UploadedFileInfo = {
   name: string;
-  format: SupportedImportFormat;
+  format: ConverterImportFormat;
   size: number;
 };
 
 const converterViewId = 'converter-main';
+const defaultConverterExportFormats: ConverterExportFormat[] = ['stl'];
 
 function ConverterContent(): React.JSX.Element {
   const { projectRef, viewGraphics } = useProject();
@@ -84,7 +68,14 @@ function ConverterContent(): React.JSX.Element {
 
   const graphicsRef = viewGraphics.get(converterViewId);
   if (!graphicsRef) {
-    return <Loader className='size-12' />;
+    return (
+      <PageContent className='space-y-6'>
+        <PageHeader title='Convert' />
+        <p role='status' className='flex items-center gap-2 text-sm text-muted-foreground'>
+          <Loader /> Preparing converter…
+        </p>
+      </PageContent>
+    );
   }
 
   return (
@@ -95,12 +86,19 @@ function ConverterContent(): React.JSX.Element {
 }
 
 /**
- * Isolated viewer component that owns all graphics-machine selectors and the
- * CadViewer.  Memoised so that UI-only state changes in the parent
- * (format selection, cookie updates, etc.) never cause the WebGL canvas to
- * re-render.
+ * Isolated viewer that owns all graphics-machine selectors, the CadViewer and the viewer bar.
+ * Memoised so that UI-only state changes in the parent (format selection, cookie updates, etc.) never cause the
+ * WebGL canvas to re-render.
  */
-const ConverterViewer = memo(function ({ glbData }: { readonly glbData: Uint8Array<ArrayBuffer> }): React.JSX.Element {
+export const ConverterViewer = memo(function ({
+  glbData,
+  hash,
+  fileName,
+}: {
+  readonly glbData: Uint8Array<ArrayBuffer>;
+  readonly hash: string;
+  readonly fileName: string;
+}): React.JSX.Element {
   const enableSurfaces = useGraphicsSelector((state) => state.context.enableSurfaces);
   const enableLines = useGraphicsSelector((state) => state.context.enableLines);
   const enableGizmo = useGraphicsSelector((state) => state.context.enableGizmo);
@@ -109,81 +107,284 @@ const ConverterViewer = memo(function ({ glbData }: { readonly glbData: Uint8Arr
   const enableMatcap = useGraphicsSelector((state) => state.context.enableMatcap);
   const upDirection = useGraphicsSelector((state) => state.context.upDirection);
 
-  const geometries = useMemo<Geometry[]>(() => [{ format: 'gltf', content: glbData, hash: 'converter' }], [glbData]);
+  const artifact = useMemo(() => ({ mimeType: 'model/gltf-binary', content: glbData }) as const, [glbData]);
 
   return (
-    <CadViewer
-      enableZoom
-      enablePan
-      upDirection={upDirection}
-      enableMatcap={enableMatcap}
-      enableLines={enableLines}
-      enableAxes={enableAxes}
-      enableGrid={enableGrid}
-      enableGizmo={enableGizmo}
-      enableSurfaces={enableSurfaces}
-      geometries={geometries}
-    />
+    <div data-viewer-frame className='fullscreen:bg-background absolute inset-0'>
+      {/* A labelled region, not an image: the viewer holds its own controls (the view cube, diagnostics). */}
+      <section aria-label={`Preview of ${fileName}`} className='absolute inset-0'>
+        <CadViewer
+          enableZoom
+          enablePan
+          upDirection={upDirection}
+          enableMatcap={enableMatcap}
+          enableLines={enableLines}
+          enableAxes={enableAxes}
+          enableGrid={enableGrid}
+          enableGizmo={enableGizmo}
+          enableSurfaces={enableSurfaces}
+          artifact={artifact}
+          artifactHash={hash}
+        />
+      </section>
+
+      {/* Keep the viewer bar clear of the export panel, with safe centring on narrow screens. */}
+      <div className='in-fullscreen:right-2 @container/viewer pointer-events-none absolute right-2 bottom-2 left-2 z-10 flex flex-col items-center-safe md:right-84'>
+        <ChatViewerControls shouldEnableCapture={false} />
+      </div>
+    </div>
   );
 });
 
+/**
+ * The export panel. From md up it is always open beside the viewer. Below md it folds away behind an Export toggle, so
+ * the viewer and its bar stay in reach, and opens under the toggle over the viewer.
+ */
+/**
+ * What the converter could not carry over from the opened file, such as the losses a native CAD import records.
+ * Collapsed by default; every warning stays readable.
+ */
+export function ConversionWarnings({
+  messages,
+}: Readonly<{ messages: readonly string[] }>): React.JSX.Element | undefined {
+  if (messages.length === 0) {
+    return undefined;
+  }
+  return (
+    <details className='text-xs text-muted-foreground'>
+      <summary className='w-fit rounded-xs select-none focus-visible:focus-outline-outside'>
+        {`${messages.length} ${messages.length === 1 ? 'warning' : 'warnings'}: some of the file's data didn't carry over`}
+      </summary>
+      <ul className='mt-2 max-h-40 list-disc space-y-1 overflow-y-auto pl-4 break-words'>
+        {messages.map((message, index) => (
+          // oxlint-disable-next-line react/no-array-index-key -- the list is replaced whole, and messages can repeat
+          <li key={index}>{message}</li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+export function ConverterExportPanel({ children }: Readonly<{ children: React.ReactNode }>): React.JSX.Element {
+  const [isOpenOnPhone, setIsOpenOnPhone] = useState(false);
+  const panelId = useId();
+  return (
+    <>
+      <Button
+        variant='overlay'
+        aria-expanded={isOpenOnPhone}
+        aria-controls={panelId}
+        className='absolute top-2 right-2 z-10 md:hidden'
+        onClick={() => {
+          setIsOpenOnPhone((isOpen) => !isOpen);
+        }}
+      >
+        <Download />
+        Export
+      </Button>
+      <div
+        id={panelId}
+        className={cn(
+          'absolute top-2 right-2 bottom-2 z-10 flex gap-2',
+          // Below the toggle, inset from every edge.
+          'max-md:top-12 max-md:left-2',
+          !isOpenOnPhone && 'max-md:hidden',
+        )}
+      >
+        <FloatingPanel isOpen side='right' className='rounded-md border'>
+          <FloatingPanelContent className='w-80 max-md:w-full'>
+            <FloatingPanelContentHeader className='px-3 text-foreground'>
+              <FloatingPanelContentTitle>Export options</FloatingPanelContentTitle>
+            </FloatingPanelContentHeader>
+            {children}
+          </FloatingPanelContent>
+        </FloatingPanel>
+      </div>
+    </>
+  );
+}
+
 function ConverterContentInner(): React.JSX.Element {
+  const graphicsRef = useGraphics();
   const [uploadedFile, setUploadedFile] = useState<UploadedFileInfo | undefined>(undefined);
   const [glbData, setGlbData] = useState<Uint8Array<ArrayBuffer> | undefined>(undefined);
-  const [selectedFormats, setSelectedFormats] = useCookie<SupportedExportFormat[]>(
+  const [glbHash, setGlbHash] = useState<string | undefined>(undefined);
+  const [runtimeDocument, setRuntimeDocument] = useState<ReturnType<ConverterRuntimeClient['open']> | undefined>();
+  const documentRef = useRef<ReturnType<ConverterRuntimeClient['open']> | undefined>(undefined);
+  const pendingDocumentRef = useRef<ReturnType<ConverterRuntimeClient['open']> | undefined>(undefined);
+  const [client, setClient] = useState<ConverterRuntimeClient | undefined>(undefined);
+  const [converterImportFormats, setConverterImportFormats] = useState<ConverterImportFormat[]>([]);
+  const [converterExportFormats, setConverterExportFormats] = useState<ConverterExportFormat[]>([]);
+  const [selectedFormats, setSelectedFormats] = useCookie<ConverterExportFormat[]>(
     cookieName.converterOutputFormats,
-    [],
+    defaultConverterExportFormats,
   );
   const [useZipForMultiple, setUseZipForMultiple] = useCookie<boolean>(cookieName.converterMultifileZip, true);
   const [isConverting, setIsConverting] = useState(false);
+  const [openingFileName, setOpeningFileName] = useState<string>();
+  const [conversionError, setConversionError] = useState<string>();
+  const [conversionWarnings, setConversionWarnings] = useState<readonly string[]>([]);
+  const conversionGeneration = useRef(0);
 
-  const handleFileSelect = useCallback(async (file: File) => {
-    setIsConverting(true);
-
-    try {
-      const format = getFormatFromFilename(file.name);
-
-      const arrayBuffer = await file.arrayBuffer();
-      const data = new Uint8Array(arrayBuffer);
-
-      toast.promise(
-        (async () => {
-          const glb = await importToGlb([{ name: file.name, bytes: data }], format);
-
-          setUploadedFile({
-            name: file.name,
-            format,
-            size: file.size,
-          });
-          setGlbData(glb);
-        })(),
-        {
-          loading: `Converting ${file.name}...`,
-          success: `Converted ${file.name} successfully`,
-          error(error: unknown) {
-            let message = 'Failed to convert file';
-            if (error instanceof Error) {
-              message = `${message}: ${error.message}`;
-            }
-
-            return message;
-          },
-        },
-      );
-    } catch (error) {
-      let message = 'Failed to process file';
-      if (error instanceof Error) {
-        message = `${message}: ${error.message}`;
+  useEffect(() => {
+    let active = true;
+    let runtimeClient: ConverterRuntimeClient | undefined;
+    let unsubscribe: (() => void) | undefined;
+    const connectConverter = async (): Promise<void> => {
+      try {
+        const createdClient = await createActiveConverterClient(createConverterClient, () => active);
+        if (!createdClient) {
+          return;
+        }
+        runtimeClient = createdClient;
+        unsubscribe = createdClient.on('capabilities', (capabilities) => {
+          if (!active) {
+            return;
+          }
+          setConverterImportFormats([
+            ...new Set(
+              capabilities.registrations
+                .flatMap((registration) => (registration.kind === 'kernel' ? registration.extensions : []))
+                .filter((format) => isConfiguredConverterFormat(format)),
+            ),
+          ] as ConverterImportFormat[]);
+          setConverterExportFormats([
+            ...new Set(
+              capabilities.routes
+                .map((route) => route.targetFormat)
+                .filter((format) => isConfiguredConverterFormat(format)),
+            ),
+          ]);
+        });
+        await createdClient.connect();
+        if (!active) {
+          unsubscribe();
+          createdClient.terminate();
+          return;
+        }
+        setClient(createdClient);
+      } catch (error) {
+        unsubscribe?.();
+        runtimeClient?.terminate();
+        if (active) {
+          setConversionError(
+            `Could not start the converter: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
-
-      toast.error(message);
-    } finally {
-      setIsConverting(false);
-    }
+    };
+    void connectConverter();
+    return () => {
+      active = false;
+      conversionGeneration.current += 1;
+      pendingDocumentRef.current?.close();
+      pendingDocumentRef.current = undefined;
+      documentRef.current?.close();
+      documentRef.current = undefined;
+      unsubscribe?.();
+      runtimeClient?.terminate();
+    };
   }, []);
 
+  useEffect(() => {
+    if (converterExportFormats.length > 0) {
+      setSelectedFormats((formats) => {
+        const configuredFormats = formats.filter((format) => converterExportFormats.includes(format));
+        return configuredFormats.length === formats.length ? formats : configuredFormats;
+      });
+    }
+  }, [converterExportFormats, setSelectedFormats]);
+
+  const handleFileSelect = useCallback(
+    async (files: File[]) => {
+      const isCurrentOperation = beginConverterOperation(conversionGeneration);
+      pendingDocumentRef.current?.close();
+      pendingDocumentRef.current = undefined;
+      setOpeningFileName(files[0]?.name);
+      setIsConverting(true);
+      setConversionError(undefined);
+      try {
+        if (!client) {
+          throw new Error('The converter runtime is still loading');
+        }
+        const entryFile = files.find((file) => {
+          try {
+            return converterImportFormats.includes(getFormatFromFilename(file.name));
+          } catch {
+            return false;
+          }
+        });
+        if (!entryFile) {
+          throw new Error('No supported model file was selected');
+        }
+        setOpeningFileName(entryFile.name);
+        const format = getFormatFromFilename(entryFile.name);
+        const entries = await Promise.all(
+          files.map(
+            async (file) => [file.webkitRelativePath || file.name, new Uint8Array(await file.arrayBuffer())] as const,
+          ),
+        );
+        if (!isCurrentOperation()) {
+          return;
+        }
+        const nextSource = createConverterSource(entries, entryFile.webkitRelativePath || entryFile.name);
+        const opened = client.open({ source: nextSource, watch: false });
+        pendingDocumentRef.current = opened;
+        const outcome = await opened.evaluation();
+        if (!isCurrentOperation() || outcome.superseded) {
+          return;
+        }
+        if (!outcome.evaluation.success) {
+          throw new Error(outcome.evaluation.issues.map((issue) => issue.message).join('\n'));
+        }
+        const view = opened.view();
+        const preview = await view.rendering();
+        view.close();
+        if (!isCurrentOperation() || preview.superseded) {
+          return;
+        }
+        if (!preview.rendering.success) {
+          throw new Error(preview.rendering.issues.map((issue) => issue.message).join('\n'));
+        }
+        const artifact = asKnownArtifact(preview.rendering.artifact);
+        if (artifact?.mimeType !== 'model/gltf-binary') {
+          throw new Error(`Converter returned unsupported preview media: ${preview.rendering.artifact.mimeType}`);
+        }
+        setUploadedFile({ name: entryFile.name, format, size: entryFile.size });
+        setConversionWarnings(
+          outcome.evaluation.issues.filter((issue) => issue.severity === 'warning').map((issue) => issue.message),
+        );
+        documentRef.current?.close();
+        documentRef.current = opened;
+        pendingDocumentRef.current = undefined;
+        setRuntimeDocument(opened);
+        setGlbData(artifact.content);
+        setGlbHash(preview.rendering.hash);
+        // The viewer presents the GLB that graphics is sent.
+        graphicsRef.send({ type: 'updateArtifact', artifact, hash: preview.rendering.hash });
+      } catch (error) {
+        if (isCurrentOperation()) {
+          let message = 'Failed to process file';
+          if (error instanceof Error) {
+            message = `${message}: ${error.message}`;
+          }
+          setConversionError(message);
+        }
+      } finally {
+        if (pendingDocumentRef.current && isCurrentOperation()) {
+          pendingDocumentRef.current.close();
+          pendingDocumentRef.current = undefined;
+        }
+        if (isCurrentOperation()) {
+          setIsConverting(false);
+        }
+      }
+    },
+    [client, converterImportFormats, graphicsRef],
+  );
+
   const handleFormatToggle = useCallback(
-    (format: SupportedExportFormat) => {
+    (format: ConverterExportFormat) => {
       setSelectedFormats((previous) => {
         if (previous.includes(format)) {
           return previous.filter((f) => f !== format);
@@ -196,9 +397,20 @@ function ConverterContentInner(): React.JSX.Element {
   );
 
   const handleReset = useCallback(() => {
+    conversionGeneration.current += 1;
+    pendingDocumentRef.current?.close();
+    pendingDocumentRef.current = undefined;
+    setIsConverting(false);
+    setConversionError(undefined);
     setUploadedFile(undefined);
+    setConversionWarnings([]);
+    documentRef.current?.close();
+    documentRef.current = undefined;
+    setRuntimeDocument(undefined);
     setGlbData(undefined);
-  }, []);
+    setGlbHash(undefined);
+    graphicsRef.send({ type: 'clearArtifact' });
+  }, [graphicsRef]);
 
   const handleClearFormats = useCallback(() => {
     setSelectedFormats([]);
@@ -213,64 +425,122 @@ function ConverterContentInner(): React.JSX.Element {
 
   const handleFileDrop = useCallback(
     (acceptedFiles: File[]) => {
-      const file = acceptedFiles[0];
-      if (file) {
-        void handleFileSelect(file);
+      if (acceptedFiles.length > 0) {
+        void handleFileSelect(acceptedFiles);
       }
     },
     [handleFileSelect],
   );
 
+  const exportFormat = useCallback(
+    async (format: ConverterExportFormat) => {
+      if (!runtimeDocument) {
+        throw new Error('No model is loaded');
+      }
+      const result = await runtimeDocument.export(format);
+      if (!result.success) {
+        throw new Error(result.issues.map((issue) => issue.message).join('\n'));
+      }
+      return [...result.files];
+    },
+    [runtimeDocument],
+  );
+
   const hasModel = glbData !== undefined;
 
   return (
-    <div className={cn('relative flex h-full flex-col', !hasModel && 'overflow-y-auto')}>
-      {hasModel ? (
-        // Loaded state - model rendered with floating panel
-        <>
-          {/* Main viewer area */}
-          <div className='relative flex-1'>
-            <div className='absolute inset-0'>
-              <ConverterViewer glbData={glbData} />
-            </div>
+    <PageContent className='flex min-h-full flex-col gap-6'>
+      <div className='shrink-0'>
+        <PageHeader
+          title='Convert'
+          action={
+            hasModel ? (
+              <Button variant='outline' onClick={handleReset}>
+                <RotateCcw />
+                Start over
+              </Button>
+            ) : undefined
+          }
+        />
+      </div>
 
-            {/* Bottom-left viewer controls */}
-            <SidebarOffset asChild via='left'>
-              <div className='pointer-events-none absolute bottom-2 left-2 z-10 flex w-90 shrink-0 flex-col gap-2'>
-                {/* File info overlay */}
-                {uploadedFile ? (
-                  <div className='pointer-events-auto w-100 rounded-md border bg-sidebar p-3'>
-                    <div className='flex items-center gap-1'>
-                      <div className='text-sm font-medium'>{uploadedFile.name}</div>
-                      <InfoTooltip>{formatConfigurations[uploadedFile.format].description}</InfoTooltip>
-                    </div>
-                    <div className='text-xs text-muted-foreground'>
-                      {formatDisplayName(uploadedFile.format)} · {formatFileSize(uploadedFile.size)}
-                    </div>
-                  </div>
-                ) : undefined}
-                <ChatInterfaceGraphics className='w-100' />
-                <div className='pointer-events-auto flex items-center gap-2'>
-                  <FovControl className='w-60' />
-                  <GridSizeIndicator />
-                  <SectionViewControl />
-                  <MeasureControl />
-                  <ResetCameraControl />
-                  <ViewerSettings />
-                </div>
+      {conversionError ? (
+        <PageNotice
+          title={client ? 'Model unavailable' : 'Converter unavailable'}
+          message={
+            client
+              ? `${openingFileName ?? 'The selected model'} could not be read. Choose another model to try again.`
+              : 'The converter could not start. Reload the page to try again.'
+          }
+          detail={conversionError}
+        >
+          {client ? undefined : (
+            <Button
+              variant='outline'
+              onClick={() => {
+                globalThis.location.reload();
+              }}
+            >
+              Reload converter
+            </Button>
+          )}
+        </PageNotice>
+      ) : undefined}
+
+      <div
+        className={cn(
+          'relative',
+          (isConverting || hasModel) && 'min-h-144 flex-1 overflow-hidden rounded-lg border bg-muted',
+        )}
+      >
+        {isConverting || hasModel ? (
+          <>
+            {glbData && glbHash ? (
+              <ConverterViewer glbData={glbData} hash={glbHash} fileName={uploadedFile?.name ?? 'Model'} />
+            ) : undefined}
+            {isConverting ? (
+              <div
+                role='status'
+                aria-label='Opening model'
+                aria-busy='true'
+                className={cn(
+                  'absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 p-4 text-center',
+                  hasModel ? 'bg-background/90' : 'bg-muted',
+                )}
+              >
+                <Loader className='size-5 text-muted-foreground' />
+                <span className='max-w-full font-mono text-sm break-all'>{openingFileName}</span>
+                <span className='text-sm text-muted-foreground'>Opening model…</span>
+                <Button
+                  variant='outline'
+                  size='sm'
+                  onClick={() => {
+                    conversionGeneration.current += 1;
+                    setIsConverting(false);
+                  }}
+                >
+                  Cancel
+                </Button>
               </div>
-            </SidebarOffset>
-
-            {/* Export panel trigger */}
-            <div className='absolute top-(--header-height) right-2 z-10 flex h-full gap-2 pb-[calc(var(--header-height)+var(--spacing)*2)]'>
-              <FloatingPanel isOpen side='right' className='rounded-md border'>
-                <FloatingPanelContent className='w-80'>
-                  <FloatingPanelContentHeader>
-                    <FloatingPanelContentTitle>Export Options</FloatingPanelContentTitle>
-                  </FloatingPanelContentHeader>
-                  <FloatingPanelContentBody className='flex h-full flex-col justify-between gap-4 p-3 pt-2'>
+            ) : (
+              <ConverterExportPanel>
+                <FloatingPanelContentBody className='flex min-h-0 flex-col justify-between gap-4 bg-sidebar p-3'>
+                  <div className='space-y-5'>
+                    {uploadedFile ? (
+                      <div className='space-y-1'>
+                        <div className='flex items-center gap-1'>
+                          <span className='truncate text-sm font-medium'>{uploadedFile.name}</span>
+                          <InfoTooltip>{formatConfigurations[uploadedFile.format].description}</InfoTooltip>
+                        </div>
+                        <p className='text-xs text-muted-foreground'>
+                          {formatDisplayName(uploadedFile.format)} · {formatFileSize(uploadedFile.size)}
+                        </p>
+                        <ConversionWarnings messages={conversionWarnings} />
+                      </div>
+                    ) : undefined}
                     <Converter
-                      getGlbData={async () => glbData}
+                      availableFormats={converterExportFormats}
+                      exportFormat={exportFormat}
                       selectedFormats={selectedFormats}
                       shouldUseZipForMultiple={useZipForMultiple}
                       uploadedFile={uploadedFile}
@@ -278,197 +548,88 @@ function ConverterContentInner(): React.JSX.Element {
                       onClearSelection={handleClearFormats}
                       onZipToggle={handleZipToggle}
                     />
-
-                    <div className='flex flex-col space-y-4'>
-                      {/* Drop area for uploading new file */}
-                      <Dropzone className='w-full max-md:hidden' maxFiles={1} onDrop={handleFileDrop}>
-                        <DropzoneEmptyState>
-                          <div className='flex flex-col items-center gap-2 py-4'>
-                            <Upload className='size-6 text-muted-foreground' />
-                            <p className='text-sm font-medium'>Drop new file here</p>
-                            <p className='text-xs text-muted-foreground'>or click to browse</p>
-                          </div>
-                        </DropzoneEmptyState>
-                      </Dropzone>
-                      <Button variant='outline' className='w-full' size='lg' onClick={handleReset}>
-                        <RotateCcw className='size-4' />
-                        Clear and start over
-                      </Button>
-                    </div>
-                  </FloatingPanelContentBody>
-                </FloatingPanelContent>
-              </FloatingPanel>
-            </div>
-          </div>
-        </>
-      ) : (
-        // Landing state - no model loaded
-        <SidebarOffset asChild via='padding'>
-          <div className='container mx-auto mt-(--header-height) grid h-full items-start gap-8 px-4 md:pt-8 xl:grid-cols-[250px_1fr_250px]'>
-            {/* Import Formats - Left */}
-            <FormatsList
-              icon={Upload}
-              title='Import Formats'
-              description='Formats you can upload'
-              formats={supportedImportFormats}
-              className='mt-30 max-xl:hidden'
-            />
-
-            {/* Center - Hero & Upload */}
-            <div className='flex flex-col items-center gap-8 pt-4'>
-              <div className='flex flex-col items-center gap-3 text-center'>
-                <h1 className='text-6xl font-bold tracking-tight'>3D Model Converter</h1>
-                <div className='flex flex-col items-center gap-0'>
-                  <p className='mb-8 max-w-2xl text-lg text-muted-foreground'>
-                    Convert 3D models between formats instantly. Free, secure, and fully offline.
-                  </p>
-                  <div className='text-md max-w-2xl text-muted-foreground italic'>
-                    Your data never leaves your browser{' '}
                   </div>
-                  <Button asChild variant='link' className='text-sm underline'>
-                    <ExternalLink href={metaConfig.githubUrl} arrowSize='xs'>
-                      View source code
-                    </ExternalLink>
-                  </Button>
-                </div>
-              </div>
-
-              {/* Upload Area */}
-              <Dropzone className='w-full max-w-2xl' maxFiles={1} onDrop={handleFileDrop}>
+                  <Dropzone
+                    className='w-full max-md:hidden'
+                    maxFiles={100}
+                    onDrop={handleFileDrop}
+                    onError={(error) => {
+                      setConversionError(error.message);
+                    }}
+                  >
+                    <DropzoneEmptyState>
+                      <div className='flex flex-col items-center gap-1 py-1 text-wrap'>
+                        <Upload className='size-4 text-muted-foreground' />
+                        <span className='text-sm font-medium'>Open another model</span>
+                        <span className='text-xs font-normal text-muted-foreground'>
+                          Drop files here or click to browse
+                        </span>
+                      </div>
+                    </DropzoneEmptyState>
+                  </Dropzone>
+                </FloatingPanelContentBody>
+              </ConverterExportPanel>
+            )}
+          </>
+        ) : (
+          <div className='grid items-start gap-8 border-t pt-6 lg:grid-cols-[minmax(0,1fr)_20rem]'>
+            <div className='min-w-0 space-y-4'>
+              <Heading level={2} variant='label'>
+                Source model
+              </Heading>
+              <Dropzone
+                className='min-h-72 rounded-lg border-dashed p-6 text-wrap'
+                maxFiles={100}
+                disabled={!client}
+                onDrop={handleFileDrop}
+                onError={(error) => {
+                  setConversionError(error.message);
+                }}
+              >
                 <DropzoneEmptyState>
-                  <div className='flex flex-col items-center gap-6 py-4'>
-                    <div className='flex size-20 items-center justify-center rounded-full bg-linear-to-br from-primary/20 to-primary/10'>
-                      <Upload className='size-10 text-primary' />
-                    </div>
-                    <div className='flex flex-col items-center gap-2 text-center'>
-                      <h3 className='text-xl font-semibold'>Drop your 3D model here</h3>
-                      <p className='text-sm text-muted-foreground'>or click to browse your files</p>
-                    </div>
+                  <div className='flex flex-col items-center gap-1 text-center'>
+                    <span className='mb-2 rounded-xl border bg-card p-2'>
+                      <Upload aria-hidden className='size-5 text-muted-foreground' />
+                    </span>
+                    <span className='text-base font-medium'>Open model</span>
+                    <span className='text-sm font-normal text-muted-foreground'>
+                      Drop files here or click to browse
+                    </span>
+                    <span className='mt-3 text-xs font-normal text-muted-foreground'>
+                      Include supporting files, such as textures.
+                    </span>
                   </div>
                 </DropzoneEmptyState>
               </Dropzone>
-
-              {/* Mobile Format Lists */}
-              <div className='w-full max-w-2xl space-y-6 xl:hidden'>
-                <FormatsListMobile title='Import Formats' formats={supportedImportFormats} />
-                <FormatsListMobile title='Export Formats' formats={supportedExportFormats} />
-              </div>
-
-              {/* Alternative Usage Methods */}
-              <div className='w-full max-w-2xl space-y-4 pb-8'>
-                <div className='text-center'>
-                  <h2 className='text-lg font-semibold'>Power Up Your Applications</h2>
-                  <p className='text-sm text-muted-foreground'>
-                    Add seamless 3D conversion to any project with our developer tools
-                  </p>
-                </div>
-
-                <div className='grid gap-4 xl:grid-cols-2'>
-                  {/* NPM Package */}
-                  <Card>
-                    <CardHeader>
-                      <div className='flex items-center gap-2'>
-                        <div className='flex size-8 items-center justify-center rounded-md bg-primary/10'>
-                          <Package className='size-4 text-primary' />
-                        </div>
-                        <CardTitle>NPM Package</CardTitle>
-                      </div>
-                      <CardDescription>
-                        <p>Integrate 3D conversion into your JavaScript and TypeScript applications.</p>
-                        <br />
-                        <p>
-                          Built for maximum flexibility with full support for both browser and Node.js environments.
-                        </p>
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <CodeBlock>
-                        <CodeBlockHeader>
-                          <CodeBlockTitle>Installation</CodeBlockTitle>
-                          <CodeBlockAction visibility='alwaysVisible'>
-                            <CopyButton
-                              size='xs'
-                              getText={() => {
-                                return 'pnpm install @taucad/converter';
-                              }}
-                            />
-                          </CodeBlockAction>
-                        </CodeBlockHeader>
-                        <CodeBlockContent>
-                          <Pre language='bash'>pnpm install @taucad/converter</Pre>
-                        </CodeBlockContent>
-                      </CodeBlock>
-                    </CardContent>
-                  </Card>
-
-                  {/* API */}
-                  <Card className='justify-between'>
-                    <CardHeader>
-                      <div className='flex items-center gap-2'>
-                        <div className='flex size-8 items-center justify-center rounded-md bg-primary/10'>
-                          <Code2 className='size-4 text-primary' />
-                        </div>
-                        <CardTitle>REST API</CardTitle>
-                      </div>
-                      <CardDescription>
-                        <p>Convert 3D models instantly with our REST API, accessible from any platform or language.</p>
-                        <br />
-                        <p>
-                          Get started in minutes with our managed cloud service, or deploy on your own infrastructure.
-                        </p>
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <Button asChild variant='outline' size='sm' className='w-full'>
-                        <Link to='/docs'>View API Documentation</Link>
-                      </Button>
-                    </CardContent>
-                  </Card>
-                </div>
-              </div>
+              <p className='flex items-center gap-2 text-xs text-muted-foreground'>
+                <Cpu aria-hidden className='size-3.5' /> Processed on this device.
+              </p>
             </div>
-
-            {/* Export Formats - Right */}
-            <FormatsList
-              icon={Download}
-              title='Export Formats'
-              description='Formats you can convert to'
-              formats={supportedExportFormats}
-              className='mt-30 max-xl:hidden'
-            />
+            <div className='min-w-0 space-y-3'>
+              {!client && conversionError ? undefined : (
+                <FormatsList formats={converterImportFormats} isLoading={!client} />
+              )}
+              <p className='border-t pt-4 text-xs leading-relaxed text-muted-foreground'>
+                Output formats depend on the model. Open a file to see available conversions.
+              </p>
+            </div>
           </div>
-        </SidebarOffset>
-      )}
-
-      {/* Loading overlay */}
-      {isConverting ? (
-        <div className='absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm'>
-          <div className='flex flex-col items-center gap-4'>
-            <div className='size-12 animate-spin rounded-full border-4 border-primary border-t-transparent' />
-            <p className='text-sm text-muted-foreground'>Converting file...</p>
-          </div>
-        </div>
-      ) : undefined}
-    </div>
+        )}
+      </div>
+    </PageContent>
   );
 }
 
 export default function ConverterRoute(): React.JSX.Element {
   // Provide a minimal project context so downstream components can use graphics/cad state
-  const now = Date.now();
-  const converterProject: Project = {
+  const converterProject = {
+    ...projectToManifest({
+      name: 'Converter',
+      description: 'Transient project context for the converter page',
+      tags: [],
+      assets: { main: { entryPath: 'converter.glb' } },
+    }),
     id: 'converter',
-    name: 'Converter',
-    description: 'Transient project context for the converter page',
-    author: {
-      name: 'Tau',
-      avatar: '',
-    },
-    tags: [],
-    thumbnail: '',
-    createdAt: now,
-    updatedAt: now,
-    assets: {},
   };
 
   return (
@@ -477,8 +638,11 @@ export default function ConverterRoute(): React.JSX.Element {
       input={{ shouldLoadModelOnStart: false }}
       provide={{
         actors: {
-          loadProjectActor: fromSafeAsync(async () => {
-            return { type: 'projectRetrieved', project: converterProject, parameterEntries: new Map() };
+          loadProjectActor: fromSafeAsync<ProjectRetrievedEvent, ProjectLoadInput>(async () => {
+            return {
+              type: 'projectRetrieved',
+              project: converterProject,
+            };
           }),
         },
       }}

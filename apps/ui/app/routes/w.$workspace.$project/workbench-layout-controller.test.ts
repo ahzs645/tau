@@ -1,0 +1,1315 @@
+/* oxlint-disable typescript/no-restricted-types -- Checked filesystem absence uses null. */
+/* oxlint-disable eslint/no-await-in-loop -- Controlled interleavings run sequentially. */
+/* oxlint-disable typescript/no-unnecessary-condition, typescript/prefer-optional-chain -- Mock preconditions may omit their first entry. */
+import { describe, expect, it, vi } from 'vitest';
+import { workbenchRecords } from '@taucad/workbench';
+import type { WorkbenchLayout } from '@taucad/workbench';
+import type { CheckedFileWriteResult } from '@taucad/types';
+import { digestBytes } from '@taucad/ui-core/utils/crypto.utils';
+import { createWorkbenchLayoutStore } from '#routes/w.$workspace.$project/workbench-layout-controller.js';
+import { fromDockview, toDockview } from '#workbench-records/converters.js';
+
+const encoder = new TextEncoder();
+const layout = (): WorkbenchLayout => ({
+  version: 1,
+  lanes: { chat: true, workbench: true },
+  viewer: { kind: 'group', tabs: [{ kind: 'view', view: 'v-abcd1234' }] },
+  workbench: { kind: 'group', tabs: [{ kind: 'pane', pane: 'parameters' }] },
+});
+
+function memoryFiles(initial: WorkbenchLayout | undefined = layout()) {
+  let bytes: Uint8Array<ArrayBuffer> | null =
+    initial === undefined ? null : encoder.encode(workbenchRecords.layout.serialize(initial));
+  let releaseWrite: (() => void) | undefined;
+  let writeGate: Promise<void> | undefined;
+  const writes = vi.fn(
+    async ({
+      data,
+      preconditions,
+    }: {
+      data: string;
+      preconditions: ReadonlyArray<{ expected: Uint8Array<ArrayBuffer> | null }>;
+    }): Promise<CheckedFileWriteResult> => {
+      const wait = writeGate;
+      writeGate = undefined;
+      if (wait) {
+        await wait;
+      }
+      const expected = preconditions[0]?.expected;
+      const matches =
+        expected === null
+          ? bytes === null
+          : bytes !== null &&
+            expected !== undefined &&
+            expected.every((value, index) => value === bytes?.[index]) &&
+            expected.length === bytes.length;
+      if (!matches) {
+        return { status: 'conflict', conflicts: [{ path: '/root/.tau/workbench/layout.json', actual: bytes }] };
+      }
+      const next = encoder.encode(data);
+      const status: 'unchanged' | 'applied' =
+        bytes?.every((value, index) => value === next[index]) && bytes.length === next.length ? 'unchanged' : 'applied';
+      bytes = next;
+      return { status, content: next };
+    },
+  );
+  return {
+    files: { exists: async () => bytes !== null, readFile: async () => bytes!, writeFileChecked: writes },
+    writes,
+    get: () => bytes,
+    set: (next: WorkbenchLayout) => {
+      bytes = encoder.encode(workbenchRecords.layout.serialize(next));
+    },
+    setBytes: (next: Uint8Array<ArrayBuffer> | null) => {
+      bytes = next;
+    },
+    delayNextWrite: () => {
+      writeGate = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      return () => releaseWrite?.();
+    },
+  };
+}
+
+describe('workbench layout checked store', () => {
+  it('fences internal publication immediately when its source invalidates during a read', async () => {
+    const data = memoryFiles();
+    const entered = Promise.withResolvers<void>();
+    const gate = Promise.withResolvers<void>();
+    const onChange = vi.fn();
+    let hold = true;
+    const owner = createWorkbenchLayoutStore({
+      root: '/root',
+      files: {
+        ...data.files,
+        readFile: async () => {
+          const bytes = await data.files.readFile();
+          if (hold) {
+            hold = false;
+            entered.resolve();
+            await gate.promise;
+          }
+          return bytes;
+        },
+      },
+      onChange,
+      onError: () => undefined,
+    });
+    try {
+      const pending = owner.read();
+      await entered.promise;
+      owner.invalidateRead();
+      gate.resolve();
+      await pending;
+      expect(onChange).not.toHaveBeenCalled();
+      expect(owner.ready()).toBe(false);
+      await owner.read();
+      expect(owner.ready()).toBe(true);
+      expect(onChange).toHaveBeenCalledOnce();
+    } finally {
+      owner.dispose();
+    }
+  });
+
+  it('should keep invalid bytes preservable when an unchanged edit owes no fields', async () => {
+    const data = memoryFiles();
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: data.files,
+      onChange: () => undefined,
+      onError: () => undefined,
+    });
+    try {
+      await store.read();
+      const invalid = encoder.encode('{broken');
+      data.setBytes(invalid);
+      await store.read();
+      expect(await store.edit(layout())).toBe(false);
+      expect(await store.flush()).toBe(true);
+      expect(data.get()).toEqual(invalid);
+      expect(data.writes).not.toHaveBeenCalled();
+    } finally {
+      store.dispose();
+    }
+  });
+
+  it('should hold an accepted edit and flush until its first record read settles', async () => {
+    const data = memoryFiles();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: {
+        ...data.files,
+        readFile: async () => {
+          entered.resolve();
+          await release.promise;
+          return data.files.readFile();
+        },
+      },
+      onChange: () => undefined,
+      onError: () => undefined,
+    });
+    try {
+      const hydration = store.read();
+      await entered.promise;
+      const next = { ...layout(), lanes: { chat: false, workbench: true } };
+      const edited = store.edit(next);
+      let settled = false;
+      const drained = (async () => {
+        const saved = await store.flush();
+        settled = true;
+        return saved;
+      })();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(data.writes).not.toHaveBeenCalled();
+      release.resolve();
+      await hydration;
+      expect(await edited).toBe(true);
+      expect(await drained).toBe(true);
+      expect(workbenchRecords.layout.read(data.get()!)).toMatchObject({ status: 'current', record: next });
+    } finally {
+      release.resolve();
+      store.dispose();
+    }
+  });
+
+  it.each(['{broken', '{"version":2}'])(
+    'should retain blocked layout intent through flush and repair (%s)',
+    async (invalid) => {
+      const data = memoryFiles();
+      const store = createWorkbenchLayoutStore({
+        root: '/root',
+        files: data.files,
+        onChange: () => undefined,
+        onError: (error) => {
+          throw error;
+        },
+      });
+      try {
+        await store.read();
+        const release = data.delayNextWrite();
+        const edited = store.edit({ ...layout(), lanes: { chat: false, workbench: true } });
+        await vi.waitFor(() => {
+          expect(data.writes).toHaveBeenCalledOnce();
+        });
+        const foreign = encoder.encode(invalid);
+        data.setBytes(foreign);
+        release();
+        expect(await edited).toBe(false);
+        expect(await store.flush()).toBe(false);
+        expect(data.get()).toEqual(foreign);
+        data.set(layout());
+        await store.read();
+        expect(await store.flush()).toBe(true);
+        expect(workbenchRecords.layout.read(data.get()!)).toMatchObject({
+          status: 'current',
+          record: { lanes: { chat: false } },
+        });
+      } finally {
+        store.dispose();
+      }
+    },
+  );
+
+  it('should preserve invalid layout bytes on a clean flush', async () => {
+    const data = memoryFiles();
+    const foreign = encoder.encode('{broken');
+    data.setBytes(foreign);
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: data.files,
+      onChange: () => undefined,
+      onError: (error) => {
+        throw error;
+      },
+    });
+    try {
+      await store.read();
+      expect(await store.flush()).toBe(true);
+      expect(data.get()).toEqual(foreign);
+      expect(data.writes).not.toHaveBeenCalled();
+    } finally {
+      store.dispose();
+    }
+  });
+
+  it('should resolve blocked layout intent only after an explicit checked Reset', async () => {
+    const data = memoryFiles();
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: data.files,
+      onChange: () => undefined,
+      onError: (error) => {
+        throw error;
+      },
+    });
+    try {
+      await store.read();
+      data.setBytes(encoder.encode('{broken'));
+      await store.read();
+      expect(await store.edit({ ...layout(), lanes: { chat: false, workbench: true } })).toBe(false);
+      expect(await store.flush()).toBe(false);
+      expect(await store.reset(layout())).toBe(true);
+      expect(await store.flush()).toBe(true);
+      expect(workbenchRecords.layout.read(data.get()!)).toEqual({ status: 'current', record: layout() });
+    } finally {
+      store.dispose();
+    }
+  });
+
+  it('should retire a disposed layout owner before a late write failure can retry', async () => {
+    vi.useFakeTimers();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const data = memoryFiles();
+    const writeFileChecked = vi.fn(async (): Promise<CheckedFileWriteResult> => {
+      entered.resolve();
+      await release.promise;
+      throw new Error('offline');
+    });
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: { ...data.files, writeFileChecked },
+      onChange: () => undefined,
+      onError: vi.fn(),
+    });
+    try {
+      await store.read();
+      const edited = store.edit({ ...layout(), lanes: { chat: false, workbench: true } });
+      await entered.promise;
+      store.dispose();
+      release.resolve();
+      expect(await edited).toBe(false);
+      await vi.runOnlyPendingTimersAsync();
+      expect(writeFileChecked).toHaveBeenCalledOnce();
+      expect(await store.edit({ ...layout(), lanes: { chat: true, workbench: false } })).toBe(false);
+      expect(writeFileChecked).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      store.dispose();
+      vi.useRealTimers();
+    }
+  });
+  it('should refuse pending person edits and never rebase a restore over foreign bytes', async () => {
+    const memory = memoryFiles();
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: memory.files,
+      editDebounce: 500,
+      onChange: () => undefined,
+      onError: () => undefined,
+    });
+    await store.read();
+    const { digest } = store.snapshot();
+    const next = { ...layout(), lanes: { chat: false, workbench: true } };
+    const editing = store.edit(next);
+    expect(await store.restore(layout(), digest, () => true)).toBe(false);
+    await store.flush();
+    await editing;
+    const current = store.snapshot().digest;
+    const release = memory.delayNextWrite();
+    const restoring = store.restore(layout(), current, () => true);
+    await vi.waitFor(() => {
+      expect(memory.writes).toHaveBeenCalledTimes(2);
+    });
+    const foreign = { ...layout(), lanes: { chat: true, workbench: false } };
+    memory.set(foreign);
+    release();
+    expect(await restoring).toBe(false);
+    expect(workbenchRecords.layout.read(memory.get()!)).toMatchObject({ status: 'current', record: foreign });
+    expect(memory.writes).toHaveBeenCalledTimes(2);
+    store.dispose();
+  });
+
+  it('does not report superseded or disposed reads and reannounces same bytes after an IO error', async () => {
+    const memory = memoryFiles();
+    let stale = Promise.withResolvers<void>();
+    const onChange = vi.fn();
+    const onError = vi.fn();
+    let next: 'normal' | 'hold' | 'fail' = 'normal';
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: {
+        ...memory.files,
+        readFile: async () => {
+          const action = next;
+          next = 'normal';
+          if (action === 'hold') {
+            await stale.promise;
+          }
+          if (action === 'fail') {
+            throw new Error('offline');
+          }
+          return memory.files.readFile();
+        },
+      },
+      onChange,
+      onError,
+    });
+    await store.read();
+    next = 'hold';
+    const old = store.read();
+    await Promise.resolve();
+    await store.read();
+    stale.reject(new Error('old worker closed'));
+    await old;
+    expect(onError).not.toHaveBeenCalled();
+    next = 'fail';
+    await store.read();
+    expect(onError).toHaveBeenCalledOnce();
+    await store.read();
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(memory.writes).not.toHaveBeenCalled();
+    stale = Promise.withResolvers<void>();
+    next = 'hold';
+    const closing = store.read();
+    await Promise.resolve();
+    store.dispose();
+    stale.resolve();
+    await closing;
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenCalledOnce();
+  });
+
+  it('merges each edited portable field with a stale foreign base for 100 repetitions', async () => {
+    for (const field of ['lanes', 'viewer', 'workbench'] as const) {
+      for (let iteration = 0; iteration < 100; iteration++) {
+        const memory = memoryFiles();
+        const store = createWorkbenchLayoutStore({
+          root: '/root',
+          files: memory.files,
+          onChange: () => undefined,
+          onError: (error) => {
+            throw error;
+          },
+        });
+        await store.read();
+        const person: WorkbenchLayout = {
+          ...layout(),
+          lanes: { chat: false, workbench: true },
+          viewer: { kind: 'group', tabs: [{ kind: 'view', view: 'v-1234abcd' }] },
+          workbench: { kind: 'group', tabs: [{ kind: 'pane', pane: 'jobs' }] },
+        };
+        const foreign: WorkbenchLayout = {
+          ...layout(),
+          lanes: { chat: true, workbench: false },
+          viewer: { kind: 'group', tabs: [{ kind: 'view', view: 'v-5678abcd' }] },
+          workbench: { kind: 'group', tabs: [{ kind: 'pane', pane: 'revisions' }] },
+        };
+        memory.set(foreign);
+        expect(await store.edit({ ...layout(), [field]: person[field] })).toBe(true);
+        const read = workbenchRecords.layout.read(memory.get()!);
+        expect(read.status).toBe('current');
+        if (read.status === 'current') {
+          expect(read.record[field]).toEqual(field === 'lanes' ? { chat: false, workbench: false } : person[field]);
+          for (const other of ['lanes', 'viewer', 'workbench'] as const) {
+            if (other !== field) {
+              expect(read.record[other]).toEqual(foreign[other]);
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it('reconciles concurrent writers for each layout field and independent lane flag over 100 interleavings', async () => {
+    const cases: ReadonlyArray<{
+      field: string;
+      person: (base: WorkbenchLayout) => WorkbenchLayout;
+      foreign: (base: WorkbenchLayout) => WorkbenchLayout;
+      check: (value: WorkbenchLayout) => void;
+    }> = [
+      {
+        field: 'lanes.chat',
+        person: (base: WorkbenchLayout) => ({ ...base, lanes: { ...base.lanes, chat: false } }),
+        foreign: (base: WorkbenchLayout) => ({ ...base, lanes: { ...base.lanes, workbench: false } }),
+        check: (value: WorkbenchLayout) => {
+          expect(value.lanes).toEqual({ chat: false, workbench: false });
+        },
+      },
+      {
+        field: 'lanes.workbench',
+        person: (base: WorkbenchLayout) => ({ ...base, lanes: { ...base.lanes, workbench: false } }),
+        foreign: (base: WorkbenchLayout) => ({ ...base, lanes: { ...base.lanes, chat: false } }),
+        check: (value: WorkbenchLayout) => {
+          expect(value.lanes).toEqual({ chat: false, workbench: false });
+        },
+      },
+      {
+        field: 'viewer',
+        person: (base: WorkbenchLayout) => ({
+          ...base,
+          viewer: { kind: 'group', tabs: [{ kind: 'view', view: 'v-1234abcd' }] },
+        }),
+        foreign: (base: WorkbenchLayout) => ({
+          ...base,
+          workbench: { kind: 'group', tabs: [{ kind: 'pane', pane: 'jobs' }] },
+        }),
+        check: (value: WorkbenchLayout) => {
+          expect(value.viewer).toMatchObject({ tabs: [{ view: 'v-1234abcd' }] });
+          expect(value.workbench).toMatchObject({ tabs: [{ pane: 'jobs' }] });
+        },
+      },
+      {
+        field: 'workbench',
+        person: (base: WorkbenchLayout) => ({
+          ...base,
+          workbench: { kind: 'group', tabs: [{ kind: 'pane', pane: 'jobs' }] },
+        }),
+        foreign: (base: WorkbenchLayout) => ({
+          ...base,
+          viewer: { kind: 'group', tabs: [{ kind: 'view', view: 'v-1234abcd' }] },
+        }),
+        check: (value: WorkbenchLayout) => {
+          expect(value.workbench).toMatchObject({ tabs: [{ pane: 'jobs' }] });
+          expect(value.viewer).toMatchObject({ tabs: [{ view: 'v-1234abcd' }] });
+        },
+      },
+    ];
+    for (const testCase of cases) {
+      for (let i = 0; i < 100; i++) {
+        const memory = memoryFiles();
+        const first = createWorkbenchLayoutStore({
+          root: '/root',
+          files: memory.files,
+          onChange: () => undefined,
+          onError: (error) => {
+            throw error;
+          },
+        });
+        const second = createWorkbenchLayoutStore({
+          root: '/root',
+          files: memory.files,
+          onChange: () => undefined,
+          onError: (error) => {
+            throw error;
+          },
+        });
+        await Promise.all([first.read(), second.read()]);
+        const release = memory.delayNextWrite();
+        const results = Promise.all(
+          i % 2 === 0
+            ? [first.edit(testCase.person(layout())), second.edit(testCase.foreign(layout()))]
+            : [second.edit(testCase.foreign(layout())), first.edit(testCase.person(layout()))],
+        );
+        await Promise.resolve();
+        release();
+        expect(await results, testCase.field).toEqual([true, true]);
+        const result = workbenchRecords.layout.read(memory.get()!);
+        expect(result.status).toBe('current');
+        if (result.status === 'current') {
+          testCase.check(result.record);
+        }
+        const count = memory.writes.mock.calls.length;
+        await Promise.all([first.read(), second.read()]);
+        expect(memory.writes).toHaveBeenCalledTimes(count);
+      }
+    }
+  });
+
+  it('reconciles competing viewer and workbench trees in both checked completion orders', async () => {
+    const variants = [
+      {
+        field: 'viewer',
+        a: { kind: 'group', tabs: [{ kind: 'view', view: 'v-1234abcd' }] },
+        b: { kind: 'group', tabs: [{ kind: 'view', view: 'v-5678abcd' }] },
+      },
+      {
+        field: 'workbench',
+        a: { kind: 'group', tabs: [{ kind: 'pane', pane: 'jobs' }] },
+        b: { kind: 'group', tabs: [{ kind: 'pane', pane: 'revisions' }] },
+      },
+    ] as const;
+    for (const variant of variants) {
+      for (let i = 0; i < 100; i++) {
+        const memory = memoryFiles();
+        const a = createWorkbenchLayoutStore({
+          root: '/root',
+          files: memory.files,
+          onChange: () => undefined,
+          onError: (error) => {
+            throw error;
+          },
+        });
+        const b = createWorkbenchLayoutStore({
+          root: '/root',
+          files: memory.files,
+          onChange: () => undefined,
+          onError: (error) => {
+            throw error;
+          },
+        });
+        await Promise.all([a.read(), b.read()]);
+        const release = memory.delayNextWrite();
+        const first =
+          i % 2 === 0
+            ? a.edit({ ...layout(), [variant.field]: variant.a })
+            : b.edit({ ...layout(), [variant.field]: variant.b });
+        const second =
+          i % 2 === 0
+            ? b.edit({ ...layout(), [variant.field]: variant.b })
+            : a.edit({ ...layout(), [variant.field]: variant.a });
+        await Promise.resolve();
+        release();
+        expect(await Promise.all([first, second])).toEqual([true, true]);
+        const result = workbenchRecords.layout.read(memory.get()!);
+        expect(result.status).toBe('current');
+        if (result.status === 'current') {
+          expect(result.record[variant.field]).toEqual(i % 2 === 0 ? variant.a : variant.b);
+        }
+        const count = memory.writes.mock.calls.length;
+        await Promise.all([a.read(), b.read()]);
+        expect(memory.writes).toHaveBeenCalledTimes(count);
+      }
+    }
+  });
+
+  it('hashes the exact observed bytes, including hand formatting', async () => {
+    const memory = memoryFiles();
+    const pretty = encoder.encode(JSON.stringify(layout(), null, 2));
+    memory.setBytes(pretty);
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: memory.files,
+      onChange: () => undefined,
+      onError: (error) => {
+        throw error;
+      },
+    });
+    await store.read();
+    expect(store.snapshot().digest).toBe(await digestBytes(pretty));
+    expect(store.snapshot().digest).not.toBe(
+      await digestBytes(encoder.encode(workbenchRecords.layout.serialize(layout()))),
+    );
+  });
+
+  it('adopts an external record without writing it back from two windows', async () => {
+    const memory = memoryFiles();
+    const first = createWorkbenchLayoutStore({
+      root: '/root',
+      files: memory.files,
+      onChange: () => undefined,
+      onError: (error) => {
+        throw error;
+      },
+    });
+    const second = createWorkbenchLayoutStore({
+      root: '/root',
+      files: memory.files,
+      onChange: () => undefined,
+      onError: (error) => {
+        throw error;
+      },
+    });
+    await Promise.all([first.read(), second.read()]);
+    memory.set({ ...layout(), lanes: { chat: false, workbench: true } });
+    await Promise.all([first.read(), second.read()]);
+    expect(first.snapshot().layout?.lanes.chat).toBe(false);
+    expect(second.snapshot().layout?.lanes.chat).toBe(false);
+    expect(memory.writes).not.toHaveBeenCalled();
+  });
+
+  it('does not echo the same portable arrangement from two differently sized Dockviews', async () => {
+    const memory = memoryFiles();
+    const windows = [
+      { width: 1200, height: 800 },
+      { width: 520, height: 1080 },
+    ].map((dimensions) => ({
+      dimensions,
+      store: createWorkbenchLayoutStore({
+        root: '/root',
+        files: memory.files,
+        onChange: () => undefined,
+        onError: (error) => {
+          throw error;
+        },
+      }),
+    }));
+    await Promise.all(windows.map(async ({ store }) => store.read()));
+    memory.set({ ...layout(), lanes: { chat: false, workbench: true } });
+    await Promise.all(windows.map(async ({ store }) => store.read()));
+    for (const { dimensions, store } of windows) {
+      const adopted = store.snapshot().layout!;
+      const viewer = fromDockview('viewer', toDockview('viewer', adopted.viewer, { dimensions }));
+      const workbench = fromDockview('workbench', toDockview('workbench', adopted.workbench, { dimensions }));
+      expect(await store.edit({ ...adopted, viewer, workbench })).toBe(true);
+    }
+    expect(memory.writes).not.toHaveBeenCalled();
+  });
+
+  it('keeps a person revert queued behind a slow checked write', async () => {
+    const memory = memoryFiles();
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: memory.files,
+      onChange: () => undefined,
+      onError: (error) => {
+        throw error;
+      },
+    });
+    await store.read();
+    const release = memory.delayNextWrite();
+    const first = store.edit({ ...layout(), lanes: { chat: false, workbench: true } });
+    const second = store.edit(layout());
+    release();
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+    const read = workbenchRecords.layout.read(memory.get()!);
+    expect(read.status).toBe('current');
+    if (read.status === 'current') {
+      expect(read.record.lanes.chat).toBe(true);
+    }
+    expect(memory.writes).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves invalid/newer bytes and Reset cannot overwrite a later external edit', async () => {
+    const memory = memoryFiles();
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: memory.files,
+      onChange: () => undefined,
+      onError: (error) => {
+        throw error;
+      },
+    });
+    await store.read();
+    memory.setBytes(encoder.encode('{broken'));
+    await store.read();
+    expect(store.snapshot().refusal?.code).toBe('INVALID_RECORD');
+    expect(await store.edit(layout())).toBe(false);
+    memory.set({ ...layout(), lanes: { chat: false, workbench: true } });
+    expect(await store.reset(layout())).toBe(false);
+    await store.read();
+    const newer = encoder.encode('{"version":2}');
+    memory.setBytes(newer);
+    await store.read();
+    expect(store.snapshot().refusal?.code).toBe('NEWER_RECORD');
+    expect(await store.reset(layout())).toBe(false);
+    expect(memory.get()).toEqual(newer);
+  });
+
+  it('requires a successful initial read and retries a pending edit after transient I/O', async () => {
+    vi.useFakeTimers();
+    try {
+      const memory = memoryFiles();
+      let failRead = true;
+      let failWrite = true;
+      const errors = vi.fn();
+      const store = createWorkbenchLayoutStore({
+        root: '/root',
+        files: {
+          ...memory.files,
+          exists: async () => {
+            if (failRead) {
+              throw new Error('offline');
+            }
+            return memory.files.exists();
+          },
+          writeFileChecked: async (input) => {
+            if (failWrite) {
+              failWrite = false;
+              throw new Error('offline');
+            }
+            return memory.files.writeFileChecked(input);
+          },
+        },
+        onChange: () => undefined,
+        onError: errors,
+      });
+      const desired = { ...layout(), lanes: { chat: false, workbench: true } };
+      expect(await store.edit(desired)).toBe(false);
+      expect(memory.writes).not.toHaveBeenCalled();
+      failRead = false;
+      await vi.waitFor(() => {
+        expect(failWrite).toBe(false);
+        expect(memory.writes).toHaveBeenCalledTimes(1);
+        expect(workbenchRecords.layout.read(memory.get()!)).toMatchObject({ status: 'current', record: desired });
+        expect(errors).toHaveBeenCalled();
+      });
+      store.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects an old watch completion after its own checked write', async () => {
+    const memory = memoryFiles();
+    let release: (() => void) | undefined;
+    let hold = false;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: {
+        ...memory.files,
+        readFile: async () => {
+          const captured = await memory.files.readFile();
+          if (hold) {
+            await held;
+          }
+          return captured;
+        },
+      },
+      onChange: () => undefined,
+      onError: (error) => {
+        throw error;
+      },
+    });
+    await store.read();
+    hold = true;
+    const stale = store.read();
+    const desired = { ...layout(), lanes: { chat: false, workbench: true } };
+    expect(await store.edit(desired)).toBe(true);
+    release?.();
+    await stale;
+    expect(store.snapshot().layout).toEqual(desired);
+  });
+
+  it('keeps a newer foreign watch started before the own write acknowledgement', async () => {
+    const memory = memoryFiles();
+    const acknowledgement = Promise.withResolvers<void>();
+    const watchGate = Promise.withResolvers<void>();
+    let holdWatch = false;
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: {
+        ...memory.files,
+        readFile: async () => {
+          const captured = await memory.files.readFile();
+          if (holdWatch) {
+            holdWatch = false;
+            await watchGate.promise;
+          }
+          return captured;
+        },
+        writeFileChecked: async (input) => {
+          const applied = await memory.files.writeFileChecked(input);
+          await acknowledgement.promise;
+          return applied;
+        },
+      },
+      onChange: () => undefined,
+      onError: (error) => {
+        throw error;
+      },
+    });
+    await store.read();
+    const own = { ...layout(), lanes: { chat: false, workbench: true } };
+    const foreign = { ...layout(), lanes: { chat: true, workbench: false } };
+    const saving = store.edit(own);
+    await vi.waitFor(() => {
+      expect(memory.writes).toHaveBeenCalledTimes(1);
+    });
+    memory.set(foreign);
+    holdWatch = true;
+    const watching = store.read();
+    await Promise.resolve();
+    acknowledgement.resolve();
+    expect(await saving).toBe(true);
+    watchGate.resolve();
+    await watching;
+    expect(store.snapshot().layout).toEqual(foreign);
+    expect(memory.writes).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an own write when an overlapping watch captured its old base', async () => {
+    const memory = memoryFiles();
+    const watchGate = Promise.withResolvers<void>();
+    let holdWatch = false;
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: {
+        ...memory.files,
+        readFile: async () => {
+          const captured = await memory.files.readFile();
+          if (holdWatch) {
+            holdWatch = false;
+            await watchGate.promise;
+          }
+          return captured;
+        },
+      },
+      onChange: () => undefined,
+      onError: (error) => {
+        throw error;
+      },
+    });
+    await store.read();
+    const release = memory.delayNextWrite();
+    const own = { ...layout(), lanes: { chat: false, workbench: true } };
+    const saving = store.edit(own);
+    await Promise.resolve();
+    holdWatch = true;
+    const watching = store.read();
+    await Promise.resolve();
+    release();
+    expect(await saving).toBe(true);
+    watchGate.resolve();
+    await watching;
+    expect(store.snapshot().layout).toEqual(own);
+    expect(memory.writes).toHaveBeenCalledTimes(1);
+  });
+
+  /* Red first (graphics event-driven state charter G0.2, incident 2026-11-06-viewer-orbit-snap-back): the layout
+   * store carried the own-write attribution race that taucad/tau#1602 fixed only in the view store. This is the
+   * view-store row "attributes its own write to a watch read that starts after the write reply and supersedes the
+   * refresh", ported. It failed while the reply cleared the in-flight bytes, so the superseding read published this
+   * store's own write as a foreign `read`. G2b moved the store onto `recordSync`, which keeps the write's entry by its
+   * exact bytes (charter I5), and the row passes; it is never deleted. */
+  it('attributes its own write to a watch read that starts after the write reply and supersedes the refresh', async () => {
+    const memory = memoryFiles();
+    const acknowledgement = Promise.withResolvers<void>();
+    const heldReads = Promise.withResolvers<void>();
+    let hold = false;
+    let held = 0;
+    const onChange = vi.fn<(state: { layout?: WorkbenchLayout }, source: 'read' | 'write', patch?: unknown) => void>();
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: {
+        ...memory.files,
+        readFile: async () => {
+          const captured = await memory.files.readFile();
+          if (hold) {
+            held++;
+            await heldReads.promise;
+          }
+          return captured;
+        },
+        writeFileChecked: async ({ data: text }: { data: string }): Promise<CheckedFileWriteResult> => {
+          const content = encoder.encode(text);
+          memory.setBytes(content);
+          await acknowledgement.promise;
+          return { status: 'applied', content };
+        },
+      },
+      onChange,
+      onError: (error) => {
+        throw error;
+      },
+    });
+    try {
+      await store.read();
+      const own = { ...layout(), lanes: { chat: false, workbench: true } };
+      const saving = store.edit(own);
+      await vi.waitFor(() => {
+        expect(workbenchRecords.layout.read(memory.get()!)).toEqual({ status: 'current', record: own });
+      });
+      hold = true;
+      const inFlightWatch = store.read();
+      await vi.waitFor(() => {
+        expect(held).toBe(1);
+      });
+      acknowledgement.resolve();
+      await vi.waitFor(() => {
+        expect(held).toBe(2);
+      });
+      hold = false;
+      await store.read();
+      expect(onChange.mock.lastCall?.[0].layout).toEqual(own);
+      expect(onChange.mock.lastCall?.[1]).toBe('write');
+      expect(onChange.mock.lastCall?.[2]).toEqual({ lanes: { chat: false } });
+      heldReads.resolve();
+      await inFlightWatch;
+      expect(await saving).toBe(true);
+    } finally {
+      heldReads.resolve();
+      store.dispose();
+    }
+  });
+
+  it('captures Reset bytes before a queued write and rejects a later watch version', async () => {
+    const memory = memoryFiles();
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: memory.files,
+      onChange: () => undefined,
+      onError: (error) => {
+        throw error;
+      },
+    });
+    await store.read();
+    const release = memory.delayNextWrite();
+    const slow = store.edit({ ...layout(), lanes: { chat: false, workbench: true } });
+    memory.setBytes(encoder.encode('{broken'));
+    await store.read();
+    const reset = store.reset(layout());
+    memory.set({ ...layout(), lanes: { chat: true, workbench: false } });
+    await store.read();
+    release();
+    await slow;
+    expect(await reset).toBe(false);
+    expect(memory.writes).toHaveBeenCalledTimes(2);
+  });
+
+  it('coalesces person edits for 500 ms and flushes both layout fields as one checked write', async () => {
+    vi.useFakeTimers();
+    try {
+      const memory = memoryFiles();
+      const store = createWorkbenchLayoutStore({
+        root: '/root',
+        files: memory.files,
+        editDebounce: 500,
+        onChange: () => undefined,
+        onError: (error) => {
+          throw error;
+        },
+      });
+      await store.read();
+      const viewer: WorkbenchLayout = {
+        ...layout(),
+        viewer: { kind: 'group', tabs: [{ kind: 'view', view: 'v-1234abcd' }] },
+      };
+      const first = store.edit(viewer);
+      const second = store.edit({ ...store.intendedLayout()!, lanes: { chat: false, workbench: true } });
+      await vi.advanceTimersByTimeAsync(499);
+      expect(memory.writes).not.toHaveBeenCalled();
+      expect(await store.flush()).toBe(true);
+      expect(await Promise.all([first, second])).toEqual([true, true]);
+      expect(memory.writes).toHaveBeenCalledTimes(1);
+      expect(workbenchRecords.layout.read(memory.get()!)).toMatchObject({
+        status: 'current',
+        record: {
+          lanes: { chat: false, workbench: true },
+          viewer: viewer.viewer,
+        },
+      });
+      store.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('workbench layout store on recordSync (G2b)', () => {
+  it('should keep the last layout as the base of an edit after the file was absent', async () => {
+    const memory = memoryFiles();
+    const onChange = vi.fn<(state: { layout?: WorkbenchLayout }, source: 'read' | 'write', patch?: unknown) => void>();
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: memory.files,
+      onChange,
+      onError: () => undefined,
+    });
+    try {
+      await store.read();
+      memory.setBytes(null);
+      await store.read();
+      expect(store.snapshot().layout).toEqual(layout());
+      const theirs: WorkbenchLayout = {
+        ...layout(),
+        viewer: { kind: 'group', tabs: [{ kind: 'view', view: 'v-1234abcd' }] },
+      };
+      memory.set(theirs);
+      const current = store.intendedLayout()!;
+      expect(await store.edit({ ...current, lanes: { ...current.lanes, chat: false } })).toBe(true);
+      expect(workbenchRecords.layout.read(memory.get()!)).toEqual({
+        status: 'current',
+        record: { ...theirs, lanes: { chat: false, workbench: true } },
+      });
+      expect(onChange.mock.lastCall?.[1]).toBe('write');
+      expect(onChange.mock.lastCall?.[2]).toEqual({ lanes: { chat: false } });
+    } finally {
+      store.dispose();
+    }
+  });
+
+  it('should keep the last layout as the base after an edit that saved nothing while the file was absent', async () => {
+    const memory = memoryFiles();
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: memory.files,
+      onChange: () => undefined,
+      onError: () => undefined,
+    });
+    try {
+      await store.read();
+      memory.setBytes(null);
+      await store.read();
+      // A Dockview echo of the same portable tree changes nothing.
+      expect(await store.edit(store.intendedLayout()!)).toBe(true);
+      const theirs: WorkbenchLayout = {
+        ...layout(),
+        viewer: { kind: 'group', tabs: [{ kind: 'view', view: 'v-1234abcd' }] },
+      };
+      memory.set(theirs);
+      const current = store.intendedLayout()!;
+      expect(await store.edit({ ...current, lanes: { ...current.lanes, chat: false } })).toBe(true);
+      expect(workbenchRecords.layout.read(memory.get()!)).toEqual({
+        status: 'current',
+        record: { ...theirs, lanes: { chat: false, workbench: true } },
+      });
+    } finally {
+      store.dispose();
+    }
+  });
+
+  it('should keep the shown layout as the base when the file is gone by the restore refresh read', async () => {
+    const memory = memoryFiles();
+    let readGate: PromiseWithResolvers<void> | undefined;
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: {
+        ...memory.files,
+        exists: async () => {
+          const gate = readGate;
+          readGate = undefined;
+          await gate?.promise;
+          return memory.files.exists();
+        },
+      },
+      onChange: () => undefined,
+      onError: () => undefined,
+    });
+    try {
+      await store.read(true);
+      const saved: WorkbenchLayout = {
+        ...layout(),
+        viewer: { kind: 'group', tabs: [{ kind: 'view', view: 'v-bbbb1111' }] },
+      };
+      const releaseWrite = memory.delayNextWrite();
+      const restored = store.restore(saved, store.snapshot().digest, () => true);
+      await vi.waitFor(() => {
+        expect(memory.writes).toHaveBeenCalledOnce();
+      });
+      // A watch read overlaps the restore's write, so its reply waits for a refresh read.
+      await store.read();
+      const refresh = Promise.withResolvers<void>();
+      readGate = refresh;
+      releaseWrite();
+      await vi.waitFor(() => {
+        expect(readGate).toBeUndefined();
+      });
+      // The file is deleted before the refresh read looks.
+      memory.setBytes(null);
+      refresh.resolve();
+      expect(await restored).toBe(true);
+      // The reply published nothing and the refresh found no file, so the host still shows the layout before it.
+      expect(store.intendedLayout()).toEqual(store.snapshot().layout);
+      const theirs: WorkbenchLayout = {
+        ...layout(),
+        viewer: { kind: 'group', tabs: [{ kind: 'view', view: 'v-cccc2222' }] },
+      };
+      memory.set(theirs);
+      const current = store.intendedLayout()!;
+      expect(await store.edit({ ...current, lanes: { ...current.lanes, chat: false } })).toBe(true);
+      expect(workbenchRecords.layout.read(memory.get()!)).toEqual({
+        status: 'current',
+        record: { ...theirs, lanes: { chat: false, workbench: true } },
+      });
+    } finally {
+      store.dispose();
+    }
+  });
+
+  it("should end a restore that conflicts on the other window's layout, so the next edit keeps that window's change", async () => {
+    const memory = memoryFiles();
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: memory.files,
+      onChange: () => undefined,
+      onError: () => undefined,
+    });
+    try {
+      await store.read(true);
+      const saved: WorkbenchLayout = {
+        ...layout(),
+        viewer: { kind: 'group', tabs: [{ kind: 'view', view: 'v-bbbb1111' }] },
+      };
+      const theirs: WorkbenchLayout = {
+        ...layout(),
+        workbench: {
+          kind: 'group',
+          tabs: [
+            { kind: 'pane', pane: 'parameters' },
+            { kind: 'file', path: 'main.ts' },
+          ],
+        },
+      };
+      const releaseWrite = memory.delayNextWrite();
+      const restored = store.restore(saved, store.snapshot().digest, () => true);
+      await vi.waitFor(() => {
+        expect(memory.writes).toHaveBeenCalledOnce();
+      });
+      // Another window writes while the restore's checked write is on the wire.
+      memory.set(theirs);
+      releaseWrite();
+      expect(await restored).toBe(false);
+      expect(store.intendedLayout()).toEqual(store.snapshot().layout);
+      const current = store.intendedLayout()!;
+      expect(await store.edit({ ...current, lanes: { ...current.lanes, chat: false } })).toBe(true);
+      expect(workbenchRecords.layout.read(memory.get()!)).toEqual({
+        status: 'current',
+        record: { ...theirs, lanes: { chat: false, workbench: true } },
+      });
+    } finally {
+      store.dispose();
+    }
+  });
+
+  it('should keep the shown layout as the base when a restore whose reply was lost reads back no file', async () => {
+    const memory = memoryFiles();
+    let lose = true;
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: {
+        ...memory.files,
+        writeFileChecked: async (input) => {
+          const result = await memory.files.writeFileChecked(input);
+          if (!lose) {
+            return result;
+          }
+          lose = false;
+          memory.setBytes(null);
+          throw Object.assign(new Error('reply lost'), { applicationState: 'potentially-applied' });
+        },
+      },
+      onChange: () => undefined,
+      onError: () => undefined,
+    });
+    try {
+      await store.read(true);
+      const saved: WorkbenchLayout = {
+        ...layout(),
+        viewer: { kind: 'group', tabs: [{ kind: 'view', view: 'v-bbbb1111' }] },
+      };
+      expect(await store.restore(saved, store.snapshot().digest, () => true)).toBe(false);
+      // The host reads the file again after a restore that did not save; it is gone.
+      expect(await store.read(true)).toBe(true);
+      expect(store.snapshot().digest).toBe('missing');
+      expect(store.intendedLayout()).toEqual(store.snapshot().layout);
+      const current = store.intendedLayout()!;
+      expect(await store.edit({ ...current, lanes: { ...current.lanes, chat: false } })).toBe(true);
+      expect(workbenchRecords.layout.read(memory.get()!)).toEqual({
+        status: 'current',
+        record: { ...layout(), lanes: { chat: false, workbench: true } },
+      });
+    } finally {
+      store.dispose();
+    }
+  });
+
+  it('should show each publication as the machine makes it, so the diff base never runs ahead of what is shown', async () => {
+    const memory = memoryFiles({ ...layout(), lanes: { chat: false, workbench: true } });
+    const seen: Array<{ digest: string; bytes: Uint8Array<ArrayBuffer> | null; agrees: boolean }> = [];
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: memory.files,
+      onChange: (state) => {
+        seen.push({
+          digest: state.digest,
+          bytes: state.bytes,
+          agrees: JSON.stringify(store.intendedLayout()) === JSON.stringify(state.layout),
+        });
+      },
+      onError: () => undefined,
+    });
+    try {
+      const first = store.read(true);
+      // Shown in the step that published it: the host never sees a record older than the diff base.
+      await vi.waitFor(() => {
+        expect(seen).toHaveLength(1);
+      });
+      expect(await first).toBe(true);
+      // Another window opens the chat lane; the person closes the workbench lane once the host shows it.
+      memory.set({ ...layout(), lanes: { chat: true, workbench: true } });
+      await store.read();
+      expect(store.snapshot().layout?.lanes).toEqual({ chat: true, workbench: true });
+      const current = store.intendedLayout()!;
+      expect(await store.edit({ ...current, lanes: { chat: current.lanes.chat, workbench: false } })).toBe(true);
+      expect(workbenchRecords.layout.read(memory.get()!)).toMatchObject({
+        status: 'current',
+        record: { lanes: { chat: true, workbench: false } },
+      });
+      expect(seen.every((entry) => entry.agrees)).toBe(true);
+      for (const entry of seen) {
+        expect(entry.digest).toBe(entry.bytes === null ? 'missing' : await digestBytes(entry.bytes));
+      }
+    } finally {
+      store.dispose();
+    }
+  });
+
+  it('should become ready only once the host has been shown the first read', async () => {
+    const memory = memoryFiles();
+    memory.setBytes(encoder.encode('{broken'));
+    let shown = 0;
+    let readyWhenShown: boolean | undefined;
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: memory.files,
+      onChange: () => {
+        shown++;
+        readyWhenShown = store.ready();
+      },
+      onError: () => undefined,
+    });
+    try {
+      const reading = store.read(true);
+      for (let turn = 0; turn < 5; turn++) {
+        await Promise.resolve();
+        expect(store.ready()).toBe(shown > 0);
+      }
+      expect(await reading).toBe(true);
+      expect(shown).toBe(1);
+      expect(readyWhenShown).toBe(true);
+      expect(store.snapshot().refusal?.code).toBe('INVALID_RECORD');
+    } finally {
+      store.dispose();
+    }
+  });
+});
+
+describe('workbench layout record health', () => {
+  it('retries reads, reconciles a potentially-applied write, and resets only reviewed bytes', async () => {
+    vi.useFakeTimers();
+    const data = memoryFiles();
+    const readFile = vi.fn(async (): Promise<Uint8Array<ArrayBuffer>> => {
+      throw new Error('disk busy');
+    });
+    const writeFileChecked = vi.fn(async (input: Parameters<typeof data.writes>[0]) => {
+      if (writeFileChecked.mock.calls.length === 1) {
+        await data.writes(input);
+        throw Object.assign(new Error('reply lost'), { applicationState: 'potentially-applied' });
+      }
+      return data.writes(input);
+    });
+    const store = createWorkbenchLayoutStore({
+      root: '/root',
+      files: { ...data.files, readFile, writeFileChecked },
+      onChange: () => undefined,
+      onError: () => undefined,
+    });
+    try {
+      await store.read();
+      await vi.runAllTimersAsync();
+      expect(store.health().read).toBe('unavailable');
+      readFile.mockImplementation(async () => data.get()!);
+      await store.retryRead();
+      await vi.runAllTimersAsync();
+      expect(store.health().read).toBe('ok');
+      expect(await store.edit({ ...layout(), lanes: { chat: false, workbench: true } })).toBe(false);
+      expect(store.health().unconfirmed).toBe(true);
+      expect(await store.flush()).toBe(true);
+      expect(writeFileChecked).toHaveBeenCalledTimes(1);
+      expect(store.health().unconfirmed).toBe(false);
+
+      const reviewed = encoder.encode('{broken');
+      data.setBytes(reviewed);
+      await store.read();
+      const newer = encoder.encode('{still broken');
+      data.setBytes(newer);
+      await store.read();
+      expect(await store.reset(layout(), reviewed)).toBe(false);
+      expect(data.get()).toEqual(newer);
+      expect(await store.reset(layout(), newer)).toBe(true);
+    } finally {
+      store.dispose();
+      vi.useRealTimers();
+    }
+  });
+});

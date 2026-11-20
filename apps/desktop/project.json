@@ -1,0 +1,861 @@
+{
+  "name": "desktop",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/desktop/src",
+  "projectType": "application",
+  "tags": ["scope:ui", "type:app", "release:app", "ci:desktop"],
+  "implicitDependencies": ["desktop-quick-look"],
+  "targets": {
+    "prepare-build123d-python": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/resources/python"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/prepare-build123d-python.mts"
+      }
+    },
+    "prepare-build123d-python-macos": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/resources/python/darwin-arm64"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/prepare-build123d-python.mts --target darwin-arm64"
+      }
+    },
+    "prepare-build123d-python-linux": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/resources/python/linux-x64"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/prepare-build123d-python.mts --target linux-x64"
+      }
+    },
+    "prepare-build123d-python-windows": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/resources/python/win32-x64"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/prepare-build123d-python.mts --target win32-x64"
+      }
+    },
+    "prepare-picogk-dotnet": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/resources/picogk"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/prepare-picogk-dotnet.mts"
+      }
+    },
+    "prepare-picogk-dotnet-macos": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/resources/picogk/darwin-arm64"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/prepare-picogk-dotnet.mts --target darwin-arm64"
+      }
+    },
+    "build": {
+      "cache": true,
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/dist"],
+      "inputs": [
+        "production",
+        "^production",
+        {
+          "env": "TAU_CLOUD_ENABLED"
+        },
+        {
+          "env": "TAU_TELEMETRY_HOST"
+        },
+        {
+          "env": "POSTHOG_CLIENT_KEY"
+        },
+        {
+          "env": "SENTRY_DSN"
+        },
+        {
+          "env": "SENTRY_RELEASE"
+        }
+      ],
+      "dependsOn": [
+        "typecheck",
+        {
+          "projects": ["ui"],
+          "target": "build:desktop"
+        }
+      ],
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "electron-vite build"
+      }
+    },
+    "dev": {
+      "executor": "nx:run-commands",
+      "continuous": true,
+      "dependsOn": [
+        "prepare-build123d-python",
+        "prepare-picogk-dotnet",
+        {
+          "projects": ["scripts"],
+          "target": "populate-ui-env"
+        },
+        {
+          "projects": ["ui"],
+          "target": "dev:desktop"
+        }
+      ],
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "node --import @oxc-node/core/register ../../scripts/src/wait-for-url.ts http://localhost:3001 && node --import @oxc-node/core/register --env-file=../ui/.env scripts/run-electron-vite.mts dev",
+        "env": {
+          "ELECTRON_RENDERER_URL": "http://localhost:3001"
+        }
+      },
+      "configurations": {
+        "local": {
+          "env": {
+            "ELECTRON_RENDERER_URL": "http://localhost:3001",
+            "TAU_LOCAL_CODESIGN_IDENTITY": "auto"
+          }
+        }
+      }
+    },
+    "serve": {
+      "executor": "nx:run-commands",
+      "continuous": true,
+      "dependsOn": [
+        "build",
+        "prepare-build123d-python",
+        "prepare-picogk-dotnet",
+        {
+          "projects": ["scripts"],
+          "target": "populate-ui-env"
+        }
+      ],
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "node --import @oxc-node/core/register --env-file=../ui/.env scripts/run-electron-vite.mts preview --skipBuild",
+        "env": {
+          "NODE_ENV": "production"
+        }
+      },
+      "configurations": {
+        "local": {
+          "env": {
+            "NODE_ENV": "production",
+            "TAU_LOCAL_CODESIGN_IDENTITY": "auto"
+          }
+        }
+      }
+    },
+    "prepare-git": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/resources/git"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/prepare-git.mts"
+      }
+    },
+    "prepare-git-macos": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/resources/git/darwin-arm64", "{projectRoot}/resources/git/SOURCES"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/prepare-git.mts --target darwin-arm64"
+      }
+    },
+    "prepare-git-linux": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/resources/git/linux-x64", "{projectRoot}/resources/git/SOURCES"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/prepare-git.mts --target linux-x64"
+      }
+    },
+    "prepare-git-windows": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/resources/git/win32-x64"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/prepare-git.mts --target win32-x64"
+      }
+    },
+    "prepare-store-guard-linux": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/resources/store-guard/linux-x64"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register libs/sandbox/scripts/build-store-guard.mts --resources apps/desktop/resources/store-guard/linux-x64"
+      }
+    },
+    "prepare-windows-sandbox": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/resources/windows-sandbox/win32-x64"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register libs/sandbox/scripts/build-windows-sandbox.mts --resources apps/desktop/resources/windows-sandbox/win32-x64"
+      }
+    },
+    "test-git-payload": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/git-payload.test.mts"
+      }
+    },
+    "package-macos": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        "build",
+        {
+          "projects": ["ui"],
+          "target": "check-desktop-payload"
+        },
+        {
+          "projects": ["desktop-quick-look"],
+          "target": "build-extensions"
+        },
+        "prepare-build123d-python-macos",
+        "prepare-picogk-dotnet-macos",
+        "prepare-git-macos"
+      ],
+      "outputs": ["{projectRoot}/package-out"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/package-macos.mts"
+      },
+      "configurations": {
+        "local": {
+          "env": {
+            "TAU_LOCAL_CODESIGN_IDENTITY": "auto",
+            "TAU_DESKTOP_CHANNEL": "staging"
+          }
+        }
+      },
+      "inputs": ["default", "^default", "{workspaceRoot}/apps/www/content/legal/open-source.md"]
+    },
+    "package-macos-release": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        "build",
+        {
+          "projects": ["ui"],
+          "target": "check-desktop-payload"
+        },
+        {
+          "projects": ["desktop-quick-look"],
+          "target": "build-extensions"
+        },
+        "prepare-build123d-python-macos",
+        "prepare-picogk-dotnet-macos",
+        "prepare-git-macos"
+      ],
+      "outputs": ["{projectRoot}/package-out"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/package-macos.mts --release"
+      },
+      "configurations": {
+        "staging": {
+          "command": "node --import @oxc-node/core/register apps/desktop/scripts/package-macos.mts --release --skip-notarization"
+        },
+        "staging-notarized": {
+          "command": "node --import @oxc-node/core/register apps/desktop/scripts/package-macos.mts --release"
+        }
+      },
+      "inputs": ["default", "^default", "{workspaceRoot}/apps/www/content/legal/open-source.md"]
+    },
+    "package-macos-unsigned": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        "build",
+        {
+          "projects": ["ui"],
+          "target": "check-desktop-payload"
+        },
+        {
+          "projects": ["desktop-quick-look"],
+          "target": "build-extensions"
+        },
+        "prepare-build123d-python-macos",
+        "prepare-picogk-dotnet-macos",
+        "prepare-git-macos"
+      ],
+      "outputs": ["{projectRoot}/package-out"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/package-macos.mts --unsigned"
+      },
+      "inputs": ["default", "^default", "{workspaceRoot}/apps/www/content/legal/open-source.md"]
+    },
+    "package-linux": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        "build",
+        {
+          "projects": ["ui"],
+          "target": "check-desktop-payload"
+        },
+        "prepare-build123d-python-linux",
+        "prepare-git-linux",
+        "prepare-store-guard-linux"
+      ],
+      "outputs": ["{projectRoot}/package-out"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/package-desktop.mts --platform linux-x64 --archive"
+      }
+    },
+    "package-windows": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        "build",
+        {
+          "projects": ["ui"],
+          "target": "check-desktop-payload"
+        },
+        "prepare-build123d-python-windows",
+        "prepare-git-windows",
+        "prepare-windows-sandbox"
+      ],
+      "outputs": ["{projectRoot}/package-out"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/package-desktop.mts --platform win32-x64 --archive"
+      }
+    },
+    "test-macos-package-mode": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/macos-package-mode.test.mts"
+      }
+    },
+    "test-desktop-package": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/desktop-package.test.mts"
+      }
+    },
+    "publish-intel-beta-dmg": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/publish-intel-beta-dmg.mts"
+      }
+    },
+    "test-intel-beta-dmg": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/publish-intel-beta-dmg.test.mts"
+      }
+    },
+    "test-publish-desktop": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/publish-desktop.test.mts"
+      }
+    },
+    "verify-macos-package": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/verify-macos-package.mts"
+      }
+    },
+    "verify-macos-release": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/verify-macos-package.mts --release"
+      },
+      "configurations": {
+        "staging": {
+          "command": "node --import @oxc-node/core/register apps/desktop/scripts/verify-macos-package.mts --release --skip-notarization"
+        },
+        "staging-notarized": {
+          "command": "node --import @oxc-node/core/register apps/desktop/scripts/verify-macos-package.mts --release"
+        }
+      }
+    },
+    "verify-macos-unsigned": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/verify-macos-package.mts --unsigned"
+      }
+    },
+    "publish": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/publish-desktop.mts"
+      }
+    },
+    "verify-ota": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/verify-ota.mts"
+      }
+    },
+    "prepare-build123d-python-macos-intel": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/resources/python/darwin-x64"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/prepare-build123d-python.mts --target darwin-x64"
+      }
+    },
+    "prepare-git-macos-intel": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/resources/git/darwin-x64", "{projectRoot}/resources/git/SOURCES"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/prepare-git.mts --target darwin-x64"
+      }
+    },
+    "package-macos-intel": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        "build",
+        {
+          "projects": ["ui"],
+          "target": "check-desktop-payload"
+        },
+        "prepare-build123d-python-macos-intel",
+        "prepare-git-macos-intel"
+      ],
+      "outputs": ["{projectRoot}/package-out"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/package-macos.mts"
+      },
+      "configurations": {
+        "local": {
+          "env": {
+            "TAU_LOCAL_CODESIGN_IDENTITY": "auto",
+            "TAU_DESKTOP_CHANNEL": "staging"
+          }
+        }
+      },
+      "inputs": ["default", "^default", "{workspaceRoot}/apps/www/content/legal/open-source.md"]
+    },
+    "package-macos-release-intel": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        "build",
+        {
+          "projects": ["ui"],
+          "target": "check-desktop-payload"
+        },
+        "prepare-build123d-python-macos-intel",
+        "prepare-git-macos-intel"
+      ],
+      "outputs": ["{projectRoot}/package-out"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/package-macos.mts --release"
+      },
+      "configurations": {
+        "staging": {
+          "command": "node --import @oxc-node/core/register apps/desktop/scripts/package-macos.mts --release --skip-notarization"
+        },
+        "staging-notarized": {
+          "command": "node --import @oxc-node/core/register apps/desktop/scripts/package-macos.mts --release"
+        }
+      },
+      "inputs": ["default", "^default", "{workspaceRoot}/apps/www/content/legal/open-source.md"]
+    },
+    "package-macos-unsigned-intel": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        "build",
+        {
+          "projects": ["ui"],
+          "target": "check-desktop-payload"
+        },
+        "prepare-build123d-python-macos-intel",
+        "prepare-git-macos-intel"
+      ],
+      "outputs": ["{projectRoot}/package-out"],
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/package-macos.mts --unsigned"
+      },
+      "inputs": ["default", "^default", "{workspaceRoot}/apps/www/content/legal/open-source.md"]
+    },
+    "render-dmg-background": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/render-dmg-background.mts"
+      }
+    },
+    "test-macos-dmg": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/macos-dmg.test.mts"
+      }
+    },
+    "test-appimage-transaction": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/appimage-transaction.test.mts"
+      }
+    },
+    "make-windows-installer": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/package-windows.mts"
+      }
+    },
+    "make-linux-deb": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/package-linux-deb.mts"
+      }
+    },
+    "make-appimage": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/package-appimage.mts"
+      }
+    },
+    "test-linux-apt-package": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/linux-apt-package.test.mts"
+      }
+    },
+    "test-appimage-package": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/appimage-package.test.mts"
+      }
+    },
+    "test-route-publication": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/desktop-route-publication.test.mts"
+      }
+    },
+    "test-windows-git-payload": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["prepare-git-windows"],
+      "options": {
+        "cwd": ".",
+        "commands": [
+          "node --import @oxc-node/core/register apps/desktop/scripts/check-windows-git-payload.mts",
+          "node --import @oxc-node/core/register apps/desktop/scripts/windows-git-payload-roundtrip.mts"
+        ],
+        "parallel": false
+      }
+    },
+    "test-windows-package": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/windows-package.test.mts"
+      }
+    },
+    "installer-candidate": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/desktop-installer-candidate.mts"
+      }
+    },
+    "test-installer-candidate": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/desktop-installer-candidate.test.mts && node --import @oxc-node/core/register apps/desktop/scripts/fetch-desktop-installer-candidate.test.mts"
+      }
+    },
+    "test-linux-receipts-replay": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/linux-receipts-replay.test.mts"
+      }
+    },
+    "test-route-transport": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/publish-desktop-routes.test.mts"
+      }
+    },
+    "test-publication-authority": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/desktop-publication-authority.test.mts"
+      }
+    },
+    "test-receipt-provenance": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/desktop-receipt-provenance.test.mts"
+      }
+    },
+    "test-first-download": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/verify-appimage-download.test.mts"
+      }
+    },
+    "test-linux-apt-repository": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/linux-apt-repository.test.mts"
+      }
+    },
+    "test-apt-publication": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/desktop-apt-publication.test.mts"
+      }
+    },
+    "test-apt-enrollment": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/configure-linux-apt.test.mts"
+      }
+    },
+    "fetch-installer-candidate": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/fetch-desktop-installer-candidate.mts"
+      }
+    },
+    "route-workflow": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/desktop-route-workflow.mts"
+      }
+    },
+    "test-apt-renewal": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/renew-desktop-apt.test.mts"
+      }
+    },
+    "qualify-installed-route": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/qualify-desktop-route.mts"
+      }
+    },
+    "collect-qualification-rows": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/collect-qualification-rows.mts"
+      }
+    },
+    "cleanup-qualification-trust": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/cleanup-qualification-trust.mts"
+      }
+    },
+    "test-qualification-tls": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/qualification-tls.test.mts"
+      }
+    },
+    "test-qualification-electron-writer": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/qualification-electron-writer.test.mts"
+      }
+    },
+    "test-qualification-probe-process": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/qualification-probe-process.test.mts"
+      }
+    },
+    "test-qualification-mirror": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register --test apps/desktop/scripts/qualification-mirror.test.mts"
+      }
+    },
+    "test-qualification-macos": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/qualification-macos.test.mts"
+      }
+    },
+    "test-collect-qualification-rows": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/collect-qualification-rows.test.mts"
+      }
+    },
+    "test-qualification-apt-mirror": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/qualification-apt-mirror.test.mts"
+      }
+    },
+    "test-qualification-metadata": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/qualification-metadata.test.mts"
+      }
+    },
+    "test-qualification-evidence": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/qualification-evidence.test.mts"
+      }
+    },
+    "test-qualification-apt-snapshot": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/qualification-apt-snapshot.test.mts"
+      }
+    },
+    "qualification-apt-snapshot": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/qualification-apt-snapshot.mts"
+      }
+    },
+    "test-qualification-windows": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/qualification-windows.test.mts"
+      }
+    },
+    "test-qualification-profile-access": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/qualification-profile-access.test.mts"
+      }
+    },
+    "collect-qualification-recovery": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/collect-qualification-recovery.mts"
+      }
+    },
+    "test-qualification-recovery": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/qualification-recovery.test.mts"
+      }
+    },
+    "test-qualification-linux": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": ".",
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/qualification-linux.test.mts"
+      }
+    },
+    "hosted-linux-vm-proof": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "bash apps/desktop/scripts/hosted-linux-vm.sh"
+      }
+    },
+    "test-sourcemaps": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node --import @oxc-node/core/register --test apps/desktop/scripts/desktop-sourcemaps.test.mts"
+      }
+    },
+    "test:authority-writer": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "vitest run --config vitest.config.ts src/main/authority-writer-electron.test.ts --testNamePattern=\"native Electron authority ownership\""
+      },
+      "dependsOn": [
+        {
+          "projects": ["desktop-services-host"],
+          "target": "test:authority-writer"
+        }
+      ]
+    },
+    "test": {
+      "dependsOn": ["test-sourcemaps", "test-first-use-download"]
+    },
+    "test-qualification-appimage-sandbox": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/qualification-appimage-sandbox.test.mts",
+        "cwd": "."
+      }
+    },
+    "test-preload-sandbox": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node --import @oxc-node/core/register apps/desktop/scripts/preload-sandbox.test.mts",
+        "cwd": "."
+      }
+    },
+    "test-first-use-download": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node --import @oxc-node/core/register --test apps/desktop/scripts/first-use-evidence.test.mts"
+      }
+    }
+  }
+}

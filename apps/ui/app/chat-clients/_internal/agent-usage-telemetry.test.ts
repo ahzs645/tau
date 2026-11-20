@@ -1,0 +1,737 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { ClientMetricEntry } from '@taucad/telemetry';
+import { initialChatProjection, reduceChatProjection } from '#machines/chat-projection.logic.js';
+import type { ChatProjection } from '#machines/chat-projection.logic.js';
+import { lifecycleRow, logRow } from '#machines/chat-projection.fixture.js';
+import {
+  agentIdentityOf,
+  createAgentSessionTracker,
+  createAgentUsageTelemetry,
+  reportRefusedAgentTurn,
+  trackAgentTurn,
+} from '#chat-clients/_internal/agent-usage-telemetry.js';
+
+const external = { tauInternal: { kind: 'external-tool', origin: 'external', agentId: 'codex' } };
+
+type TrackOptions = Parameters<typeof trackAgentTurn>[0];
+
+const harness = (
+  runId: string,
+  options: Partial<Pick<TrackOptions, 'identity' | 'usageMetrics' | 'onAccepted' | 'onSettled'>> & {
+    prior?: ReadonlyArray<Record<string, unknown>>;
+  } = {},
+) => {
+  const { prior = [], ...extra } = options;
+  let projection: ChatProjection = initialChatProjection;
+  let cursor = 0;
+  const listeners = new Set<() => void>();
+  let clock = 1000;
+  const report = vi.fn<(entry: ClientMetricEntry) => void>();
+  const publish = (rows: ReadonlyArray<Record<string, unknown>>, at: number): void => {
+    clock = at;
+    const events = rows.map((row, index) => ({ ...row, runId, sequence: cursor + index }));
+    projection = reduceChatProjection(projection, {
+      type: 'batch',
+      answer: { status: 'batch', cursor, nextCursor: cursor + rows.length, endCursor: cursor + rows.length, events },
+    }).state;
+    cursor += rows.length;
+    for (const listener of listeners) {
+      listener();
+    }
+  };
+  publish(prior, clock);
+  trackAgentTurn({
+    runId,
+    identity: { agentId: 'codex', placement: 'daemon' },
+    admittedAt: clock,
+    now: () => clock,
+    report,
+    ...extra,
+    source: {
+      getProjection: () => projection,
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+  });
+  return { publish, report, listeners };
+};
+
+const toolRows = (callId: string, kind: string, isError: boolean) => [
+  logRow(0, {
+    type: 'message.appended',
+    message: {
+      id: `${callId}-in`,
+      role: 'tool-input',
+      toolCallId: callId,
+      toolName: 'shell',
+      content: {},
+      call: { toolCallId: callId, kind, status: 'pending' },
+      metadata: external,
+    },
+  }),
+  logRow(0, {
+    type: 'message.appended',
+    message: {
+      id: `${callId}-out`,
+      role: 'tool-output',
+      toolCallId: callId,
+      toolName: 'shell',
+      content: 'ok',
+      isError,
+      call: { toolCallId: callId, kind, status: isError ? 'failed' : 'completed' },
+      metadata: external,
+    },
+  }),
+];
+
+/** One ACP agent call: the kind rides `call`, the name is the agent's own (or a Tau MCP tool's), the input is its content. */
+const acpRows = (
+  callId: string,
+  io: { kind: string; toolName?: string; input: unknown; output: unknown; isError?: boolean },
+) => [
+  logRow(0, {
+    type: 'message.appended',
+    message: {
+      id: `${callId}-in`,
+      role: 'tool-input',
+      toolCallId: callId,
+      toolName: io.toolName ?? 'shell',
+      content: io.input,
+      call: { toolCallId: callId, kind: io.kind, status: 'pending' },
+      metadata: external,
+    },
+  }),
+  logRow(0, {
+    type: 'message.appended',
+    message: {
+      id: `${callId}-out`,
+      role: 'tool-output',
+      toolCallId: callId,
+      toolName: io.toolName ?? 'shell',
+      content: io.output,
+      isError: io.isError ?? false,
+      call: { toolCallId: callId, kind: io.kind, status: io.isError ? 'failed' : 'completed' },
+      metadata: external,
+    },
+  }),
+];
+
+const acpSkills = '/Users/u/Library/Application Support/tau/acp-skills/0123abcd/.agents/skills';
+
+/** One of Tau's own tool calls: no `external` origin, so the chunk keeps its Tau name and input. */
+const tauToolRows = (callId: string, toolName: string, io: { input: unknown; output: unknown }) => [
+  logRow(0, {
+    type: 'message.appended',
+    message: { id: `${callId}-in`, role: 'tool-input', toolCallId: callId, toolName, content: io.input },
+  }),
+  logRow(0, {
+    type: 'message.appended',
+    message: {
+      id: `${callId}-out`,
+      role: 'tool-output',
+      toolCallId: callId,
+      toolName,
+      content: io.output,
+      isError: false,
+    },
+  }),
+];
+
+const usageRow = (id: string, input: number) =>
+  logRow(0, {
+    type: 'message.appended',
+    message: {
+      id,
+      role: 'assistant',
+      content: 'Done.',
+      metadata: {
+        model: 'gpt-5',
+        usage: {
+          input,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: input + 1,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        ...external,
+      },
+    },
+  });
+
+describe('trackAgentTurn', () => {
+  it('reports one completed turn with time to first update, tool kinds and reported tokens', () => {
+    const { publish, report, listeners } = harness('run_ok');
+    publish([lifecycleRow(0, 'admitted', 'run_ok'), lifecycleRow(0, 'running', 'run_ok')], 1200);
+    expect(report).not.toHaveBeenCalled();
+    publish([...toolRows('c1', 'execute', false), ...toolRows('c2', 'read', true)], 1500);
+    publish(
+      [
+        logRow(0, {
+          type: 'message.appended',
+          message: {
+            id: 'final',
+            role: 'assistant',
+            content: 'Done.',
+            metadata: {
+              model: 'gpt-5',
+              usage: {
+                input: 100,
+                output: 20,
+                cacheRead: 50,
+                cacheWrite: 0,
+                totalTokens: 170,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              ...external,
+            },
+          },
+        }),
+        lifecycleRow(0, 'completed', 'run_ok'),
+      ],
+      4000,
+    );
+
+    expect(report).toHaveBeenCalledTimes(1);
+    expect(report.mock.calls[0]![0]).toEqual({
+      name: 'agent.turn',
+      duration: 3000,
+      detail: {
+        agentId: 'codex',
+        placement: 'daemon',
+        outcome: 'completed',
+        timeToFirstUpdate: 500,
+        toolCalls: [
+          { kind: 'execute', status: 'completed', count: 1 },
+          { kind: 'read', status: 'failed', count: 1 },
+        ],
+        tokens: { input: 100, output: 20, cacheRead: 50, cacheWrite: 0 },
+      },
+    });
+    expect(listeners.size).toBe(0);
+  });
+
+  it('tells onSettled the chat’s turns and whether the turn evaluated, after reporting it', () => {
+    const order: string[] = [];
+    const onSettled = vi.fn(() => order.push('settled'));
+    const { publish, report } = harness('run_eval', { onSettled });
+    report.mockImplementation(() => order.push('reported'));
+    publish([lifecycleRow(0, 'admitted', 'run_eval'), lifecycleRow(0, 'running', 'run_eval')], 1200);
+    publish(
+      [
+        ...tauToolRows('e1', 'evaluate_model', { input: { targetFile: 'main.scad' }, output: { status: 'ready' } }),
+        lifecycleRow(0, 'completed', 'run_eval'),
+      ],
+      2000,
+    );
+    expect(order).toEqual(['reported', 'settled']);
+    expect(onSettled).toHaveBeenCalledWith({ agentId: 'codex', turns: 1, evaluated: true });
+  });
+
+  it('omits tokens an agent never reported and carries the failure code', () => {
+    const { publish, report } = harness('run_fail');
+    publish(
+      [
+        lifecycleRow(0, 'admitted', 'run_fail'),
+        logRow(0, {
+          type: 'run.lifecycle',
+          state: 'failed',
+          attempt: 1,
+          detail: { message: 'stalled', code: 'MODEL_STREAM_STALLED' },
+        }),
+      ],
+      2000,
+    );
+    const { detail } = report.mock.calls[0]![0] as Extract<ClientMetricEntry, { name: 'agent.turn' }>;
+    expect(detail).toEqual({
+      agentId: 'codex',
+      placement: 'daemon',
+      outcome: 'error',
+      errorCode: 'MODEL_STREAM_STALLED',
+    });
+  });
+
+  it('reports a resumed run at its next terminal row, counting only what the new attempt did', () => {
+    const failed = {
+      type: 'run.lifecycle',
+      state: 'failed',
+      attempt: 1,
+      detail: { message: 'stalled', code: 'MODEL_STREAM_STALLED', resumable: true },
+    };
+    const attemptOne = [
+      lifecycleRow(0, 'admitted', 'run_resume'),
+      lifecycleRow(0, 'running', 'run_resume'),
+      ...toolRows('old', 'edit', false),
+      usageRow('old-usage', 1000),
+      logRow(0, failed),
+    ];
+    const onAccepted = vi.fn();
+    const { publish, report } = harness('run_resume', { prior: attemptOne, onAccepted });
+    expect(report).not.toHaveBeenCalled();
+    expect(onAccepted).not.toHaveBeenCalled();
+    publish([logRow(0, { type: 'run.lifecycle', state: 'running', attempt: 2 })], 1300);
+    expect(onAccepted).toHaveBeenCalledOnce();
+    publish(
+      [
+        ...toolRows('new', 'read', false),
+        usageRow('new-usage', 10),
+        logRow(0, { type: 'run.lifecycle', state: 'completed', attempt: 2 }),
+      ],
+      1800,
+    );
+    expect(report).toHaveBeenCalledOnce();
+    expect(report.mock.calls[0]![0]).toEqual({
+      name: 'agent.turn',
+      duration: 800,
+      detail: {
+        agentId: 'codex',
+        placement: 'daemon',
+        outcome: 'completed',
+        timeToFirstUpdate: 800,
+        toolCalls: [{ kind: 'read', status: 'completed', count: 1 }],
+        tokens: { input: 10, output: 1, cacheRead: 0, cacheWrite: 0 },
+      },
+    });
+  });
+
+  it('names Tau tools and folds the turn context only with usage-metrics consent, never its paths or messages', () => {
+    const { publish, report } = harness('run_ctx', {
+      identity: { agentId: 'tau', placement: 'browser' },
+      usageMetrics: { kernelId: 'replicad' },
+    });
+    publish([lifecycleRow(0, 'admitted', 'run_ctx'), lifecycleRow(0, 'running', 'run_ctx')], 1200);
+    publish(
+      [
+        ...tauToolRows('r1', 'read_file', {
+          input: { path: '.agents/skills/cad-replicad/reference/sketching.md' },
+          output: 'ten bytes!',
+        }),
+        ...tauToolRows('s1', 'use_skill', { input: { skillName: 'cad-replicad' }, output: { ok: true } }),
+        ...tauToolRows('e1', 'evaluate_model', {
+          input: { path: 'model.ts' },
+          output: {
+            status: 'error',
+            kernelIssues: [{ severity: 'error', type: 'runtime', message: 'draw is not a function' }],
+          },
+        }),
+        ...tauToolRows('w1', 'edit_file', {
+          input: { targetFile: 'model.ts', content: 'export default 1;' },
+          output: { ok: true },
+        }),
+      ],
+      1500,
+    );
+    publish([lifecycleRow(0, 'completed', 'run_ctx')], 2000);
+    const entry = report.mock.calls[0]![0] as Extract<ClientMetricEntry, { name: 'agent.turn' }>;
+    expect(entry.detail.toolCalls?.map((call) => call.tool)).toEqual([
+      'read_file',
+      'use_skill',
+      'evaluate_model',
+      'edit_file',
+    ]);
+    expect(entry.detail.context).toEqual({
+      kernelId: 'replicad',
+      skillsActivated: ['cad-replicad'],
+      callsBeforeFirstModelWrite: 3,
+      timeToFirstModelWrite: 500,
+      referenceLookups: [{ outcome: 'ok', count: 1 }],
+      referenceBytesRead: 10,
+      evaluations: [{ class: 'api_misuse', count: 1 }],
+      correctionsAfterError: 1,
+    });
+    const serialised = JSON.stringify(entry);
+    for (const secret of ['/', '.agents', 'sketching', '.md', '.ts', 'is not a function', 'export default']) {
+      expect(serialised).not.toContain(secret);
+    }
+  });
+
+  it('folds a Codex PicoGK turn over ACP from its staged skill paths, naming no tool and reading no bytes', () => {
+    const { publish, report } = harness('run_acp', { usageMetrics: { kernelId: 'picogk' } });
+    publish([lifecycleRow(0, 'admitted', 'run_acp'), lifecycleRow(0, 'running', 'run_acp')], 1200);
+    publish(
+      [
+        ...acpRows('a1', { kind: 'read', input: { path: `${acpSkills}/cad-picogk/SKILL.md` }, output: 'skill text' }),
+        ...acpRows('a2', {
+          kind: 'read',
+          input: { path: `${acpSkills}/cad-picogk/reference/lattices.md` },
+          output: 'ref',
+        }),
+        ...acpRows('a3', {
+          kind: 'read',
+          input: { path: `${acpSkills}/cad-picogk/reference/missing.md` },
+          output: 'ENOENT',
+          isError: true,
+        }),
+        ...acpRows('a4', {
+          kind: 'search',
+          input: { pattern: 'Lattice', path: `${acpSkills}/cad-picogk/reference` },
+          output: { status: 'done' },
+        }),
+        ...acpRows('a5', { kind: 'edit', input: { path: 'Part.cs', content: 'class Part {}' }, output: 'ok' }),
+        ...acpRows('a6', {
+          kind: 'execute',
+          toolName: 'evaluate_model',
+          input: { path: 'Part.cs' },
+          output: { status: 'ready', kernelIssues: [] },
+        }),
+        ...acpRows('a7', {
+          kind: 'execute',
+          toolName: 'test_model',
+          input: { path: 'Part.cs' },
+          output: { failures: [], passes: [], passed: 2, total: 3, runStatus: 'failed' },
+        }),
+      ],
+      1700,
+    );
+    publish([lifecycleRow(0, 'completed', 'run_acp')], 2000);
+    const entry = report.mock.calls[0]![0] as Extract<ClientMetricEntry, { name: 'agent.turn' }>;
+    expect(entry.detail.toolCalls?.every((call) => call.tool === undefined)).toBe(true);
+    expect(entry.detail.context).toEqual({
+      kernelId: 'picogk',
+      skillsActivated: ['cad-picogk'],
+      callsBeforeFirstModelWrite: 4,
+      timeToFirstModelWrite: 700,
+      referenceLookups: [
+        { outcome: 'ok', count: 1 },
+        { outcome: 'tool_error', count: 1 },
+        { outcome: 'zero_match', count: 1 },
+      ],
+      evaluations: [{ class: 'ok', count: 1 }],
+      correctionsAfterError: 0,
+      geospec: { runs: 1, passed: 2, failed: 1, runStatuses: [{ status: 'failed', count: 1 }] },
+    });
+    const serialised = JSON.stringify(entry);
+    for (const secret of ['/', 'acp-skills', 'Part', '.cs', 'Lattice', 'ENOENT', 'class ']) {
+      expect(serialised).not.toContain(secret);
+    }
+  });
+
+  it('reports an empty context for a turn that answered without writing', () => {
+    const { publish, report } = harness('run_qa', { usageMetrics: { kernelId: 'openscad' } });
+    publish([lifecycleRow(0, 'admitted', 'run_qa'), lifecycleRow(0, 'running', 'run_qa')], 1200);
+    publish(
+      [
+        ...acpRows('q1', { kind: 'read', input: { path: 'README.md' }, output: 'text' }),
+        lifecycleRow(0, 'completed', 'run_qa'),
+      ],
+      1500,
+    );
+    const { detail } = report.mock.calls[0]![0] as Extract<ClientMetricEntry, { name: 'agent.turn' }>;
+    expect(detail.context).toEqual({
+      kernelId: 'openscad',
+      skillsActivated: [],
+      referenceLookups: [],
+      evaluations: [],
+      correctionsAfterError: 0,
+    });
+  });
+
+  it('folds only the new attempt into a resumed run’s context', () => {
+    const attemptOne = [
+      lifecycleRow(0, 'admitted', 'run_again'),
+      lifecycleRow(0, 'running', 'run_again'),
+      ...acpRows('old', { kind: 'read', input: { path: `${acpSkills}/cad-openscad/SKILL.md` }, output: 'skill' }),
+      ...acpRows('old-edit', { kind: 'edit', input: { path: 'model.scad', content: 'cube(1);' }, output: 'ok' }),
+      logRow(0, {
+        type: 'run.lifecycle',
+        state: 'failed',
+        attempt: 1,
+        detail: { message: 'stalled', code: 'MODEL_STREAM_STALLED', resumable: true },
+      }),
+    ];
+    const { publish, report } = harness('run_again', { prior: attemptOne, usageMetrics: { kernelId: 'openscad' } });
+    publish([logRow(0, { type: 'run.lifecycle', state: 'running', attempt: 2 })], 1300);
+    publish(
+      [
+        ...acpRows('new-edit', { kind: 'edit', input: { path: 'model.scad', content: 'cube(2);' }, output: 'ok' }),
+        logRow(0, { type: 'run.lifecycle', state: 'completed', attempt: 2 }),
+      ],
+      1800,
+    );
+    const { detail } = report.mock.calls[0]![0] as Extract<ClientMetricEntry, { name: 'agent.turn' }>;
+    expect(detail.context).toMatchObject({
+      skillsActivated: [],
+      callsBeforeFirstModelWrite: 0,
+      timeToFirstModelWrite: 800,
+      correctionsAfterError: 0,
+    });
+  });
+
+  it('omits tool names and context without consent', () => {
+    const { publish, report } = harness('run_quiet');
+    publish([lifecycleRow(0, 'admitted', 'run_quiet'), lifecycleRow(0, 'running', 'run_quiet')], 1200);
+    publish(
+      [
+        ...tauToolRows('w1', 'edit_file', { input: { targetFile: 'model.ts' }, output: { ok: true } }),
+        lifecycleRow(0, 'completed', 'run_quiet'),
+      ],
+      1500,
+    );
+    const { detail } = report.mock.calls[0]![0] as Extract<ClientMetricEntry, { name: 'agent.turn' }>;
+    expect(detail.context).toBeUndefined();
+    expect(detail.toolCalls).toEqual([{ kind: 'edit', status: 'completed', count: 1 }]);
+  });
+
+  it('counts the attempt’s safeguard interventions and compaction decisions, not an earlier attempt’s (R9)', () => {
+    const nudge = (safeguardId: string) =>
+      logRow(0, {
+        type: 'safeguard.recorded',
+        safeguardId,
+        action: 'nudge',
+        reason: 'Stop repeating the call.',
+        message: { id: `tau:safeguard:${safeguardId}`, role: 'user', content: 'Stop repeating the call.' },
+      });
+    const trace = {
+      tokensBefore: 10,
+      tokensAfter: 5,
+      cleared: 1,
+      evicted: 0,
+      summarizerAttempts: 0,
+      summarizerUsage: null,
+    };
+    const attemptOne = [
+      lifecycleRow(0, 'admitted', 'run_loop'),
+      lifecycleRow(0, 'running', 'run_loop'),
+      nudge('read_file:abc:any-result'),
+      logRow(0, {
+        type: 'run.lifecycle',
+        state: 'failed',
+        attempt: 1,
+        detail: { message: 'stalled', code: 'MODEL_STREAM_STALLED', resumable: true },
+      }),
+    ];
+    const { publish, report } = harness('run_loop', { prior: attemptOne });
+    publish([logRow(0, { type: 'run.lifecycle', state: 'running', attempt: 2 })], 1300);
+    publish(
+      [
+        nudge('read_file:def:any-result'),
+        nudge('read_file:ghi:any-result'),
+        logRow(0, { type: 'safeguard.recorded', safeguardId: 'ping_pong:a:b', action: 'terminate', reason: 'Loop.' }),
+        logRow(0, {
+          type: 'history.compacted',
+          evictedMessageIds: ['m1'],
+          summary: { id: 'summary-1', role: 'user', content: 'Summary.' },
+          details: { ...trace, lane: 'overflow', tier: 'summarization', summary: 'generated' },
+        }),
+        logRow(0, { type: 'run.lifecycle', state: 'completed', attempt: 2 }),
+      ],
+      1800,
+    );
+    const { detail } = report.mock.calls[0]![0] as Extract<ClientMetricEntry, { name: 'agent.turn' }>;
+    expect(detail.safeguards).toEqual([
+      { pattern: 'identical_call', action: 'nudge', count: 2 },
+      { pattern: 'ping_pong', action: 'terminate', count: 1 },
+    ]);
+    expect(detail.compactions).toEqual([{ lane: 'overflow', tier: 'summarization', outcome: 'generated', count: 1 }]);
+  });
+
+  it('reports no safeguard or compaction field for a turn without either', () => {
+    const { publish, report } = harness('run_plain');
+    publish([lifecycleRow(0, 'admitted', 'run_plain'), lifecycleRow(0, 'completed', 'run_plain')], 1100);
+    const { detail } = report.mock.calls[0]![0] as Extract<ClientMetricEntry, { name: 'agent.turn' }>;
+    expect(detail).not.toHaveProperty('safeguards');
+    expect(detail).not.toHaveProperty('compactions');
+    expect(detail).not.toHaveProperty('prefixBreaks');
+  });
+
+  it('counts the attempt’s prefix breaks by cause, provider and cache outcome, with the reasoning they left out', () => {
+    /** One reply row; `cacheRead` gives it a usage of 100 uncached prompt tokens beside that many cached ones. */
+    const reply = (
+      id: string,
+      provider: string,
+      { cacheRead, ...prefix }: Record<string, unknown> & { cacheRead?: number },
+    ) =>
+      logRow(0, {
+        type: 'message.appended',
+        message: {
+          id,
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Done.' }],
+          metadata: {
+            provider,
+            prefix: { digest: 'd', system: 's', tools: 't', settings: 'high', ...prefix },
+            ...(cacheRead === undefined
+              ? {}
+              : {
+                  usage: {
+                    input: 100,
+                    cacheRead,
+                    cacheWrite: 0,
+                    output: 1,
+                    totalTokens: 0,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                  },
+                }),
+          },
+        },
+      });
+    const attemptOne = [
+      lifecycleRow(0, 'admitted', 'run_breaks'),
+      lifecycleRow(0, 'running', 'run_breaks'),
+      reply('reply-0', 'anthropic', { break: 'model' }),
+      logRow(0, {
+        type: 'run.lifecycle',
+        state: 'failed',
+        attempt: 1,
+        detail: { message: 'stalled', code: 'MODEL_STREAM_STALLED', resumable: true },
+      }),
+    ];
+    const { publish, report } = harness('run_breaks', { prior: attemptOne });
+    publish([logRow(0, { type: 'run.lifecycle', state: 'running', attempt: 2 })], 1300);
+    publish(
+      [
+        reply('reply-1', 'anthropic', { break: 'clearing', dropped: 9, cacheRead: 0 }),
+        reply('reply-2', 'anthropic', {}),
+        reply('reply-3', 'anthropic', { break: 'clearing', dropped: 2, cacheRead: 0 }),
+        reply('reply-4', 'a-provider-of-tomorrow', { break: 'settings' }),
+        reply('reply-5', 'anthropic', { break: 'clearing', dropped: 1, cacheRead: 900 }),
+        logRow(0, { type: 'run.lifecycle', state: 'completed', attempt: 2 }),
+      ],
+      1800,
+    );
+    const { detail } = report.mock.calls[0]![0] as Extract<ClientMetricEntry, { name: 'agent.turn' }>;
+    expect(detail.prefixBreaks).toEqual([
+      { cause: 'clearing', provider: 'anthropic', outcome: 'miss', count: 2, reasoningOmitted: 11 },
+      { cause: 'settings', provider: 'other', outcome: 'unreported', count: 1, reasoningOmitted: 0 },
+      { cause: 'clearing', provider: 'anthropic', outcome: 'hit', count: 1, reasoningOmitted: 1 },
+    ]);
+  });
+
+  it('counts a cancelled run as cancelled', () => {
+    const { publish, report } = harness('run_stop');
+    publish([lifecycleRow(0, 'admitted', 'run_stop'), lifecycleRow(0, 'cancelled', 'run_stop')], 1100);
+    expect(report.mock.calls[0]![0]).toMatchObject({ detail: { outcome: 'cancelled' } });
+  });
+});
+
+describe('agentIdentityOf', () => {
+  it('names Tau and external agents with their placement', () => {
+    expect(agentIdentityOf({ kind: 'tau', model: 'm' })).toEqual({ agentId: 'tau', placement: 'browser' });
+    expect(agentIdentityOf({ kind: 'acp', agentId: 'codex', hostId: 'origin' })).toEqual({
+      agentId: 'codex',
+      placement: 'daemon',
+    });
+    expect(agentIdentityOf({ kind: 'acp', agentId: 'Not Valid!', hostId: 'desktop' })).toEqual({
+      agentId: 'other',
+      placement: 'desktop',
+    });
+  });
+});
+
+describe('agent sessions and refusals', () => {
+  it('starts once per agent, ends on switch and refuses only when no session is open', () => {
+    const report = vi.fn<(entry: ClientMetricEntry) => void>();
+    const session = createAgentSessionTracker(report);
+    const codex = { agentId: 'codex', placement: 'daemon' } as const;
+    const tau = { agentId: 'tau', placement: 'browser' } as const;
+    session.refused(codex);
+    session.admitted(codex);
+    session.admitted(codex);
+    session.refused(codex);
+    session.admitted(tau);
+    session.end();
+    expect(report.mock.calls.map(([entry]) => [entry.detail, entry.name])).toEqual([
+      [{ ...codex, outcome: 'refused' }, 'agent.session'],
+      [{ ...codex, outcome: 'started' }, 'agent.session'],
+      [{ ...codex, outcome: 'ended' }, 'agent.session'],
+      [{ ...tau, outcome: 'started' }, 'agent.session'],
+      [{ ...tau, outcome: 'ended' }, 'agent.session'],
+    ]);
+  });
+
+  it('reports a refused turn with a bounded code', () => {
+    const report = vi.fn<(entry: ClientMetricEntry) => void>();
+    const codex = { agentId: 'codex', placement: 'daemon' } as const;
+    reportRefusedAgentTurn({
+      identity: codex,
+      error: Object.assign(new Error('x'), { code: 'CHAT_PLACEMENT_UNAVAILABLE' }),
+      duration: 12,
+      report,
+    });
+    reportRefusedAgentTurn({ identity: codex, error: new Error('free text'), duration: 3, report });
+    /* The credit preflight throws the gateway's structured 402 payload as its message. */
+    const credits = JSON.stringify({
+      category: 'credits',
+      title: 'Credits',
+      message: 'Add credits',
+      code: 'INSUFFICIENT_CREDIT',
+    });
+    reportRefusedAgentTurn({ identity: codex, error: new Error(credits), duration: 4, report });
+    expect(report.mock.calls.map(([entry]) => entry.detail)).toEqual([
+      { ...codex, outcome: 'refused', errorCode: 'CHAT_PLACEMENT_UNAVAILABLE' },
+      { ...codex, outcome: 'refused', errorCode: 'ADMISSION_FAILED' },
+      { ...codex, outcome: 'refused', errorCode: 'INSUFFICIENT_CREDIT' },
+    ]);
+  });
+});
+
+describe('createAgentUsageTelemetry', () => {
+  const codex = { kind: 'acp', agentId: 'codex', hostId: 'origin' } as const;
+
+  const surface = () => {
+    let projection: ChatProjection = initialChatProjection;
+    let cursor = 0;
+    const listeners = new Set<() => void>();
+    const report = vi.fn<(entry: ClientMetricEntry) => void>();
+    const telemetry = createAgentUsageTelemetry(
+      {
+        getProjection: () => projection,
+        subscribe: (listener) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+      report,
+    );
+    const publish = (runId: string, rows: ReadonlyArray<Record<string, unknown>>): void => {
+      const events = rows.map((row, index) => ({ ...row, runId, sequence: cursor + index }));
+      projection = reduceChatProjection(projection, {
+        type: 'batch',
+        answer: { status: 'batch', cursor, nextCursor: cursor + rows.length, endCursor: cursor + rows.length, events },
+      }).state;
+      cursor += rows.length;
+      for (const listener of listeners) {
+        listener();
+      }
+    };
+    return { telemetry, publish, report };
+  };
+
+  it.each(['denied', 'unknown'] as const)('reports nothing, turn or session, when consent is %s', (consent) => {
+    const { telemetry, publish, report } = surface();
+
+    telemetry.begin(codex, { kernelId: 'replicad', consent }).admitted('run_off');
+    publish('run_off', [lifecycleRow(0, 'admitted', 'run_off'), lifecycleRow(0, 'completed', 'run_off')]);
+    telemetry.begin(codex, { kernelId: 'replicad', consent }).refused(new Error('refused'));
+    telemetry.end();
+
+    expect(report).not.toHaveBeenCalled();
+  });
+
+  it('reports the turn, its context and its session when consent is granted', () => {
+    const { telemetry, publish, report } = surface();
+
+    telemetry.begin(codex, { kernelId: 'replicad', consent: 'granted' }).admitted('run_on');
+    publish('run_on', [lifecycleRow(0, 'admitted', 'run_on'), lifecycleRow(0, 'completed', 'run_on')]);
+    telemetry.end();
+
+    const entries = report.mock.calls.map(([entry]) => entry);
+    expect(entries.map(({ name }) => name)).toEqual(['agent.session', 'agent.turn', 'agent.session']);
+    const turn = entries[1] as Extract<ClientMetricEntry, { name: 'agent.turn' }>;
+    expect(turn.detail).toMatchObject({ agentId: 'codex', outcome: 'completed', context: { kernelId: 'replicad' } });
+  });
+
+  it('does not end a session opened with consent once a later turn finds it withdrawn', () => {
+    const { telemetry, publish, report } = surface();
+
+    telemetry.begin(codex, { kernelId: 'replicad', consent: 'granted' }).admitted('run_first');
+    publish('run_first', [lifecycleRow(0, 'admitted', 'run_first'), lifecycleRow(0, 'completed', 'run_first')]);
+    report.mockClear();
+    telemetry.begin(codex, { kernelId: 'replicad', consent: 'denied' }).refused(new Error('second'));
+    telemetry.end();
+
+    expect(report).not.toHaveBeenCalled();
+  });
+});

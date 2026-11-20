@@ -1,6 +1,69 @@
 import { describe, it, expect } from 'vitest';
 import { rpcClientErrorCode } from '#schemas/rpc.schema.js';
-import { assertRpcSuccess, ToolError } from '#utils/tool-error.utils.js';
+import { isRpcExecutionError } from '#types/rpc.types.js';
+import {
+  assertRpcSuccess,
+  isToolExecutionError,
+  parseToolErrorEnvelope,
+  parseToolErrorText,
+  ToolError,
+} from '#utils/tool-error.utils.js';
+
+describe('tool error schemas', () => {
+  it('parses the shared tool-result error envelope', () => {
+    expect(parseToolErrorEnvelope('{"errorCode":"USER_INTERRUPTED","message":"Stopped"}')).toEqual({
+      errorCode: 'USER_INTERRUPTED',
+      message: 'Stopped',
+    });
+    expect(parseToolErrorEnvelope('{"errorCode":42}')).toBeUndefined();
+    expect(parseToolErrorEnvelope('opaque')).toBeUndefined();
+  });
+
+  it('validates tool execution codes from the canonical code array', () => {
+    expect(
+      isToolExecutionError({
+        errorCode: 'STREAM_ERROR',
+        message: 'Interrupted',
+        toolName: 'read_file',
+        toolCallId: 'call-1',
+      }),
+    ).toBe(true);
+    expect(isToolExecutionError({ errorCode: 'NOT_A_TOOL_ERROR' })).toBe(false);
+  });
+
+  it.each(['TOOL_INPUT_VALIDATION_FAILED', 'TOOL_OUTPUT_VALIDATION_FAILED'])(
+    'should reject incomplete or malformed %s records without repairing them',
+    (errorCode) => {
+      const base = { errorCode, message: 'Invalid input', toolName: 'export_model', toolCallId: 'call-1' };
+      for (const value of [
+        { errorCode, message: '✖ Unrecognized key: "toolCallId"' },
+        base,
+        { ...base, validationErrors: null },
+        { ...base, validationErrors: 'bad' },
+        { ...base, validationErrors: [{}] },
+        { ...base, validationErrors: [{ path: [], message: 'Required' }] },
+        { ...base, validationErrors: [], message: {} },
+        { ...base, validationErrors: [], toolName: undefined },
+        { ...base, validationErrors: [], toolCallId: undefined },
+      ]) {
+        expect(isToolExecutionError(value)).toBe(false);
+        expect(parseToolErrorText(JSON.stringify(value))).toBeUndefined();
+      }
+      const valid = { ...base, validationErrors: [{ path: 'format', message: 'Required' }] };
+      expect(parseToolErrorText(JSON.stringify(valid))).toEqual(valid);
+      expect(isToolExecutionError({ ...valid, validationErrors: [] })).toBe(true);
+      expect(parseToolErrorText(JSON.stringify({ ...valid, rawOutput: { unexpected: true } }))).toEqual({
+        ...valid,
+        rawOutput: { unexpected: true },
+      });
+    },
+  );
+
+  it('validates RPC execution codes from the canonical code array', () => {
+    expect(isRpcExecutionError({ errorCode: 'TIMEOUT' })).toBe(true);
+    expect(isRpcExecutionError({ errorCode: 'NOT_AN_RPC_ERROR' })).toBe(false);
+  });
+});
 
 describe('assertRpcSuccess', () => {
   const baseOptions = { toolName: 'grep', toolCallId: 'call-1' };

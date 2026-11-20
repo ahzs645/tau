@@ -1,0 +1,56 @@
+import { defineConfiguration } from '@taucad/runtime/schema';
+import { defineMachine } from '@taucad/runtime/machine';
+import type { MachineManifestDefinition } from '@taucad/runtime/machine';
+import { z } from 'zod';
+
+// Only what this provider needs to talk to the machine. Where it is (address or serial path) arrives as the discovery
+// endpoint, and its name comes from the person at bind.
+const bindingConfiguration = defineConfiguration({
+  id: '<%= name %>.machine.binding',
+  version: '1.0.0',
+  schema: z.object({}),
+  ui: { version: 1, rjsf: {} },
+});
+
+const submissionConfiguration = defineConfiguration({
+  id: '<%= name %>.machine.submission',
+  version: '1.0.0',
+  schema: z.object({ copies: z.number().int().positive().default(1) }),
+  ui: { version: 1, rjsf: {} },
+});
+
+const manifest: MachineManifestDefinition = {
+  version: 3,
+  identity: { typeId: '<%= name %>.machine', vendor: '<%= name %>', model: '<%= name %>', displayName: '<%= alias %>Machine' },
+  connection: { transport: 'network', exclusive: true, opening: 'nothing', identity: 'claimed' },
+  axes: [],
+  components: [{ id: 'controller', kind: 'controller', label: 'Controller' }],
+  processes: [],
+  // Declare actions with `standardMachineAction` or `defineMachineAction`; each starts `designed` until qualified.
+  actions: [],
+  holds: [],
+  jobs: { type: 'unsupported' },
+  stop: { motion: 'halts', spindle: 'none', heaters: 'none', position: 'kept', recovery: [] },
+  observations: [],
+  qualifications: [],
+};
+
+/** `<%= name %>` physical-machine capability. @public */
+export const <%= alias %>Machine = defineMachine({
+  id: '<%= name %>',
+  name: '<%= alias %>Machine',
+  version: '1.0.0',
+  protocolVersion: 2,
+  vendor: '<%= name %>',
+  manifest,
+  bindingConfiguration,
+  submissionConfiguration,
+  async *discover(input) {
+    void input.endpoint;
+    yield* [];
+  },
+  async connect(input) {
+    void input.candidate.endpoint;
+    throw new Error('TODO: implement <%= name %> machine connection');
+  },
+});

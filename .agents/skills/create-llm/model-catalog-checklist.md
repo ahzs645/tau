@@ -1,0 +1,250 @@
+# Model Catalog Checklist
+
+Use this checklist after loading `SKILL.md` for model/provider work.
+
+## File Map
+
+| Concern                            | Primary files                                                      |
+| ---------------------------------- | ------------------------------------------------------------------ |
+| Model catalog rows                 | `apps/libs/api-llm-gateway/src/models/model.constants.ts`          |
+| Model schema                       | `apps/libs/api-llm-gateway/src/models/model.schema.ts`             |
+| Catalog cap/shape tests            | `apps/libs/api-llm-gateway/src/models/model.service.test.ts`       |
+| Gateway routes, wires, credentials | `apps/libs/api-llm-gateway/src/providers/provider-gateway.ts`      |
+| Strict gateway request boundary    | `apps/libs/api-llm-gateway/src/billable-model-request.ts`          |
+| Funded routes: rates, ceilings     | `apps/libs/api-billing/src/billable-model-qualification.ts`        |
+| Funded route contract test         | `apps/libs/api-billing/src/billable-model-qualification.test.ts`   |
+| Provider/family enums (chat wire)  | `libs/chat/src/schemas/provider.schema.ts`                         |
+| Tool-schema contract test          | `libs/chat/src/schemas/provider-tool-schema-compat.test.ts`        |
+| Host transport: wire + reasoning   | `packages/agent-host/src/transport/gateway-model-transport.ts`     |
+| Vertex response/request shim       | `packages/agent-host/src/transport/vertex-completions-shim.ts`     |
+| UI reasoning derivation            | `apps/ui/app/chat-clients/_internal/turn-body.ts`                  |
+| Self-host helper codec             | `apps/libs/api-llm-gateway/src/providers/helper-wire.ts`           |
+| Provider metadata (OTel, cache)    | `apps/libs/api-llm-gateway/src/providers/provider.service.ts`      |
+| Helper invocation                  | `apps/libs/api-llm-gateway/src/direct-model-invocation.service.ts` |
+| Environment config                 | `apps/api/app/config/environment.config.ts`                        |
+| Live gateway suite (gateway URL)   | `packages/agent-host/tests/live/provider-streaming.live.test.ts`   |
+| Live helper path (self-host)       | `apps/api/app/api/llm/helper-path.live.test.ts`                    |
+
+## Research Checklist
+
+Before editing, verify current model facts from official/current sources:
+
+- Provider endpoint and exact provider model ID.
+- Release/version naming and deprecation status.
+- Context window and max output tokens on the chosen provider surface.
+- Input/output pricing, cached-input pricing, and any cache-write pricing.
+- Input modalities, especially image support.
+- Tool/function calling, structured output or JSON mode, and streaming support.
+- Reasoning controls and whether Tau's transport can pass them through.
+- Whether an existing gateway provider already represents the billing and runtime identity.
+
+## Provider Decision
+
+Use an existing provider when all are true:
+
+- The provider id is already in `providerTargets` in `provider-gateway.ts`.
+- The model is available on that provider's configured URL and wire.
+- The host transport's codec and compat overrides can express required model settings.
+- Billing, telemetry, base URL, and token accounting match that provider identity.
+
+Add a new provider only when at least one is true:
+
+- The user explicitly wants direct billing or direct API access through a different provider.
+- Required provider-native controls are not available through an existing provider.
+- The provider needs distinct env vars, base URL, telemetry, or token accounting.
+- No existing gateway provider serves the model.
+
+Never put a non-OpenAI provider under `openai` only because the API is OpenAI-compatible.
+
+## Existing-Provider Workflow
+
+1. Add or update the row under the provider in `modelList` (`model.constants.ts`).
+2. Use a provider-prefixed `id`, for example `together-glm-5.2`; `provider.id` must be a gateway provider id.
+3. Set `provider.id`, `provider.name`, and provider `model` exactly for the chosen provider surface.
+4. Set `details.contextWindow` to Tau's effective cap, currently `200_000`, for long-context models.
+5. Add the model ID to `cappedModelIds` in `model.service.test.ts` when the provider supports more than Tau exposes.
+6. Set `support.toolChoice: false` when explicit tool choice is not proven safe for the provider/model.
+7. Set `configuration` only to controls the transport actually forwards (see Reasoning below).
+8. Keep `enabled: false` for text-only, unproven, beta, or otherwise unsafe public exposure.
+9. Run the verification ladder.
+
+Routes are built from `modelList` at import time: a row with `enabled: false` gets no gateway route and cannot be reached even by id.
+
+## New-Provider Workflow
+
+When a new provider is actually needed, update all relevant surfaces:
+
+- Add the provider id to `GatewayProviderId` and `providerTargets` (`key`, `url`, `wire`) in `provider-gateway.ts`.
+- Add it to `fundedGatewayProviderIds` only when Tau Cloud funds it; unfunded providers are self-host only.
+- Extend `isGatewayProviderConfigured` if the credential is not a plain string key.
+- Add the env var to `environment.config.ts`.
+- Add the provider id to `providerIdSchema`, and a family to `modelFamilySchema` only if no existing family fits (`libs/chat/src/schemas/provider.schema.ts`).
+- Add the provider kind to `openAiGatewayProviderKinds` in `gateway-model-transport.ts`, and to `isOpenAiResponsesProviderKind` only if it speaks the Responses wire (today: `openai`, `xai`).
+- Add a `piModelFor` compat override only for a proven upstream incompatibility.
+- Extend the request boundary in `billable-model-request.ts` if the wire carries block shapes it does not yet accept.
+- Add reasoning derivation in `turn-body.ts` if the provider names its reasoning control differently.
+- Add at least one catalog row and a live matrix row.
+- If Tau Cloud funds it, add funded routes for its rows (next section).
+
+## Funded Route Checklist
+
+A provider in `fundedGatewayProviderIds` reaches its supplier on Tau Cloud only through a route in `billable-model-qualification.ts`. `CodeOwnedBillableModelQualificationResolver.resolve` refuses any request whose route, wire, output field or output bound does not match, before anything is charged or sent. For every funded row:
+
+- Add a `route(...)` with the catalog route id, display name and wire.
+- Set `contextMaximum` and `outputMaximum` to the supplier's limits on that surface. `outputMaximum` must be at least the row's `details.maxTokens`, or every turn at the catalog ceiling is refused.
+- Set `rates(input, cacheRead, cacheWrite, output)` in USD per million tokens from the supplier's published pricing, and `pricingRevision` to the date you read it. A route without rates is refused as temporarily unavailable.
+- Set `outputParameter` to the field the host transport actually sends. The default is `max_tokens` for `anthropic`, `max_output_tokens` for `openai-responses`, and `max_completion_tokens` for `openai-completions`. On `openai-completions`, pi-ai picks the field in `detectCompat` (`dist/api/openai-completions.js` in `@earendil-works/pi-ai`): it sends `max_tokens` for Together, DeepSeek, Moonshot and some other providers and base URLs, and `max_completion_tokens` otherwise, unless `piModelFor` sets `compat.maxTokensField`. Read `detectCompat` for the pinned pi-ai version; do not infer the field from the provider's docs. A mismatch refuses every turn with `Exactly one bounded output-token maximum is required`.
+- Set `allowsImage: false` for text-only models and `combinedMaximum` where the supplier bounds input plus output together.
+- Run the funded route contract test. It sends each funded row's real host request through the real resolver at the row's catalog output ceiling, so it catches a wrong field or a low ceiling. Re-check `outputParameter` for every funded route when pi-ai is upgraded.
+
+## Catalog Row Checklist
+
+Every model row should explicitly address:
+
+- `id`, `name`, `slug`, and provider `model`.
+- `provider.id`, `provider.name`, and `providerKind`.
+- `recommended` only when product-visible defaults should include it. Self-host helper surfaces fall back to the first `recommended` enabled row when `openai-gpt-5.6-luna` is unconfigured, so this flag also selects the helper model.
+- `description` as one concise CAD-task sentence.
+- `support.tools`, `support.toolChoice`, and `support.modalities` when relevant.
+- `details.family` and `details.families`.
+- `details.contextWindow`, capped to Tau policy when needed, and `details.maxTokens`.
+- `details.knowledgeCutoff` when current reliable data exists.
+- `details.cost.inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`.
+- `configuration.streaming`.
+- Reasoning, thinking, temperature, or output config only when the transport forwards them.
+- `enabled: false` when public exposure is unsafe or intentionally staged.
+- `default: true` on exactly one enabled row: the model a new chat starts on when the person has not chosen one. The field is optional; the API throws if more than one row sets it, and the UI holds no default of its own.
+
+## Description Rubric
+
+Write descriptions for Tau users, not vendor scorecards.
+
+Good:
+
+- `Strong text-only open reasoning model for long-horizon CAD code generation and complex geometry planning.`
+- `Fast model for rapid design iterations and small changes.`
+- `Strong long-context capable open coder with vision, good for large multi-file CAD projects.`
+
+Avoid:
+
+- `Latest Z.ai GLM model on Together.`
+- `Flagship frontier model with best performance.`
+- `Long-context model with strong benchmarks.`
+
+## Reasoning And Thinking Controls
+
+`turn-body.ts` derives the host's `reasoning` from the catalog `configuration` per provider kind:
+
+- `anthropic`: `configuration.thinking` (`enabled` -> budget tokens, `adaptive` -> effort/display).
+- `vertexai`: `configuration.thinkingLevel`, lowercased into `reasoning.effort`.
+- everything else: `configuration.reasoning` passed through.
+
+`gateway-model-transport.ts` then applies it: Anthropic gets `thinkingEnabled` plus budget/display/effort, the Responses providers get `reasoningEffort`/`reasoningSummary`, and Vertex gets `samplingParams.extra_body.google`.
+
+The self-host helper (`project_name`, `commit_name` with Tau Cloud off) maps the row's `configuration` in `helper-wire.ts`, but asks for the least reasoning each wire accepts, so a short name fits its 64-token ceiling: OpenAI gets `reasoning.effort: 'none'`; xAI and Moonshot get the row's lowest level; Vertex gets the row's lowest level as `extra_body.google.thinking_config.thinking_level`; Together Kimi and GLM get `reasoning.enabled: false`; Anthropic gets no `thinking` and no `output_config`. The row's `temperature` is forwarded where set, except on Moonshot Kimi, which fixes its own. A new reasoning control a helper must forward is a codec change there, with a `helper-wire.test.ts` case.
+
+Two more facts live in the row's `support.reasoning` and are true per model, not per provider. Declare each only after the live row for it passes on this model id; `modelReasoning` (`apps/ui/app/utils/model-reasoning.ts`) forwards what the row declares and the transport sends nothing for a row that declares neither:
+
+- `effortInTranscript`: the provider reads the reasoning level from the transcript (Anthropic's empty `system` message with `output_config`, OpenAI's `configuration_update` item), so an effort change keeps the prompt cache. A model that lacks it refuses the request with a 400 or 422.
+- `replayBinding`: the provider takes `thinking.block_binding` (Anthropic). Tau asks it to drop and report a replayed block whose prefix changed in production, and to refuse it in live suites.
+
+## Vertex Wire Facts
+
+A Vertex row goes through Tau's OpenAI-compatible route, not Gemini's native `generateContent`. Facts a model author must know:
+
+- Thinking levels are per model; Gemini 4 Hydrogen rejects `MINIMAL` outright. Tau cannot declare `MINIMAL`: the `thinkingLevel` enum in `model.schema.ts` and the gateway transport admit only `LOW`, `MEDIUM`, `HIGH`. Setting a level the model rejects is a request-time refusal, not a downgrade.
+- Streamed tool-call arguments are never requested: `extra_body.google.stream_function_call_arguments` on the OpenAI-compatible route is refused by `billable-model-request.ts` and never sent by the helper codec. Every Vertex call, the self-host helper included, uses that route; none uses native `generateContent`. Vertex sheds requests carrying it with a pre-stream 499 CANCELLED while its shared-quota pool is stressed (near-deterministic inside such a window, 0/120 outside one), and its streamed-arguments serializer also cancels a turn mid-stream — HTTP 200, real deltas, then a bare `[{"error":{"code":499,…"CANCELLED"}}]` tail no pre-stream retry can see — whenever a tool call closes a nested object on a string value. That value shape is why no schema contract test can guarantee it away: `apply_parameter_operation` is 0/9 live with the flag and 9/9 without it across Gemini 3.7 Flash, 3.8 Flash and 3.1 Pro, so the live matrix's `apply_parameter_operation` row is the standing guard for anyone re-enabling the flag once Google fixes the serializer.
+- Thought-signature echo is handled by `vertex-completions-shim.ts`: it captures `extra_content.google.thought_signature` off the response stream and replays it onto outbound tool calls. Do not add a second signature path in a catalog change.
+- Tool schemas must satisfy the contract test. Vertex rejects `$ref`/`definitions` loops and a non-object top-level schema outright.
+- The gateway exchanges the service-account JSON in `GOOGLE_VERTEX_AI_CREDENTIALS` for an OAuth token and prefixes the model id with `google/`; the catalog row carries the bare provider model id.
+
+## Enablement Gates
+
+Before public enablement, verify:
+
+- The model supports every input modality Tau may send to it.
+- Text-only models remain hidden unless Tau prevents image parts from reaching them.
+- Tool calling works through the agent host's full toolbelt, not one sample tool.
+- Streaming works through the configured wire.
+- Provider-specific reasoning or JSON controls are actually wired, not merely present in the row.
+- The live matrix row for the model's provider passed with this model id.
+- For a funded model: the funded route contract test passes, and after deploy one funded turn with tools succeeded on staging (taucad.dev) before the row is public on production (tau.new). The live matrix cannot stand in for this: it runs with Tau Cloud off.
+
+Hidden rows are still useful for staging, but `enabled: false` also removes the gateway route, so a hidden row cannot be smoke-tested through the gateway.
+
+## Verification Ladder
+
+Focused unit checks first:
+
+```bash
+pnpm nx lint api-llm-gateway --files="src/models/model.constants.ts"
+pnpm nx test api-llm-gateway --watch=false src/models/model.service.test.ts
+pnpm nx typecheck api
+```
+
+When the tool surface, provider enums, or transport changed:
+
+```bash
+pnpm nx test chat --watch=false src/schemas/provider-tool-schema-compat.test.ts
+pnpm nx test agent-host --watch=false
+pnpm nx typecheck agent-host
+```
+
+When a funded route, a funded row's output ceiling or the pi-ai version changed:
+
+```bash
+pnpm nx test api-billing --watch=false src/billable-model-qualification.test.ts
+```
+
+Then the live ladder. `api:test:live` runs an in-process live gateway harness (suites under `apps/api/app/testing/live/`: a provider matrix suite and a provider-switch suite) against real keys from `apps/api/.env`, with no running API required. The harness boots the gateway with `ModelInvocationModule.forRoot({ tauCloudEnabled: false })` in `live-gateway.harness.ts`, so it skips route qualification, metering and settlement entirely. A green live matrix says nothing about whether Tau Cloud admits the model:
+
+```bash
+pnpm nx run api:test:live
+```
+
+The self-host helper path has its own live harness, skipped unless `TAU_LIVE_PROVIDERS=1`: for each configured provider it streams a helper request, an image helper request, and a tool call through the direct `gateway` surface, printing provider, model id, status, latency and token counts only:
+
+```bash
+TAU_LIVE_PROVIDERS=1 pnpm nx run api:test:live -- app/api/llm/helper-path.live.test.ts
+```
+
+The gateway-URL variant drives a running gateway from the agent host instead:
+
+```bash
+TAU_AGENT_LIVE_GATEWAY_URL=... TAU_AGENT_LIVE_BEARER=... TAU_AGENT_LIVE_PROVIDERS=vertexai \
+  pnpm nx run agent-host:test:live
+```
+
+Per-provider model overrides use `TAU_AGENT_LIVE_<PROVIDER>_MODEL`.
+
+A new model row must pass the live matrix row for its provider. A skipped live run is not validated; say so rather than reporting green.
+
+One pass cannot show a row that a model refuses part of the time. Validate a new or newly recommended row with repeats: each row runs `1 + TAU_LIVE_REPEATS` times and fails when any pass fails. The matrix names one representative per non-Vertex wire; when a model becomes its provider's recommended row, move that provider's matrix and provider-switch representative to it, otherwise add the row to the matrix list for the run.
+
+```bash
+TAU_LIVE_REPEATS=9 pnpm nx run api:test:live -- provider-matrix -t <model-id>
+```
+
+A model that returns native reasoning (thinking blocks, reasoning items or thought signatures) must also pass the replay rows: they edit the prefix under signed reasoning and fail unless the reply's log holds that reasoning before the edit. Add the model id to `replayModelIds` in `provider-switch.live.test.ts`, and to `boundModelIds` in `reasoning-binding.live.test.ts` when the row declares `replayBinding`. Add it to the matching effort row, in the transcript or on the request:
+
+```bash
+pnpm nx run api:test:live --skip-nx-cache -- provider-switch -t "live reasoning replay"
+pnpm nx run api:test:live --skip-nx-cache -- reasoning-binding
+pnpm nx run api:test:live --skip-nx-cache -- provider-switch -t "live effort change"
+```
+
+A replay row that passes with no thinking in the log proves nothing; the rows assert it, so do not relax that assertion to get a model through. Rules: [Cross-Provider Content Contract Policy](../../../docs/policy/cross-provider-content-contract.md), Rule 9.
+
+Live prompts call the value a scripted tool result hands back a _marker_. `createLiveSession` refuses a prompt that asks for a "token": Grok 4.7 refuses "reply with the exact token … and nothing else" as a jailbreak and completes the run with no tool call (`docs/research/grok-4-7-live-suite-refusal-blueprint.md`). A failing tool row reports the model's own answer; read it before suspecting the wire.
+
+## Reporting Template
+
+Report:
+
+- Provider decision: existing provider or new provider, with evidence.
+- Catalog changes: id, provider model id, context cap, costs, support flags, enabled state.
+- Transport changes: wire, compat override, reasoning option, and why each was needed.
+- Description review: why the wording is CAD-focused.
+- Verification: exact commands and pass/fail/skip status.
+- Live run: model id, suite, and whether credentials were present.
+- Blockers: unrelated dirty-worktree failures called out precisely.

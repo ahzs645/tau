@@ -1,119 +1,135 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '#components/ui/card.js';
-import { Switch } from '#components/ui/switch.js';
-import { Slider } from '#components/ui/slider.js';
+import { useId } from 'react';
+import { SettingsGroup, SettingsItem, SettingsRow } from '@taucad/settings-ui/components/settings/settings-item';
+import type { SettingId } from '@taucad/settings-ui/components/settings/settings-catalogue';
+import { Switch } from '@taucad/ui/components/switch';
 import { useCookie } from '#hooks/use-cookie.js';
-import { useImageQuality } from '#hooks/use-image-quality.js';
-import { cookieName } from '#constants/cookie.constants.js';
+import { cookieName } from '@taucad/ui-core/constants/cookie.constants';
+import { useDeploymentMode } from '#cloud/use-deployment-mode.js';
+import { DefaultPermissionsSetting } from '#components/settings/default-permissions-setting.js';
+import { desktopPermissions } from '@taucad/files-ui/filesystem/desktop-permissions';
+import { SetupAnswersRow } from '#components/settings/setup-answers-row.js';
+import { setupAnswersCopy } from '@taucad/settings-ui/components/settings/setup-answers-copy';
+import { useFeature } from '#flags/use-feature.js';
+import { useOnboardingTelemetry } from '#telemetry/onboarding-telemetry.js';
 
-function SettingRow({
-  label,
+function SwitchSetting({
+  settingId,
+  title,
   description,
-  children,
+  isChecked,
+  onIsCheckedChange,
 }: {
-  readonly label: string;
+  readonly settingId: SettingId;
+  readonly title: string;
   readonly description: string;
-  readonly children: React.ReactNode;
-}): React.JSX.Element {
+  readonly isChecked: boolean;
+  readonly onIsCheckedChange: (isChecked: boolean) => void;
+}): React.JSX.Element | undefined {
+  const id = useId();
+  // The row's text labels the switch, so the whole row is its target: the bare switch alone is too small to tap.
   return (
-    <div className='flex items-center justify-between gap-4'>
-      <div className='flex flex-col gap-0.5'>
-        <span className='text-sm font-medium'>{label}</span>
-        <span className='text-xs text-muted-foreground'>{description}</span>
-      </div>
-      {children}
-    </div>
+    <SettingsRow
+      settingId={settingId}
+      title={
+        <label htmlFor={id} className='cursor-action'>
+          {title}
+        </label>
+      }
+      description={
+        <label htmlFor={id} className='cursor-action'>
+          {description}
+        </label>
+      }
+      control={<Switch id={id} aria-label={title} checked={isChecked} onCheckedChange={onIsCheckedChange} />}
+    />
+  );
+}
+
+/** The switch and the answers row, present only while the onboarding surface is on. */
+function SetupAnswersGroup(): React.JSX.Element {
+  const [isPersonShared, setIsPersonShared] = useCookie(cookieName.chatCtxPerson, true);
+  const telemetry = useOnboardingTelemetry();
+
+  return (
+    <SettingsGroup title={setupAnswersCopy.group}>
+      <SwitchSetting
+        settingId='use-setup-answers'
+        title={setupAnswersCopy.switchTitle}
+        description={setupAnswersCopy.switchDescription}
+        isChecked={isPersonShared}
+        onIsCheckedChange={(isChecked) => {
+          setIsPersonShared(isChecked);
+          telemetry.setupAnswersSwitchChanged({ enabled: isChecked });
+        }}
+      />
+      <SetupAnswersRow />
+    </SettingsGroup>
   );
 }
 
 export function AgentSettings(): React.JSX.Element {
-  const [showModelCost, setShowModelCost] = useCookie(cookieName.chatModelCost, true);
+  const isOnboardingEnabled = useFeature('onboarding');
+  const isFunded = useDeploymentMode().state === 'funded';
+  const [showCredits, setShowCredits] = useCookie(cookieName.chatModelCost, true);
   const [includeFileSystem, setIncludeFileSystem] = useCookie(cookieName.chatCtxFs, true);
   const [includeActiveFile, setIncludeActiveFile] = useCookie(cookieName.chatCtxActive, true);
   const [includeOpenFiles, setIncludeOpenFiles] = useCookie(cookieName.chatCtxOpen, true);
-  const [showCodePreview, setShowCodePreview] = useCookie(cookieName.chatToolCodePreview, true);
-  const [showAnalysisImages, setShowAnalysisImages] = useCookie(cookieName.chatToolAnalysisImages, true);
   const [testingEnabled, setTestingEnabled] = useCookie(cookieName.chatTestingEnabled, true);
-  const { quality: screenshotQuality, setQuality: setScreenshotQuality } = useImageQuality();
 
   return (
     <div className='flex flex-col gap-6 pb-6'>
-      <Card>
-        <CardHeader>
-          <CardTitle>Metadata Display</CardTitle>
-          <CardDescription>Control what metadata is shown alongside chat messages.</CardDescription>
-        </CardHeader>
-        <CardContent className='flex flex-col gap-4'>
-          <SettingRow label='Show Model Cost' description='Display token cost per message in the chat history'>
-            <Switch checked={showModelCost} onCheckedChange={setShowModelCost} />
-          </SettingRow>
-        </CardContent>
-      </Card>
+      <SettingsGroup title='Chat'>
+        {isFunded ? (
+          <SwitchSetting
+            settingId='show-credits'
+            title='Show credits'
+            description='Show the credits each message used'
+            isChecked={showCredits}
+            onIsCheckedChange={setShowCredits}
+          />
+        ) : null}
+        <SwitchSetting
+          settingId='testing-tools'
+          title='Testing tools'
+          description='Let the agent run and edit tests'
+          isChecked={testingEnabled}
+          onIsCheckedChange={setTestingEnabled}
+        />
+      </SettingsGroup>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Editor Context</CardTitle>
-          <CardDescription>Choose which editor context is automatically included with each message.</CardDescription>
-        </CardHeader>
-        <CardContent className='flex flex-col gap-4'>
-          <SettingRow label='Filesystem' description='Include a snapshot of the project file tree'>
-            <Switch checked={includeFileSystem} onCheckedChange={setIncludeFileSystem} />
-          </SettingRow>
-          <SettingRow label='Active File' description='Include the currently focused file'>
-            <Switch checked={includeActiveFile} onCheckedChange={setIncludeActiveFile} />
-          </SettingRow>
-          <SettingRow label='Open Tabs' description='Include all open editor tabs'>
-            <Switch checked={includeOpenFiles} onCheckedChange={setIncludeOpenFiles} />
-          </SettingRow>
-        </CardContent>
-      </Card>
+      <SettingsGroup title='Context'>
+        <SwitchSetting
+          settingId='filesystem-context'
+          title='Project files'
+          description='Include the project file tree'
+          isChecked={includeFileSystem}
+          onIsCheckedChange={setIncludeFileSystem}
+        />
+        <SwitchSetting
+          settingId='active-file'
+          title='Active file'
+          description='Include the file you are editing'
+          isChecked={includeActiveFile}
+          onIsCheckedChange={setIncludeActiveFile}
+        />
+        <SwitchSetting
+          settingId='open-tabs'
+          title='Open tabs'
+          description='Include every open editor tab'
+          isChecked={includeOpenFiles}
+          onIsCheckedChange={setIncludeOpenFiles}
+        />
+      </SettingsGroup>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Tool Display</CardTitle>
-          <CardDescription>Configure how tool results are displayed in the chat.</CardDescription>
-        </CardHeader>
-        <CardContent className='flex flex-col gap-4'>
-          <SettingRow label='Code Preview' description='Show inline code previews for file operations'>
-            <Switch checked={showCodePreview} onCheckedChange={setShowCodePreview} />
-          </SettingRow>
-          <SettingRow label='Analysis Images' description='Show image previews for visual analysis results'>
-            <Switch checked={showAnalysisImages} onCheckedChange={setShowAnalysisImages} />
-          </SettingRow>
-          <SettingRow
-            label='Screenshot Quality'
-            description='Higher quality is more precise but increases upload time and LLM cost'
-          >
-            <div className='flex w-32 items-center gap-2'>
-              <Slider
-                min={0.1}
-                max={1}
-                step={0.1}
-                value={[screenshotQuality]}
-                onValueChange={([value]) => {
-                  if (value !== undefined) {
-                    setScreenshotQuality(value);
-                  }
-                }}
-              />
-              <span className='w-10 text-right text-xs text-muted-foreground'>
-                {Math.round(screenshotQuality * 100)}%
-              </span>
-            </div>
-          </SettingRow>
-        </CardContent>
-      </Card>
+      {isOnboardingEnabled ? <SetupAnswersGroup /> : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Testing</CardTitle>
-          <CardDescription>Control the availability of testing tools in agent conversations.</CardDescription>
-        </CardHeader>
-        <CardContent className='flex flex-col gap-4'>
-          <SettingRow label='Enable Testing Tools' description='Allow the agent to run and edit tests'>
-            <Switch checked={testingEnabled} onCheckedChange={setTestingEnabled} />
-          </SettingRow>
-        </CardContent>
-      </Card>
+      {desktopPermissions() === undefined ? null : (
+        <SettingsItem settingId='default-permissions'>
+          <SettingsGroup title='Permissions'>
+            <DefaultPermissionsSetting />
+          </SettingsGroup>
+        </SettingsItem>
+      )}
     </div>
   );
 }

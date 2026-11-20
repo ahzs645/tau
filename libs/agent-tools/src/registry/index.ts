@@ -1,0 +1,42 @@
+export { createChatToolRegistry, type ChatToolRegistryOptions } from '#registry/tool-registry.js';
+export type { ShellClient, ShellRunRequest, ShellSource } from '#registry/shell-tool.js';
+export {
+  createGatewayWebResearchClient,
+  type GatewayWebResearchClientOptions,
+  type WebResearchClient,
+} from '#registry/web-tools.js';
+export {
+  createMachineToolRegistry,
+  type MachinePrintPlanner,
+  type MachineToolRegistryOptions,
+} from '#registry/machine-tool-registry.js';
+export {
+  createMachinePrintPlanner,
+  defaultFilamentSlots,
+  machineSliceOptions,
+  type MachinePrintPlannerDependencies,
+} from '#registry/machine-print-planner.js';
+export type { BambuStudioEngine } from '#registry/print-profiles.js';
+export { createProviderRpcFileSystem, type ProviderRpcFileSystemOptions } from '#registry/provider-file-system.js';
+export {
+  createRuntimeWorkbenchClient,
+  type WorkbenchClientOptions,
+  type WorkbenchRuntime,
+} from '#registry/workbench-client.js';
+export {
+  createCachedSkillResourceReader,
+  createSkillBundleOverlay,
+  createSkillBundleRegistry,
+} from '#registry/skill-overlay.js';
+export type {
+  CachedSkillResourceReader,
+  CachedSkillResourceReaderOptions,
+  ReadSkillResource,
+  SkillResourceCacheEvent,
+  SkillResourceCacheStats,
+  SkillBundleRegistry,
+  SkillResourceDescriptor,
+  SystemSkillBundle,
+} from '#registry/skill-overlay.js';
+export { maskedPathCode } from '@taucad/filesystem/composed-view';
+export { slicedFilamentColors } from '@taucad/slicer/container';

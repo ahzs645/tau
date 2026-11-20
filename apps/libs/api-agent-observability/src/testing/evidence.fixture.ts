@@ -1,0 +1,178 @@
+import type { Evidence } from '@taucad/agent-observability/contract';
+import { evidenceDigest } from '@taucad/agent-observability/identity';
+
+const day = 86_400_000;
+/** One clock for every fixture in a run, so two fixtures differ only where a test says. */
+const loadedAt = Date.now();
+
+/** A marker that must never appear outside the sealed payload. */
+export const privateMarker = 'PRIVATE_DESIGN_MARKER_7f3a';
+
+type Overrides = Readonly<{
+  principal?: string;
+  project?: string;
+  policyEpoch?: string;
+  sequence?: number;
+  sourceDigest?: string;
+  projectionVersion?: string;
+  uploader?: string;
+  plane?: Evidence['payload']['plane'];
+  text?: string;
+  protection?: 'pro' | 'free' | 'unknown';
+  lineageDigest?: string;
+  now?: number;
+  authority?: Evidence['authority'];
+  /** A summary fact in place of the default instruction, for a test that needs one that maps to a Langfuse object. */
+  fact?: Extract<Evidence['payload'], { plane: 'summary' }>['fact'];
+  /** The fact's semantic id; two sources that share it name one Langfuse object. */
+  semantic?: string;
+}>;
+
+const payloadOf = (overrides: Overrides, plane: Evidence['payload']['plane'], text: string): Evidence['payload'] => {
+  if (plane === 'summary') {
+    return { plane, fact: overrides.fact ?? { kind: 'instruction', mode: 'initial', message: 'message-1' } };
+  }
+  if (plane === 'feedback') {
+    return { plane, fact: { kind: 'rating', scale: 'thumbs.1', value: 'negative', evidence: 'presented-1' } };
+  }
+  const bytes = new TextEncoder().encode(text).byteLength;
+  return {
+    plane,
+    fact: overrides.fact ?? { kind: 'instruction', mode: 'initial', message: 'message-1' },
+    input: {
+      messages: [
+        {
+          role: 'user',
+          parts: [{ kind: 'text', text, originalBytes: bytes, retainedBytes: bytes, redaction: 'none' }],
+        },
+      ],
+      omitted: 0,
+    },
+    output: null,
+    context: null,
+    parameters: {},
+  };
+};
+
+/** The semantic kind a fixture's plane and fact name. */
+const semanticKind = (plane: Overrides['plane'], fact: Overrides['fact']): Evidence['semantic']['kind'] =>
+  plane === 'feedback' ? 'rating' : (fact?.kind ?? 'instruction');
+
+/**
+ * A valid host-reported envelope whose projection digest is computed, so a
+ * test changes one claim at a time and keeps every other check passing.
+ */
+export const evidenceFixture = async (overrides: Overrides = {}): Promise<Evidence> => {
+  const now = overrides.now ?? loadedAt;
+  const sourceDigest = overrides.sourceDigest ?? 'a'.repeat(64);
+  const lineageDigest = overrides.lineageDigest ?? sourceDigest;
+  const plane = overrides.plane ?? 'summary';
+  const text = overrides.text ?? privateMarker;
+  const evidence: Evidence = {
+    version: 1,
+    source: {
+      kind: 'row',
+      chat: 'chat-1',
+      leaderEpoch: 'device-a',
+      sequence: overrides.sequence ?? 7,
+      digest: sourceDigest,
+    },
+    semantic: {
+      kind: semanticKind(plane, overrides.fact),
+      id: overrides.semantic ?? 'message-1',
+    },
+    projection: { version: overrides.projectionVersion ?? 'v1', redactor: 'r1', digest: '0'.repeat(64) },
+    delivery: {
+      uploader: overrides.uploader ?? 'device-a',
+      attempt: 'send-1',
+      cursor: { view: 'own', origin: overrides.uploader ?? 'device-a', position: '7' },
+    },
+    scope: {
+      principal: overrides.principal ?? 'user-a',
+      project: overrides.project ?? 'project-a',
+      policyEpoch: overrides.policyEpoch ?? 'epoch-a',
+      destination: 'langfuse',
+    },
+    run: 'run-a',
+    execution: { attempt: 'attempt-a', resumedFrom: null, branchedFrom: null },
+    versions: {
+      hostBuild: 'synthetic',
+      apiBuild: null,
+      harness: null,
+      compaction: null,
+      prompts: [],
+      skills: [],
+      tools: [],
+      kernels: [],
+      mapper: 'v1',
+      policy: 'v1',
+    },
+    task: null,
+    authority: overrides.authority ?? 'host-reported',
+    clocks: { occurredAt: now - 1000, sourceOrder: '7', intervals: [] },
+    retention: { originalAt: now - 1000, expiresAt: now - 1000 + 180 * day, proof: 'retention-1' },
+    lineage: [
+      {
+        source: `row-${String(overrides.sequence ?? 7)}`,
+        digest: lineageDigest,
+        protection: overrides.protection ?? 'free',
+        rights: 'verified',
+        expiresAt: now - 1000 + 180 * day,
+        proof: 'source-proof-1',
+      },
+    ],
+    coverage: {
+      events: 'complete',
+      input: plane === 'content' ? 'complete' : 'omitted',
+      output: 'omitted',
+      usage: 'missing',
+      artifacts: 'unsupported',
+      permission: 'complete',
+    },
+    payload: payloadOf(overrides, plane, text),
+  };
+  return { ...evidence, projection: { ...evidence.projection, digest: await evidenceDigest(evidence) } };
+};
+
+/** A completed run's outcome, decided verified by rule `cad-checks-v1`: its root and two scores. */
+export const outcomeFact = (): Extract<Evidence['payload'], { plane: 'summary' }>['fact'] => ({
+  kind: 'outcome',
+  termination: 'completed',
+  success: 'verified',
+  assessment: 'cad-checks-v1',
+});
+
+/** A settled tool call's summary fact: one that maps to a Langfuse object. */
+export const toolFact = (call = 'call-1'): Extract<Evidence['payload'], { plane: 'summary' }>['fact'] => ({
+  kind: 'tool',
+  call,
+  dispatch: 'dispatch-1',
+  toolClass: 'other',
+  toolVersion: null,
+  schemaVersion: null,
+  modelCall: null,
+  outcome: 'completed',
+  revisionBefore: null,
+  revisionAfter: null,
+});
+
+/** A completed model call's summary fact: a generation in Langfuse. */
+export const providerFact = (): Extract<Evidence['payload'], { plane: 'summary' }>['fact'] => ({
+  kind: 'provider',
+  logicalCall: 'call-1',
+  attempt: null,
+  billing: null,
+  requestedModel: null,
+  resolvedModel: 'model-1',
+  provider: null,
+  response: null,
+  firstOutput: null,
+  purpose: 'generation',
+  callKind: 'run',
+  stop: 'stop',
+  usage: { input: 1, output: 1, cacheRead: null, cacheWrite: null, reasoning: null, missing: 'none' },
+});
+
+/** The envelope as the host sends it. */
+export const encodeEvidence = (evidence: unknown): Uint8Array<ArrayBuffer> =>
+  Uint8Array.from(new TextEncoder().encode(JSON.stringify(evidence)));

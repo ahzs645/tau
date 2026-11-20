@@ -1,12 +1,15 @@
 # Build
 build
+build-adaptive
 dist
 
 # Public
 public/build
 public/entry.worker.js
-public/version.json
-public/version.js
+
+# Vendored assets generated from node_modules dependencies (copy-files-from-to.cjson)
+public/fonts/Geist-Variable.woff2
+public/fonts/GeistMono-Variable.woff2
 
 # React Router
 .react-router

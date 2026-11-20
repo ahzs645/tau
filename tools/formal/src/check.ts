@@ -1,0 +1,672 @@
+import { spawnSync } from 'node:child_process';
+import { lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import type { Expectation, ExpectedLocation, Outcome, Tier } from '#expected.js';
+import { compareOutcome, describeOutcome, findExpectedFiles, lintExpectedFile } from '#expected.js';
+import { exportGraph, generatedFiles, simulateBehaviours, staleFiles } from '#export.js';
+import { checkLean, leanMutantChecker } from '#lean.js';
+import type { MutantShard } from '#mutant-shard.js';
+import { findMutantFiles, runMutants } from '#mutants.js';
+import { sanitizeLog } from '#sanitize.js';
+import type { Shard } from '#shard.js';
+import { dealRuns, readRunSeconds } from '#shard.js';
+import type { JavaResult } from '#tlc.js';
+import { compressTrace, runApalacheCase, runJava, runTlcCase, sanyCommand } from '#tlc.js';
+import type { FormalContext, LocatedTools } from '#toolchain.js';
+import { cacheDirectory, locateTools, missingTools } from '#toolchain.js';
+
+export type RunRecord = {
+  readonly name: string;
+  readonly expected?: string;
+  readonly actual: string;
+  readonly seconds: number;
+  readonly ok: boolean;
+};
+
+export type CheckReport = { readonly records: readonly RunRecord[]; readonly failures: readonly string[] };
+
+type JavaTools = Required<Pick<LocatedTools, 'java' | 'tlc'>>;
+
+type Job = {
+  readonly name: string;
+  readonly expectation?: Expectation;
+  readonly run: () => Promise<{ readonly outcome: Outcome; readonly result: JavaResult }>;
+};
+
+const watchdogSeconds = (tier: Tier): number => (tier === 'pr' ? 300 : 900);
+
+const moduleOfConfig = (config: string): string => `${config.split('.')[0] ?? config}.tla`;
+
+/** Plans every SANY, config and log run of one `specs/` directory for a tier. */
+const planDirectory = (
+  context: FormalContext,
+  {
+    location,
+    tier,
+    tools,
+    projectRoot,
+  }: {
+    readonly location: ExpectedLocation;
+    readonly tier: Tier;
+    readonly tools: JavaTools & Pick<LocatedTools, 'apalache'>;
+    readonly projectRoot: string;
+  },
+): { readonly jobs: readonly Job[]; readonly problems: readonly string[] } => {
+  const { directory, file } = location;
+  const relative = path.relative(context.root, directory);
+  const env = { ...context.env, FORMAL_PROJECT_ROOT: projectRoot }; // eslint-disable-line @typescript-eslint/naming-convention -- environment variable
+  const timeoutSeconds = watchdogSeconds(tier);
+  const problems = lintExpectedFile(file).map((problem) => `${relative}: ${problem}`);
+  const entries = readdirSync(directory);
+  const configs = file.configs ?? {};
+  for (const config of entries.filter((entry) => entry.endsWith('.cfg'))) {
+    const tracedBy = Object.keys(file.logs ?? {}).some((spec) => config === `${spec}.validate.cfg`);
+    if (!(config in configs) && !tracedBy) {
+      problems.push(`${relative}/${config}: no expectation in expected.json`);
+    }
+  }
+  for (const config of Object.keys(configs)) {
+    if (!entries.includes(config)) {
+      problems.push(`${relative}/${config}: expected.json names a config that does not exist`);
+    }
+  }
+
+  type TlcJob = {
+    readonly config: string;
+    readonly module: string;
+    readonly traceFile?: string;
+    readonly prepare?: () => void;
+  };
+  const tlcJob = (name: string, expectation: Expectation | undefined, run: TlcJob): Job => ({
+    name,
+    ...(expectation ? { expectation } : {}),
+    run: async () => {
+      run.prepare?.();
+      return runTlcCase(context, {
+        tools,
+        directory,
+        module: run.module,
+        config: run.config,
+        env,
+        timeoutSeconds,
+        ...(run.traceFile ? { traceFile: run.traceFile } : {}),
+      });
+    },
+  });
+
+  const sany: Job[] =
+    tier === 'pr'
+      ? entries
+          .filter((entry) => entry.endsWith('.tla'))
+          .map((module) => ({
+            name: `${relative}/${module} (SANY)`,
+            run: async () => {
+              const result = await runJava({
+                ...sanyCommand(tools, path.join(directory, module)),
+                cwd: directory,
+                env,
+                timeoutSeconds,
+              });
+              const failed = /\*\*\* errors?:|fatal errors|parse error|could not parse/i.test(result.output);
+              return {
+                outcome: failed
+                  ? { error: result.output.split('\n').find((line) => /error/i.test(line)) ?? 'SANY failed' }
+                  : 'pass',
+                result,
+              };
+            },
+          }))
+      : [];
+
+  const configJobs = Object.entries(configs)
+    .filter(([, expectation]) => expectation.tier === tier)
+    .map(([config, expectation]) =>
+      tlcJob(`${relative}/${config}`, expectation, { config, module: moduleOfConfig(config) }),
+    );
+
+  const logJobs = Object.entries(file.logs ?? {}).flatMap(([spec, logs]) =>
+    Object.entries(logs)
+      .filter(([, expectation]) => expectation.tier === tier)
+      .map(([log, expectation]) => {
+        const traceFile = path.join(cacheDirectory(context), 'logs', relative, log);
+        return tlcJob(`${relative}/${log} (${spec})`, expectation, {
+          config: `${spec}.validate.cfg`,
+          module: `${spec}.tla`,
+          traceFile,
+          prepare: () => {
+            sanitizeLog(path.join(directory, log), traceFile);
+          },
+        });
+      }),
+  );
+
+  const graphJobs: Job[] =
+    tier === 'pr'
+      ? Object.entries(file.graphs ?? {}).map(([module, graph]) => ({
+          name: `${relative}/${module} (graph and suite)`,
+          run: async () => {
+            const exported = await exportGraph(context, { tools, directory, module, ...graph });
+            const stale = staleFiles(generatedFiles(directory, module, exported)).map((stalePath) =>
+              path.relative(directory, stalePath),
+            );
+            const outcome: Outcome =
+              exported.outcome === 'pass'
+                ? stale.length > 0
+                  ? { error: `stale ${stale.join(', ')}: run formal update` }
+                  : 'pass'
+                : exported.outcome;
+            return { outcome, result: { output: '', seconds: exported.seconds, killed: false } };
+          },
+        }))
+      : [];
+
+  const { apalache } = tools;
+  const apalacheJobs: Job[] = (file.apalache ?? [])
+    .filter((entry) => entry.tier === tier)
+    .map((entry) => ({
+      name: `${relative} apalache ${entry.args.join(' ')}`,
+      expectation: entry,
+      run: async () =>
+        apalache
+          ? runApalacheCase(context, {
+              tools: { java: tools.java, apalache },
+              directory,
+              args: entry.args,
+              timeoutSeconds,
+            })
+          : { outcome: { error: 'apalache not found' }, result: { output: '', seconds: 0, killed: false } },
+    }));
+
+  return { jobs: [...sany, ...configJobs, ...graphJobs, ...logJobs, ...apalacheJobs], problems };
+};
+
+/**
+ * Runs `jobs` (all of them, or the indices in `startOrder`, which start in that order) and returns
+ * their records and failures in `jobs` order.
+ */
+const runJobs = async (
+  jobs: readonly Job[],
+  log: (line: string) => void,
+  startOrder: readonly number[] = jobs.map((_job, index) => index),
+): Promise<{ records: RunRecord[]; failures: string[] }> => {
+  const started = await Promise.all(
+    startOrder.map(async (index) => {
+      const job = jobs[index];
+      if (job === undefined) {
+        throw new Error(`no job ${String(index)}`);
+      }
+      const { outcome, result } = await job.run();
+      const mismatch = job.expectation
+        ? compareOutcome(job.expectation, outcome)
+        : typeof outcome === 'object' && 'error' in outcome
+          ? describeOutcome(outcome)
+          : undefined;
+      const record: RunRecord = {
+        name: job.name,
+        ...(job.expectation ? { expected: describeOutcome(job.expectation.expect) } : {}),
+        actual: describeOutcome(outcome),
+        seconds: Math.round(result.seconds * 100) / 100,
+        ok: mismatch === undefined,
+      };
+      log(`${record.ok ? 'ok  ' : 'FAIL'} ${job.name}: ${record.actual} (${record.seconds}s)`);
+      if (mismatch) {
+        log(`     ${mismatch}`);
+        for (const line of compressTrace(result.output).slice(0, 40)) {
+          log(`     ${line}`);
+        }
+      }
+      return { index, record, failure: mismatch ? `${job.name}: ${mismatch}` : undefined };
+    }),
+  );
+  const results = started.toSorted((left, right) => left.index - right.index);
+  return {
+    records: results.map((entry) => entry.record),
+    failures: results.flatMap((entry) => (entry.failure ? [entry.failure] : [])),
+  };
+};
+
+export const writeSummary = (
+  context: FormalContext,
+  {
+    projectRoot,
+    tier,
+    family,
+    shard,
+  }: { readonly projectRoot: string; readonly tier: string; readonly family?: string; readonly shard?: Shard },
+  report: CheckReport,
+): string => {
+  const directory = path.join(
+    context.root,
+    'out/reports/formal',
+    path.relative(context.root, projectRoot),
+    tier,
+    ...(family === undefined ? [] : [family]),
+    ...(shard === undefined ? [] : [`shard-${String(shard.index)}-of-${String(shard.count)}`]),
+  );
+  mkdirSync(directory, { recursive: true });
+  const file = path.join(directory, 'summary.json');
+  const seconds = report.records.reduce((total, record) => total + record.seconds, 0);
+  writeFileSync(
+    file,
+    `${JSON.stringify({ tier, seconds: Math.round(seconds * 100) / 100, failures: report.failures, runs: report.records }, undefined, 2)}\n`,
+  );
+  return file;
+};
+
+export type CheckOptions = {
+  readonly tier: Tier | 'lean';
+  /** Absolute project root. */
+  readonly projectRoot: string;
+  /**
+   * One model family: the path of a spec directory relative to `specs/` (`record-sync`). The check reads
+   * only that directory's `expected.json` and writes its summary under `<tier>/<family>/`, so an owner
+   * with several families runs each in a target of its own (`formal:tla:<family>`, formal verification
+   * policy § 6). Without it the check reads every `expected.json` under `specs/`.
+   */
+  readonly family?: string;
+  /**
+   * One of several runners: the check plans every run of the tier as without it, deals them to
+   * `count` shards by the measured seconds in `run-seconds.json` (`dealRuns`), and runs only shard
+   * `index`'s, longest first. The shards partition the runs, so all of them together run every run
+   * once; each writes its summary under `<tier>/shard-<index>-of-<count>/`.
+   */
+  readonly shard?: Shard;
+  readonly log?: (line: string) => void;
+  readonly tools?: LocatedTools;
+};
+
+/** Where a project's differential test writes fresh-seed traces for the nightly oracle run. */
+export const freshTraceDirectory = (context: FormalContext, projectRoot: string): string =>
+  path.join(context.root, 'out/test-results/formal', path.relative(context.root, projectRoot), 'lean');
+
+/**
+ * `formal check --tier lean <projectRoot>`: every `expected.json` under `specs/` with a `lean` section.
+ * With `fresh` (nightly) the oracle also runs over the fresh-seed traces there.
+ */
+const checkLeanProject = (
+  context: FormalContext,
+  options: CheckOptions,
+  { log, target, fresh }: { readonly log: (line: string) => void; readonly target: string; readonly fresh?: string },
+): number => {
+  const locations = findExpectedFiles(options.projectRoot).filter((location) => location.file.lean !== undefined);
+  if (locations.length === 0) {
+    log(`${target}: no specs/**/expected.json with a lean section`);
+    return 1;
+  }
+  const tools = options.tools ?? locateTools(context);
+  const skipped = missingTools(context, { tools, needed: ['lean'], target }, log);
+  if (skipped !== undefined || !tools.lean) {
+    return skipped ?? 1;
+  }
+  const { lean } = tools;
+  const steps = locations.flatMap(({ directory, file }) =>
+    file.lean
+      ? checkLean(context, { directory, lean, spec: file.lean, ...(fresh ? { fresh } : {}) }).map((step) => ({
+          ...step,
+          name: `${path.relative(context.root, directory)}/${step.name}`,
+        }))
+      : [],
+  );
+  for (const step of steps) {
+    log(`${step.problems.length === 0 ? 'ok  ' : 'FAIL'} ${step.name} (${step.seconds}s)`);
+    for (const problem of step.problems) {
+      log(`     ${problem}`);
+    }
+  }
+  const report: CheckReport = {
+    records: steps.map((step) => ({
+      name: step.name,
+      actual: step.problems.length === 0 ? 'pass' : step.problems.join('; '),
+      seconds: step.seconds,
+      ok: step.problems.length === 0,
+    })),
+    failures: steps.flatMap((step) => step.problems.map((problem) => `${step.name}: ${problem}`)),
+  };
+  const summary = writeSummary(
+    context,
+    { projectRoot: options.projectRoot, tier: fresh ? 'nightly-lean' : 'lean' },
+    report,
+  );
+  log(`${target}: ${steps.length} steps, ${report.failures.length} failures; ${path.relative(context.root, summary)}`);
+  return report.failures.length === 0 ? 0 : 1;
+};
+
+/** `formal check --tier pr|nightly|lean <projectRoot>`: SANY, every config and log case of the tier, against `expected.json`. */
+export const checkProject = async (context: FormalContext, options: CheckOptions): Promise<number> => {
+  const log = options.log ?? ((line: string) => process.stdout.write(`${line}\n`));
+  const { family, shard } = options;
+  const target = `${path.relative(context.root, options.projectRoot)}:formal:${options.tier === 'pr' ? 'tla' : options.tier}${family === undefined ? '' : `:${family}`}`;
+  if (options.tier === 'lean') {
+    if (family !== undefined) {
+      log(`${target}: --family selects a TLA+ family; the lean tier has none`);
+      return 2;
+    }
+    if (shard !== undefined) {
+      log(`${target}: --shard deals TLA+ runs; the lean tier has none`);
+      return 2;
+    }
+    return checkLeanProject(context, options, { log, target });
+  }
+  const { tier } = options;
+  const specs = path.join(options.projectRoot, 'specs');
+  const locations = findExpectedFiles(options.projectRoot).filter(
+    (location) =>
+      location.file.lean === undefined &&
+      (family === undefined || path.relative(specs, location.directory).split(path.sep).join('/') === family),
+  );
+  if (locations.length === 0) {
+    log(`${target}: no specs/${family ?? '**'}/expected.json`);
+    return 1;
+  }
+  const tools = options.tools ?? locateTools(context);
+  const needsApalache = locations.some(({ file }) => (file.apalache ?? []).some((entry) => entry.tier === tier));
+  const skipped = missingTools(
+    context,
+    { tools, needed: needsApalache ? ['java', 'tlc', 'apalache'] : ['java', 'tlc'], target },
+    log,
+  );
+  if (skipped !== undefined || !tools.java || !tools.tlc) {
+    return skipped ?? 1;
+  }
+  const javaTools = { java: tools.java, tlc: tools.tlc, ...(tools.apalache ? { apalache: tools.apalache } : {}) };
+  const plans = locations.map((location) =>
+    planDirectory(context, { location, tier, tools: javaTools, projectRoot: options.projectRoot }),
+  );
+  const problems = plans.flatMap((plan) => plan.problems);
+  for (const problem of problems) {
+    log(`FAIL ${problem}`);
+  }
+  const planned = plans.flatMap((plan) => plan.jobs);
+  // A shard's runs, heaviest first; the records keep plan order.
+  const mine = shard
+    ? (dealRuns(
+        planned.map((job) => job.name),
+        shard.count,
+        readRunSeconds(),
+      )[shard.index - 1] ?? [])
+    : undefined;
+  const inPlanOrder = mine?.toSorted((left, right) => left - right);
+  const jobs = inPlanOrder ? inPlanOrder.flatMap((index) => planned[index] ?? []) : planned;
+  // Within a shard the longest runs start first, so no long run waits behind short ones for a JVM.
+  const startOrder = mine && inPlanOrder ? mine.map((index) => inPlanOrder.indexOf(index)) : undefined;
+  const { records, failures } = await runJobs(jobs, log, startOrder);
+  const report: CheckReport = { records, failures: [...problems, ...failures] };
+  const summary = writeSummary(
+    context,
+    {
+      projectRoot: options.projectRoot,
+      tier: options.tier,
+      ...(family === undefined ? {} : { family }),
+      ...(shard === undefined ? {} : { shard }),
+    },
+    report,
+  );
+  const runs = shard
+    ? `shard ${String(shard.index)}/${String(shard.count)}: ${records.length} of ${planned.length} runs`
+    : `${records.length} runs`;
+  log(`${target}: ${runs}, ${report.failures.length} failures; ${path.relative(context.root, summary)}`);
+  return report.failures.length === 0 ? 0 : 1;
+};
+
+/**
+ * `formal update <projectRoot>`: regenerate every graph and suite; run the owner's tests with
+ * `FORMAL_UPDATE=1`, which rewrite drift manifests (refusals apply, FM-R13) and corpus traces;
+ * then regenerate the Lean goldens from those traces.
+ */
+export const updateProject = async (
+  context: FormalContext,
+  projectRoot: string,
+  log: (line: string) => void = (line) => process.stdout.write(`${line}\n`),
+): Promise<number> => {
+  const tools = locateTools(context);
+  const locations = findExpectedFiles(projectRoot);
+  for (const { directory, file } of locations) {
+    for (const [module, graph] of Object.entries(file.graphs ?? {})) {
+      if (!tools.java || !tools.tlc) {
+        log('formal update needs java and tlc for the graphs; run pnpm nx run formal:setup');
+        return 1;
+      }
+      // oxlint-disable-next-line no-await-in-loop -- one export at a time keeps the JVM budget.
+      const exported = await exportGraph(context, {
+        tools: { java: tools.java, tlc: tools.tlc },
+        directory,
+        module,
+        ...graph,
+      });
+      if (exported.outcome !== 'pass') {
+        log(`FAIL ${module}: ${describeOutcome(exported.outcome)}`);
+        return 1;
+      }
+      for (const [target, text] of Object.entries(generatedFiles(directory, module, exported))) {
+        mkdirSync(path.dirname(target), { recursive: true });
+        writeFileSync(target, text);
+        log(`wrote ${path.relative(context.root, target)} (${text.length} bytes)`);
+      }
+    }
+  }
+  // The owner's tests write drift manifests and corpus traces; the Lean goldens follow the traces.
+  const { name } = JSON.parse(readFileSync(path.join(projectRoot, 'project.json'), 'utf8')) as {
+    readonly name: string;
+  };
+  const tests = spawnSync('pnpm', ['nx', 'test', name, '--skip-nx-cache'], {
+    cwd: context.root,
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- environment variable
+    env: { ...context.env, FORMAL_UPDATE: '1' },
+    stdio: 'inherit',
+  });
+  for (const { directory, file } of locations) {
+    if (file.lean) {
+      if (!tools.lean) {
+        log('formal update needs lean for the goldens; run pnpm nx run formal:setup');
+        return 1;
+      }
+      const problems = checkLean(context, { directory, lean: tools.lean, spec: file.lean, update: true }).flatMap(
+        (step) => step.problems.map((problem) => `${step.name}: ${problem}`),
+      );
+      if (problems.length > 0) {
+        log(problems.map((problem) => `FAIL ${problem}`).join('\n'));
+        return 1;
+      }
+      log(`wrote ${path.relative(context.root, directory)}/corpus/*.expected`);
+    }
+  }
+  return tests.status ?? 1;
+};
+
+const assertSafeSimulationPath = (root: string, target: string): void => {
+  const relative = path.relative(root, target);
+  if (relative === '' || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`simulation path escapes the workspace: ${target}`);
+  }
+  const rootStat = lstatSync(root, { throwIfNoEntry: false });
+  if (!rootStat?.isDirectory() || rootStat.isSymbolicLink()) {
+    throw new Error(`simulation workspace root is not a real directory: ${root}`);
+  }
+  let current = root;
+  for (const part of relative.split(path.sep)) {
+    current = path.join(current, part);
+    const stat = lstatSync(current, { throwIfNoEntry: false });
+    if (stat?.isSymbolicLink()) {
+      throw new Error(`simulation path contains a symlink: ${current}`);
+    }
+  }
+};
+
+/**
+ * Nightly: TLC random simulation of every exported graph from one fresh, printed seed, written to
+ * `out/test-results/formal/<projectRoot>/simulated/<Module>.ndjson`. Owner conformance tests replay
+ * these when `FORMAL_SIMULATED` names the directory, and so do the mutant runs. Only a local
+ * missing-tool skip writes `.skipped`; an absent declared trace without that marker must fail replay.
+ */
+const simulateProject = async (
+  context: FormalContext,
+  projectRoot: string,
+  log: (line: string) => void,
+): Promise<{ readonly status: number; readonly directory?: string }> => {
+  const graphs = findExpectedFiles(projectRoot).flatMap(({ directory, file }) =>
+    Object.entries(file.graphs ?? {}).map(([module, graph]) => ({ directory, module, graph })),
+  );
+  const invalid = graphs.find(({ module }) => !/^[A-Za-z]\w*$/.test(module));
+  if (invalid) {
+    log(`FAIL simulation graph module name is invalid: ${invalid.module}`);
+    return { status: 1 };
+  }
+  const projectRelative = path.relative(context.root, projectRoot);
+  if (
+    projectRelative === '' ||
+    projectRelative === '..' ||
+    projectRelative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(projectRelative)
+  ) {
+    log(`FAIL simulation project root is outside the workspace: ${projectRoot}`);
+    return { status: 1 };
+  }
+  const output = path.join(context.root, 'out/test-results/formal', projectRelative, 'simulated');
+  const outputIsSafe = (target: string): boolean => {
+    try {
+      assertSafeSimulationPath(context.root, target);
+      return true;
+    } catch (error) {
+      log(`FAIL unsafe simulation output: ${String(error)}`);
+      return false;
+    }
+  };
+  if (!outputIsSafe(output)) {
+    return { status: 1 };
+  }
+  // This directory belongs only to simulation; remove traces for graphs deleted from expected.json too.
+  rmSync(output, { recursive: true, force: true });
+  if (graphs.length === 0) {
+    return { status: 0 };
+  }
+  const tools = locateTools(context);
+  if (!tools.java || !tools.tlc) {
+    const status =
+      missingTools(context, { tools, needed: ['java', 'tlc'], target: `${projectRelative} simulation` }, log) ?? 1;
+    if (status === 0) {
+      if (!outputIsSafe(output)) {
+        return { status: 1 };
+      }
+      mkdirSync(output, { recursive: true });
+      const marker = path.join(output, '.skipped');
+      if (!outputIsSafe(marker)) {
+        return { status: 1 };
+      }
+      writeFileSync(marker, 'java or tlc unavailable\n');
+    }
+    return {
+      status,
+    };
+  }
+  const seed = Number(context.env['FORMAL_SEED'] ?? Math.floor(Math.random() * 2_147_483_647));
+  if (!outputIsSafe(output)) {
+    return { status: 1 };
+  }
+  mkdirSync(output, { recursive: true });
+  let status = 0;
+  for (const { directory, module, graph } of graphs) {
+    // oxlint-disable-next-line no-await-in-loop -- one simulation at a time keeps the JVM budget.
+    const simulated = await simulateBehaviours(context, {
+      tools: { java: tools.java, tlc: tools.tlc },
+      directory,
+      module,
+      config: graph.config,
+      seed,
+      traces: 2000,
+      depth: 40,
+    });
+    const traceFile = path.join(output, `${module}.ndjson`);
+    if (!outputIsSafe(traceFile)) {
+      return { status: 1 };
+    }
+    writeFileSync(traceFile, simulated.behaviours.map((behaviour) => JSON.stringify(behaviour)).join('\n'));
+    const ok = simulated.outcome === 'pass' && simulated.behaviours.length > 0;
+    status = ok ? status : 1;
+    log(
+      `${ok ? 'ok  ' : 'FAIL'} simulate ${module}: seed ${seed}, ${simulated.behaviours.length} quiescent behaviours, ${describeOutcome(simulated.outcome)} (replay with FORMAL_SEED=${seed})`,
+    );
+  }
+  return { status, directory: output };
+};
+
+/**
+ * `formal mutants <projectRoot>`: machine mutants through Vitest, Lean mutants through the oracle when Lean is present.
+ * With `shard`, only that shard's mutants and their controls (`dealMutants`).
+ */
+export const mutantsProject = async (
+  context: FormalContext,
+  projectRoot: string,
+  {
+    log = (line) => process.stdout.write(`${line}\n`),
+    shard,
+  }: { readonly log?: (line: string) => void; readonly shard?: MutantShard } = {},
+): Promise<number> => {
+  const { lean } = locateTools(context);
+  const spec = findExpectedFiles(projectRoot).find((location) => location.file.lean !== undefined)?.file.lean;
+  const checker = lean && spec ? { lean: leanMutantChecker(context, { projectRoot, lean, spec }) } : {};
+  const { results, failures } = await runMutants(context, {
+    projectRoot,
+    ...checker,
+    log,
+    ...(shard ? { shard } : {}),
+  });
+  if (shard) {
+    log(
+      `${path.relative(context.root, projectRoot)} mutants shard ${String(shard.index)}/${String(shard.count)}: ${String(results.length)} mutants, ${String(failures)} failures`,
+    );
+  }
+  return failures === 0 ? 0 : 1;
+};
+
+/**
+ * `formal nightly <projectRoot>`: the project's nightly-tier configs and Apalache commands, the Lean
+ * tier with its fresh-seed differential, fresh-seed simulation of each exported graph, and every
+ * mutant matrix (whose runs replay the simulated behaviours). Each part runs; any failure fails.
+ * `--without-check` leaves out the configs and Apalache commands, for an owner whose
+ * `formal:nightly:check` target runs them (`formal check --tier nightly`) in a job of its own.
+ * `--without-mutants` leaves out the mutant matrices, for an owner whose `formal:nightly:mutants`
+ * target runs them; `--mutants-only` (that target) runs the same-seed simulation and the mutants
+ * alone, and with `--shard k/N` only that shard's mutants, so N jobs together run every mutant once.
+ */
+export const nightlyProject = async (
+  context: FormalContext,
+  projectRoot: string,
+  {
+    log = (line) => process.stdout.write(`${line}\n`),
+    check = true,
+    lean = true,
+    mutants = true,
+    shard,
+  }: {
+    readonly log?: (line: string) => void;
+    readonly check?: boolean;
+    /** The Lean tier with its fresh-seed differential. */
+    readonly lean?: boolean;
+    readonly mutants?: boolean;
+    /** This runner's share of the mutants (`dealMutants`). */
+    readonly shard?: MutantShard;
+  } = {},
+): Promise<number> => {
+  const locations = findExpectedFiles(projectRoot);
+  const target = `${path.relative(context.root, projectRoot)}:formal:nightly`;
+  const statuses: number[] = [];
+  if (check && locations.some((location) => location.file.lean === undefined)) {
+    statuses.push(await checkProject(context, { tier: 'nightly', projectRoot, log }));
+  }
+  if (lean && locations.some((location) => location.file.lean !== undefined)) {
+    statuses.push(
+      checkLeanProject(
+        context,
+        { tier: 'lean', projectRoot, log },
+        { log, target, fresh: freshTraceDirectory(context, projectRoot) },
+      ),
+    );
+  }
+  const simulation = await simulateProject(context, projectRoot, log);
+  statuses.push(simulation.status);
+  if (mutants && findMutantFiles(projectRoot).length > 0) {
+    const env = simulation.directory ? { ...context.env, FORMAL_SIMULATED: simulation.directory } : context.env; // eslint-disable-line @typescript-eslint/naming-convention -- environment variable
+    statuses.push(await mutantsProject({ ...context, env }, projectRoot, { log, ...(shard ? { shard } : {}) }));
+  }
+  return statuses.every((status) => status === 0) ? 0 : 1;
+};

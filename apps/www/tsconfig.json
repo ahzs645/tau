@@ -1,0 +1,26 @@
+{
+  "extends": "../../tools/typescript/base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "types": ["node", "vite/client"],
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "rootDirs": [".", "./.react-router/types"]
+  },
+  "include": [
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "scripts/**/*.ts",
+    "tests/**/*.ts",
+    "tests/**/*.tsx",
+    "*.ts",
+    ".react-router/types/**/*"
+  ]
+}

@@ -1,0 +1,155 @@
+#!/usr/bin/env node
+
+/**
+ * Purpose: Check the macOS package mode boundary without invoking packaging or signing tools.
+ * Why: Measurement packages must never combine unsigned and release behavior, and only a release
+ * writes the distribution ZIP unless --zip asks for it.
+ * Environment: Node.js 22+.
+ * Usage: node --import @oxc-node/core/register apps/desktop/scripts/macos-package-mode.test.mts
+ * Exit codes: 0 when package mode validation passes; non-zero on regression.
+ */
+
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+import { FuseV1Options } from '@electron/fuses';
+
+/* oxlint-disable no-restricted-imports -- Operational scripts are outside the app's # source alias. */
+import {
+  macosBundleId,
+  macosPackageArchitecture,
+  macosPackageFuses,
+  parseMacosPackageMode,
+} from './macos-package-mode.mjs';
+/* oxlint-enable no-restricted-imports -- End operational script import exception. */
+// oxlint-disable-next-line no-restricted-imports -- Operational signing helper under test.
+import { selectLocalSigningIdentity } from './local-signing.mjs';
+
+const developmentFingerprint = 'A'.repeat(40);
+const signingListing = `1) ${developmentFingerprint} "Apple Development: Test Developer (TEST)"\n2) ${'B'.repeat(40)} "Developer ID Application: Test (TEAM)"`;
+for (const selection of ['auto', developmentFingerprint.toLowerCase(), 'Apple Development: Test Developer (TEST)']) {
+  assert.equal(selectLocalSigningIdentity(selection, signingListing), developmentFingerprint);
+}
+for (const selection of ['', '-', 'missing', 'B'.repeat(40)]) {
+  assert.throws(() => selectLocalSigningIdentity(selection, signingListing), /exactly one matching Apple Development/u);
+}
+assert.throws(() => selectLocalSigningIdentity('auto', ''), /exactly one matching/u);
+assert.throws(
+  () =>
+    selectLocalSigningIdentity('auto', `${signingListing}\n3) ${'C'.repeat(40)} "Apple Development: Other (OTHER)"`),
+  /exactly one matching/u,
+);
+
+assert.deepEqual(parseMacosPackageMode([]), {
+  release: false,
+  unsigned: false,
+  zip: false,
+  dmg: false,
+  notarize: false,
+});
+assert.deepEqual(parseMacosPackageMode(['--release']), {
+  release: true,
+  unsigned: false,
+  zip: true,
+  dmg: false,
+  notarize: true,
+});
+assert.deepEqual(parseMacosPackageMode(['--unsigned']), {
+  release: false,
+  unsigned: true,
+  zip: false,
+  dmg: false,
+  notarize: false,
+});
+assert.deepEqual(parseMacosPackageMode(['--unsigned', '--zip']), {
+  release: false,
+  unsigned: true,
+  zip: true,
+  dmg: false,
+  notarize: false,
+});
+assert.deepEqual(parseMacosPackageMode(['--zip']), {
+  release: false,
+  unsigned: false,
+  zip: true,
+  dmg: false,
+  notarize: false,
+});
+assert.throws(() => parseMacosPackageMode(['--release', '--unsigned']), {
+  name: 'TypeError',
+  message: '--release and --unsigned cannot be used together',
+});
+assert.throws(() => parseMacosPackageMode(['--zipped']), {
+  name: 'TypeError',
+  message: 'Usage: <script> [--release | --unsigned] [--zip] [--dmg] [--skip-notarization]',
+});
+console.log('✓ macOS package modes are mutually exclusive, and only release zips unless --zip is passed');
+
+const packageSource = readFileSync(new URL('package-macos.mts', import.meta.url), 'utf8');
+const licenceGate = packageSource.indexOf('if (zip || dmg) {');
+const modeParse = packageSource.indexOf('parseMacosPackageMode(');
+assert.ok(modeParse !== -1 && licenceGate !== -1 && licenceGate > modeParse);
+assert.ok(
+  packageSource.slice(licenceGate).startsWith(`if (zip || dmg) {
+  execFileSync(process.execPath, [resolve(workspaceRoot, 'packages/plugins/tscircuit/check-vendored-licenses.mjs')],`),
+);
+assert.ok(licenceGate < packageSource.indexOf('const runtimePackages = await resolveRuntimePackages'));
+
+/* Security assessment 2026-10 desktop F-3: the hardening fuses are on in every mode,
+ * RunAsNode is never touched (ACP adapters need it), and only a release refuses --inspect. */
+for (const release of [false, true]) {
+  const fuses = macosPackageFuses({ release });
+  assert.equal(fuses[FuseV1Options.RunAsNode], undefined);
+  assert.equal(fuses[FuseV1Options.EnableCookieEncryption], true);
+  assert.equal(fuses[FuseV1Options.EnableNodeOptionsEnvironmentVariable], false);
+  assert.equal(fuses[FuseV1Options.EnableNodeCliInspectArguments], !release);
+  assert.equal(fuses[FuseV1Options.EnableEmbeddedAsarIntegrityValidation], true);
+  assert.equal(fuses[FuseV1Options.OnlyLoadAppFromAsar], true);
+}
+const fuseFlip = packageSource.indexOf('await flipFuses(appPath');
+assert.ok(fuseFlip !== -1 && fuseFlip < packageSource.indexOf('await sign({'));
+assert.deepEqual(parseMacosPackageMode(['--release', '--skip-notarization'], 'staging'), {
+  release: true,
+  unsigned: false,
+  zip: true,
+  dmg: false,
+  notarize: false,
+});
+for (const [args, channel] of [
+  [['--skip-notarization'], 'staging'],
+  [['--release', '--skip-notarization'], 'production'],
+] as const) {
+  assert.throws(() => parseMacosPackageMode(args, channel), {
+    name: 'TypeError',
+    message: '--skip-notarization requires --release and the staging channel',
+  });
+}
+console.log('✓ macOS packages flip the hardening fuses before signing, and only a release refuses --inspect');
+
+assert.equal(macosPackageArchitecture('darwin', 'arm64'), 'arm64');
+assert.equal(macosPackageArchitecture('darwin', 'x64'), 'x64');
+assert.throws(() => macosPackageArchitecture('linux', 'x64'));
+assert.throws(() => macosPackageArchitecture('darwin', 'ia32'));
+
+assert.deepEqual(parseMacosPackageMode(['--dmg']), {
+  release: false,
+  unsigned: false,
+  zip: false,
+  dmg: true,
+  notarize: false,
+});
+assert.deepEqual(parseMacosPackageMode(['--release', '--dmg']), {
+  release: true,
+  unsigned: false,
+  zip: true,
+  dmg: true,
+  notarize: true,
+});
+
+/* A development package (unsigned or ad-hoc) must not share the release bundle id: an e2e build running beside an
+ * installed Tau Staging would otherwise be the same app to LaunchServices (`open -b`, Dock, the `tau:` handler). */
+assert.equal(macosBundleId({ release: true }, false), 'com.taucad.tau.desktop');
+assert.equal(macosBundleId({ release: false }, true), 'com.taucad.tau.desktop.local');
+assert.equal(macosBundleId({ release: false }, false), 'com.taucad.tau.desktop.e2e');
+assert.ok(packageSource.includes('appBundleId: macosBundleId({ release }, localIdentity !== undefined),'));
+console.log('✓ Only a release package carries the release bundle id; development packages get .e2e or .local');

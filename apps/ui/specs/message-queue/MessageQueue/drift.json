@@ -1,0 +1,59 @@
+{
+  "actions": {},
+  "alphabet": [
+    "adoptRun",
+    "autoResumeOffered",
+    "autoResumeWithdrawn",
+    "close",
+    "dirtyChanged",
+    "interruptRecorded",
+    "loaded",
+    "refresh",
+    "requestTurn",
+    "retry",
+    "runElsewhereAwaitsPull",
+    "runElsewherePullSettled",
+    "runLifecycle",
+    "syncState",
+    "toolParts",
+    "turnAdmitted",
+    "turnFinalized",
+    "watchFailed"
+  ],
+  "sources": {
+    "apps/libs/chat-ui/src/components/chat-message-queue-view.tsx": "a9293c32f2cd43071ad44214c879c3d9d30af67491f1c23730998a18cb62a13f",
+    "apps/libs/chat-ui/src/db/chat-message-queue-store.ts": "ab89825172dbc3da1a4acf792f7ef8591e2eefda49a3a89fe26c58a01116f6cb",
+    "apps/libs/chat-ui/src/machines/chat-message-queue.machine.ts": "b8ff03658a2db816af1d7e34ad621d548653e48784d5c7b2ce7801a26bbfeb0f",
+    "apps/ui/app/chat-clients/_internal/use-turn-admission.ts": "78a63355978a6111ffc2d54ec68cf4f909552e598ecd1b3d281d62883d768496",
+    "apps/ui/app/chat-clients/chat-turn-host.tsx": "3b0e9bd944d07faa1a5d224eae228163f1c3ed40104e885d8afdab445e858d36",
+    "apps/ui/app/chat-clients/use-cad-chat-client.ts": "99d8efe4866b3d8ebc23c988055b8d8ab0a1dc20f0a0bbb0951ab89530c9f9f7",
+    "apps/ui/app/components/chat/chat-message-queue.tsx": "1d2fed0cd4bac8a15dfcd9ac805581ee465e8c6d6c3b2803b3b601366a382fba",
+    "apps/ui/app/components/chat/chat-textarea.tsx": "45e71234fa658c153d621ae02b1fd48e68495da9af15e885ed35087b5704279b",
+    "apps/ui/app/hooks/use-chat.tsx": "a905bb65d19088e3b68e1aedbedd38dc82bcb043c32b9fb780e5722fc42115b6",
+    "apps/ui/app/machines/chat-session.machine.ts": "6591885571ef8134b175eaaa4a5662357276623613b2a3f9d7c18f13f638815c",
+    "apps/ui/app/services/chat-session-store.ts": "1c5838c453d262c913150c8994a730c063a4f6c832a28f270fe12e83ff52779e"
+  },
+  "specs": {
+    "MessageQueue.tla": "d7c1402de6944f58d74fa31d5ea05c245cf293606116453f0a329f762ff1f42e",
+    "QueuePlacement.tla": "b4c85bb439e54faeef87790711cc1da9f5a3e21be4f589c58b83069f15f86c47"
+  },
+  "tables": {
+    "MessageQueue.duplicate.cfg": "9d566ac1a0f357cd7744cdf8594fbaa4554d7c262a0fadf921c45b66b9ffb9da",
+    "MessageQueue.early-steer.cfg": "c3238fc4bfcecd7fa9444fb891f8c668dd50a23aaaf20e3418a4e009f39f091e",
+    "MessageQueue.follower-lag.cfg": "0f72287763bb81ba6288212735b42dc601031938e69c52159ae87597deabf83c",
+    "MessageQueue.late-terminal-capture.cfg": "eee38a8dd8754540aba9144e65be9a21a5539a3d21816bdeb58879042062ffb8",
+    "MessageQueue.lost-payload.cfg": "3f5b7905e927a25bacd64b50c2d348a381aa922cec7210dd02e9639c257d37b9",
+    "MessageQueue.release-stopped.cfg": "12cbfa5d0b5b62bc8200e44b3b50003caa9afd9b29f69b095f20d590f6a2dbdd",
+    "MessageQueue.target.cfg": "681dc3b351dc087568c31dbc5c487d124323485706fb94483bbb67c19b4a28e3",
+    "MessageQueue.today.cfg": "f185e5b96916ae1a6ffc9e93296bf3bf70f0474617a782f86a1866e46bd9078f",
+    "MessageQueue.wrong-cancel.cfg": "821eae120126639dc7baa965d46abc6cd06880964a2f16debfa4415521de4c65",
+    "QueuePlacement.cross-host-replay.cfg": "507e578d96b08b85d0ee49b168dc7a8675482dba6106c6cda5453feb4ad0c2c0",
+    "QueuePlacement.target.cfg": "91bb01fafd3d18d06472fe06f008c177e9b428d59e5e61f0709256035b37c92b",
+    "QueuePlacement.unscoped-rebase.cfg": "487bb85bad45f03a17631de6afcad8b44ac933198f40824630da3048dc5f22a8",
+    "expected.json": "48b4bb6a9bdce61e209c4bead739d14e0111d47291acac7803b0147b2a525974"
+  },
+  "versions": {
+    "chat-message-queue": "1",
+    "chat-session": "4"
+  }
+}

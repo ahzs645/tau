@@ -1,0 +1,549 @@
+// @vitest-environment node
+import { describe, expect, it, vi } from 'vitest';
+import * as THREE from 'three';
+import type { WebGLProgramParametersWithUniforms, WebGLRenderer } from 'three';
+import { resolveSectionPieces } from '#graphics/section-cuts.js';
+import type { SectionCut, SectionHalfSpace, SectionPiece } from '#graphics/section-cuts.js';
+import { getSectionCapDepthBias } from '#graphics/three/materials/section-cap-depth-state.js';
+import { sectionStencilBits } from '#graphics/three/materials/section-stencil.material.js';
+import { sectionCapOpenChainWidthScale } from '#graphics/three/overlay-colors.constants.js';
+import {
+  boxCrossesSectionRegion,
+  createSectionStencilCaps,
+  resolveSectionExitHalfSpaces,
+  writeSectionPlanePolygon,
+} from '#graphics/three/utils/section-stencil-caps.js';
+import type {
+  SectionStencilCapFrame,
+  SectionStencilCapRenderer,
+  SectionStencilCapSource,
+} from '#graphics/three/utils/section-stencil-caps.js';
+
+const plane = (normal: readonly [number, number, number], constant: number): SectionHalfSpace => ({
+  normal,
+  constant,
+});
+
+const unitBox = new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 1, 1));
+
+/** The area of a convex polygon in 3D, from its fan. */
+const polygonArea = (points: readonly THREE.Vector3[], count: number): number => {
+  const total = new THREE.Vector3();
+  for (let index = 1; index < count - 1; index++) {
+    total.add(
+      new THREE.Vector3()
+        .subVectors(points[index]!, points[0]!)
+        .cross(new THREE.Vector3().subVectors(points[index + 1]!, points[0]!)),
+    );
+  }
+  return total.length() / 2;
+};
+
+describe('writeSectionPlanePolygon', () => {
+  it('should cut a box into the polygon where the plane meets it, ordered around it', () => {
+    const points: THREE.Vector3[] = [];
+    const count = writeSectionPlanePolygon(plane([0, 0, 1], 0.5), unitBox, [], points);
+    expect(count).toBe(4);
+    expect(polygonArea(points, count)).toBeCloseTo(1);
+    // A diagonal plane cuts a hexagon from the cube.
+    const diagonal = writeSectionPlanePolygon(
+      plane([1 / Math.sqrt(3), 1 / Math.sqrt(3), 1 / Math.sqrt(3)], Math.sqrt(3) / 2),
+      unitBox,
+      [],
+      points,
+    );
+    expect(diagonal).toBe(6);
+    expect(polygonArea(points, diagonal)).toBeCloseTo((3 * Math.sqrt(3)) / 4);
+  });
+
+  it('should keep only what a face bound holds, and nothing where the plane misses the box', () => {
+    const points: THREE.Vector3[] = [];
+    const count = writeSectionPlanePolygon(plane([0, 0, 1], 0.5), unitBox, [plane([1, 0, 0], 0.25)], points);
+    expect(polygonArea(points, count)).toBeCloseTo(0.75);
+    expect(writeSectionPlanePolygon(plane([0, 0, 1], 2), unitBox, [], points)).toBe(0);
+    expect(writeSectionPlanePolygon(plane([0, 0, 1], 0.5), unitBox, [plane([1, 0, 0], 2)], points)).toBe(0);
+  });
+});
+
+describe('boxCrossesSectionRegion', () => {
+  it('should count a box only where it meets the removed region without lying wholly inside it', () => {
+    expect(boxCrossesSectionRegion(unitBox, [plane([0, 0, 1], 0.5)])).toBe(true);
+    // Wholly kept, wholly removed.
+    expect(boxCrossesSectionRegion(unitBox, [plane([0, 0, 1], 2)])).toBe(false);
+    expect(boxCrossesSectionRegion(unitBox, [plane([0, 0, 1], -1)])).toBe(false);
+    // A wedge that holds part of the box, and one that misses it.
+    expect(boxCrossesSectionRegion(unitBox, [plane([1, 0, 0], 0.5), plane([0, 1, 0], 0.5)])).toBe(true);
+    expect(boxCrossesSectionRegion(unitBox, [plane([1, 0, 0], 2), plane([0, 1, 0], 0.5)])).toBe(false);
+  });
+});
+
+describe('resolveSectionExitHalfSpaces', () => {
+  const wedge: SectionPiece = {
+    cutId: 'wedge',
+    halfSpaces: [plane([1, 0, 0], 0), plane([0, 1, 0], 0)],
+    faces: [],
+  };
+
+  it('should take the half-spaces whose removed side holds a perspective eye', () => {
+    const camera = new THREE.PerspectiveCamera();
+    camera.position.set(5, -5, 5);
+    camera.updateMatrixWorld();
+    expect(resolveSectionExitHalfSpaces(camera, wedge)).toEqual([wedge.halfSpaces[0]]);
+    camera.position.set(5, 5, 5);
+    camera.updateMatrixWorld();
+    expect(resolveSectionExitHalfSpaces(camera, wedge)).toEqual(wedge.halfSpaces);
+  });
+
+  it('should take the half-spaces an orthographic camera looks out of, wherever it stands', () => {
+    const camera = new THREE.OrthographicCamera();
+    camera.position.set(-50, -50, 0);
+    camera.lookAt(-60, -40, 0);
+    camera.updateMatrixWorld();
+    expect(resolveSectionExitHalfSpaces(camera, wedge)).toEqual([wedge.halfSpaces[0]]);
+  });
+});
+
+type RecordedFrame = Readonly<{ objects: THREE.Mesh[]; autoClear: boolean }>;
+
+const createRecordingRenderer = (): SectionStencilCapRenderer & { frames: RecordedFrame[] } => {
+  const frames: RecordedFrame[] = [];
+  const renderer = {
+    autoClear: true,
+    frames,
+    render: vi.fn((scene: THREE.Object3D) => {
+      const objects: THREE.Mesh[] = [];
+      scene.traverse((object) => {
+        if ((object as Partial<THREE.Mesh>).isMesh === true && object.visible) {
+          objects.push(object as THREE.Mesh);
+        }
+      });
+      frames.push({ objects, autoClear: renderer.autoClear });
+    }),
+  };
+  return renderer;
+};
+
+// oxlint-disable-next-line max-params -- A test source names its key, owner, geometry and offset.
+const createSource = (
+  key: string,
+  ownerKey: string,
+  geometry: THREE.BufferGeometry,
+  x = 0,
+): SectionStencilCapSource => {
+  const mesh = new THREE.Mesh(geometry);
+  mesh.position.set(x, 0, 0);
+  mesh.updateMatrixWorld();
+  return { key, ownerKey, meshes: [mesh], tintHex: 0x33_66_99, edgeHex: 0 };
+};
+
+const createCamera = (): THREE.Camera => {
+  const camera = new THREE.PerspectiveCamera();
+  camera.position.set(0.5, -2, 6);
+  camera.lookAt(0, 0, 0);
+  camera.updateMatrixWorld();
+  return camera;
+};
+
+const planeCut: SectionCut = { id: 'plane', kind: 'plane', plane: 'xy', offset: 0.1, isFlipped: false };
+
+const frameFor = (
+  sources: readonly SectionStencilCapSource[],
+  pieces = resolveSectionPieces([planeCut]),
+): SectionStencilCapFrame => ({
+  camera: createCamera(),
+  pieces,
+  sources,
+  stripes: { stripeFrequency: 2, stripeWidth: 0.25 },
+  outlineWidthPixels: 1,
+  viewportHeightPixels: 600,
+});
+
+describe('createSectionStencilCaps', () => {
+  it('should count, cap and outline each crossing source with draws that do not depend on its triangles', () => {
+    for (const backend of ['webgl', 'webgpu'] as const) {
+      const statsBySegments = [8, 256].map((segments) => {
+        const caps = createSectionStencilCaps(backend);
+        const renderer = createRecordingRenderer();
+        const stats = caps.render(
+          renderer,
+          frameFor([
+            createSource('a', 'owner-a', new THREE.SphereGeometry(1, segments, segments / 2)),
+            createSource('b', 'owner-b', new THREE.SphereGeometry(1, segments, segments / 2), 1.5),
+          ]),
+        );
+        caps.dispose();
+        return { ...stats, buildMilliseconds: 0, submitMilliseconds: 0 };
+      });
+      expect(statsBySegments[0]).toEqual(statsBySegments[1]);
+      expect(statsBySegments[0]).toMatchObject({
+        pieceCount: 1,
+        drawnPieceCount: 1,
+        crossingSourceCount: 2,
+        // The later owner's bounds meet the earlier one's.
+        overlapCandidateSourceCount: 1,
+        outlineSourceCount: 2,
+        // Back and front counts per source, then one outline draw each.
+        meshDrawCount: 6,
+      });
+    }
+  });
+
+  it('should draw each pass after the one before it, in one render without clearing the frame', () => {
+    const caps = createSectionStencilCaps('webgl');
+    const renderer = createRecordingRenderer();
+    caps.render(renderer, frameFor([createSource('a', 'owner-a', new THREE.BoxGeometry())]));
+    expect(renderer.render).toHaveBeenCalledTimes(1);
+    expect(renderer.frames[0]!.autoClear).toBe(false);
+    expect(renderer.autoClear).toBe(true);
+    const passes = renderer.frames[0]!.objects.toSorted((left, right) => left.renderOrder - right.renderOrder).map(
+      ({ material }) => (material as THREE.Material).name,
+    );
+    expect(passes).toEqual([
+      'TauSectionStencil:clear-all',
+      'TauSectionStencil:count-back',
+      'TauSectionStencil:count-front',
+      'TauSectionCap',
+      'TauSectionStencil:clear-count',
+      'TauSectionCapOutline',
+    ]);
+    caps.dispose();
+  });
+
+  it('should share each pass draw between owners whose bounds do not meet, and order owners whose bounds do', () => {
+    const caps = createSectionStencilCaps('webgl');
+    const renderer = createRecordingRenderer();
+    const passOrders = (sources: readonly SectionStencilCapSource[]) => {
+      const stats = caps.render(renderer, frameFor(sources));
+      const orders = new Map<string, number[]>();
+      for (const { material, renderOrder } of renderer.frames.at(-1)!.objects) {
+        const { name } = material as THREE.Material;
+        orders.set(
+          name,
+          [...(orders.get(name) ?? []), renderOrder].toSorted((left, right) => left - right),
+        );
+      }
+      return { stats, orders };
+    };
+
+    // Six owners of two sources each, every box apart from every other: one draw per pass.
+    const apart = Array.from({ length: 6 }, (_, owner) =>
+      [0, 1].map((index) =>
+        createSource(`${owner}-${index}`, `owner-${owner}`, new THREE.BoxGeometry(), (owner * 2 + index) * 3),
+      ),
+    ).flat();
+    const shared = passOrders(apart);
+    expect(shared.stats).toMatchObject({ crossingSourceCount: 12, overlapCandidateSourceCount: 0 });
+    // An owner's two sources still take turns: two rounds of a cap and a clear, after one clear of the piece.
+    expect(shared.stats.polygonDrawCount).toBe(5);
+    expect(shared.orders.get('TauSectionStencil:mark-overlap')).toBeUndefined();
+    expect(shared.orders.get('TauSectionStencil:promote-owner')).toBeUndefined();
+
+    // A later owner that meets an earlier one marks and caps after the earlier one is promoted; one apart from both
+    // shares the first owner's draws.
+    const meeting = passOrders([
+      createSource('a', 'owner-a', new THREE.BoxGeometry()),
+      createSource('b', 'owner-b', new THREE.BoxGeometry(), 0.5),
+      createSource('c', 'owner-c', new THREE.BoxGeometry(), 10),
+    ]);
+    const capOrders = meeting.orders.get('TauSectionCap')!;
+    const [promote] = meeting.orders.get('TauSectionStencil:promote-owner')!;
+    const [mark] = meeting.orders.get('TauSectionStencil:mark-overlap')!;
+    // The first and last owners' caps in one draw, the second owner's, then the overlap cap.
+    expect(capOrders).toHaveLength(3);
+    expect(capOrders[0]).toBeLessThan(promote!);
+    expect(promote).toBeLessThan(mark!);
+    expect(mark).toBeLessThan(capOrders[1]!);
+    expect(meeting.stats.overlapCandidateSourceCount).toBe(1);
+    caps.dispose();
+  });
+
+  it('should omit zero-width outline draws while retaining cap fills', () => {
+    const caps = createSectionStencilCaps('webgpu');
+    const renderer = createRecordingRenderer();
+    const source = createSource('a', 'owner-a', new THREE.BoxGeometry());
+    try {
+      const stats = caps.render(renderer, { ...frameFor([source]), outlineWidthPixels: 0 });
+      expect(stats.outlineSourceCount).toBe(0);
+      expect(stats.polygonDrawCount).toBeGreaterThan(0);
+      expect(
+        renderer.frames[0]!.objects.some(
+          ({ material }) => (material as THREE.Material).name === 'TauSectionCapOutline',
+        ),
+      ).toBe(false);
+    } finally {
+      caps.dispose();
+      source.meshes[0]!.geometry.dispose();
+    }
+  });
+
+  it('should reuse the built draw list while only the camera moves, and report the same work', () => {
+    for (const backend of ['webgl', 'webgpu'] as const) {
+      const caps = createSectionStencilCaps(backend);
+      const renderer = createRecordingRenderer();
+      const source = createSource('a', 'owner-a', new THREE.BoxGeometry());
+      const frame = frameFor([source]);
+      try {
+        const built = caps.render(renderer, frame);
+        expect(built.rebuilt).toBe(true);
+        // Orbiting on the same side of the cut leaves every build input alone.
+        frame.camera.position.set(1.5, -2, 6);
+        frame.camera.lookAt(0, 0, 0);
+        frame.camera.updateMatrixWorld();
+        const reused = caps.render(renderer, frame);
+        expect(reused.rebuilt).toBe(false);
+        // The same draws, in the same numbers: a reused frame draws what the built one drew.
+        expect({ ...reused, rebuilt: true, buildMilliseconds: 0, submitMilliseconds: 0 }).toEqual({
+          ...built,
+          buildMilliseconds: 0,
+          submitMilliseconds: 0,
+        });
+        expect(renderer.frames[1]!.objects).toEqual(renderer.frames[0]!.objects);
+      } finally {
+        caps.dispose();
+        source.meshes[0]!.geometry.dispose();
+      }
+    }
+  });
+
+  it('should rebuild when the camera crosses a cut plane, so the exit faces change', () => {
+    const caps = createSectionStencilCaps('webgl');
+    const renderer = createRecordingRenderer();
+    const source = createSource('a', 'owner-a', new THREE.BoxGeometry());
+    const frame = frameFor([source]);
+    try {
+      expect(caps.render(renderer, frame).rebuilt).toBe(true);
+      expect(caps.render(renderer, frame).rebuilt).toBe(false);
+      // The far side of the cut: the piece is now seen from its kept side.
+      frame.camera.position.set(0.5, -2, -6);
+      frame.camera.lookAt(0, 0, 0);
+      frame.camera.updateMatrixWorld();
+      expect(caps.render(renderer, frame).rebuilt).toBe(true);
+    } finally {
+      caps.dispose();
+      source.meshes[0]!.geometry.dispose();
+    }
+  });
+
+  it('should rebuild when a cut, a source, its emphasis, a pose or the pixel scale changes', () => {
+    const caps = createSectionStencilCaps('webgl');
+    const renderer = createRecordingRenderer();
+    const source = createSource('a', 'owner-a', new THREE.BoxGeometry());
+    const frame = frameFor([source]);
+    const expectRebuildFor = (label: string, next: SectionStencilCapFrame): void => {
+      // Back to this frame's own build after whatever the case before left, then settled on it.
+      caps.render(renderer, frame);
+      expect(caps.render(renderer, frame).rebuilt, `${label}: settles into a reused frame`).toBe(false);
+      expect(caps.render(renderer, next).rebuilt, `${label}: rebuilds`).toBe(true);
+    };
+    try {
+      expect(caps.render(renderer, frame).rebuilt).toBe(true);
+      expectRebuildFor('a moved cut', {
+        ...frame,
+        pieces: resolveSectionPieces([{ ...planeCut, offset: 0.2 }]),
+      });
+      expectRebuildFor('emphasis', { ...frame, sources: [{ ...source, tintHex: 0xaa_55_22 }] });
+      expectRebuildFor('an outline colour', { ...frame, sources: [{ ...source, edgeHex: 0xff_00_00 }] });
+      expectRebuildFor('a source that left', { ...frame, sources: [] });
+      expectRebuildFor('the stripe frequency', { ...frame, stripes: { stripeFrequency: 3, stripeWidth: 0.25 } });
+      expectRebuildFor('the outline width', { ...frame, outlineWidthPixels: 2 });
+      expectRebuildFor('a hatch', { ...frame, sources: [{ ...source, hatch: { angle: 0.3, spacingScale: 1 } }] });
+      expectRebuildFor('an owner', { ...frame, sources: [{ ...source, ownerKey: 'owner-b' }] });
+      const loopFill = new THREE.BufferGeometry();
+      const loopOpen = new THREE.BufferGeometry();
+      const landed = { fill: loopFill, open: loopOpen, closedLoopCount: 1, openChainCount: 0 };
+      expectRebuildFor('a per-loop slice that landed', {
+        ...frame,
+        sources: [{ ...source, loops: { matrix: new THREE.Matrix4(), bySlot: new Map([[0, landed]]) } }],
+      });
+      // A posed part moves its meshes without any cut or source change.
+      caps.render(renderer, frame);
+      expect(caps.render(renderer, frame).rebuilt).toBe(false);
+      source.meshes[0]!.position.set(0.4, 0, 0);
+      source.meshes[0]!.updateMatrixWorld();
+      expect(caps.render(renderer, frame).rebuilt, 'a posed part rebuilds').toBe(true);
+      // Geometry edited in place keeps its identity; its revision and draw range carry the edit.
+      expect(caps.render(renderer, frame).rebuilt).toBe(false);
+      source.meshes[0]!.geometry.getAttribute('position').needsUpdate = true;
+      expect(caps.render(renderer, frame).rebuilt, 'a geometry edited in place rebuilds').toBe(true);
+      expect(caps.render(renderer, frame).rebuilt).toBe(false);
+      source.meshes[0]!.geometry.setDrawRange(0, 12);
+      expect(caps.render(renderer, frame).rebuilt, 'a new draw range rebuilds').toBe(true);
+      loopFill.dispose();
+      loopOpen.dispose();
+    } finally {
+      caps.dispose();
+      source.meshes[0]!.geometry.dispose();
+    }
+  });
+
+  it('should write the outline camera on a reused frame as a build at that camera writes it', () => {
+    const outlineCamera = (renderer: ReturnType<typeof createRecordingRenderer>): unknown[] =>
+      renderer.frames
+        .at(-1)!
+        .objects.filter(({ material }) => (material as THREE.Material).name === 'TauSectionCapOutline')
+        .map(({ material }) =>
+          Object.entries((material as THREE.ShaderMaterial).uniforms).map(([name, uniform]): [string, unknown] => {
+            const value: unknown = uniform.value;
+            return [name, (value as Partial<THREE.Vector4>).toArray?.() ?? value];
+          }),
+        );
+    const reusing = createSectionStencilCaps('webgl');
+    const fresh = createSectionStencilCaps('webgl');
+    const reusingRenderer = createRecordingRenderer();
+    const freshRenderer = createRecordingRenderer();
+    const source = createSource('a', 'owner-a', new THREE.BoxGeometry());
+    const frame = frameFor([source]);
+    try {
+      reusing.render(reusingRenderer, frame);
+      // Orbit, zoom and resize: none of them is a build input, and all of them move the outline's screen-space data.
+      const camera = frame.camera as THREE.PerspectiveCamera;
+      camera.position.set(1.5, -2, 6);
+      camera.lookAt(0, 0, 0);
+      camera.zoom = 2;
+      camera.updateProjectionMatrix();
+      camera.updateMatrixWorld();
+      const moved = { ...frame, viewportHeightPixels: 900 };
+      expect(reusing.render(reusingRenderer, moved).rebuilt).toBe(false);
+      expect(fresh.render(freshRenderer, moved).rebuilt).toBe(true);
+      expect(outlineCamera(reusingRenderer)).not.toHaveLength(0);
+      expect(outlineCamera(reusingRenderer)).toEqual(outlineCamera(freshRenderer));
+    } finally {
+      reusing.dispose();
+      fresh.dispose();
+      source.meshes[0]!.geometry.dispose();
+    }
+  });
+
+  it('should retain unchanged polygon uploads during orbit and update changed cut payloads', () => {
+    for (const backend of ['webgl', 'webgpu'] as const) {
+      const caps = createSectionStencilCaps(backend);
+      const renderer = createRecordingRenderer();
+      const source = createSource('a', 'owner-a', new THREE.BoxGeometry());
+      const frame = frameFor([source]);
+      try {
+        caps.render(renderer, frame);
+        const polygons = renderer.frames[0]!.objects.filter((mesh) => mesh.geometry.hasAttribute('aPlaneUv'));
+        expect(polygons.length).toBeGreaterThan(0);
+        const attributes = polygons.flatMap(({ geometry }) =>
+          Object.values(geometry.attributes)
+            .filter((attribute): attribute is THREE.BufferAttribute => attribute instanceof THREE.BufferAttribute)
+            .map((attribute) => ({ attribute, version: attribute.version })),
+        );
+        frame.camera.position.x += 0.1;
+        frame.camera.updateMatrixWorld();
+        caps.render(renderer, frame);
+        expect(attributes.map(({ attribute }) => attribute.version)).toEqual(attributes.map(({ version }) => version));
+        const before = polygons.map(({ geometry }) => [...geometry.getAttribute('position').array]);
+        caps.render(renderer, {
+          ...frame,
+          pieces: resolveSectionPieces([{ ...planeCut, offset: 0.2 }]),
+        });
+        expect(polygons.map(({ geometry }) => [...geometry.getAttribute('position').array])).not.toEqual(before);
+        expect(attributes.some(({ attribute, version }) => attribute.version > version)).toBe(true);
+        const geometryVersions = polygons.map(
+          ({ geometry }) => (geometry.getAttribute('position') as THREE.BufferAttribute).version,
+        );
+        caps.render(renderer, {
+          ...frame,
+          sources: [{ ...source, tintHex: 0xaa_55_22 }],
+          pieces: resolveSectionPieces([{ ...planeCut, offset: 0.2 }]),
+        });
+        expect(
+          polygons.map(({ geometry }) => (geometry.getAttribute('position') as THREE.BufferAttribute).version),
+        ).toEqual(geometryVersions);
+        const recolored = polygons.some(({ geometry }) => {
+          const color = geometry.getAttribute('aCapBaseColor') as THREE.BufferAttribute;
+          return color.version > attributes.find(({ attribute }) => attribute === color)!.version;
+        });
+        expect(recolored).toBe(true);
+      } finally {
+        caps.dispose();
+        source.meshes[0]!.geometry.dispose();
+      }
+    }
+  });
+
+  it('should reuse its pooled draws frame after frame, and let go of a source that left', () => {
+    const caps = createSectionStencilCaps('webgl');
+    const renderer = createRecordingRenderer();
+    const first = createSource('a', 'owner-a', new THREE.BoxGeometry());
+    const second = createSource('b', 'owner-b', new THREE.BoxGeometry(), 0.5);
+    caps.render(renderer, frameFor([first, second]));
+    const objectCount = caps.scene.children.length;
+    const materials = new Set(caps.scene.children.map((child) => (child as THREE.Mesh).material));
+    for (let index = 0; index < 3; index++) {
+      caps.render(renderer, frameFor([first, second]));
+    }
+    expect(caps.scene.children.length).toBe(objectCount);
+    expect(new Set(caps.scene.children.map((child) => (child as THREE.Mesh).material))).toEqual(materials);
+    caps.render(renderer, frameFor([first]));
+    const held = caps.scene.children.map((child) => (child as THREE.Mesh).geometry);
+    expect(held).not.toContain(second.meshes[0]!.geometry);
+    const disposed = [...materials].map((material) => vi.spyOn(material as THREE.Material, 'dispose'));
+    caps.dispose();
+    expect(disposed.every((spy) => spy.mock.calls.length === 1)).toBe(true);
+    expect(caps.scene.children).toHaveLength(0);
+  });
+
+  it('should draw nothing for a cut seen from its kept side, or one that misses every source', () => {
+    const caps = createSectionStencilCaps('webgl');
+    const renderer = createRecordingRenderer();
+    const source = createSource('a', 'owner-a', new THREE.BoxGeometry());
+    const flipped = resolveSectionPieces([{ ...planeCut, isFlipped: true }]);
+    expect(caps.render(renderer, frameFor([source], flipped))).toMatchObject({ drawnPieceCount: 0 });
+    const missing = resolveSectionPieces([{ ...planeCut, offset: 5 }]);
+    expect(caps.render(renderer, frameFor([source], missing))).toMatchObject({ drawnPieceCount: 0, meshDrawCount: 0 });
+    caps.dispose();
+  });
+
+  it('should cap with the shared surface depth bias and the cap stencil test', () => {
+    const caps = createSectionStencilCaps('webgl');
+    const renderer = createRecordingRenderer();
+    caps.render(renderer, frameFor([createSource('a', 'owner-a', new THREE.BoxGeometry())]));
+    const cap = renderer.frames[0]!.objects.find(
+      ({ material }) => (material as THREE.Material).name === 'TauSectionCap',
+    )!.material as THREE.ShaderMaterial;
+    const shader = {
+      vertexShader: cap.vertexShader,
+      fragmentShader: cap.fragmentShader,
+      uniforms: { ...cap.uniforms },
+    };
+    cap.onBeforeCompile(shader as unknown as WebGLProgramParametersWithUniforms, {} as unknown as WebGLRenderer);
+    expect(shader.fragmentShader).toContain('gl_FragDepth + tauSurfaceDepthOffset');
+    expect(shader.fragmentShader).toContain('tauSectionRemoved( vTauSectionWorld )');
+    expect(cap.polygonOffsetFactor).toBe(getSectionCapDepthBias('webgl').polygonOffsetFactor);
+    expect([cap.depthTest, cap.depthWrite, cap.stencilWrite, cap.stencilFunc, cap.stencilFuncMask]).toEqual([
+      true,
+      true,
+      true,
+      THREE.NotEqualStencilFunc,
+      sectionStencilBits.count,
+    ]);
+    caps.dispose();
+  });
+
+  it('should outline open chains at the open-chain scale of the ordinary outline width', () => {
+    const caps = createSectionStencilCaps('webgl');
+    const renderer = createRecordingRenderer();
+    const open = new THREE.BufferGeometry().setAttribute(
+      'position',
+      new THREE.BufferAttribute(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), 3),
+    );
+    const source: SectionStencilCapSource = {
+      ...createSource('a', 'owner-a', new THREE.BoxGeometry()),
+      loops: {
+        matrix: new THREE.Matrix4(),
+        bySlot: new Map([[0, { fill: new THREE.BufferGeometry(), open, closedLoopCount: 0, openChainCount: 1 }]]),
+      },
+    };
+    caps.render(renderer, { ...frameFor([source]), outlineWidthPixels: 1.5 });
+    const outlineWidth = (mesh: THREE.Mesh | undefined): number =>
+      ((mesh!.material as THREE.ShaderMaterial).uniforms['tauOutline']!.value as THREE.Vector2).y;
+    const { objects } = renderer.frames[0]!;
+    const outlines = objects.filter(({ material }) => (material as THREE.Material).name === 'TauSectionCapOutline');
+    expect(outlineWidth(outlines.find(({ geometry }) => geometry !== open))).toBe(1.5);
+    expect(outlineWidth(outlines.find(({ geometry }) => geometry === open))).toBe(1.5 * sectionCapOpenChainWidthScale);
+    expect(sectionCapOpenChainWidthScale).toBe(2);
+    caps.dispose();
+  });
+});

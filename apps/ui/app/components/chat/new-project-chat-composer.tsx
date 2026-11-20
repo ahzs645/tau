@@ -1,0 +1,165 @@
+import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useLocation, useNavigate } from 'react-router';
+import { ChatTextarea } from '#components/chat/chat-textarea.js';
+import type { ChatTextareaHandle, ChatTextareaProperties } from '#components/chat/chat-textarea-types.js';
+import type { EarlyChatInput } from '#components/chat/chat-early-input.js';
+import { WorkspaceSelector } from '#components/filesystem/workspace-selector.js';
+import { toast } from '@taucad/ui/components/sonner';
+import { useChatComposer } from '#hooks/active-chat-provider.js';
+import { useKernel } from '#hooks/use-kernel.js';
+import { useModels } from '#hooks/use-models.js';
+import { useProjectCreationLocation } from '#hooks/use-project-creation-location.js';
+import { useProjectCreationLocationError } from '#hooks/use-project-creation-location-error.js';
+import { useProjectManager } from '#hooks/use-project-manager.js';
+import { projectUrl } from '@taucad/files-ui/utils/project-url.utils';
+import { reportProjectCreationFailure } from '#lib/project-creation-failure-reporting.js';
+
+type NewProjectChatComposerProperties = {
+  readonly enableAutoFocus?: boolean;
+  readonly enableEarlyInput?: boolean;
+  /** An early edit the route already adopted, when the route owns the native input. */
+  readonly adoptedEarlyInput?: EarlyChatInput;
+  readonly className?: string;
+};
+
+/** Shared direct-create composer rendered inside an existing chat provider. */
+export function NewProjectChatComposer({
+  enableAutoFocus = true,
+  enableEarlyInput = false,
+  adoptedEarlyInput,
+  className,
+}: NewProjectChatComposerProperties): React.JSX.Element {
+  const navigate = useNavigate();
+  /* The kernel is the bar's pill (D8). Under Auto the project starts entry-less and the agent picks the kernel from
+   * the prompt (blueprint D3). */
+  const { preference: creationKernel } = useKernel();
+  const projectManager = useProjectManager();
+  const location = useProjectCreationLocation();
+  const presentLocationError = useProjectCreationLocationError();
+  const textareaRef = useRef<ChatTextareaHandle>(null);
+  const { withCatalogDefaultModel } = useModels();
+  const {
+    draftActorRef,
+    attachmentSource,
+    execution: { execution },
+    consumeDraft,
+  } = useChatComposer();
+
+  const focusComposer = useCallback((): void => {
+    textareaRef.current?.focus();
+  }, []);
+
+  /* Mount autofocus alone misses a return to an already-mounted Home, so honour a
+   * navigation that asks for focus (`state.focusChatComposer`) too. */
+  const { key: locationKey, state: locationState } = useLocation() as { key: string; state: unknown };
+  // Each navigation that asks for focus is its own request, identified by its location key.
+  const focusRequestKey =
+    (locationState as { focusChatComposer?: unknown } | undefined)?.focusChatComposer === true
+      ? locationKey
+      : undefined;
+  useEffect(() => {
+    if (enableAutoFocus && focusRequestKey !== undefined) {
+      focusComposer();
+    }
+  }, [enableAutoFocus, focusComposer, focusRequestKey]);
+
+  /* Returning to the window restores the last focused element; when that is
+   * nothing, the draft is what the user came back for. */
+  useEffect(() => {
+    if (!enableAutoFocus) {
+      return undefined;
+    }
+    const handleWindowFocus = (): void => {
+      if (document.activeElement === null || document.activeElement === document.body) {
+        focusComposer();
+      }
+    };
+    globalThis.addEventListener('focus', handleWindowFocus);
+    return () => {
+      globalThis.removeEventListener('focus', handleWindowFocus);
+    };
+  }, [enableAutoFocus, focusComposer]);
+
+  const creationLocationControl = useMemo(
+    () =>
+      location.shouldShowPicker ? (
+        <WorkspaceSelector
+          data-chat-textarea-focustrap
+          state={location}
+          variant='toolbar'
+          onSelectionComplete={focusComposer}
+          onRequestFocus={focusComposer}
+        />
+      ) : undefined,
+    [focusComposer, location],
+  );
+
+  const onSubmit: ChatTextareaProperties['onSubmit'] = useCallback(
+    async ({ content }) => {
+      if (location.phase !== 'ready') {
+        return;
+      }
+      // The stored draft is the source of truth for attachments: the new
+      // project's chat receives copies of exactly these bytes.
+      const attachments = draftActorRef
+        .getSnapshot()
+        .context.draftAttachments.map(({ byteLength: _byteLength, ...stored }) => stored);
+      try {
+        const created = await projectManager.createProject({
+          kernel: creationKernel,
+          /* The chip's value verbatim — not a Tau execution rebuilt from the
+           * model. Rebuilding dropped `hostId` (and any `acp` choice),
+           * so a project started from a "Tau Host · …" chip ran its first turn
+           * in this browser instead, against a chip that still named the
+           * daemon. Both providers keep this execution's Tau model in step with
+           * the model chip, so there is nothing left to override here. Project
+           * creation keeps a device-relative host for this device only (XD2). */
+          activeExecution: await withCatalogDefaultModel(execution),
+          initialMessage: { content, attachments, ...(attachmentSource === undefined ? {} : { attachmentSource }) },
+          editorState: {
+            panelState: { desktopLayout: { chatOpen: true, compactAuxiliary: 'chat' }, mobileActiveTab: 'chat' },
+          },
+          location: location.value,
+        });
+        await consumeDraft();
+        await navigate(projectUrl(created.slugs));
+      } catch (error) {
+        if (presentLocationError(error)) {
+          if (location.hasWebAccessCapability) {
+            await location.refresh();
+          }
+          return;
+        }
+        console.error('Failed to create project:', error);
+        reportProjectCreationFailure(error);
+        toast.error('Failed to create project');
+      }
+    },
+    [
+      attachmentSource,
+      consumeDraft,
+      draftActorRef,
+      execution,
+      creationKernel,
+      location,
+      navigate,
+      presentLocationError,
+      projectManager,
+      withCatalogDefaultModel,
+    ],
+  );
+
+  return (
+    <ChatTextarea
+      enableEarlyInput={enableEarlyInput}
+      adoptedEarlyInput={adoptedEarlyInput}
+      ref={textareaRef}
+      enableAutoFocus={enableAutoFocus}
+      enableContextActions={false}
+      creationLocationControl={creationLocationControl}
+      isSubmitDisabled={!location.canCreate}
+      className={className}
+      onSubmit={onSubmit}
+    />
+  );
+}

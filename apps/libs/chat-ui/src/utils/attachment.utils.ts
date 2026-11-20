@@ -1,0 +1,123 @@
+/**
+ * Content-addressed attachment identity (blueprint D12/D17).
+ *
+ * An attachment is bytes named by their SHA-256 and referenced as
+ * `attachments/<sha256>.<ext>`, relative to the directory of the record or log
+ * that holds the reference. This module owns the naming, the URL shape and the
+ * per-kind size caps; `#db/attachment-store.js` owns the bytes.
+ */
+
+import {
+  attachmentExtensionOf,
+  attachmentExtensions,
+  attachmentMediaTypes,
+  isAttachmentMediaType,
+} from '@taucad/agent-host/wire';
+import type { AttachmentMediaType } from '@taucad/agent-host/wire';
+
+/** Images are sent to the model inline; documents are materialised per provider. */
+export type AttachmentKind = 'image' | 'document';
+
+/** The part of an attachment its stored name is derived from. */
+export type AttachmentName = Pick<Attachment, 'hash' | 'mediaType'>;
+
+/**
+ * An attachment as a file part names it: enough to find, copy and label the
+ * bytes. `byteLength` is present only when the writer had the stored
+ * attachment in hand; a reference read back from a record never does (P29).
+ */
+export type AttachmentReference = AttachmentName & Readonly<Partial<Pick<Attachment, 'filename' | 'byteLength'>>>;
+
+declare const storedAttachment: unique symbol;
+
+/**
+ * A reference to bytes a store holds (I37, PV-R12).
+ *
+ * Only an attachment store's `put` mints one, and a reference read back from a record whose writer required one
+ * (`attachmentReferenceOf`). Every row, draft and composer writer requires it, so no record names bytes before they
+ * are stored; a plain content hash does not typecheck.
+ */
+export type StoredAttachmentRef = AttachmentReference & { readonly [storedAttachment]: true };
+
+/** A stored attachment, as the store's `put` returns it. */
+export type StoredAttachment = Attachment & StoredAttachmentRef;
+
+/** A stored attachment. `hash` is the lowercase hex SHA-256 of the bytes. */
+export type Attachment = {
+  readonly hash: string;
+  readonly mediaType: string;
+  readonly byteLength: number;
+  readonly filename?: string;
+};
+
+/** A media type the attachment store accepts: one of `attachmentMedia` in `@taucad/agent-host/wire` (I2). */
+export type SupportedAttachmentMediaType = AttachmentMediaType;
+
+/** Every media type the attachment store accepts, for composer `accept` lists and validation. */
+export const supportedAttachmentMediaTypes: readonly SupportedAttachmentMediaType[] = attachmentMediaTypes;
+
+/** Whether the attachment store will accept bytes of this media type. A type outside the table is refused at ingest. */
+export const isSupportedAttachmentMediaType: (mediaType: string) => mediaType is SupportedAttachmentMediaType =
+  isAttachmentMediaType;
+
+/** `application/pdf` is the only document type in this wave; everything else stored is an image. */
+export const attachmentKind = (mediaType: string): AttachmentKind =>
+  mediaType.startsWith('image/') ? 'image' : 'document';
+
+/**
+ * The file name an attachment is written under.
+ *
+ * Takes only the fields the name is made of: a reference read back from a file
+ * part names its hash and media type but has no byte length to offer.
+ *
+ * @throws When `mediaType` is unsupported. Only store-produced attachments are
+ *   passed here, and the store refuses an unsupported type before writing.
+ */
+export const attachmentFileName = (attachment: AttachmentName): string => {
+  if (!isSupportedAttachmentMediaType(attachment.mediaType)) {
+    throw new Error(`Unsupported attachment type: ${attachment.mediaType}`);
+  }
+  return `${attachment.hash}.${attachmentExtensionOf(attachment.mediaType)}`;
+};
+
+/** The reference stored in a file part or log row, relative to the owning directory. */
+export const attachmentUrl = (attachment: AttachmentName): string => `attachments/${attachmentFileName(attachment)}`;
+
+/**
+ * Cap after processing: images 4 MiB (captures included), documents 16 MiB (D17,
+ * amended R1). One maximal document must fit the agent host's per-request
+ * attachment budget and the gateway's request bound together with its turn.
+ */
+export const attachmentCapBytes = (kind: AttachmentKind): number => (kind === 'image' ? 4 : 16) * 1024 * 1024;
+
+/** The prefix every attachment reference URL carries. */
+export const attachmentUrlPrefix = 'attachments/';
+/* GeoSpec report JSON is readable as an agent-produced reference; `put` still
+ * accepts only the stored attachment types. */
+const attachmentFileNamePattern = new RegExp(
+  `^[\\da-f]{64}\\.(?:${[...attachmentExtensions, 'json'].join('|')})$`,
+  'u',
+);
+
+/** Whether a URL is an attachment reference, as opposed to a `data:` URL or anything else. */
+export const isAttachmentUrl = (url: string): boolean =>
+  url.startsWith(attachmentUrlPrefix) && attachmentFileNamePattern.test(url.slice(attachmentUrlPrefix.length));
+
+/**
+ * The attachment a file part references, or `undefined` for a `data:` URL or
+ * any other non-reference. The part's own media type names the bytes.
+ */
+export const attachmentReferenceOf = (part: {
+  readonly url: string;
+  readonly mediaType: string;
+  readonly filename?: string;
+}): StoredAttachmentRef | undefined =>
+  isAttachmentUrl(part.url)
+    ? /* The part was written from a stored reference (I37), so the bytes it names were stored first. */
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- the one brand site for read-back references.
+      ({
+        hash: part.url.slice(attachmentUrlPrefix.length, attachmentUrlPrefix.length + 64),
+        mediaType: part.mediaType,
+        ...(part.filename === undefined ? {} : { filename: part.filename }),
+      } as StoredAttachmentRef)
+    : undefined;

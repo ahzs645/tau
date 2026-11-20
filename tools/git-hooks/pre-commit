@@ -1,0 +1,8 @@
+# Large upstream integrations split into many formatter tasks; bound their memory.
+# A fully staged merge has no unstaged edits to protect. Some Git environments
+# return no object from `stash create` during a merge; still run every formatter.
+if git rev-parse -q --verify MERGE_HEAD >/dev/null && git diff --quiet; then
+  corepack pnpm lint-staged --concurrent 1 --no-stash
+else
+  corepack pnpm lint-staged --concurrent 1
+fi

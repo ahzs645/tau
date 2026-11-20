@@ -1,0 +1,331 @@
+import { useSyncExternalStore } from 'react';
+import { toolName } from '@taucad/chat/constants';
+import type { ExportModelOutput } from '@taucad/chat/schemas/tools/export-model';
+import type { TauViewerModel } from '@taucad/mcp/viewer-protocol';
+import { readTauViewerBytes } from '@taucad/mcp/viewer-read';
+import type { ExportFidelity, FileExtension } from '@taucad/types';
+import { fileExtensions } from '@taucad/types/constants';
+import { runtimeContentFromRecord, sanitizeFormDelta } from '@taucad/workbench-panes/export/export-source';
+import type {
+  ExportEntryState,
+  ExportFormatEntry,
+  ExportNotices,
+  ExportOutcome,
+  ExportRequest,
+  ExportSchema,
+  ExportSource,
+  ExportUnavailable,
+} from '@taucad/workbench-panes/export/export-source';
+// oxlint-disable-next-line no-restricted-imports -- relative import is the only portable way to load this package's own package.json (matches `packages/runtime/src/utils/package-info.ts`).
+import packageJson from '../../package.json' with { type: 'json' };
+import { ToolCallError } from '#app/host-bridge.js';
+import type { HostBridge } from '#app/host-bridge.js';
+import { laneStoreFor } from '#app/lane-store.js';
+import { createExportPreferences } from '#app/sources/export-preferences.js';
+import type { ExportOptionStorage } from '#app/sources/export-preferences.js';
+
+/**
+ * The page's export tools, served by `@taucad/host`'s `mcp-viewer-export.ts` (app-only). `export_model` is the model
+ * tool both hosts already expose; it writes under `.tau/artifacts`.
+ */
+export const viewerExportTool = {
+  formats: 'app_export_formats',
+  save: 'app_save_export',
+  readArtifact: 'app_read_artifact',
+} as const;
+
+/** One format as `app_export_formats` lists it. */
+type ListedFormat = Readonly<{
+  format: string;
+  fidelity: ExportFidelity;
+  direct: boolean;
+  provider: string;
+  content?: ExportSchema;
+  exportOptions?: ExportSchema;
+}>;
+
+const isCatalogFormat = (value: string): value is FileExtension => fileExtensions.some((format) => format === value);
+
+const isListedFormats = (value: unknown): value is Readonly<{ formats: readonly ListedFormat[] }> =>
+  typeof value === 'object' && value !== null && Array.isArray((value as { formats?: unknown }).formats);
+
+const isExportResult = (value: unknown): value is Pick<ExportModelOutput, 'files'> =>
+  typeof value === 'object' && value !== null && Array.isArray((value as { files?: unknown }).files);
+
+/**
+ * The formats `app_export_formats` lists, narrowed to the catalog the pane can label, with each route's content and
+ * option forms.
+ *
+ * @param listed - The tool's formats.
+ * @returns The pane's entries.
+ */
+const formatEntries = (listed: readonly ListedFormat[]): ExportFormatEntry[] =>
+  listed.flatMap(({ format, fidelity, direct, provider, content, exportOptions }) =>
+    isCatalogFormat(format)
+      ? [
+          {
+            format,
+            fidelity,
+            direct,
+            provider,
+            ...(content === undefined ? {} : { content }),
+            ...(exportOptions === undefined ? {} : { exportOptions }),
+          },
+        ]
+      : [],
+  );
+
+/** The pane's view of each entry, fetched once per entry and shared by every render that asks for it. */
+type EntryCache = Readonly<{
+  subscribe(listener: () => void): () => void;
+  get(entryPath: string): ExportEntryState;
+  /** What is known so far, without asking the server. */
+  peek(entryPath: string): ExportEntryState | undefined;
+}>;
+
+const loadingState: ExportEntryState = {
+  hasGeometry: true,
+  formats: undefined,
+};
+const noGeometryState: ExportEntryState = {
+  hasGeometry: false,
+  formats: undefined,
+};
+
+/**
+ * Why the formats could not be listed, for the person. The plugin, the CLI and the MCP server release as one version,
+ * so a server without the formats tool is an older `tau` that only the matching CLI replaces; any other failure may
+ * pass and is offered again.
+ *
+ * @param error - What the listing threw.
+ * @param retry - Asks for the formats again.
+ * @returns The pane's account of the failure.
+ */
+const unavailableOf = (error: unknown, retry: () => void): ExportUnavailable => {
+  if (error instanceof ToolCallError && error.code === 'UNKNOWN_TOOL') {
+    const { version } = packageJson;
+    return {
+      code: error.code,
+      message: `This Tau server has no export formats; plugin ${version} needs the same version: npm install -g @taucad/cli@${version}, then restart the Tau server or your agent`,
+      retry: undefined,
+    };
+  }
+  return {
+    code: error instanceof ToolCallError && error.code !== undefined ? error.code : 'FORMATS_UNAVAILABLE',
+    message: error instanceof Error ? error.message : String(error),
+    retry,
+  };
+};
+
+const createEntryCache = (load: (entryPath: string) => Promise<ExportFormatEntry[]>): EntryCache => {
+  const states = new Map<string, ExportEntryState>();
+  const listeners = new Set<() => void>();
+  const notify = (): void => {
+    for (const listener of listeners) {
+      listener();
+    }
+  };
+  const settle = (entryPath: string, state: ExportEntryState): void => {
+    states.set(entryPath, state);
+    notify();
+  };
+  /* Forgetting the failure makes the next read ask again; every reader hears it and reads. */
+  const retry = (entryPath: string): void => {
+    if (states.get(entryPath)?.unavailable !== undefined) {
+      states.delete(entryPath);
+      notify();
+    }
+  };
+  return {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    peek: (entryPath) => states.get(entryPath),
+    get(entryPath) {
+      const known = states.get(entryPath);
+      if (known !== undefined) {
+        return known;
+      }
+      states.set(entryPath, loadingState);
+      const fetchFormats = async (): Promise<void> => {
+        try {
+          settle(entryPath, {
+            hasGeometry: true,
+            formats: await load(entryPath),
+          });
+        } catch (error) {
+          settle(entryPath, {
+            hasGeometry: true,
+            formats: undefined,
+            unavailable: unavailableOf(error, () => {
+              retry(entryPath);
+            }),
+          });
+        }
+      };
+      // async-iife: the cache owns the request; every reader of this entry hears its settlement.
+      void fetchFormats();
+      return loadingState;
+    },
+  };
+};
+
+/**
+ * Hand bytes to the browser as a download (the loopback page is an ordinary tab).
+ *
+ * @param bytes - The file.
+ * @param name - Its download name.
+ * @param mimeType - Its type.
+ */
+const download = (bytes: Uint8Array<ArrayBuffer>, name: string, mimeType: string): void => {
+  const url = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = name;
+  anchor.click();
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 0);
+};
+
+/** What the page hands the Export pane besides its bridge and model. */
+export type ExportSourceOptions = Readonly<{
+  /** Where the pane's choices persist; the shown model's project lane store (`laneStoreFor`) by default. */
+  storage?: ExportOptionStorage | undefined;
+  /** The page's toasts; without them the pane reports outcomes under its export button. */
+  notices?: ExportNotices | undefined;
+  /** The icon the page draws for a file name. */
+  FileIcon?: ExportSource['FileIcon'];
+}>;
+
+/**
+ * The Export pane's source on the viewer page. The page has no kernel: formats come from `app_export_formats` (the
+ * same capability routes the Tau app reads), each format is exported by `export_model` on the server, finished files
+ * are copied into the project's `exports/` by `app_save_export`, and on the loopback page, an ordinary browser tab,
+ * they can also be downloaded through `app_read_artifact`. An MCP Apps frame cannot download, so there the project
+ * folder is the only destination. Each format's options and content, and the pane's other choices, are kept under
+ * the Tau app's keys.
+ *
+ * @param bridge - The page's host bridge.
+ * @param model - The model the page shows; its source file is the page's one entry.
+ * @param options - Where choices persist, the page's notices and its file icon.
+ * @returns The pane's export source for this model.
+ */
+export function createExportSource(
+  bridge: HostBridge,
+  model: TauViewerModel,
+  options: ExportSourceOptions = {},
+): ExportSource {
+  const entries = createEntryCache(async (targetFile) => {
+    const listed = await bridge.callTool(viewerExportTool.formats, {
+      modelId: model.id,
+      targetFile,
+    });
+    if (!isListedFormats(listed)) {
+      throw new Error(`No export formats for ${targetFile}.`);
+    }
+    return formatEntries(listed.formats);
+  });
+  /* Until the page learns what the render drew, an empty model file is the one sign that it drew nothing. */
+  const hasGeometry = model.byteLength > 0;
+  const read = (entryPath: string): ExportEntryState => (hasGeometry ? entries.get(entryPath) : noGeometryState);
+  const useEntry = (entryPath: string): ExportEntryState =>
+    useSyncExternalStore(
+      entries.subscribe,
+      () => read(entryPath),
+      () => read(entryPath),
+    );
+
+  /* The loopback server finds the project from the shown model; in a host frame the server finds it from the call's
+   * conversation, and `export_model`'s strict input admits no model id there. */
+  const isLoopback = bridge.view().kind === 'loopback';
+
+  /** Read one finished artifact for a download, a reply-sized range at a time. */
+  const readArtifact = async (file: Readonly<{ artifactPath: string; byteLength: number }>) =>
+    readTauViewerBytes({
+      read: async (range) =>
+        bridge.callTool(viewerExportTool.readArtifact, {
+          modelId: model.id,
+          artifactPath: file.artifactPath,
+          ...range,
+        }),
+      byteLength: file.byteLength,
+      label: file.artifactPath,
+    });
+
+  const exportEntry = async (request: ExportRequest): Promise<ExportOutcome> => {
+    const offered = entries.peek(request.entryPath)?.formats ?? [];
+    const succeeded: FileExtension[] = [];
+    const failed: FileExtension[] = [];
+    /* oxlint-disable no-await-in-loop -- one export at a time, as the Tau app runs them on its one kernel. */
+    for (const format of request.formats) {
+      try {
+        const entry = offered.find((candidate) => candidate.format === format);
+        const exportOptions =
+          entry?.exportOptions === undefined
+            ? {}
+            : sanitizeFormDelta(entry.exportOptions.schema, request.formatOptions[format] ?? {});
+        const content =
+          entry?.content === undefined
+            ? {}
+            : runtimeContentFromRecord(
+                sanitizeFormDelta(entry.content.schema, {
+                  ...request.formatContent[format],
+                }),
+              );
+        const result = await bridge.callTool(toolName.exportModel, {
+          ...(isLoopback ? { modelId: model.id } : {}),
+          targetFile: request.entryPath,
+          to: format,
+          ...(Object.keys(exportOptions).length > 0 ? { options: exportOptions } : {}),
+          ...(Object.keys(content).length > 0 ? { content } : {}),
+        });
+        if (!isExportResult(result) || result.files.length === 0) {
+          failed.push(format);
+          continue;
+        }
+        if (request.saveToProject) {
+          await bridge.callTool(viewerExportTool.save, {
+            modelId: model.id,
+            directory: request.formats.length === 1 ? 'exports' : `exports/${format}`,
+            files: result.files.map(({ artifactPath, name }) => ({
+              artifactPath,
+              name,
+            })),
+          });
+        }
+        if (request.download) {
+          for (const file of result.files) {
+            download(
+              await readArtifact(file),
+              result.files.length === 1 ? `${model.title}.${format}` : file.name,
+              file.mimeType,
+            );
+          }
+        }
+        succeeded.push(format);
+      } catch {
+        failed.push(format);
+      }
+    }
+    /* oxlint-enable no-await-in-loop */
+    return { succeeded, failed };
+  };
+
+  /* The project's lane store, the same for every source of the project, so the choices outlive a model change and
+   * each project keeps its own (PAR-7). */
+  const storage = options.storage ?? laneStoreFor(model.projectKey);
+
+  return {
+    useEntry,
+    export: exportEntry,
+    destinations: isLoopback ? ['download', 'project'] : ['project'],
+    usePreferences: createExportPreferences(storage),
+    ...(options.notices === undefined ? {} : { notices: options.notices }),
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- Match the pane's ExportSource component prop.
+    ...(options.FileIcon === undefined ? {} : { FileIcon: options.FileIcon }),
+  };
+}

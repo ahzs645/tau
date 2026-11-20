@@ -1,35 +1,61 @@
-import { z } from 'zod';
-import { editFileInputSchema } from '#schemas/tools/edit-file.tool.schema.js';
-import { editTestsInputSchema } from '#schemas/tools/test-model.tool.schema.js';
-import { webBrowserInputSchema } from '#schemas/tools/web-browser.tool.schema.js';
-import { webSearchInputSchema } from '#schemas/tools/web-search.tool.schema.js';
-import { readFileInputSchema } from '#schemas/tools/read-file.tool.schema.js';
-import { listDirectoryInputSchema } from '#schemas/tools/list-directory.tool.schema.js';
-import { createFileInputSchema } from '#schemas/tools/create-file.tool.schema.js';
-import { deleteFileInputSchema } from '#schemas/tools/delete-file.tool.schema.js';
-import { grepInputSchema } from '#schemas/tools/grep.tool.schema.js';
-import { globSearchInputSchema } from '#schemas/tools/glob-search.tool.schema.js';
-import { getKernelResultInputSchema } from '#schemas/tools/get-kernel-result.tool.schema.js';
-import { screenshotInputSchema } from '#schemas/tools/screenshot.tool.schema.js';
-import { exportGeometryInputSchema } from '#schemas/tools/export-geometry.tool.schema.js';
+import type { z } from 'zod';
+import {
+  arrangeWorkbenchInputSchema,
+  arrangeWorkbenchOutputSchema,
+} from '#schemas/tools/arrange-workbench.tool.schema.js';
+import { editFileInputSchema, editFileOutputSchema } from '#schemas/tools/edit-file.tool.schema.js';
+import { webBrowserInputSchema, webBrowserOutputSchema } from '#schemas/tools/web-browser.tool.schema.js';
+import { webSearchInputSchema, webSearchOutputSchema } from '#schemas/tools/web-search.tool.schema.js';
+import { readFileInputSchema, readFileOutputSchema } from '#schemas/tools/read-file.tool.schema.js';
+import { useSkillInputSchema, useSkillOutputSchema } from '#schemas/tools/use-skill.tool.schema.js';
+import { listDirectoryInputSchema, listDirectoryOutputSchema } from '#schemas/tools/list-directory.tool.schema.js';
+import { createFileInputSchema, createFileOutputSchema } from '#schemas/tools/create-file.tool.schema.js';
+import { deleteFileInputSchema, deleteFileOutputSchema } from '#schemas/tools/delete-file.tool.schema.js';
+import { grepInputSchema, grepOutputSchema } from '#schemas/tools/grep.tool.schema.js';
+import { globSearchInputSchema, globSearchOutputSchema } from '#schemas/tools/glob-search.tool.schema.js';
+import { evaluateModelInputSchema, evaluateModelOutputSchema } from '#schemas/tools/evaluate-model.tool.schema.js';
+import { screenshotInputSchema, screenshotOutputSchema } from '#schemas/tools/screenshot.tool.schema.js';
+import { exportModelInputSchema, exportModelOutputSchema } from '#schemas/tools/export-model.tool.schema.js';
+import { testModelInputSchema, testModelOutputSchema } from '#schemas/tools/test-model.tool.schema.js';
+import { revisionsInputSchema, revisionsOutputSchema } from '#schemas/tools/revisions.tool.schema.js';
+import { updateTodosInputSchema, updateTodosOutputSchema } from '#schemas/tools/update-todos.tool.schema.js';
+import { askQuestionsInputSchema, askQuestionsOutputSchema } from '#schemas/tools/ask-questions.tool.schema.js';
+import {
+  installPackagesInputSchema,
+  installPackagesOutputSchema,
+} from '#schemas/tools/install-packages.tool.schema.js';
+import {
+  checkJobInputSchema,
+  checkJobOutputSchema,
+  getMachineInputSchema,
+  getMachineOutputSchema,
+  getPrintProfilesInputSchema,
+  getPrintProfilesOutputSchema,
+  listMachinesInputSchema,
+  listMachinesOutputSchema,
+  machineActionInputSchema,
+  machineActionOutputSchema,
+  requestJobInputSchema,
+  requestJobOutputSchema,
+  stopMachineInputSchema,
+  stopMachineOutputSchema,
+} from '#schemas/tools/machine.tool.schema.js';
+import { shellInputSchema, shellOutputSchema } from '#schemas/tools/shell.tool.schema.js';
+import {
+  applyParameterOperationInputSchema,
+  applyParameterOperationOutputSchema,
+  getParametersInputSchema,
+  getParametersOutputSchema,
+} from '#schemas/tools/parameter.tool.schema.js';
+import { toolName } from '#constants/tool.constants.js';
 import type { ToolName } from '#types/tool.types.js';
-
-/**
- * Empty-input schema enforced by `createEmptyInputToolSchemas` in
- * `message.schema.ts`. Tools with no parameters (test_model, transfer_*) only
- * accept the literal empty object on the wire; anything else is invalid input
- * and must be forensically demoted to `rawInput` by the server-side healing
- * transform. Defined locally to keep this registry the single source of truth
- * for "is this input legal for this tool?".
- */
-const emptyInputSchema = z.record(z.string(), z.never());
 
 /** @public */
 export type ToolPartType = `tool-${ToolName}`;
 
 /**
  * Maps every static tool part type (e.g. `tool-read_file`) to the strict Zod
- * schema enforced by `uiMessagesSchema` for that tool's `input` field.
+ * schema enforced by `safeValidateUiMessages` for that tool's `input` field.
  *
  * Used by the server-side healing preprocess in `message.schema.ts` to detect
  * persisted tool parts in `output-error` state whose `input` no longer
@@ -40,32 +66,131 @@ export type ToolPartType = `tool-${ToolName}`;
  * `messageContentSanitizerMiddleware` and a synthetic `tool_result` can be
  * paired with the dangling `tool_use` block.
  *
- * Keys must remain in lock-step with the `toolPartSchemas` aggregation in
- * `message.schema.ts`. Keep this file as the single source of truth — adding
- * a tool means updating both places, but every consumer of the registry stays
- * compile-checked against `ToolPartType`.
+ * This registry is the single source of truth consumed by both AI SDK message
+ * validation and Tau's lifecycle checks.
  *
  * @public
  */
-export const toolInputSchemas: Record<ToolPartType, z.ZodType> = {
-  'tool-web_search': webSearchInputSchema,
-  'tool-web_browser': webBrowserInputSchema,
-  'tool-test_model': emptyInputSchema,
-  'tool-edit_tests': editTestsInputSchema,
-  'tool-read_file': readFileInputSchema,
-  'tool-list_directory': listDirectoryInputSchema,
-  'tool-create_file': createFileInputSchema,
-  'tool-edit_file': editFileInputSchema,
-  'tool-delete_file': deleteFileInputSchema,
-  'tool-grep': grepInputSchema,
-  'tool-glob_search': globSearchInputSchema,
-  'tool-get_kernel_result': getKernelResultInputSchema,
-  'tool-export_geometry': exportGeometryInputSchema,
-  'tool-screenshot': screenshotInputSchema,
-  'tool-transfer_to_cad_expert': emptyInputSchema,
-  'tool-transfer_to_research_expert': emptyInputSchema,
-  'tool-transfer_back_to_supervisor': emptyInputSchema,
-};
+export const uiMessageTools = {
+  [toolName.webSearch]: {
+    inputSchema: webSearchInputSchema,
+    outputSchema: webSearchOutputSchema,
+  },
+  [toolName.webBrowser]: {
+    inputSchema: webBrowserInputSchema,
+    outputSchema: webBrowserOutputSchema,
+  },
+  [toolName.testModel]: {
+    inputSchema: testModelInputSchema,
+    outputSchema: testModelOutputSchema,
+  },
+  [toolName.useSkill]: {
+    inputSchema: useSkillInputSchema,
+    outputSchema: useSkillOutputSchema,
+  },
+  [toolName.readFile]: {
+    inputSchema: readFileInputSchema,
+    outputSchema: readFileOutputSchema,
+  },
+  [toolName.listDirectory]: {
+    inputSchema: listDirectoryInputSchema,
+    outputSchema: listDirectoryOutputSchema,
+  },
+  [toolName.createFile]: {
+    inputSchema: createFileInputSchema,
+    outputSchema: createFileOutputSchema,
+  },
+  [toolName.arrangeWorkbench]: { inputSchema: arrangeWorkbenchInputSchema, outputSchema: arrangeWorkbenchOutputSchema },
+  [toolName.editFile]: {
+    inputSchema: editFileInputSchema,
+    outputSchema: editFileOutputSchema,
+  },
+  [toolName.deleteFile]: {
+    inputSchema: deleteFileInputSchema,
+    outputSchema: deleteFileOutputSchema,
+  },
+  [toolName.grep]: {
+    inputSchema: grepInputSchema,
+    outputSchema: grepOutputSchema,
+  },
+  [toolName.globSearch]: {
+    inputSchema: globSearchInputSchema,
+    outputSchema: globSearchOutputSchema,
+  },
+  [toolName.evaluateModel]: {
+    inputSchema: evaluateModelInputSchema,
+    outputSchema: evaluateModelOutputSchema,
+  },
+  [toolName.exportModel]: {
+    inputSchema: exportModelInputSchema,
+    outputSchema: exportModelOutputSchema,
+  },
+  [toolName.getParameters]: {
+    inputSchema: getParametersInputSchema,
+    outputSchema: getParametersOutputSchema,
+  },
+  [toolName.applyParameterOperation]: {
+    inputSchema: applyParameterOperationInputSchema,
+    outputSchema: applyParameterOperationOutputSchema,
+  },
+  [toolName.screenshot]: {
+    inputSchema: screenshotInputSchema,
+    outputSchema: screenshotOutputSchema,
+  },
+  [toolName.history]: {
+    inputSchema: revisionsInputSchema,
+    outputSchema: revisionsOutputSchema,
+  },
+  [toolName.updateTodos]: {
+    inputSchema: updateTodosInputSchema,
+    outputSchema: updateTodosOutputSchema,
+  },
+  [toolName.askQuestions]: {
+    inputSchema: askQuestionsInputSchema,
+    outputSchema: askQuestionsOutputSchema,
+  },
+  [toolName.installPackages]: {
+    inputSchema: installPackagesInputSchema,
+    outputSchema: installPackagesOutputSchema,
+  },
+  [toolName.listMachines]: {
+    inputSchema: listMachinesInputSchema,
+    outputSchema: listMachinesOutputSchema,
+  },
+  [toolName.getMachine]: {
+    inputSchema: getMachineInputSchema,
+    outputSchema: getMachineOutputSchema,
+  },
+  [toolName.machineAction]: {
+    inputSchema: machineActionInputSchema,
+    outputSchema: machineActionOutputSchema,
+  },
+  [toolName.stopMachine]: {
+    inputSchema: stopMachineInputSchema,
+    outputSchema: stopMachineOutputSchema,
+  },
+  [toolName.getPrintProfiles]: {
+    inputSchema: getPrintProfilesInputSchema,
+    outputSchema: getPrintProfilesOutputSchema,
+  },
+  [toolName.requestJob]: {
+    inputSchema: requestJobInputSchema,
+    outputSchema: requestJobOutputSchema,
+  },
+  [toolName.checkJob]: {
+    inputSchema: checkJobInputSchema,
+    outputSchema: checkJobOutputSchema,
+  },
+  [toolName.shell]: {
+    inputSchema: shellInputSchema,
+    outputSchema: shellOutputSchema,
+  },
+} as const;
+
+/** Static tool-part input schemas used by lifecycle normalization. @public */
+export const toolInputSchemas = Object.fromEntries(
+  Object.entries(uiMessageTools).map(([name, tool]) => [`tool-${name}`, tool.inputSchema]),
+) as unknown as Record<ToolPartType, z.ZodType>;
 
 /**
  * Type-guard variant of {@link toolInputSchemas} lookup that accepts the

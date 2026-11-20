@@ -1,13 +1,17 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { ChatToolCard, ChatToolCardHeader, ChatToolCardTitle } from '#components/chat/chat-tool-card.js';
-import { ChatToolLabel } from '#components/chat/chat-tool-label.js';
-import { ChatToolDescription } from '#components/chat/chat-tool-text.js';
-import { FileLink } from '#components/files/file-link.js';
-import { ViewerLink } from '#components/files/viewer-link.js';
-import { TooltipProvider } from '#components/ui/tooltip.js';
-import { GeometryArtifactBadge } from '#routes/projects_.$id/chat-message-tool-test-model.js';
+import userEvent from '@testing-library/user-event';
+import {
+  ChatToolCard,
+  ChatToolCardContent,
+  ChatToolCardHeader,
+  ChatToolCardTitle,
+} from '@taucad/chat-ui/components/chat-tool-card';
+import { ChatToolLabel } from '@taucad/chat-ui/components/chat-tool-label';
+import { ChatToolDescription } from '@taucad/chat-ui/components/chat-tool-text';
+import { FileLink } from '@taucad/files-ui/components/files/file-link';
+import { ViewerLink } from '@taucad/files-ui/components/files/viewer-link';
 
 // ChatToolCard transitively calls `useCookie`, which expects a react-router
 // data router for `useRouteLoaderData`. Stub the cookie hook so these contract
@@ -60,6 +64,28 @@ afterEach(() => {
  * click stops reaching the inner handler. These assertions pin every layer.
  */
 describe('chat-tool title-row truncation cascade', () => {
+  it('should keep the minimal row disclosure available at rest and open its details', async () => {
+    const user = userEvent.setup();
+    render(
+      <ChatToolCard variant='minimal' status='ready'>
+        <ChatToolCardHeader>
+          <ChatToolCardTitle>Ran command</ChatToolCardTitle>
+        </ChatToolCardHeader>
+        <ChatToolCardContent>Command output</ChatToolCardContent>
+      </ChatToolCard>,
+    );
+
+    const trigger = screen.getByRole('button', { name: 'Ran command' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(trigger.querySelector('.lucide-chevron-right')).toBeInTheDocument();
+    expect(screen.queryByText('Command output')).not.toBeInTheDocument();
+
+    await user.click(trigger);
+
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Command output')).toBeVisible();
+  });
+
   it('keeps ChatToolCardTitle as the single block-level truncation owner', () => {
     render(
       <ChatToolCard variant='minimal' status='ready' isCollapsible={false}>
@@ -241,41 +267,6 @@ describe('chat-tool title-row truncation cascade', () => {
     expect(ancestorButtonClick).not.toHaveBeenCalled();
   });
 
-  it('keeps GeometryArtifactBadge truncating long artifact paths via the chip wrapper + inner span min-w-0/truncate chain, with the cube auto-injected by ViewerLink (no manual <Box />)', () => {
-    // The artifact badge sits as a chip inside `chat-message-tool-test-model`'s
-    // `FileGroupSection`. The truncation chain is identical to the canonical
-    // chat-tool title row: the outermost flex chip needs `min-w-0 max-w-full`
-    // (so the chip itself can shrink under its parent), and the inner path
-    // span needs `min-w-0 truncate` (so the path itself can character-clip
-    // instead of overflowing the chip).
-    const longPath = '.tau/artifacts/tooluu_01ARC_thisIsAnIntentionallyLongFilenameToProveTruncation__main.scad.glb';
-    render(
-      <TooltipProvider>
-        <GeometryArtifactBadge artifactPath={longPath} />
-      </TooltipProvider>,
-    );
-
-    const pathSpan = screen.getByText(longPath);
-    expect(pathSpan).toHaveClass('min-w-0');
-    expect(pathSpan).toHaveClass('truncate');
-
-    // Walk up to the chip wrapper that ViewerLink's asChild merges onto.
-    const chipWrapper = pathSpan.parentElement;
-    expect(chipWrapper).not.toBeNull();
-    expect(chipWrapper).toHaveClass('flex');
-    expect(chipWrapper).toHaveClass('min-w-0');
-    expect(chipWrapper).toHaveClass('max-w-full');
-
-    // ViewerLink auto-injects the cube into the consumer's chip via
-    // SlotPrimitive.Slottable — the badge JSX must NOT render its own <Box />
-    // (the architectural rule that the icon lives in exactly one place).
-    // Assert exactly one cube is present, and that it sits as a sibling of
-    // the path span inside the chip wrapper.
-    const cubes = chipWrapper?.querySelectorAll('svg.lucide-box');
-    expect(cubes?.length).toBe(1);
-    expect(cubes?.[0]?.parentElement).toBe(chipWrapper);
-  });
-
   it('still allows callers to override the default `inline` (e.g. chat-stack-trace uses `flex min-w-0`)', () => {
     render(
       <FileLink path='main.kcl' className='flex min-w-0'>
@@ -291,12 +282,12 @@ describe('chat-tool title-row truncation cascade', () => {
     expect(link).toHaveClass('min-w-0');
   });
 
-  it('does NOT impose `inline` when used with `asChild`, so the consumer chip / wrapper owns its own display (e.g. ContextChip `inline-flex`, GeometryArtifactBadge `flex`)', () => {
+  it('does NOT impose `inline` when used with `asChild`, so the consumer owns its own display', () => {
     // Radix Slot concatenates classNames via plain string join (no twMerge —
     // see `@radix-ui/react-slot` source: `[a, b].filter(Boolean).join(' ')`).
     // If FileLink/ViewerLink emit an `inline` class on the asChild branch, it
     // ends up on the consumer's element alongside the consumer's `inline-flex`
-    // (ContextChip) or `flex` (GeometryArtifactBadge). Both are utility classes
+    // or `flex`. Both are utility classes
     // with the same specificity, so which display value wins is decided by
     // Tailwind's CSS source order — fragile and bug-prone. The contract here
     // is that asChild merges DON'T leak a display value at all; the consumer
@@ -305,7 +296,7 @@ describe('chat-tool title-row truncation cascade', () => {
     render(
       <>
         <FileLink path='main.kcl' asChild>
-          <span data-testid='file-asChild' className='inline-flex items-center gap-1 rounded-xs bg-purple/10 px-1.5'>
+          <span data-testid='file-asChild' className='inline-flex items-center gap-1 rounded-xs bg-feature/10 px-1.5'>
             main.kcl
           </span>
         </FileLink>

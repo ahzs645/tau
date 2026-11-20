@@ -1,0 +1,344 @@
+import { fileURLToPath } from 'node:url';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createEsbuildModuleVm } from '#vm/module-vm.js';
+import type { ModuleVm } from '#vm/module-vm.js';
+import type { VmFileSystem } from '#vm/types.js';
+
+class MemoryFileSystem implements VmFileSystem {
+  private readonly files = new Map<string, string | Uint8Array<ArrayBuffer>>();
+
+  public setText(path: string, content: string): void {
+    this.files.set(path, content);
+  }
+
+  public async exists(path: string): Promise<boolean> {
+    return this.files.has(path);
+  }
+
+  public async readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
+  public async readFile(path: string, encoding: 'utf8'): Promise<string>;
+  public async readFile(path: string, encoding?: 'utf8'): Promise<string | Uint8Array<ArrayBuffer>> {
+    const file = this.files.get(path);
+    if (file === undefined) {
+      throw new Error(`ENOENT: ${path}`);
+    }
+
+    if (encoding === 'utf8') {
+      return typeof file === 'string' ? file : new TextDecoder().decode(file);
+    }
+
+    return typeof file === 'string' ? new TextEncoder().encode(file) : file;
+  }
+
+  public async writeFile(path: string, content: string): Promise<void> {
+    this.files.set(path, content);
+  }
+
+  public async ensureDir(_path: string): Promise<void> {
+    return undefined;
+  }
+}
+
+describe('createEsbuildModuleVm', () => {
+  let activeVm: ModuleVm | undefined;
+
+  afterEach(() => {
+    activeVm?.dispose();
+    activeVm = undefined;
+    vi.unstubAllGlobals();
+  });
+
+  it('should bundle and execute project ESM with an in-memory builtin module', async () => {
+    const filesystem = new MemoryFileSystem();
+    filesystem.setText(
+      'project/model.test.ts',
+      [
+        "import { describe, expectGeo } from 'geospec';",
+        "import { makeBox } from './shape';",
+        'export const result = describe("box", () => expectGeo(makeBox()).toHaveBoundingBox([0, 0, 0], [1, 1, 1]));',
+      ].join('\n'),
+    );
+    filesystem.setText('project/shape.ts', 'export const makeBox = () => ({ kind: "box", size: 1 });');
+
+    const vm = await createEsbuildModuleVm({ filesystem });
+    activeVm = vm;
+    vm.registerModule('geospec', {
+      version: '0.0.0-test',
+      code: [
+        'export const describe = (name, fn) => ({ name, assertion: fn() });',
+        'export const expectGeo = (shape) => ({',
+        '  toHaveBoundingBox: (min, max) => ({ shape, min, max })',
+        '});',
+      ].join('\n'),
+    });
+
+    const imports = await vm.detectImports('project/model.test.ts');
+    expect(imports.detectedModules).toEqual(['geospec']);
+    expect(imports.dependencies).toContain('project/model.test.ts');
+    expect(imports.dependencies).toContain('project/shape.ts');
+
+    const bundled = await vm.bundle('project/model.test.ts');
+    expect(bundled.success).toBe(true);
+    expect(bundled.dependencies).toEqual(expect.arrayContaining(['project/model.test.ts', 'project/shape.ts']));
+
+    const executed = await vm.execute<{ result: unknown }>(bundled.code);
+    expect(executed.success).toBe(true);
+    if (executed.success) {
+      expect(executed.value.result).toEqual({
+        name: 'box',
+        assertion: {
+          shape: { kind: 'box', size: 1 },
+          min: [0, 0, 0],
+          max: [1, 1, 1],
+        },
+      });
+    }
+  });
+
+  it('should bind a builtin global name only from its registry expression', async () => {
+    vi.stubGlobal('__moduleVmBuiltinScopeA', { token: 'A' });
+    const filesystem = new MemoryFileSystem();
+    filesystem.setText(
+      'project/main.ts',
+      'export const result = { scoped: scopedBuiltin.token, unbound: typeof unboundBuiltin };',
+    );
+
+    const vm = await createEsbuildModuleVm({ filesystem });
+    activeVm = vm;
+    vm.registerModule('scoped-builtin', {
+      version: '1.0.0',
+      code: 'export default globalThis.__moduleVmBuiltinScopeA;',
+      globalName: 'scopedBuiltin',
+      registryExpression: 'globalThis.__moduleVmBuiltinScopeA',
+    });
+    vm.registerModule('unbound-builtin', {
+      version: '1.0.0',
+      code: 'export default {};',
+      globalName: 'unboundBuiltin',
+    });
+
+    const bundled = await vm.bundle('project/main.ts');
+    expect(bundled.success).toBe(true);
+    expect(bundled.code).toContain('const scopedBuiltin = globalThis.__moduleVmBuiltinScopeA;');
+    expect(bundled.code).not.toContain('unboundBuiltin =');
+    expect(bundled.code).not.toContain('__KERNEL_MODULES__');
+
+    const executed = await vm.execute<{ result: unknown }>(bundled.code);
+    expect(executed).toMatchObject({ success: true, value: { result: { scoped: 'A', unbound: 'undefined' } } });
+  });
+
+  it('should return a structured bundle issue for unsupported private package imports', async () => {
+    const filesystem = new MemoryFileSystem();
+    filesystem.setText('project/model.ts', "import value from '#internal'; export const result = value;");
+
+    const vm = await createEsbuildModuleVm({ filesystem });
+    activeVm = vm;
+
+    const result = await vm.bundle('project/model.ts');
+    expect(result).toMatchObject({
+      success: false,
+      issues: [
+        expect.objectContaining({
+          code: 'BUNDLER_FAILED',
+          severity: 'error',
+          type: 'compilation',
+          message: "Private package import '#internal' is not supported.",
+        }),
+      ],
+    });
+  });
+
+  it('should resolve production dependencies and unresolved import paths', async () => {
+    const filesystem = new MemoryFileSystem();
+    filesystem.setText(
+      'project/main.ts',
+      "import { value } from './present'; import './missing'; export const result = value;",
+    );
+    filesystem.setText('project/present.ts', 'export const value = 7;');
+
+    const vm = await createEsbuildModuleVm({ filesystem });
+    activeVm = vm;
+
+    const result = await vm.resolveDependencies('project/main.ts');
+
+    expect(result.resolved).toEqual(expect.arrayContaining(['project/main.ts', 'project/present.ts']));
+    expect(result.unresolved).toEqual(
+      expect.arrayContaining([
+        'project/missing.ts',
+        'project/missing.tsx',
+        'project/missing.js',
+        'project/missing.jsx',
+      ]),
+    );
+  });
+
+  it('should include query-suffixed and attribute-imported assets in resolved dependencies', async () => {
+    // Cache-participation guard (tau-examples OQ6): assets loaded via TC39
+    // `with { type }` attributes and Vite-style `?raw` suffixes must appear in
+    // resolved dependencies so asset-only edits rotate the geometry cache key.
+    const filesystem = new MemoryFileSystem();
+    filesystem.setText(
+      'project/main.ts',
+      [
+        "import attributeText from './assets/part.step' with { type: 'text' };",
+        "import rawText from './assets/other.step?raw';",
+        'export const result = attributeText.length + rawText.length;',
+      ].join('\n'),
+    );
+    filesystem.setText('project/assets/part.step', 'ISO-10303-21;');
+    filesystem.setText('project/assets/other.step', 'ISO-10303-21;');
+
+    const vm = await createEsbuildModuleVm({ filesystem });
+    activeVm = vm;
+
+    const result = await vm.resolveDependencies('project/main.ts');
+
+    expect(result.resolved).toEqual(
+      expect.arrayContaining(['project/main.ts', 'project/assets/part.step', 'project/assets/other.step']),
+    );
+  });
+
+  it('should return structured bundle issues when a builtin module is missing', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(undefined, { status: 404 })));
+    const filesystem = new MemoryFileSystem();
+    filesystem.setText('project/model.test.ts', "import { describe } from 'geospec'; export const result = describe;");
+
+    const vm = await createEsbuildModuleVm({ filesystem });
+    activeVm = vm;
+
+    const result = await vm.bundle('project/model.test.ts');
+
+    expect(result.success).toBe(false);
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        code: 'BUNDLER_FAILED',
+        severity: 'error',
+        type: 'compilation',
+      }),
+    ]);
+    expect(result.issues[0]!.message).toContain('geospec');
+  });
+
+  it('should return structured execution issues when bundled code throws', async () => {
+    const filesystem = new MemoryFileSystem();
+    const vm = await createEsbuildModuleVm({ filesystem });
+    activeVm = vm;
+
+    const result = await vm.execute('throw new TypeError("boom from vm test");');
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.issues).toEqual([
+        {
+          code: 'RUNTIME',
+          message: 'boom from vm test',
+          severity: 'error',
+          type: 'runtime',
+        },
+      ]);
+    }
+  });
+
+  it('should re-execute identical code by default for repeatable VM consumers', async () => {
+    const key = '__TAU_VM_REPEATABLE_DEFAULT__';
+    const filesystem = new MemoryFileSystem();
+    const vm = await createEsbuildModuleVm({ filesystem });
+    activeVm = vm;
+
+    try {
+      const code = [
+        `globalThis.${key} = (globalThis.${key} ?? 0) + 1;`,
+        `export const count = globalThis.${key};`,
+      ].join('\n');
+
+      const first = await vm.execute<{ count: number }>(code);
+      const second = await vm.execute<{ count: number }>(code);
+
+      expect(first.success).toBe(true);
+      expect(second.success).toBe(true);
+      if (first.success && second.success) {
+        expect(first.value.count).toBe(1);
+        expect(second.value.count).toBe(2);
+      }
+    } finally {
+      Reflect.deleteProperty(globalThis, key);
+    }
+  });
+
+  it('should reuse identical code only when execution caching is enabled', async () => {
+    const key = '__TAU_VM_CACHED_EXECUTION__';
+    const filesystem = new MemoryFileSystem();
+    const vm = await createEsbuildModuleVm({
+      filesystem,
+      cacheExecution: true,
+    });
+    activeVm = vm;
+
+    try {
+      const code = [
+        `globalThis.${key} = (globalThis.${key} ?? 0) + 1;`,
+        'export function fail() {',
+        '  throw new Error("cached stack");',
+        '}',
+        `export const count = globalThis.${key};`,
+      ].join('\n');
+
+      const first = await vm.execute<{ count: number; fail: () => void }>(code);
+      const second = await vm.execute<{ count: number; fail: () => void }>(code);
+
+      expect(first.success).toBe(true);
+      expect(second.success).toBe(true);
+      if (first.success && second.success) {
+        expect(first.value).toBe(second.value);
+        expect(first.value.count).toBe(1);
+        expect(second.value.count).toBe(1);
+        expect(first.entryUrl).toMatch(/^file:\/\//u);
+        expect(second.entryUrl).toBe(first.entryUrl);
+        if (first.entryUrl === undefined || second.entryUrl === undefined) {
+          throw new Error('Expected both successful executions to have an entry URL.');
+        }
+
+        const thrownStack = (fail: () => void): string => {
+          try {
+            fail();
+          } catch (error) {
+            if (error instanceof Error) {
+              return error.stack ?? '';
+            }
+          }
+          throw new Error('Expected the cached module function to throw an Error.');
+        };
+        expect(thrownStack(first.value.fail)).toContain(`${fileURLToPath(first.entryUrl)}:3:`);
+        expect(thrownStack(second.value.fail)).toContain(`${fileURLToPath(second.entryUrl)}:3:`);
+      }
+
+      vm.clearExecutionCache(code);
+      const third = await vm.execute<{ count: number; fail: () => void }>(code);
+      expect(third.success).toBe(true);
+      if (third.success && first.success) {
+        expect(third.value.count).toBe(2);
+        expect(third.entryUrl).not.toBe(first.entryUrl);
+      }
+    } finally {
+      Reflect.deleteProperty(globalThis, key);
+    }
+  });
+
+  it('should retry failed executions when execution caching is enabled', async () => {
+    const key = '__TAU_VM_FAILED_EXECUTION__';
+    const vm = await createEsbuildModuleVm({ filesystem: new MemoryFileSystem(), cacheExecution: true });
+    activeVm = vm;
+
+    try {
+      const code = [`globalThis.${key} = (globalThis.${key} ?? 0) + 1;`, 'throw new Error("retry me");'].join('\n');
+      const first = await vm.execute(code);
+      const second = await vm.execute(code);
+
+      expect(first).toMatchObject({ success: false, issues: [{ message: 'retry me' }] });
+      expect(second).toMatchObject({ success: false, issues: [{ message: 'retry me' }] });
+      expect(Reflect.get(globalThis, key)).toBe(2);
+    } finally {
+      Reflect.deleteProperty(globalThis, key);
+    }
+  });
+});

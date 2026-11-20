@@ -1,0 +1,102 @@
+import deepmerge from 'deepmerge';
+import { z } from 'zod';
+import { parameterEntryPath } from '@taucad/types';
+import type { JSONValue } from '@taucad/types';
+import type { KernelIssue } from '@taucad/runtime/types';
+import { isNotFoundError } from '@taucad/runtime/kernel';
+import { defineMiddleware } from '@taucad/runtime/middleware';
+import { parameterRecordInputValues, requireParameterRecord } from '@taucad/parameters';
+
+const encoder = new TextEncoder();
+
+const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/** The kernel issue for a record `requireParameterRecord` refused. */
+const recordIssue = (error: unknown): KernelIssue => ({
+  code: 'INVALID_RECORD',
+  message: errorMessage(error),
+  type: 'runtime',
+  severity: 'error',
+});
+
+/** Decode a stored record, reporting an unusable one as the typed kernel issue every reader shares. */
+const recordFrom = (content: string): ReturnType<typeof requireParameterRecord> => {
+  try {
+    return requireParameterRecord(encoder.encode(content));
+  } catch (error) {
+    throw Object.assign(new Error(errorMessage(error)), { issues: [recordIssue(error)] });
+  }
+};
+
+/**
+ * The last record's input values, keyed on its exact text. A render usually rereads unchanged
+ * bytes, and comparing the text is cheaper than hashing it. One entry is enough for the common
+ * single-entry project; switching entry files only costs a decode.
+ */
+let lastRecord: Readonly<{ content: string; values: Readonly<Record<string, JSONValue>> }> | undefined;
+
+/**
+ * Decode the record's input values, reusing the last decode when the text is unchanged.
+ * @param content - The record's text as read.
+ * @returns The active group's input values; never mutate them.
+ */
+const inputValuesFrom = (content: string): Readonly<Record<string, JSONValue>> => {
+  if (lastRecord?.content !== content) {
+    lastRecord = { content, values: parameterRecordInputValues(recordFrom(content)) };
+  }
+  return lastRecord.values;
+};
+
+/**
+ * Middleware that applies persisted parameter-group values during geometry creation.
+ *
+ * Each normalized runtime entry path maps to its canonical parameter record path. The active
+ * group's values are merged below caller overrides, with arrays replaced rather than concatenated.
+ *
+ * The parameter file is included in dependency hashing and registered for watching.
+ * Missing files leave the request unchanged. Invalid or unsupported records
+ * surface a stable diagnostic, and other read failures propagate so stale
+ * handles, permission errors, and provider failures cannot be mistaken for an
+ * absent optional parameter file.
+ *
+ * @public
+ */
+export const parameterFileResolver = defineMiddleware({
+  id: 'parameterFileResolver',
+  name: 'ParameterFileResolver',
+  optionsSchema: z.object({
+    /** Milliseconds. */
+    watchDebounce: z.number().default(0),
+  }),
+
+  resolve({ entryPath }, { options }) {
+    return [
+      {
+        path: parameterEntryPath(entryPath),
+        affects: ['evaluate'],
+        watchDebounce: options.watchDebounce,
+      },
+    ];
+  },
+
+  async wrapEvaluate(input, handler, services) {
+    const parametersPath = parameterEntryPath(input.entryPath);
+    let content: string;
+    try {
+      content = await services.filesystem.readFile(parametersPath, 'utf8');
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return handler(input);
+      }
+      throw error;
+    }
+
+    // `deepmerge` clones its inputs, so the memoised values are never handed out or mutated.
+    return handler({
+      ...input,
+      parameters: deepmerge(inputValuesFrom(content), input.parameters, {
+        arrayMerge: (_target: unknown[], source: unknown[]) => source,
+      }),
+    });
+  },
+});

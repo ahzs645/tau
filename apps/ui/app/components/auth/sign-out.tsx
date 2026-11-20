@@ -2,8 +2,13 @@ import { useAuth, useSignOut } from '@better-auth-ui/react';
 import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 
-import { Spinner } from '#components/ui/spinner.js';
-import { cn } from '#utils/ui.utils.js';
+import { Spinner } from '@taucad/ui-kit/components/spinner';
+import { cn } from '@taucad/ui/utils/cn';
+import { useCloudFinancialPurge } from '#cloud/financial-purge.js';
+import { setEntryPreference } from '@taucad/ui-core/lib/entry-preference';
+import { isDesktopTarget } from '#lib/build-target.js';
+import { clearLegacyProjectListing } from '@taucad/files-ui/lib/legacy-project-listing.lib';
+import { authErrorMessage } from '@taucad/ui-core/utils/auth-error.utils';
 
 export type SignOutProps = {
   className?: string;
@@ -15,12 +20,13 @@ export type SignOutProps = {
  * @param className - Optional additional class names appended to the root element
  * @returns The spinner shown during sign-out
  */
-export function SignOut({ className }: SignOutProps) {
-  const { authClient, basePaths, navigate, viewPaths } = useAuth();
+export function SignOut({ className }: SignOutProps): React.JSX.Element {
+  const { authClient, basePaths, localization, navigate, viewPaths } = useAuth();
+  const purgeFinancial = useCloudFinancialPurge();
 
   const { mutate: signOut } = useSignOut(authClient, {
     onError: (error) => {
-      toast.error(error.error?.message ?? error.message);
+      toast.error(authErrorMessage(error));
 
       navigate({
         to: `${basePaths.auth}/${viewPaths.auth.signIn}`,
@@ -28,6 +34,13 @@ export function SignOut({ className }: SignOutProps) {
       });
     },
     onSuccess: () => {
+      /* An earlier build's project listing snapshot holds names; a shared device keeps none of them. */
+      clearLegacyProjectListing();
+      if (!isDesktopTarget()) {
+        const prefersWebsite = setEntryPreference('website');
+        globalThis.location.replace(prefersWebsite ? '/' : '/?website=1');
+        return;
+      }
       navigate({
         to: `${basePaths.auth}/${viewPaths.auth.signIn}`,
         replace: true,
@@ -43,8 +56,15 @@ export function SignOut({ className }: SignOutProps) {
     }
     hasSignedOut.current = true;
 
+    purgeFinancial?.('logout');
     signOut();
-  }, [signOut]);
+  }, [purgeFinancial, signOut]);
 
-  return <Spinner className={cn('mx-auto my-auto', className)} />;
+  return (
+    <>
+      {/* The page's one heading: the spinner is all a person sees while the session ends. */}
+      <h1 className='sr-only'>{localization.auth.signOut}</h1>
+      <Spinner className={cn('mx-auto my-auto', className)} />
+    </>
+  );
 }

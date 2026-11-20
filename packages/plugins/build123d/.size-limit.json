@@ -1,0 +1,7 @@
+[
+  {
+    "name": "total (ESM JS) — measured 10882 B brotli on 2026-10-18; main absolute tessellation plus native mechanism admission and preserved metadata through budget wrappers, and the /native adopter entry",
+    "path": "dist/**/*.mjs",
+    "limit": "11 kB"
+  }
+]

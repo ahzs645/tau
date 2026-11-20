@@ -1,0 +1,698 @@
+/**
+ * The GeoSpec runner worker's implementation, loaded by
+ * `geospec-runner.worker.ts` through a dynamic import.
+ *
+ * Everything heavy lives here rather than in the worker entry on purpose: a
+ * module worker whose entry graph fails to evaluate is silent in Chrome — no
+ * `error` event, no `messageerror`, no console output — so a failure anywhere
+ * under this graph would only ever surface as the client's init timeout. Behind
+ * a dynamic import the same failure is a rejected promise the entry can report.
+ *
+ * What remains here is only the browser half: the engine's browser
+ * registration, the bridge-backed filesystems, the kernel worker, and the
+ * request queue. Discovery, model loading and result projection are
+ * `@taucad/agent-tools/geospec`, which the daemon runs too.
+ *
+ * @module
+ */
+
+import { rpcClientErrorCode } from '@taucad/chat';
+import { geoSpecHostLimitProblem } from '@taucad/chat/constants';
+import { createGeoSpecConfigSession, runGeoSpecTests } from '@taucad/agent-tools/geospec';
+import type { GeoSpecKernelEvidence, GeoSpecTestModelConfig } from '@taucad/agent-tools/geospec';
+import { tauClientExporter } from '@taucad/agent-tools/geospec/exporter';
+// GeoSpec has no browser VM of its own: Tau's esbuild VM bundles specs and configs, npm packages included.
+import { createEsbuildModuleVm } from '@taucad/esbuild/vm';
+import { createRuntimeClient } from '@taucad/runtime/client';
+import { forwardOperations, geoSpecVerifyEntry } from '#telemetry/worker-forwarding.js';
+import type { WorkerTelemetry } from '#telemetry/worker-forwarding.js';
+import type { AnyRuntimeDefinition } from '@taucad/runtime/worker';
+import { fromFsLike } from '@taucad/runtime/filesystem';
+import type { FsLike } from '@taucad/runtime/filesystem';
+import type { FileStat } from '@taucad/types';
+import type { FileSystemBridgeProxy } from '@taucad/fs-bridge';
+import { assertRootedPath } from '@taucad/utils/path';
+import type { GeoSpecDiscoveryFileSystem } from 'geospec/runner';
+import type { GeoSpecRunner, GeoSpecRunnerOptions } from 'geospec/runner/worker';
+import { z } from 'zod';
+import { createDefaultKernelOptions } from '#constants/kernel-worker.constants.js';
+import { uiRuntimeConfigSchema } from '#runtime/ui-runtime.schema.js';
+import type { AppRuntimeClient } from '#types/runtime-client.alias.js';
+import type {
+  GeoSpecRunnerWorkerInitializeRequest,
+  GeoSpecRunnerWorkerRequest,
+  GeoSpecRunnerWorkerResponse,
+  GeoSpecRunnerWorkerRunRequest,
+} from '#workers/geospec-runner.types.js';
+
+type WorkerScope = {
+  postMessage(message: GeoSpecRunnerWorkerResponse): void;
+  close(): void;
+};
+
+type ProjectFileSystemBridge = Pick<
+  FileSystemBridgeProxy,
+  | 'readFile'
+  | 'writeFile'
+  | 'readdir'
+  | 'stat'
+  | 'lstat'
+  | 'mkdir'
+  | 'unlink'
+  | 'rmdir'
+  | 'rename'
+  | 'exists'
+  | 'dispose'
+>;
+
+type GeoSpecVmFileSystem = GeoSpecRunnerOptions['filesystem'];
+
+const workerScope = globalThis as unknown as WorkerScope;
+const candidateEncoder = new TextEncoder();
+const candidateDecoder = new TextDecoder('utf-8', { fatal: true });
+let foreignCandidates: ReadonlyArray<Uint8Array<ArrayBuffer>> = [];
+let locallyEstablishedCandidates: Array<Uint8Array<ArrayBuffer>> = [];
+let candidateSharingEnabled = false;
+
+type ExactClusterSelector = Readonly<{ subjectHash: string; toleranceMm: number }>;
+
+/** The one native fact family this browser candidate route can represent. */
+export const exactClusterSelector = (request: Uint8Array<ArrayBuffer>): ExactClusterSelector | undefined => {
+  try {
+    const input: unknown = JSON.parse(candidateDecoder.decode(request));
+    if (
+      typeof input !== 'object' ||
+      input === null ||
+      !('method' in input) ||
+      input.method !== 'submitClaims' ||
+      !('plan' in input)
+    ) {
+      return undefined;
+    }
+    const { plan } = input;
+    if (
+      typeof plan !== 'object' ||
+      plan === null ||
+      !('subjects' in plan) ||
+      !('claims' in plan) ||
+      !Array.isArray(plan.subjects) ||
+      !Array.isArray(plan.claims)
+    ) {
+      return undefined;
+    }
+    const claim = plan.claims[0] as unknown;
+    if (
+      typeof claim !== 'object' ||
+      claim === null ||
+      !('capability' in claim) ||
+      claim.capability !== 'toHaveConnectedComponents' ||
+      !('payload' in claim)
+    ) {
+      return undefined;
+    }
+    const { payload } = claim;
+    if (
+      typeof payload !== 'object' ||
+      payload === null ||
+      !('kind' in payload) ||
+      payload.kind !== 'connectedComponents'
+    ) {
+      return undefined;
+    }
+    const expected: unknown =
+      'arguments' in payload && Array.isArray(payload.arguments) ? payload.arguments[0] : undefined;
+    if (
+      typeof expected !== 'object' ||
+      expected === null ||
+      !('toleranceMm' in expected) ||
+      typeof expected.toleranceMm !== 'number' ||
+      !Number.isFinite(expected.toleranceMm) ||
+      expected.toleranceMm < 0
+    ) {
+      return undefined;
+    }
+    if (!('subjectSlots' in claim) || !Array.isArray(claim.subjectSlots) || claim.subjectSlots.length !== 1) {
+      return undefined;
+    }
+    const slot: unknown = claim.subjectSlots[0];
+    const subject: unknown = plan.subjects.find(
+      (row: unknown) => typeof row === 'object' && row !== null && 'slot' in row && row.slot === slot,
+    );
+    if (typeof subject !== 'object' || subject === null) {
+      return undefined;
+    }
+    const hash = 'subjectHash' in subject ? subject.subjectHash : undefined;
+    if (typeof hash !== 'string' || !/^[0-9a-f]{64}$/u.test(hash)) {
+      return undefined;
+    }
+    return { subjectHash: hash, toleranceMm: expected.toleranceMm };
+  } catch {
+    return undefined;
+  }
+};
+
+const candidateControl = (
+  input: Readonly<{
+    engine: { processRequest(request: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> };
+    canonicalize: (request: Uint8Array<ArrayBuffer>) => Uint8Array<ArrayBuffer>;
+    selector: ExactClusterSelector;
+    operation: 'export' | 'compare';
+    candidate?: unknown;
+  }>,
+): Record<string, unknown> => {
+  const { engine, canonicalize, selector, operation, candidate } = input;
+  const control =
+    candidate === undefined
+      ? { operation, subjectHash: selector.subjectHash, toleranceMm: selector.toleranceMm }
+      : { candidate, operation, subjectHash: selector.subjectHash, toleranceMm: selector.toleranceMm };
+  const bytes = canonicalize(candidateEncoder.encode(JSON.stringify({ _tauNativeExactClusterCandidateV1: control })));
+  const result: unknown = JSON.parse(candidateDecoder.decode(engine.processRequest(bytes)));
+  return typeof result === 'object' && result !== null ? (result as Record<string, unknown>) : {};
+};
+
+/** Local assertion first; private work is conditional and never changes its result. */
+export const withCandidate = <T>(
+  input: Readonly<{
+    request: Uint8Array<ArrayBuffer>;
+    evaluate: () => T;
+    engine: { processRequest(request: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> };
+    canonicalize: (request: Uint8Array<ArrayBuffer>) => Uint8Array<ArrayBuffer>;
+    enabled: boolean;
+  }>,
+): T => {
+  const result = input.evaluate();
+  if (!input.enabled || locallyEstablishedCandidates.length > 0) {
+    return result;
+  }
+  const selector = exactClusterSelector(input.request);
+  if (selector === undefined) {
+    return result;
+  }
+  try {
+    const { candidate } = candidateControl({
+      engine: input.engine,
+      canonicalize: input.canonicalize,
+      selector,
+      operation: 'export',
+    });
+    if (
+      typeof candidate === 'object' &&
+      candidate !== null &&
+      'address' in candidate &&
+      typeof candidate.address === 'object' &&
+      candidate.address !== null &&
+      'actionSha256' in candidate.address &&
+      typeof candidate.address.actionSha256 === 'string'
+    ) {
+      const { actionSha256 } = candidate.address;
+      if (locallyEstablishedCandidates.length === 0) {
+        locallyEstablishedCandidates.push(candidateEncoder.encode(JSON.stringify(candidate)));
+      }
+      const matching = foreignCandidates.find((bytes) => {
+        try {
+          const foreign: unknown = JSON.parse(candidateDecoder.decode(bytes));
+          return (
+            typeof foreign === 'object' &&
+            foreign !== null &&
+            'address' in foreign &&
+            typeof foreign.address === 'object' &&
+            foreign.address !== null &&
+            'actionSha256' in foreign.address &&
+            foreign.address.actionSha256 === actionSha256
+          );
+        } catch {
+          return false;
+        }
+      });
+      if (matching !== undefined) {
+        const foreign: unknown = JSON.parse(candidateDecoder.decode(matching));
+        candidateControl({
+          engine: input.engine,
+          canonicalize: input.canonicalize,
+          selector,
+          operation: 'compare',
+          candidate: foreign,
+        });
+      }
+    }
+  } catch {
+    // Optional candidate work cannot change a completed local assertion.
+  }
+  return result;
+};
+
+function createBridgeVmFileSystem(proxy: ProjectFileSystemBridge): GeoSpecVmFileSystem {
+  async function readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
+  async function readFile(path: string, encoding: 'utf8'): Promise<string>;
+  async function readFile(path: string, encoding?: 'utf8'): Promise<string | Uint8Array<ArrayBuffer>> {
+    const bridgePath = assertRootedPath(path);
+    if (encoding === 'utf8') {
+      return proxy.readFile(bridgePath, 'utf8');
+    }
+    const bytes = await proxy.readFile(bridgePath);
+    const copy = new Uint8Array(bytes.byteLength);
+    copy.set(bytes);
+    return copy;
+  }
+
+  return {
+    async exists(path: string): Promise<boolean> {
+      return proxy.exists(assertRootedPath(path));
+    },
+    readFile,
+    async writeFile(path: string, content: string): Promise<void> {
+      await proxy.writeFile(assertRootedPath(path), content);
+    },
+    async ensureDir(path: string): Promise<void> {
+      await proxy.mkdir(assertRootedPath(path), { recursive: true });
+    },
+  };
+}
+
+function createDiscoveryFileSystem(proxy: ProjectFileSystemBridge): GeoSpecDiscoveryFileSystem {
+  return {
+    async readdir(path: string): Promise<readonly string[]> {
+      return proxy.readdir(assertRootedPath(path));
+    },
+    async stat(path: string) {
+      const stat = await proxy.stat(assertRootedPath(path));
+      return { kind: stat.type === 'dir' ? 'directory' : 'file' };
+    },
+  };
+}
+
+const createProjectFileSystemProxy = async (port: MessagePort): Promise<ProjectFileSystemBridge> => {
+  const { createTransferredFileSystemBridgeProxy } = await import('@taucad/fs-bridge');
+  const proxy = createTransferredFileSystemBridgeProxy(port);
+  await proxy.ready;
+  return proxy;
+};
+
+const createRuntimeFsLike = (proxy: ProjectFileSystemBridge): FsLike => {
+  const toNativeStat = async (stat: FileStat) => {
+    return {
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      isDirectory: () => stat.type === 'dir',
+    };
+  };
+
+  return {
+    promises: {
+      readFile: proxy.readFile.bind(proxy),
+      writeFile: proxy.writeFile.bind(proxy),
+      mkdir: proxy.mkdir.bind(proxy),
+      readdir: proxy.readdir.bind(proxy),
+      unlink: proxy.unlink.bind(proxy),
+      rmdir: proxy.rmdir.bind(proxy),
+      rename: proxy.rename.bind(proxy),
+      stat: async (path) => toNativeStat(await proxy.stat(path)),
+      lstat: async (path) => toNativeStat(await proxy.lstat(path)),
+    },
+  };
+};
+
+const formatRuntimeConfigError = (error: unknown): string => {
+  if (error instanceof z.ZodError) {
+    return z.prettifyError(error);
+  }
+  return error instanceof Error ? error.message : String(error);
+};
+
+type WorkerSession = {
+  sessionId: string;
+  fileSystem: ProjectFileSystemBridge;
+  runtimeClient: AppRuntimeClient;
+  runner: GeoSpecRunner;
+  closeEngine?: (() => void) | undefined;
+  /** The project's `geospec.config.*` for one run: read through the spec VM each run; an unchanged not-applied outcome is reported once. */
+  readConfig: () => Promise<GeoSpecTestModelConfig>;
+  /** Host policy: the longest effective `testTimeout`; a longer one is refused, never clamped. Milliseconds. */
+  maxRunBudget?: number | undefined;
+  /** Runtime telemetry (FR-16): the page's context; absent where the page would not record. */
+  telemetry?: WorkerTelemetry | undefined;
+};
+
+type QueuedRun = {
+  request: GeoSpecRunnerWorkerRunRequest;
+};
+
+let session: WorkerSession | undefined;
+let activeRun: QueuedRun | undefined;
+const runQueue: QueuedRun[] = [];
+let processingQueue = false;
+let closing = false;
+
+const postError = (requestId: string, message: string): void => {
+  workerScope.postMessage({
+    type: 'error',
+    requestId,
+    message,
+  });
+};
+
+const disposeSession = async (): Promise<void> => {
+  const activeSession = session;
+  session = undefined;
+  if (!activeSession) {
+    return;
+  }
+
+  try {
+    await activeSession.runner.close();
+  } finally {
+    try {
+      activeSession.runtimeClient.terminate();
+    } finally {
+      try {
+        activeSession.closeEngine?.();
+      } finally {
+        activeSession.fileSystem.dispose();
+      }
+    }
+  }
+};
+
+const initializeGeoSpecWorker = async (request: GeoSpecRunnerWorkerInitializeRequest): Promise<void> => {
+  if (session) {
+    if (session.sessionId === request.sessionId) {
+      workerScope.postMessage({ type: 'initialized', requestId: request.requestId, sessionId: request.sessionId });
+      return;
+    }
+    await disposeSession();
+  }
+
+  let fileSystem: ProjectFileSystemBridge | undefined;
+  let runtimeClient: AppRuntimeClient | undefined;
+  let runner: GeoSpecRunner | undefined;
+  let closeEngine: (() => void) | undefined;
+  let readConfig: WorkerSession['readConfig'] | undefined;
+  const telemetry: WorkerTelemetry | undefined =
+    request.telemetry === undefined
+      ? undefined
+      : {
+          context: request.telemetry,
+          forward: (entry) => {
+            workerScope.postMessage({ type: 'telemetry', entry });
+          },
+        };
+  try {
+    const runtimeConfigResult = uiRuntimeConfigSchema.safeParse(request.runtimeConfig);
+    if (!runtimeConfigResult.success) {
+      throw new Error(`RUNTIME_CONFIG_INVALID: ${formatRuntimeConfigError(runtimeConfigResult.error)}`);
+    }
+
+    fileSystem = await createProjectFileSystemProxy(request.fileSystemPort);
+    const runtimeFileSystem = fromFsLike(createRuntimeFsLike(fileSystem));
+    runtimeClient = createRuntimeClient<AnyRuntimeDefinition>(
+      createDefaultKernelOptions({
+        fileSystem: runtimeFileSystem,
+        runtimeConfig: runtimeConfigResult.data,
+        // A memory compute store here would duplicate the editor's and grow until the worker idles out (B-07).
+        compute: { mode: 'off' },
+      }),
+    );
+    if (telemetry !== undefined) {
+      // The session terminates the client on close, which ends these subscriptions with it.
+      forwardOperations(runtimeClient, 'geospec', telemetry);
+    }
+    {
+      const [native, { createNativeGeoSpecRunner }, { readGeoSpecConfig }, exporter] = await Promise.all([
+        import('geospec-engine'),
+        import('geospec/runner/native'),
+        import('geospec/config'),
+        // The session owns the client and terminates it on close; the exporter only borrows it.
+        tauClientExporter({ client: runtimeClient }),
+      ]);
+      await native.initialize();
+      const engine = new native.Engine();
+      closeEngine = () => {
+        engine.close();
+      };
+      const candidateEngine = {
+        ingestSubject: (...args: Parameters<typeof engine.ingestSubject>) => engine.ingestSubject(...args),
+        subjectHandle: (requestBytes: Uint8Array<ArrayBuffer>) => engine.subjectHandle(requestBytes),
+        releaseSubject: (requestBytes: Uint8Array<ArrayBuffer>) => engine.releaseSubject(requestBytes),
+        processRequest: (requestBytes: Uint8Array<ArrayBuffer>) =>
+          withCandidate({
+            request: requestBytes,
+            evaluate: () => engine.processRequest(requestBytes),
+            engine,
+            canonicalize: native.canonicalize,
+            enabled: candidateSharingEnabled,
+          }),
+        evaluateClaim: (requestBytes: Uint8Array<ArrayBuffer>) =>
+          withCandidate({
+            request: requestBytes,
+            evaluate: () => engine.evaluateClaim(requestBytes),
+            engine,
+            canonicalize: native.canonicalize,
+            enabled: candidateSharingEnabled,
+          }),
+      };
+      const projectFiles = fileSystem;
+      const vmFileSystem = createBridgeVmFileSystem(fileSystem);
+      const configSession = createGeoSpecConfigSession();
+      // The browser never runs the config's exporters: it applies the data fields and says once when it cannot.
+      readConfig = async () =>
+        configSession(
+          await readGeoSpecConfig({ filesystem: vmFileSystem, projectPath: '', createModuleVm: createEsbuildModuleVm }),
+        );
+
+      runner = createNativeGeoSpecRunner({
+        filesystem: vmFileSystem,
+        createModuleVm: createEsbuildModuleVm,
+        // PERF-OUTPUT-01: the product selects the bounded success evidence (ruling 13).
+        nativeAssertions: {
+          engine: candidateEngine,
+          evidenceProfile: 'bounded',
+          ...(request.maxWorkUnitLimit === undefined ? {} : { maximumWorkUnitLimit: request.maxWorkUnitLimit }),
+        },
+        model: {
+          exporters: [exporter],
+          readSource: async (source) => {
+            if (typeof source !== 'string') {
+              throw new TypeError('Project GeoSpec sources must be rooted filesystem paths or in-memory bytes.');
+            }
+            return projectFiles.readFile(assertRootedPath(source));
+          },
+        },
+      });
+    }
+    const activeSession = {
+      sessionId: request.sessionId,
+      fileSystem,
+      runtimeClient,
+      runner,
+      closeEngine,
+      readConfig,
+      maxRunBudget: request.maxRunBudget,
+      telemetry,
+    };
+    session = activeSession;
+    workerScope.postMessage({ type: 'initialized', requestId: request.requestId, sessionId: request.sessionId });
+  } catch (error) {
+    try {
+      await runner?.close();
+    } finally {
+      try {
+        runtimeClient?.terminate();
+      } finally {
+        try {
+          closeEngine?.();
+        } finally {
+          fileSystem?.dispose();
+        }
+      }
+    }
+    postError(request.requestId, error instanceof Error ? error.message : 'GeoSpec worker failed to initialize.');
+  }
+};
+
+/** The runtime slice kernel facts are read from. */
+export type KernelEvidenceRuntime = Pick<AppRuntimeClient, 'describe' | 'bestRouteFor'>;
+
+/**
+ * The kernel that evaluates a model source and whether it can export STEP
+ * with BRep fidelity without a transcoder. Evidence suggestions use it so a
+ * kernel with no such route, such as a voxel kernel, is never told to load STEP.
+ *
+ * @param runtime - This session's runtime client.
+ * @param sourcePath - The rooted model source a refused claim loaded.
+ * @returns The kernel facts, or `undefined` when the source names no kernel or cannot be described.
+ */
+export const describeKernelEvidence = async (
+  runtime: KernelEvidenceRuntime,
+  sourcePath: string,
+): Promise<GeoSpecKernelEvidence | undefined> => {
+  try {
+    const { kernelId } = await runtime.describe({ source: { path: sourcePath } });
+    if (kernelId === undefined) {
+      return undefined;
+    }
+    const route = runtime.bestRouteFor('step', { kernelId });
+    return { kernelId, directBrepStep: route?.transcoderId === undefined && route?.fidelity === 'brep' };
+  } catch {
+    // Kernel facts only sharpen a suggestion; without them the refusal keeps its generic wording.
+    return undefined;
+  }
+};
+
+/**
+ * FR-16: one run-level `verify` entry per settled run, after its result. Test names, specs and values never leave, and
+ * telemetry never changes a run's answer.
+ *
+ * @param activeSession - The run's session.
+ * @param output - The run's output.
+ * @param input - The run's wall time and whether it named its own work-unit limit.
+ */
+const forwardVerifyEntry = (
+  activeSession: WorkerSession,
+  output: Parameters<typeof geoSpecVerifyEntry>[0],
+  input: Parameters<typeof geoSpecVerifyEntry>[1],
+): void => {
+  if (activeSession.telemetry === undefined) {
+    return;
+  }
+  try {
+    activeSession.telemetry.forward(geoSpecVerifyEntry(output, input, activeSession.telemetry.context));
+  } catch {
+    /* Fire-and-forget. */
+  }
+};
+
+const runGeoSpecInWorker = async (request: GeoSpecRunnerWorkerRunRequest): Promise<void> => {
+  const activeSession = session;
+  if (!activeSession || activeSession.sessionId !== request.sessionId) {
+    postError(request.requestId, 'GeoSpec worker session is not initialized.');
+    return;
+  }
+
+  foreignCandidates = request.candidates ?? [];
+  candidateSharingEnabled = request.candidateSharingEnabled === true;
+  locallyEstablishedCandidates = [];
+
+  try {
+    const config = await activeSession.readConfig();
+    const testTimeout = request.args.testTimeout ?? config.defaults?.testTimeout;
+    // The client refuses an input over the host's maximum; a project config's default is only known here.
+    const overLimit =
+      activeSession.maxRunBudget === undefined
+        ? undefined
+        : geoSpecHostLimitProblem(
+            { testTimeout },
+            { maxRunBudget: activeSession.maxRunBudget, maxWorkUnitLimit: Number.POSITIVE_INFINITY },
+          );
+    if (overLimit !== undefined) {
+      workerScope.postMessage({
+        type: 'result',
+        requestId: request.requestId,
+        result: { success: false, errorCode: rpcClientErrorCode.validationError, message: overLimit },
+      });
+      return;
+    }
+    const startedAt = performance.now();
+    const output = await runGeoSpecTests({
+      discovery: createDiscoveryFileSystem(activeSession.fileSystem),
+      runner: activeSession.runner,
+      args: request.args,
+      config,
+      onProgress: (event) => {
+        workerScope.postMessage({
+          type: 'progress',
+          requestId: request.requestId,
+          event,
+          ...(event.type === 'run-start' && testTimeout !== undefined ? { testTimeout } : {}),
+        });
+      },
+      kernelEvidence: async (sourcePath) => describeKernelEvidence(activeSession.runtimeClient, sourcePath),
+    });
+    workerScope.postMessage({
+      type: 'result',
+      requestId: request.requestId,
+      result: { success: true, ...output },
+      candidates: locallyEstablishedCandidates,
+    });
+    forwardVerifyEntry(activeSession, output, {
+      duration: performance.now() - startedAt,
+      workUnitLimitArgument: request.args.workUnitLimit !== undefined,
+    });
+  } catch (error) {
+    postError(request.requestId, error instanceof Error ? error.message : 'GeoSpec worker failed to run tests.');
+  } finally {
+    foreignCandidates = [];
+    locallyEstablishedCandidates = [];
+  }
+};
+
+const processRunQueue = async (): Promise<void> => {
+  if (processingQueue || closing) {
+    return;
+  }
+  processingQueue = true;
+  try {
+    while (runQueue.length > 0) {
+      activeRun = runQueue.shift();
+      if (!activeRun) {
+        continue;
+      }
+      // oxlint-disable-next-line no-await-in-loop -- GeoSpec CAD runs are intentionally serialized for deterministic runtime pressure.
+      await runGeoSpecInWorker(activeRun.request);
+      activeRun = undefined;
+    }
+  } finally {
+    activeRun = undefined;
+    processingQueue = false;
+  }
+};
+
+const abortRun = (message: Extract<GeoSpecRunnerWorkerRequest, { type: 'abort' }>): void => {
+  if (activeRun?.request.requestId === message.targetRequestId && session?.sessionId === message.sessionId) {
+    session.runner.abort(message.reason);
+    return;
+  }
+  const queuedIndex = runQueue.findIndex((entry) => entry.request.requestId === message.targetRequestId);
+  if (queuedIndex === -1) {
+    return;
+  }
+  const [queued] = runQueue.splice(queuedIndex, 1);
+  if (queued) {
+    postError(queued.request.requestId, message.reason ?? 'GeoSpec run aborted.');
+  }
+};
+
+const closeWorker = async (request: Extract<GeoSpecRunnerWorkerRequest, { type: 'close' }>): Promise<void> => {
+  closing = true;
+  if (activeRun && session) {
+    session.runner.abort('GeoSpec worker closed.');
+  }
+  for (const queued of runQueue.splice(0)) {
+    postError(queued.request.requestId, 'GeoSpec worker closed.');
+  }
+  await disposeSession();
+  workerScope.postMessage({ type: 'closed', requestId: request.requestId, sessionId: request.sessionId });
+  workerScope.close();
+};
+
+/**
+ * Handle one request from the worker client. The entry buffers requests that
+ * arrive while this module is still loading and replays them here in order.
+ *
+ * @public
+ */
+export const handleGeoSpecRunnerRequest = (message: GeoSpecRunnerWorkerRequest): void => {
+  if (message.type === 'initialize') {
+    void initializeGeoSpecWorker(message);
+    return;
+  }
+  if (message.type === 'abort') {
+    abortRun(message);
+    return;
+  }
+  if (message.type === 'close') {
+    void closeWorker(message);
+    return;
+  }
+  runQueue.push({ request: message });
+  void processRunQueue();
+};

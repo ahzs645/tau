@@ -1,0 +1,260 @@
+import { XIcon } from 'lucide-react';
+import { createContext, useContext, useMemo, useRef, useState } from 'react';
+import type { ComponentProps, MouseEventHandler, ReactNode } from 'react';
+import { Badge } from '@taucad/ui/components/badge';
+import type { CommandGroup } from '@taucad/ui/components/command';
+import { Command, CommandEmpty, CommandItem, CommandList } from '@taucad/ui/components/command';
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@taucad/ui/components/popover';
+import { cn } from '@taucad/ui/utils/cn';
+
+type TagsContextType = {
+  value: string;
+  setValue: (value: string) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  tags: string[];
+  onTagsChange: (tags: string[]) => void;
+};
+const TagsContext = createContext<TagsContextType | undefined>(undefined);
+const useTagsContext = (): TagsContextType => {
+  const context = useContext(TagsContext);
+  if (!context) {
+    throw new Error('useTagsContext must be used within a TagsProvider');
+  }
+
+  return context;
+};
+
+export type TagsProps = {
+  readonly tags: string[];
+  readonly onTagsChange: (tags: string[]) => void;
+  readonly isOpen?: boolean;
+  readonly onOpenChange?: (open: boolean) => void;
+  readonly children?: ReactNode;
+  readonly className?: string;
+};
+export function Tags({
+  tags,
+  onTagsChange,
+  isOpen: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
+  children,
+  className,
+}: TagsProps): React.JSX.Element {
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const [value, setValue] = useState('');
+  const open = controlledOpen ?? uncontrolledOpen;
+  const onOpenChange = controlledOnOpenChange ?? setUncontrolledOpen;
+
+  const contextValue = useMemo(
+    () => ({ value, setValue, open, onOpenChange, tags, onTagsChange }),
+    [value, open, onOpenChange, tags, onTagsChange],
+  );
+
+  return (
+    <TagsContext.Provider value={contextValue}>
+      <Popover open={open} onOpenChange={onOpenChange}>
+        <div className={cn('relative w-full', className)}>{children}</div>
+      </Popover>
+    </TagsContext.Provider>
+  );
+}
+
+export type TagsTriggerProps = {
+  readonly id?: string;
+  readonly placeholder?: string;
+  readonly className?: string;
+  readonly inputAriaLabel?: string;
+  /** Ids of the helper or error text that describes the input. */
+  readonly inputAriaDescribedBy?: string;
+  // oxlint-disable-next-line react-js/boolean-prop-naming -- mirrors native input prop.
+  readonly disabled?: boolean;
+};
+export function TagsTrigger({
+  id,
+  className,
+  placeholder = 'Type to add tags…',
+  inputAriaLabel,
+  inputAriaDescribedBy,
+  disabled,
+}: TagsTriggerProps): React.JSX.Element {
+  const { tags, onTagsChange, value, setValue, onOpenChange } = useTagsContext();
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleRemoveTag = (tagToRemove: string): void => {
+    if (disabled) {
+      return;
+    }
+
+    onTagsChange(tags.filter((tag) => tag !== tagToRemove));
+  };
+
+  const commitCurrentValue = (): void => {
+    if (disabled) {
+      return;
+    }
+
+    const normalizedTag = value.trim().toLowerCase();
+    if (!normalizedTag) {
+      return;
+    }
+
+    if (!tags.includes(normalizedTag)) {
+      onTagsChange([...tags, normalizedTag]);
+    }
+
+    setValue('');
+  };
+
+  const handleKeyDown: React.KeyboardEventHandler<HTMLInputElement> = (event) => {
+    if (disabled) {
+      return;
+    }
+
+    if (event.key === 'Enter' && value.trim()) {
+      event.preventDefault();
+      commitCurrentValue();
+    } else if (event.key === 'Backspace' && !value && tags.length > 0) {
+      // Remove last tag on backspace when input is empty
+      event.preventDefault();
+      onTagsChange(tags.slice(0, -1));
+    }
+  };
+
+  const handleContainerClick: MouseEventHandler<HTMLDivElement> = (event) => {
+    if (disabled) {
+      return;
+    }
+
+    // Don't focus if clicking on a tag remove button
+    if ((event.target as HTMLElement).closest('[data-tag-remove]')) {
+      return;
+    }
+
+    inputRef.current?.focus();
+    // The input's PopoverTrigger already toggles for clicks on the input itself.
+    if (event.target !== inputRef.current) {
+      onOpenChange(true);
+    }
+  };
+
+  return (
+    <PopoverAnchor asChild>
+      <div
+        className={cn(
+          'group/tags-trigger flex h-auto min-h-9 w-full cursor-text flex-wrap items-center gap-1 rounded-md border border-input bg-background p-2 text-sm shadow-xs transition-[box-shadow] outline-none dark:bg-input/30',
+          'has-[[data-slot=input-tags-input]:focus-visible]:focus-outline',
+          disabled && 'cursor-not-allowed opacity-50',
+          className,
+        )}
+        onClick={handleContainerClick}
+      >
+        {tags.map((tag) => (
+          <TagsValue
+            key={tag}
+            /* A disabled field shows its tags without Remove buttons that look usable but do nothing. */
+            onRemove={
+              disabled
+                ? undefined
+                : () => {
+                    handleRemoveTag(tag);
+                  }
+            }
+          >
+            {tag}
+          </TagsValue>
+        ))}
+        <PopoverTrigger asChild>
+          <input
+            // oxlint-disable-next-line jsx-a11y/role-has-required-aria-props -- PopoverTrigger supplies aria-expanded and aria-controls to this slotted input.
+            role='combobox'
+            ref={inputRef}
+            data-slot='input-tags-input'
+            id={id}
+            type='text'
+            aria-label={inputAriaLabel ?? placeholder}
+            aria-describedby={inputAriaDescribedBy}
+            value={value}
+            disabled={disabled}
+            placeholder={tags.length === 0 ? placeholder : ''}
+            className='w-0 flex-1 bg-transparent px-0.5 py-px text-sm outline-none group-focus-within/tags-trigger:w-30 placeholder:text-muted-foreground pointer-coarse:text-base'
+            onChange={(event) => {
+              setValue(event.target.value);
+            }}
+            onKeyDown={handleKeyDown}
+            onBlur={commitCurrentValue}
+          />
+        </PopoverTrigger>
+      </div>
+    </PopoverAnchor>
+  );
+}
+
+export type TagsValueProps = ComponentProps<typeof Badge>;
+export function TagsValue({
+  className,
+  children,
+  onRemove,
+  ...props
+}: TagsValueProps & { readonly onRemove?: () => void; readonly children?: string }): React.JSX.Element {
+  const handleRemove: MouseEventHandler<HTMLButtonElement> = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (onRemove) {
+      onRemove();
+    }
+  };
+
+  const handlePointerDown: MouseEventHandler<HTMLButtonElement> = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  return (
+    <Badge variant='secondary' className={cn('flex items-center gap-2 pr-0.5', className)} {...props}>
+      {children}
+      {onRemove ? (
+        <button
+          type='button'
+          data-tag-remove
+          aria-label={`Remove ${children}`}
+          /* 16px for a mouse; the 24px floor under a coarse pointer, icon centred (I3). */
+          className='size-auto rounded-full outline-none hover:bg-primary-foreground/30 focus-visible:focus-outline pointer-coarse:flex pointer-coarse:size-6 pointer-coarse:items-center pointer-coarse:justify-center'
+          onClick={handleRemove}
+          onPointerDown={handlePointerDown}
+        >
+          <XIcon className='size-4' />
+        </button>
+      ) : null}
+    </Badge>
+  );
+}
+
+export type TagsContentProps = ComponentProps<typeof PopoverContent>;
+export function TagsContent({ className, children, ...props }: TagsContentProps): React.JSX.Element {
+  const { value, setValue } = useTagsContext();
+  return (
+    <PopoverContent className={cn('w-75 p-0', className)} align='start' {...props}>
+      <Command value={value} onValueChange={setValue}>
+        {children}
+      </Command>
+    </PopoverContent>
+  );
+}
+
+export type TagsListProps = ComponentProps<typeof CommandList>;
+export function TagsList({ className, ...props }: TagsListProps): React.JSX.Element {
+  return <CommandList className={cn('max-h-50', className)} {...props} />;
+}
+
+export type TagsEmptyProps = ComponentProps<typeof CommandEmpty>;
+export function TagsEmpty({ children, className, ...props }: TagsEmptyProps): React.JSX.Element {
+  return <CommandEmpty {...props}>{children ?? 'No tags found.'}</CommandEmpty>;
+}
+
+export type TagsGroupProps = ComponentProps<typeof CommandGroup>;
+
+export type TagsItemProps = ComponentProps<typeof CommandItem>;
+export function TagsItem({ className, ...props }: TagsItemProps): React.JSX.Element {
+  return <CommandItem className={cn('items-center justify-between', className)} {...props} />;
+}

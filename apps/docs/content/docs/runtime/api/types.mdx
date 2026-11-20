@@ -1,0 +1,193 @@
+---
+title: Core Types
+description: Operation results, artifacts, kernel authoring contracts, issues, and capability types.
+docType: reference
+icon: lucide:file-type
+---
+
+# Core Types
+
+Operation results and plugin-author contracts share issues and artifacts.
+
+## Result Types
+
+`KernelResult<T>` discriminates success and failure with `success`.
+
+<auto-type-table path='./props/types.ts' name='KernelSuccessResult' />
+
+<auto-type-table path='./props/types.ts' name='KernelErrorResult' />
+
+## Issue and Location Types
+
+<auto-type-table path='./props/types.ts' name='KernelIssue' />
+
+<auto-type-table path='./props/types.ts' name='KernelStackFrame' />
+
+<auto-type-table path='./props/types.ts' name='ErrorLocation' />
+
+`KernelIssueType` (`'compilation' | 'runtime' | 'kernel' | 'connection' | 'unknown'`) and `IssueSeverity` (`'error' | 'warning' | 'info'`) classify each issue. `kernelIssueCodeValues` enumerates the stable codes; `isKernelIssueCode` guards one.
+
+A resource-bound refusal carries `ResourceLimitDetails` in `details`: `limit`, `unit`, `maximum`, `demand` (unknown is not zero) and `origin`.
+
+## Document Results
+
+<auto-type-table path='./props/types.ts' name='Description' />
+
+<auto-type-table path='./props/types.ts' name='Evaluation' />
+
+<auto-type-table path='./props/types.ts' name='Rendering' />
+
+<auto-type-table path='./props/types.ts' name='ExportResult' />
+
+<auto-type-table path='./props/types.ts' name='ViewOffer' />
+
+<auto-type-table path='./props/types.ts' name='ExportOffer' />
+
+Document results carry `issues`. Successful evaluations offer ordered view and export IDs, possibly no views. A rendering correlates `requestId` and `evaluationId`; its `artifact` carries MIME type, content, and optional units. `hash` identifies its projected artifact. Successful exports carry a nonempty file tuple. Optional `sourceRevision` records evaluated source provenance.
+
+`DocumentStatus` and `ViewStatus` describe separate owners. Their events and supersession outcomes are in [Client API](./client).
+
+## Dependency Types
+
+`Dependency` records inputs to cache identity and change detection:
+
+<auto-type-table path='./props/types.ts' name='FileDependency' />
+
+<auto-type-table path='./props/types.ts' name='MiddlewareDependency' />
+
+<auto-type-table path='./props/types.ts' name='FrameworkDependency' />
+
+<auto-type-table path='./props/types.ts' name='OptionDependency' />
+
+<auto-type-table path='./props/types.ts' name='ParameterDependency' />
+
+<auto-type-table path='./props/types.ts' name='AssetDependency' />
+
+<auto-type-table path='./props/types.ts' name='BundleDependency' />
+
+`FileDependency.path` is a canonical root-relative [runtime path](../concepts/path-namespaces), shared by filesystem and cache identity.
+
+## Filesystem Types
+
+<auto-type-table path='./props/types.ts' name='RuntimeFileSystemBase' />
+
+<auto-type-table path='./props/types.ts' name='KernelFileSystem' />
+
+<auto-type-table path='./props/types.ts' name='RuntimeFileSystem' />
+
+## Kernel Types
+
+<auto-type-table path='./props/types.ts' name='DescribeInput' />
+
+<auto-type-table path='./props/types.ts' name='DescribeResult' />
+
+<auto-type-table path='./props/types.ts' name='ResolveInput' />
+
+<auto-type-table path='./props/types.ts' name='ResolveOutput' />
+
+<auto-type-table path='./props/types.ts' name='KernelDefinition' />
+
+<auto-type-table path='./props/types.ts' name='KernelServices' />
+
+<auto-type-table path='./props/types.ts' name='KernelExecuteOptions' />
+
+<auto-type-table path='./props/types.ts' name='RealmResources' />
+
+<auto-type-table path='./props/types.ts' name='RealmGroup' />
+
+<auto-type-table path='./props/types.ts' name='RealmHoldInput' />
+
+<auto-type-table path='./props/types.ts' name='RealmHold' />
+
+<auto-type-table path='./props/types.ts' name='ViewDeclaration' />
+
+<auto-type-table path='./props/types.ts' name='ExportDeclaration' />
+
+<auto-type-table path='./props/types.ts' name='ViewInstance' />
+
+`evaluate` returns an opaque handle plus ordered view and export IDs; the first is the default. `render` selects one view and optional instance without re-evaluating.
+
+<auto-type-table path='./props/types.ts' name='EvaluateInput' />
+
+<auto-type-table path='./props/types.ts' name='EvaluateOutput' />
+
+<auto-type-table path='./props/types.ts' name='RenderInput' />
+
+<auto-type-table path='./props/types.ts' name='RenderOutput' />
+
+<auto-type-table path='./props/types.ts' name='TessellationReport' />
+
+<auto-type-table path='./props/types.ts' name='KernelBuildReport' />
+
+<auto-type-table path='./props/types.ts' name='BuildReport' />
+
+<auto-type-table path='./props/types.ts' name='OperationReuse' />
+
+<auto-type-table path='./props/types.ts' name='OperationCost' />
+
+<auto-type-table path='./props/types.ts' name='ExportInput' />
+
+<auto-type-table path='./props/types.ts' name='ExportOutput' />
+
+## Bundler Types
+
+<auto-type-table path='./props/types.ts' name='BundlerDefinition' />
+
+<auto-type-table path='./props/types.ts' name='KernelBundler' />
+
+<auto-type-table path='./props/types.ts' name='BundleResult' />
+
+<auto-type-table path='./props/types.ts' name='BuiltinModule' />
+
+## Tracer Types
+
+<auto-type-table path='./props/types.ts' name='TelemetryEntry' />
+
+<auto-type-table path='./props/types.ts' name='SpanHandle' />
+
+<auto-type-table path='./props/types.ts' name='RuntimeSpanTracer' />
+
+Node hosts persist batches through `openTelemetryFileSink()`, a non-blocking `TelemetryExporter`; `telemetryDirectory()` and `telemetryFormat()` (a `TelemetryFileFormat`) read `TAU_TELEMETRY_DIR` and `TAU_TELEMETRY_FORMAT`. Spans arrive after their operation's reply.
+
+## Artifacts and Plugin Results
+
+<auto-type-table path='./props/types.ts' name='Artifact' />
+
+<auto-type-table path='./props/types.ts' name='EvaluateResult' />
+
+<auto-type-table path='./props/types.ts' name='RenderResult' />
+
+<auto-type-table path='./props/types.ts' name='KernelExportResult' />
+
+<auto-type-table path='./props/types.ts' name='KnownArtifact' />
+
+`Artifact` accepts open MIME types with text or bytes. `asKnownArtifact` narrows GLB and SVG; others remain valid. `ExportOutput` carries a nonempty ordered `ExportFile` tuple; `RenderOutput` carries one artifact whose MIME type matches the selected declaration.
+
+## Conversion Types
+
+<auto-type-table path='./props/types.ts' name='TranscodeInput' />
+
+<auto-type-table path='./props/types.ts' name='TranscodeResult' />
+
+`TranscoderServices` supplies a logger, tracer and cancellation signal. `MediaType` names artifact MIME types; `JSONSchema7` carries serializable option metadata.
+
+## Content and Capability Types
+
+Framework content requirements stay separate from plugin option schemas. A route advertises supported content and an `ExportFidelity` (`'brep' | 'mesh'`) used for ranking.
+
+<auto-type-table path='./props/types.ts' name='RuntimeContentInput' />
+
+<auto-type-table path='./props/types.ts' name='ContentCapability' />
+
+<auto-type-table path='./props/types.ts' name='ExportRoute' />
+
+<auto-type-table path='./props/types.ts' name='RenderCapability' />
+
+<auto-type-table path='./props/types.ts' name='CapabilitiesManifest' />
+
+## Related
+
+- [Handle Errors](../guides/error-handling)
+- [Live Rendering](../guides/live-rendering)
+- [API: Client](./client)
+- [API: Filesystem](./filesystem)

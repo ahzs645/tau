@@ -1,0 +1,262 @@
+import { CheckCircle, XCircle, AlertTriangle, Info } from 'lucide-react';
+import type { ToolInvocation } from '@taucad/chat';
+import { toolName } from '@taucad/chat/constants';
+import type { IssueSeverity, KernelIssue } from '@taucad/runtime';
+import {
+  ChatToolCard,
+  ChatToolCardHeader,
+  ChatToolCardIcon,
+  ChatToolCardTitle,
+  ChatToolCardContent,
+  ChatToolCardList,
+  ChatToolCardListItem,
+} from '@taucad/chat-ui/components/chat-tool-card';
+import { ChatToolDescription } from '@taucad/chat-ui/components/chat-tool-text';
+import { ChatToolLabel } from '@taucad/chat-ui/components/chat-tool-label';
+import { FileLink } from '@taucad/files-ui/components/files/file-link';
+import { ViewerLink } from '@taucad/files-ui/components/files/viewer-link';
+import { MarkdownViewer } from '@taucad/editor-ui/components/markdown/markdown-viewer';
+import { ChatToolError } from '#components/chat/chat-tool-error.js';
+
+/**
+ * Maps issue severity to appropriate icon component.
+ */
+function getSeverityIcon(severity: IssueSeverity): typeof AlertTriangle {
+  switch (severity) {
+    case 'error': {
+      return XCircle;
+    }
+
+    case 'warning': {
+      return AlertTriangle;
+    }
+
+    case 'info': {
+      return Info;
+    }
+  }
+}
+
+/**
+ * Maps issue severity to appropriate icon color class.
+ *
+ * Only `error` is colored (red) so the eye is drawn to real failures.
+ * Warnings and info stay muted — the icon shape (AlertTriangle / Info) is
+ * enough to convey severity without competing with destructive states.
+ */
+function getSeverityIconClass(severity: IssueSeverity): string {
+  switch (severity) {
+    case 'error': {
+      return 'text-feature';
+    }
+
+    case 'warning':
+    case 'info': {
+      return 'text-muted-foreground';
+    }
+  }
+}
+
+type IssueCounts = {
+  readonly errorCount: number;
+  readonly warningCount: number;
+  readonly infoCount: number;
+  readonly hasErrors: boolean;
+};
+
+/**
+ * Counts kernel issues by severity. Title copy is composed at the call site so
+ * the filename can render as an inline {@link ViewerLink}.
+ */
+function getIssueCounts(issues: KernelIssue[]): IssueCounts {
+  let errorCount = 0;
+  let warningCount = 0;
+  let infoCount = 0;
+
+  for (const issue of issues) {
+    if (issue.severity === 'error') {
+      errorCount++;
+    } else if (issue.severity === 'warning') {
+      warningCount++;
+    } else {
+      infoCount++;
+    }
+  }
+
+  return {
+    errorCount,
+    warningCount,
+    infoCount,
+    hasErrors: errorCount > 0,
+  };
+}
+
+function FilenameLink({ targetFile }: { readonly targetFile: string }): React.JSX.Element {
+  return <ViewerLink path={targetFile}>{targetFile}</ViewerLink>;
+}
+
+export function ChatMessageToolGetKernelResult({
+  part,
+}: {
+  readonly part: ToolInvocation<typeof toolName.evaluateModel>;
+}): React.JSX.Element {
+  switch (part.state) {
+    case 'input-streaming': {
+      const targetFile = part.input?.targetFile;
+
+      return (
+        <ChatToolCard variant='minimal' status='loading' isCollapsible={false}>
+          <ChatToolCardHeader>
+            <ChatToolCardIcon icon={CheckCircle} />
+            <ChatToolCardTitle>
+              <ChatToolLabel verb='Rendering'>
+                {targetFile ? (
+                  <ChatToolDescription>
+                    <FilenameLink targetFile={targetFile} />
+                    ...
+                  </ChatToolDescription>
+                ) : (
+                  <ChatToolDescription>...</ChatToolDescription>
+                )}
+              </ChatToolLabel>
+            </ChatToolCardTitle>
+          </ChatToolCardHeader>
+        </ChatToolCard>
+      );
+    }
+
+    case 'input-available': {
+      const { targetFile } = part.input;
+
+      return (
+        <ChatToolCard variant='minimal' status='loading' isCollapsible={false}>
+          <ChatToolCardHeader>
+            <ChatToolCardIcon icon={CheckCircle} />
+            <ChatToolCardTitle>
+              <ChatToolLabel verb='Rendering'>
+                <ChatToolDescription>
+                  <FilenameLink targetFile={targetFile} />
+                  ...
+                </ChatToolDescription>
+              </ChatToolLabel>
+            </ChatToolCardTitle>
+          </ChatToolCardHeader>
+        </ChatToolCard>
+      );
+    }
+
+    case 'output-available': {
+      const { output } = part;
+      const { targetFile } = part.input;
+      const { status, kernelIssues = [] } = output;
+
+      const hasIssues = kernelIssues.length > 0;
+
+      // Without diagnostics there is nothing to disclose, regardless of render status.
+      if (!hasIssues) {
+        return (
+          <ChatToolCard variant='minimal' status={status === 'error' ? 'error' : 'ready'} isCollapsible={false}>
+            <ChatToolCardHeader>
+              <ChatToolCardIcon
+                icon={status === 'error' ? XCircle : CheckCircle}
+                tone={status === 'error' ? 'error' : undefined}
+              />
+              <ChatToolCardTitle>
+                <ChatToolLabel verb={status === 'error' ? 'Failed to render' : 'Rendered'}>
+                  <ChatToolDescription>
+                    <FilenameLink targetFile={targetFile} />
+                  </ChatToolDescription>
+                </ChatToolLabel>
+              </ChatToolCardTitle>
+            </ChatToolCardHeader>
+          </ChatToolCard>
+        );
+      }
+
+      // Has issues - determine severity for styling
+      const counts = getIssueCounts(kernelIssues);
+      const { hasErrors, warningCount } = counts;
+      const headerIcon = hasErrors ? XCircle : AlertTriangle;
+      // Only failures get a colored leading icon. Warnings render the
+      // AlertTriangle shape (which is enough to convey severity) without a
+      // tone so the success/warning headers don't visually compete with real
+      // failures.
+      const headerIconTone = hasErrors ? 'error' : undefined;
+      const borderClass = hasErrors ? 'border-feature/30' : 'border-warning/30';
+      const cardStatus = hasErrors ? 'error' : 'warning';
+
+      const titleLabel = ((): React.ReactNode => {
+        if (hasErrors) {
+          return (
+            <ChatToolLabel verb='Failed to render'>
+              <ChatToolDescription>
+                <FilenameLink targetFile={targetFile} />
+              </ChatToolDescription>
+            </ChatToolLabel>
+          );
+        }
+
+        const warningSuffix = `with ${warningCount} ${warningCount === 1 ? 'warning' : 'warnings'}`;
+        return (
+          <ChatToolLabel verb='Rendered'>
+            <ChatToolDescription>
+              <FilenameLink targetFile={targetFile} /> {warningSuffix}
+            </ChatToolDescription>
+          </ChatToolLabel>
+        );
+      })();
+
+      return (
+        <ChatToolCard variant='minimal' status={cardStatus} isDefaultOpen={false}>
+          <ChatToolCardHeader>
+            <ChatToolCardIcon icon={headerIcon} tone={headerIconTone} />
+            <ChatToolCardTitle>{titleLabel}</ChatToolCardTitle>
+          </ChatToolCardHeader>
+          <ChatToolCardContent>
+            <ChatToolCardList maxHeight='max-h-48' className={borderClass}>
+              {kernelIssues.map((issue, index) => {
+                const { location, severity } = issue;
+                const key = `${location?.startLineNumber ?? index}-${issue.message}`;
+                const issueIcon = getSeverityIcon(severity);
+                const issueIconClass = getSeverityIconClass(severity);
+
+                return (
+                  <ChatToolCardListItem key={key} icon={issueIcon} iconClassName={issueIconClass}>
+                    <span className='flex min-w-0 flex-1 flex-col items-start gap-0.5 @xs:flex-row @xs:gap-1'>
+                      {location ? (
+                        <FileLink
+                          asChild
+                          path={location.fileName}
+                          lineNumber={location.startLineNumber}
+                          column={location.startColumn}
+                          className='min-w-0 truncate font-mono text-xs text-muted-foreground/70 hover:text-foreground'
+                        >
+                          <span>
+                            {location.fileName}:{location.startLineNumber}:{location.startColumn}
+                          </span>
+                        </FileLink>
+                      ) : undefined}
+                      <MarkdownViewer className='inline w-auto min-w-0 font-mono text-xs wrap-break-word text-inherit'>
+                        {issue.message}
+                      </MarkdownViewer>
+                    </span>
+                  </ChatToolCardListItem>
+                );
+              })}
+            </ChatToolCardList>
+          </ChatToolCardContent>
+        </ChatToolCard>
+      );
+    }
+
+    case 'output-error': {
+      return <ChatToolError errorText={part.errorText} icon={XCircle} noun='kernel render' />;
+    }
+
+    case 'approval-requested':
+    case 'approval-responded':
+    case 'output-denied': {
+      throw new Error(`Unexpected ${toolName.evaluateModel} state: ${part.state}`);
+    }
+  }
+}

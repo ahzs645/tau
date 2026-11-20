@@ -1,0 +1,562 @@
+import { setRevisionSessionUser } from '@taucad/revisions-ui/lib/revision-actor';
+import { mock } from 'vitest-mock-extended';
+// @vitest-environment jsdom
+import type { ReactNode } from 'react';
+import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RemoteFacet, RevisionStatusProjection } from '@taucad/revisions';
+
+/* eslint-disable-next-line @typescript-eslint/naming-convention -- `window.ENV`'s keys are the deployment's own environment variable names. */
+vi.mock('#environment.config.js', () => ({ ENV: { TAU_API_URL: 'https://api.test' } }));
+/* The account behind the session hook, scripted per row. */
+const { account } = vi.hoisted(() => ({
+  account: {
+    auth: 'authed' as 'authed' | 'anonymous' | 'indeterminate',
+    isResolved: true,
+    canSyncFiles: true,
+    basis: 'pinned' as 'pinned' | 'confirmed' | 'remembered' | 'absent',
+  },
+}));
+vi.mock('#hooks/use-resolved-auth.js', () => ({ useResolvedAuth: () => account.auth }));
+vi.mock('#cloud/commercial-features.js', () => ({
+  useCommercialFeatures: () =>
+    account.isResolved
+      ? { isResolved: true, basis: account.basis, canSyncFiles: account.canSyncFiles }
+      : { isResolved: false, wait: 'checking', retry: () => undefined },
+}));
+const { mockToast } = vi.hoisted(() => ({
+  mockToast: vi.fn<
+    (
+      message: string,
+      options: {
+        description?: string;
+        action: { label: string; onClick: () => void };
+        onDismiss?: () => void;
+        onAutoClose?: () => void;
+      },
+    ) => void
+  >(),
+}));
+vi.mock('@taucad/ui/components/sonner', () => ({ toast: mockToast }));
+
+const storageValues = new Map<string, string>();
+vi.stubGlobal(
+  'localStorage',
+  mock<Storage>({
+    getItem: (key) => storageValues.get(key) ?? null,
+    setItem: (key, value) => {
+      storageValues.set(key, value);
+    },
+    removeItem: (key) => {
+      storageValues.delete(key);
+    },
+    clear: () => {
+      storageValues.clear();
+    },
+  }),
+);
+
+const { canOpenCloudProject, tauCloudIntent } = await import('#lib/tau-cloud-intent.js');
+const {
+  backupByDefaultNotice,
+  cloudOpenContinuationTestApi,
+  fetchCloudProjects,
+  materializeOnSignIn,
+  materializedCloudProjects,
+  nextTauCloudStep,
+  useTauCloudEligibility,
+  useTauCloudIntent,
+  useTauCloudIntentConnection,
+} = await import('#hooks/use-cloud-projects.js');
+type Eligibility = Parameters<typeof nextTauCloudStep>[1];
+type TauCloudIntent = NonNullable<Parameters<typeof nextTauCloudStep>[0]>;
+
+const remote = (kind: RemoteFacet['kind'], phase: RemoteFacet['phase'] = 'none'): RemoteFacet => ({
+  kind,
+  url: undefined,
+  phase,
+  storage: undefined,
+  overQuota: [],
+  quota: undefined,
+  error: undefined,
+  reason: undefined,
+  fetchOnly: false,
+  provider: undefined,
+  repositoryId: undefined,
+});
+
+/* Only the two fields the decision reads; the rest of the projection is not its business. */
+const status = (
+  headRevisionId: string | undefined,
+  kind: RemoteFacet['kind'] = 'none',
+  phase: RemoteFacet['phase'] = 'none',
+): RevisionStatusProjection => {
+  const read: Pick<RevisionStatusProjection, 'headRevisionId' | 'remote' | 'sync'> = {
+    headRevisionId,
+    remote: remote(kind, phase),
+    sync: {
+      state: 'checking',
+      pendingCount: 0,
+      online: true,
+      conflictRef: undefined,
+      error: undefined,
+      reason: undefined,
+      arrived: undefined,
+      hasAppliedRemote: false,
+    },
+  };
+  return read as RevisionStatusProjection;
+};
+
+const entitled: Eligibility = { auth: 'authed', isResolved: true, canSyncFiles: true };
+/* W8: an account whose plan cannot sync (an Enterprise override). */
+const notEntitled: Eligibility = { auth: 'authed', isResolved: true, canSyncFiles: false };
+
+describe('nextTauCloudStep', () => {
+  // ── D19: backup by default, announced before commitment ──────────────────
+  it('should announce backup by default before anything else, even before the first revision', () => {
+    expect(nextTauCloudStep('default', entitled, status(undefined))).toBe('announce');
+    expect(nextTauCloudStep('default', entitled, status('rev-1'))).toBe('announce');
+  });
+
+  it('should connect a noticed project on an entitled account once its first revision exists', () => {
+    expect(nextTauCloudStep('noticed', entitled, status('rev-1'))).toBe('connect');
+  });
+
+  it('should wait for the first revision before anything leaves the device', () => {
+    expect(nextTauCloudStep('noticed', entitled, status(undefined))).toBe('wait');
+  });
+
+  it('should forget the intent for an account whose plan cannot sync', () => {
+    expect(nextTauCloudStep('default', notEntitled, status('rev-1'))).toBe('forget');
+    expect(nextTauCloudStep('noticed', notEntitled, status('rev-1'))).toBe('forget');
+  });
+
+  it('should wait for a signed-out account, so the project backs up once its person signs in', () => {
+    expect(nextTauCloudStep('default', { ...entitled, auth: 'anonymous' }, status('rev-1'))).toBe('wait');
+    expect(nextTauCloudStep('noticed', { ...entitled, auth: 'anonymous' }, status('rev-1'))).toBe('wait');
+  });
+
+  it('should wait while the session or the plan is still unknown', () => {
+    expect(nextTauCloudStep('default', { ...entitled, auth: 'indeterminate' }, status('rev-1'))).toBe('wait');
+    expect(nextTauCloudStep('default', { ...entitled, isResolved: false }, status('rev-1'))).toBe('wait');
+  });
+
+  it('should forget the intent once a remote was chosen by hand', () => {
+    expect(nextTauCloudStep('default', entitled, status('rev-1', 'git'))).toBe('forget');
+  });
+
+  it('should wait before the revision root has answered', () => {
+    expect(nextTauCloudStep('default', entitled, undefined)).toBe('wait');
+  });
+
+  it('should never connect again once the default connection is made', () => {
+    expect(nextTauCloudStep('connected', entitled, status('rev-1'))).toBe('wait');
+    expect(nextTauCloudStep(undefined, entitled, status('rev-1'))).toBe('wait');
+  });
+
+  // ── D20: materialized projects ───────────────────────────────────────────
+  it('should connect a materialized project on its first open, before any revision', () => {
+    expect(nextTauCloudStep('open', notEntitled, status(undefined))).toBe('connect');
+  });
+
+  it('should keep a materialized project owed until a person is signed in', () => {
+    expect(nextTauCloudStep('open', { ...entitled, auth: 'anonymous' }, status(undefined))).toBe('wait');
+    expect(nextTauCloudStep('open', { ...entitled, auth: 'indeterminate' }, status(undefined))).toBe('wait');
+  });
+
+  it('should keep a materialized project owed until its authored manifest is reconciled', () => {
+    expect(nextTauCloudStep('open', entitled, status(undefined, 'tau', 'connecting'))).toBe('wait');
+    expect(nextTauCloudStep('open', entitled, status(undefined, 'tau', 'failed'))).toBe('wait');
+    expect(nextTauCloudStep('open', entitled, status(undefined, 'tau', 'connected'))).toBe('wait');
+    const applied = status(undefined, 'tau', 'connected');
+    expect(nextTauCloudStep('open', entitled, { ...applied, sync: { ...applied.sync, hasAppliedRemote: true } })).toBe(
+      'wait',
+    );
+  });
+});
+
+describe('backupByDefaultNotice', () => {
+  it('should offer the opt-out before the first revision to an entitled account', () => {
+    expect(backupByDefaultNotice('default', entitled, remote('none'))).toBe('pending');
+    expect(backupByDefaultNotice('noticed', entitled, remote('none'))).toBe('pending');
+  });
+
+  it('should say nothing to an account that is not entitled', () => {
+    expect(backupByDefaultNotice('default', notEntitled, remote('none'))).toBeUndefined();
+  });
+
+  it('should say the project is backed up once the default connection landed', () => {
+    expect(backupByDefaultNotice('connected', entitled, remote('tau', 'connected'))).toBe('on');
+  });
+
+  it('should drop the line once the project was disconnected', () => {
+    expect(backupByDefaultNotice('connected', entitled, remote('none'))).toBeUndefined();
+    expect(backupByDefaultNotice('connected', entitled, remote('tau', 'disconnecting'))).toBeUndefined();
+  });
+});
+
+describe('tauCloudIntent', () => {
+  it('keeps pending opens owned by the signed-in account, including unavailable storage', () => {
+    setRevisionSessionUser({ id: 'account-a', name: 'A' });
+    tauCloudIntent.set('owned-project', 'open');
+    expect(canOpenCloudProject('owned-project')).toBe(true);
+    setRevisionSessionUser({ id: 'account-b', name: 'B' });
+    expect(canOpenCloudProject('owned-project')).toBe(false);
+    const failingStorage = vi.spyOn(globalThis.localStorage, 'setItem').mockImplementation(() => {
+      throw new Error('quota');
+    });
+    tauCloudIntent.set('memory-project', 'open');
+    failingStorage.mockRestore();
+    setRevisionSessionUser({ id: 'account-c', name: 'C' });
+    expect(canOpenCloudProject('memory-project')).toBe(false);
+    tauCloudIntent.set('owned-project', undefined);
+    tauCloudIntent.set('memory-project', undefined);
+    setRevisionSessionUser(undefined);
+  });
+
+  it('does not revive a settled open when storage removal fails', () => {
+    tauCloudIntent.set('settled-project', 'open');
+    const failingRemove = vi.spyOn(globalThis.localStorage, 'removeItem').mockImplementation(() => {
+      throw new Error('storage unavailable');
+    });
+    tauCloudIntent.set('settled-project', undefined);
+    expect(tauCloudIntent.get('settled-project')).toBeUndefined();
+    failingRemove.mockRestore();
+    tauCloudIntent.set('settled-project', undefined);
+  });
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('should keep a project’s intent in storage, so a reload reads it back', () => {
+    tauCloudIntent.set('proj_aaaaaaaaaaaaaaaaaaaaa', 'default');
+
+    expect(localStorage.getItem('tau:tau-cloud-intent:proj_aaaaaaaaaaaaaaaaaaaaa')).toBe('default');
+    expect(tauCloudIntent.get('proj_aaaaaaaaaaaaaaaaaaaaa')).toBe('default');
+  });
+
+  it('should tell subscribers when another tab changes an intent', () => {
+    const listener = vi.fn();
+    const unsubscribe = tauCloudIntent.subscribe(listener);
+    localStorage.setItem('tau:tau-cloud-intent:proj_aaaaaaaaaaaaaaaaaaaaa', 'connected');
+
+    globalThis.dispatchEvent(
+      new StorageEvent('storage', { key: 'tau:tau-cloud-intent:proj_aaaaaaaaaaaaaaaaaaaaa', newValue: 'connected' }),
+    );
+
+    expect(listener).toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  it('should forget an intent that was turned off', () => {
+    tauCloudIntent.set('proj_aaaaaaaaaaaaaaaaaaaaa', 'connected');
+    tauCloudIntent.set('proj_aaaaaaaaaaaaaaaaaaaaa', undefined);
+
+    expect(tauCloudIntent.get('proj_aaaaaaaaaaaaaaaaaaaaa')).toBeUndefined();
+  });
+
+  it('should read a value it did not write as nothing owed', () => {
+    localStorage.setItem('tau:tau-cloud-intent:proj_aaaaaaaaaaaaaaaaaaaaa', 'always');
+
+    expect(tauCloudIntent.get('proj_aaaaaaaaaaaaaaaaaaaaa')).toBeUndefined();
+  });
+});
+
+describe('materializeOnSignIn', () => {
+  it('should be off by default', () => {
+    expect(materializeOnSignIn.get()).toBeUndefined();
+  });
+
+  it('should keep the chosen workspace in storage', () => {
+    materializeOnSignIn.set({ kind: 'workspace', workspaceId: 'wsp_aaaaaaaaaaaaaaaaaaaaa' });
+
+    expect(JSON.parse(localStorage.getItem('tau:materialize-cloud-projects') ?? 'null')).toEqual({
+      kind: 'workspace',
+      workspaceId: 'wsp_aaaaaaaaaaaaaaaaaaaaa',
+    });
+    materializeOnSignIn.set(undefined);
+    expect(localStorage.getItem('tau:materialize-cloud-projects')).toBeNull();
+  });
+});
+
+describe('materializedCloudProjects', () => {
+  it('should remember a project brought to this device, across a reload', () => {
+    expect(materializedCloudProjects.has('proj_aaaaaaaaaaaaaaaaaaaaa')).toBe(false);
+
+    materializedCloudProjects.add('proj_aaaaaaaaaaaaaaaaaaaaa');
+
+    expect(materializedCloudProjects.has('proj_aaaaaaaaaaaaaaaaaaaaa')).toBe(true);
+    expect(materializedCloudProjects.has('proj_bbbbbbbbbbbbbbbbbbbbb')).toBe(false);
+  });
+});
+
+describe('fetchCloudProjects', () => {
+  it('should carry each row’s update time for the library’s Last Updated sort', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => [
+          { id: 'proj_aaaaaaaaaaaaaaaaaaaaa', name: 'Gearbox', role: 'owner', updatedAt: '2026-09-13T01:00:00.000Z' },
+          { id: 'proj_bbbbbbbbbbbbbbbbbbbbb', name: 'Bracket', role: 'owner' },
+        ],
+      })),
+    );
+
+    await expect(fetchCloudProjects()).resolves.toEqual([
+      {
+        id: 'proj_aaaaaaaaaaaaaaaaaaaaa',
+        name: 'Gearbox',
+        role: 'owner',
+        updatedAt: Date.parse('2026-09-13T01:00:00Z'),
+        canDeleteCloud: false,
+        cloudState: 'active',
+      },
+      { id: 'proj_bbbbbbbbbbbbbbbbbbbbb', name: 'Bracket', role: 'owner', canDeleteCloud: false, cloudState: 'active' },
+    ]);
+  });
+});
+
+describe('useTauCloudIntentConnection', () => {
+  const projectId = 'proj_aaaaaaaaaaaaaaaaaaaaa';
+  const connectRemote = vi.fn(async (_kind: 'tau') => undefined);
+  const disconnectRemote = vi.fn();
+  const cancelRemote = vi.fn();
+  const commands = { connectRemote, disconnectRemote, cancelRemote };
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    setRevisionSessionUser({ id: 'account-a', name: 'A' });
+    Object.assign(account, { auth: 'authed', isResolved: true, canSyncFiles: true });
+  });
+
+  afterEach(() => {
+    cleanup();
+    setRevisionSessionUser(undefined);
+    vi.restoreAllMocks();
+    /* No Web Locks in jsdom: a row's hold that never settles would otherwise keep the next row's open waiting. */
+    cloudOpenContinuationTestApi.reset();
+  });
+
+  function Connector({
+    intent,
+    head,
+  }: {
+    readonly intent: TauCloudIntent;
+    readonly head: string | undefined;
+  }): ReactNode {
+    useTauCloudIntentConnection({ projectId, intent, status: status(head), commands });
+    return null;
+  }
+
+  /* As the project session does: the connector is mounted only while an intent is owed, read live. */
+  function Session({ head }: { readonly head: string | undefined }): ReactNode {
+    const intent = useTauCloudIntent(projectId);
+    return intent === undefined || intent === 'connected' ? null : <Connector intent={intent} head={head} />;
+  }
+
+  const renderConnection = (head: string | undefined) => {
+    const view = render(<Session head={head} />);
+    return {
+      unmount: view.unmount,
+      rerender: ({ head: next }: { head: string | undefined }) => {
+        view.rerender(<Session head={next} />);
+      },
+    };
+  };
+
+  // ── DESIGN: the opt-out is offered before commitment ─────────────────────
+  it('should expose the inline offer without a creation toast or an early connection', () => {
+    tauCloudIntent.set(projectId, 'default');
+    renderConnection(undefined);
+    expect(tauCloudIntent.get(projectId)).toBe('noticed');
+    expect(backupByDefaultNotice('noticed', entitled, remote('none'))).toBe('pending');
+    expect(mockToast).not.toHaveBeenCalled();
+    expect(connectRemote).not.toHaveBeenCalled();
+  });
+
+  it('should never connect while the intent is default and unannounced', () => {
+    tauCloudIntent.set(projectId, 'default');
+
+    renderHook(() => {
+      useTauCloudIntentConnection({ projectId, intent: 'default', status: status('rev-1'), commands });
+    });
+
+    expect(connectRemote).not.toHaveBeenCalled();
+    expect(tauCloudIntent.get(projectId)).toBe('noticed');
+  });
+
+  it('should connect nothing once the intent is cleared before the first revision', () => {
+    tauCloudIntent.set(projectId, 'default');
+    const { rerender } = renderConnection(undefined);
+    act(() => {
+      tauCloudIntent.set(projectId, undefined);
+    });
+    rerender({ head: 'rev-1' });
+
+    expect(tauCloudIntent.get(projectId)).toBeUndefined();
+    expect(connectRemote).not.toHaveBeenCalled();
+    expect(disconnectRemote).not.toHaveBeenCalled();
+  });
+
+  // ── Acceptance 1: no Connect step on an entitled account ────────────────
+  it('should connect Tau Cloud once after the first revision of a noticed project', () => {
+    tauCloudIntent.set(projectId, 'noticed');
+    const { rerender } = renderConnection(undefined);
+    expect(connectRemote).not.toHaveBeenCalled();
+
+    rerender({ head: 'rev-1' });
+    rerender({ head: 'rev-1' });
+
+    expect(connectRemote).toHaveBeenCalledOnce();
+    expect(connectRemote).toHaveBeenCalledWith('tau');
+    expect(tauCloudIntent.get(projectId)).toBe('connected');
+  });
+
+  it('should not repeat a step another tab already took', () => {
+    tauCloudIntent.set(projectId, 'connected');
+
+    renderHook(() => {
+      useTauCloudIntentConnection({ projectId, intent: 'noticed', status: status('rev-1'), commands });
+    });
+
+    expect(connectRemote).not.toHaveBeenCalled();
+    expect(tauCloudIntent.get(projectId)).toBe('connected');
+  });
+
+  // ── Acceptance 1: not entitled ───────────────────────────────────────────
+  it('should create nothing for an account whose plan cannot sync', () => {
+    account.canSyncFiles = false;
+    tauCloudIntent.set(projectId, 'noticed');
+
+    renderConnection('rev-1');
+
+    expect(connectRemote).not.toHaveBeenCalled();
+    expect(mockToast).not.toHaveBeenCalled();
+    expect(tauCloudIntent.get(projectId)).toBeUndefined();
+  });
+
+  // ── D20: materialized projects ───────────────────────────────────────────
+  it('should connect a materialized project on open and keep it owed until the connection lands', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json([{ id: projectId, name: 'Gearbox', role: 'owner' }])),
+    );
+    tauCloudIntent.set(projectId, 'open');
+
+    renderConnection(undefined);
+
+    await waitFor(() => {
+      expect(connectRemote).toHaveBeenCalledWith('tau');
+    });
+    expect(tauCloudIntent.get(projectId)).toBe('open');
+  });
+
+  it('should keep a materialized project owed, unconnected, while signed out', () => {
+    account.auth = 'anonymous';
+    tauCloudIntent.set(projectId, 'open');
+
+    renderConnection(undefined);
+
+    expect(connectRemote).not.toHaveBeenCalled();
+    expect(tauCloudIntent.get(projectId)).toBe('open');
+  });
+
+  it('should settle an unavailable open durably and not reconnect after remount', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const fetchMock = vi.fn(async () => Response.json([]));
+    vi.stubGlobal('fetch', fetchMock);
+    tauCloudIntent.set(projectId, 'open');
+    const view = renderConnection(undefined);
+    await waitFor(() => {
+      expect(tauCloudIntent.get(projectId)).toBeUndefined();
+    });
+    expect(logged).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ name: 'CloudProjectUnavailableError' }),
+    );
+    expect(localStorage.getItem(`tau:tau-cloud-intent:${projectId}`)).toBeNull();
+    expect(localStorage.getItem(`tau:tau-cloud-intent:${projectId}:account`)).toBeNull();
+    view.unmount();
+    renderConnection(undefined);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(connectRemote).not.toHaveBeenCalled();
+  });
+
+  it('should retain a first-open intent after a network failure and recover on remount', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const fetchMock = vi.fn<typeof fetch>().mockRejectedValueOnce(new TypeError('offline'));
+    vi.stubGlobal('fetch', fetchMock);
+    tauCloudIntent.set(projectId, 'open');
+    const view = renderConnection(undefined);
+    await waitFor(() => {
+      expect(logged).toHaveBeenCalled();
+    });
+    expect(tauCloudIntent.get(projectId)).toBe('open');
+    expect(connectRemote).not.toHaveBeenCalled();
+    view.unmount();
+    fetchMock.mockResolvedValue(Response.json([{ id: projectId, name: 'Kept project', role: 'write' }]));
+    renderConnection(undefined);
+    await waitFor(() => {
+      expect(connectRemote).toHaveBeenCalledExactlyOnceWith('tau');
+    });
+  });
+
+  it.each(['account', 'intent'])(
+    'should not clear a newer %s intent when an earlier access check refuses',
+    async (change) => {
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const response = Promise.withResolvers<Response>();
+      const fetchMock = vi.fn<typeof fetch>().mockReturnValue(response.promise);
+      vi.stubGlobal('fetch', fetchMock);
+      tauCloudIntent.set(projectId, 'open');
+      const view = renderConnection(undefined);
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledOnce();
+      });
+      view.unmount();
+      if (change === 'account') {
+        setRevisionSessionUser({ id: 'account-b', name: 'B' });
+      }
+      const next = change === 'account' ? 'open' : 'connected';
+      tauCloudIntent.set(projectId, next);
+      await act(async () => {
+        response.resolve(Response.json([]));
+      });
+      expect(logged).toHaveBeenCalled();
+      expect(tauCloudIntent.get(projectId)).toBe(next);
+      expect(connectRemote).not.toHaveBeenCalled();
+      if (change === 'account') {
+        expect(localStorage.getItem(`tau:tau-cloud-intent:${projectId}:account`)).toBe('account-b');
+      }
+    },
+  );
+});
+
+/* Adaptive app deployment mode C4 (T-G4, D5): data moves only on a pinned or confirmed plan. */
+describe('useTauCloudEligibility basis', () => {
+  it.each([
+    ['pinned', true],
+    ['confirmed', true],
+    ['remembered', false],
+    ['absent', false],
+  ] as const)('reads a plan whose basis is %s as resolved: %s', (basis, isResolved) => {
+    account.basis = basis;
+    const { result } = renderHook(() => useTauCloudEligibility());
+    expect(result.current.isResolved).toBe(isResolved);
+    account.basis = 'pinned';
+  });
+
+  it('never connects or forgets on a remembered unfunded start, and waits until the answer confirms it', () => {
+    const status = { remote: { kind: 'none', phase: 'none' }, headRevisionId: 'rev-1' } as unknown as Parameters<
+      typeof nextTauCloudStep
+    >[2];
+    expect(nextTauCloudStep('noticed', { auth: 'authed', isResolved: false }, status)).toBe('wait');
+    expect(nextTauCloudStep('noticed', { auth: 'authed', isResolved: true, canSyncFiles: true }, status)).toBe(
+      'connect',
+    );
+  });
+});

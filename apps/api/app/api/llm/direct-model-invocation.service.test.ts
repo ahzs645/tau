@@ -1,0 +1,654 @@
+/* eslint-disable @typescript-eslint/naming-convention -- provider wire fields use snake_case. */
+import { Logger } from '@nestjs/common';
+import type { ConfigService } from '@nestjs/config';
+import { DefaultChatTransport, readUIMessageStream } from 'ai';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ChatService } from '@taucad/api-chat/chat.service';
+import {
+  DirectModelInvocationService,
+  LlmGatewayError,
+  modelList,
+  providerDiagnostic,
+  textMarker,
+} from '@taucad/api-llm-gateway';
+import type { ModelInvocationIntent, ModelService } from '@taucad/api-llm-gateway';
+import type { Model } from '@taucad/chat/model-catalog';
+import type { Environment } from '@taucad/api-core';
+
+const providerMessage =
+  'You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/.';
+const exhaustedBody = {
+  error: {
+    type: 'insufficient_quota',
+    code: 'credit_balance_exhausted',
+    message: providerMessage,
+    param: null,
+  },
+};
+
+/* The body Vertex answered on 2026-09-19, with a credential-shaped field added: the
+ * operator needs the schema path in the log and must never find the token there. */
+const vertexSchemaRefusal = {
+  error: {
+    code: 400,
+    status: 'INVALID_ARGUMENT',
+    message: 'ref loops are only supported if they include optional or nullable property values',
+    metadata: { authorization: 'Bearer ya29.a0AfH6SMBx-secret-token' },
+  },
+};
+
+const keyedConfig = { get: vi.fn(() => 'provider-key') } as unknown as ConfigService<Environment, true>;
+
+const gatewayIntent = (): ModelInvocationIntent => ({
+  authUserId: 'user',
+  surface: 'gateway',
+  attempt: { version: 1, key: 'attempt_0000000001' },
+  providerWire: 'openai-responses',
+  body: { model: 'openai-gpt-5.6-luna', input: 'fixture', stream: true, max_output_tokens: 16 },
+  priceHeaders: {},
+  activity: 'agent',
+  signal: new AbortController().signal,
+});
+
+const helperIntent = (): ModelInvocationIntent => ({
+  ...gatewayIntent(),
+  surface: 'project_name',
+  activity: 'title',
+  directPrompt: {
+    system: 'Name it.',
+    messages: [{ role: 'user', content: 'Name this part' }],
+    maximumOutputTokens: 64,
+  },
+});
+
+const errorDetails = (error: unknown): { type?: string; message?: string; details?: unknown } =>
+  error instanceof LlmGatewayError
+    ? (error.getResponse() as { error: { type?: string; message?: string; details?: unknown } }).error
+    : {};
+
+const catalogRow = (providerId: keyof typeof modelList, slug: string): Model =>
+  (modelList[providerId] as Record<string, Model>)[slug]!;
+
+/** A self-host model list that offers exactly these rows, as `ModelService.getModels` would. */
+const helperModels = (...rows: Model[]): ModelService =>
+  ({
+    getModels: vi.fn(async () => rows),
+    getOtelProviderName: vi.fn(() => undefined),
+  }) as unknown as ModelService;
+
+/** A provider SSE body: one `data:` frame per event, named when the event carries a type. */
+const providerSse = (frames: readonly unknown[]): Response =>
+  new Response(
+    frames
+      .map((frame) => {
+        const type =
+          typeof frame === 'object' && frame !== null && 'type' in frame ? `event: ${String(frame.type)}\n` : '';
+        return `${type}data: ${typeof frame === 'string' ? frame : JSON.stringify(frame)}\n\n`;
+      })
+      .join(''),
+    { status: 200, headers: { 'content-type': 'text/event-stream' } },
+  );
+
+/** Recorded-shape provider streams that answer "Named part", per wire, with the usage each reports. */
+const providerStreams = {
+  'openai-responses': (): Response =>
+    providerSse([
+      { type: 'response.created', response: { id: 'resp_1' } },
+      { type: 'response.reasoning_summary_text.delta', delta: 'Thinking.' },
+      { type: 'response.output_text.delta', delta: 'Named ' },
+      { type: 'response.output_text.delta', delta: 'part' },
+      {
+        type: 'response.completed',
+        response: {
+          id: 'resp_1',
+          usage: {
+            input_tokens: 30,
+            output_tokens: 12,
+            input_tokens_details: { cached_tokens: 20 },
+            output_tokens_details: { reasoning_tokens: 8 },
+          },
+        },
+      },
+    ]),
+  anthropic: (): Response =>
+    providerSse([
+      {
+        type: 'message_start',
+        message: { usage: { input_tokens: 4, cache_read_input_tokens: 20, cache_creation_input_tokens: 6 } },
+      },
+      { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'Thinking.' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Named part' } },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 12 } },
+      { type: 'message_stop' },
+    ]),
+  'openai-completions': (): Response =>
+    providerSse([
+      { choices: [{ index: 0, delta: { role: 'assistant', reasoning: 'Thinking.' } }] },
+      { choices: [{ index: 0, delta: { content: 'Named part' }, finish_reason: 'stop' }] },
+      {
+        choices: [],
+        usage: {
+          prompt_tokens: 30,
+          completion_tokens: 12,
+          prompt_tokens_details: { cached_tokens: 20 },
+          completion_tokens_details: { reasoning_tokens: 8 },
+        },
+      },
+      '[DONE]',
+    ]),
+} as const;
+
+/** The `response.completed` usage a helper stream ends with. */
+const completedUsage = (text: string): unknown => {
+  const completed = text
+    .split('\n\n')
+    .map((frame) => frame.replace(/^data: /u, ''))
+    .filter((data) => data.startsWith('{'))
+    .map((data) => JSON.parse(data) as { type: string; response?: { usage?: unknown } })
+    .find((event) => event.type === 'response.completed');
+  return completed?.response?.usage;
+};
+
+describe('DirectModelInvocationService', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('runs API helper prompts through an advertised non-OpenAI self-host model', async () => {
+    const fetchOnce = vi.spyOn(globalThis, 'fetch').mockResolvedValue(providerStreams.anthropic());
+    const chat = new ChatService(
+      new DirectModelInvocationService(keyedConfig, helperModels(catalogRow('anthropic', 'claude-fable-5'))),
+    );
+
+    const result = await chat.getBuildNameGenerator(
+      [{ role: 'user', content: 'Name this part' }],
+      'owner',
+      'attempt',
+      { projectHint: 'project' },
+      new AbortController().signal,
+    );
+    if (result.state !== 'streaming') {
+      throw new Error('Expected stream');
+    }
+    const stream = await new DefaultChatTransport({
+      api: 'http://fixture.invalid/chat',
+      fetch: async () => result.response,
+    }).sendMessages({
+      chatId: 'chat',
+      messages: [],
+      trigger: 'submit-message',
+      messageId: undefined,
+      abortSignal: new AbortController().signal,
+    });
+    let text = '';
+    for await (const message of readUIMessageStream({ stream })) {
+      text = message.parts
+        .filter((part) => part.type === 'text')
+        .map((part) => part.text)
+        .join('');
+    }
+
+    expect(text).toBe('Named part');
+    const [url, init] = fetchOnce.mock.calls[0] ?? [];
+    expect(url).toBe('https://api.anthropic.com/v1/messages');
+    const sent = JSON.parse(init?.body as string) as Record<string, unknown>;
+    expect(sent).toMatchObject({ model: 'claude-fable-5', stream: true, max_tokens: 64 });
+    // The row's adaptive thinking at `high` would spend the 64-token ceiling before the name.
+    expect(sent).not.toHaveProperty('thinking');
+    expect(sent).not.toHaveProperty('output_config');
+    expect(init?.headers).toMatchObject({ 'x-api-key': 'provider-key', 'anthropic-version': '2023-06-01' });
+    await result.completion;
+  });
+
+  it.each([
+    {
+      wire: 'openai-responses',
+      row: catalogRow('openai', 'gpt-5.6-luna'),
+      url: 'https://api.openai.com/v1/responses',
+      usage: { input_tokens: 30, output_tokens: 12, cached: 20, reasoning: 8 },
+    },
+    {
+      wire: 'anthropic',
+      row: catalogRow('anthropic', 'claude-haiku-5.5'),
+      url: 'https://api.anthropic.com/v1/messages',
+      // Anthropic's input excludes cache reads and writes; the Responses total includes both.
+      usage: { input_tokens: 30, output_tokens: 12, cached: 20, reasoning: 0 },
+    },
+    {
+      wire: 'openai-completions',
+      row: catalogRow('together', 'kimi-k3.1-pro'),
+      url: 'https://api.together.ai/v1/chat/completions',
+      usage: { input_tokens: 30, output_tokens: 12, cached: 20, reasoning: 8 },
+    },
+  ] as const)(
+    'should relay a $wire helper stream as Responses text with the provider usage',
+    async ({ wire, row, url, usage }) => {
+      const fetchOnce = vi.spyOn(globalThis, 'fetch').mockResolvedValue(providerStreams[wire]());
+      const service = new DirectModelInvocationService(keyedConfig, helperModels(row));
+
+      const result = await service.invoke(helperIntent());
+      if (result.state !== 'streaming') {
+        throw new Error('Expected stream');
+      }
+      const text = await result.response.text();
+      await result.completion;
+
+      expect(fetchOnce.mock.calls[0]?.[0]).toBe(url);
+      expect(text).toContain('"type":"response.output_text.delta"');
+      expect(text).not.toContain('Thinking.');
+      expect(text.endsWith('data: [DONE]\n\n')).toBe(true);
+      expect(completedUsage(text)).toEqual({
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        input_tokens_details: { cached_tokens: usage.cached },
+        output_tokens_details: { reasoning_tokens: usage.reasoning },
+        total_tokens: usage.input_tokens + usage.output_tokens,
+      });
+    },
+  );
+
+  it('should send a discovered Ollama helper model to the local server without a credential', async () => {
+    const fetchOnce = vi.spyOn(globalThis, 'fetch').mockResolvedValue(providerStreams['openai-completions']());
+    const ollama = {
+      id: 'llama3.2:latest',
+      model: 'llama3.2:latest',
+      recommended: true,
+      provider: { id: 'ollama', name: 'Ollama' },
+      configuration: { streaming: true, temperature: 0 },
+    } as unknown as Model;
+    const config = {
+      get: vi.fn((key: string) => key === 'OLLAMA_ENABLED'),
+    } as unknown as ConfigService<Environment, true>;
+    const service = new DirectModelInvocationService(config, helperModels(ollama));
+
+    const result = await service.invoke(helperIntent());
+    if (result.state !== 'streaming') {
+      throw new Error('Expected stream');
+    }
+    await result.response.text();
+
+    const [url, init] = fetchOnce.mock.calls[0] ?? [];
+    expect(url).toBe('http://localhost:11434/v1/chat/completions');
+    expect(init?.headers).toEqual({ 'content-type': 'application/json' });
+    expect(JSON.parse(init?.body as string)).toMatchObject({
+      model: 'llama3.2:latest',
+      temperature: 0,
+      max_tokens: 64,
+    });
+  });
+
+  it('should answer a recognized pre-stream provider refusal as a typed 503 naming the operator account', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify(exhaustedBody), { status: 429, headers: { 'content-type': 'application/json' } }),
+    );
+    const service = new DirectModelInvocationService(keyedConfig, {} as unknown as ModelService);
+
+    try {
+      await service.invoke(gatewayIntent());
+      expect.fail('The exhausted provider account should refuse the relay');
+    } catch (error) {
+      expect(error).toBeInstanceOf(LlmGatewayError);
+      expect((error as LlmGatewayError).getStatus()).toBe(503);
+      expect(errorDetails(error)).toEqual({
+        type: 'PROVIDER_ACCOUNT_EXHAUSTED',
+        // The operator owns the key, so the provider's own sentence is the message.
+        message: providerMessage,
+        details: { providerId: 'openai', providerCode: 'credit_balance_exhausted', accountOwner: 'operator' },
+      });
+    }
+  });
+
+  it.each([
+    'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.',
+    'You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.',
+  ])('should answer an Anthropic 400 for an unfunded account as the operator account refusal: %s', async (message) => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message } }), {
+        status: 400,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const service = new DirectModelInvocationService(keyedConfig, {} as unknown as ModelService);
+
+    const refused = await service
+      .invoke({
+        ...gatewayIntent(),
+        providerWire: 'anthropic',
+        body: {
+          model: 'anthropic-claude-haiku-5.5',
+          max_tokens: 16,
+          stream: true,
+          messages: [{ role: 'user', content: 'A cool vase' }],
+        },
+        priceHeaders: { 'anthropic-version': '2023-06-01' },
+      })
+      .then(
+        () => expect.fail('The unfunded Anthropic account should refuse the relay'),
+        (error: unknown) => error,
+      );
+
+    expect(refused).toBeInstanceOf(LlmGatewayError);
+    expect((refused as LlmGatewayError).getStatus()).toBe(503);
+    expect(errorDetails(refused)).toEqual({
+      type: 'PROVIDER_ACCOUNT_EXHAUSTED',
+      message,
+      details: { providerId: 'anthropic', providerCode: 'invalid_request_error', accountOwner: 'operator' },
+    });
+  });
+
+  it('should keep the provider reason in an unrecognized self-host rejection', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({ error: { type: 'invalid_request_error', message: 'max_output_tokens is too large.' } }),
+        {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    );
+    const service = new DirectModelInvocationService(keyedConfig, {} as unknown as ModelService);
+
+    await expect(service.invoke(gatewayIntent())).rejects.toThrow(
+      'Configured provider returned HTTP 400. max_output_tokens is too large.',
+    );
+  });
+
+  it('should code a refused reasoning replay as its own refusal and keep the provider reason for the operator', async () => {
+    const sentence =
+      'messages.1.content.4: Invalid `signature` in `thinking` block. The block is bound to a different conversation.';
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: sentence } }), {
+        status: 400,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const service = new DirectModelInvocationService(keyedConfig, {} as unknown as ModelService);
+
+    const refused = await service.invoke(gatewayIntent()).catch((error: unknown) => error);
+
+    expect((refused as LlmGatewayError).getStatus()).toBe(502);
+    expect(errorDetails(refused)).toMatchObject({
+      type: 'REASONING_REPLAY_REJECTED',
+      message: `Configured provider returned HTTP 400. ${sentence}`,
+    });
+  });
+
+  it('should redact a credential the provider quotes back before it reaches the client', async () => {
+    const quotedKey = 'sk-proj-abcdefghijklmnop1234';
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: { type: 'invalid_request_error', message: `Incorrect API key provided: ${quotedKey}.` },
+        }),
+        {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    );
+    const service = new DirectModelInvocationService(keyedConfig, {} as unknown as ModelService);
+
+    try {
+      await service.invoke(gatewayIntent());
+      expect.fail('The refused relay should throw');
+    } catch (error) {
+      expect(errorDetails(error).message).toContain('Incorrect API key provided: [redacted].');
+      expect(errorDetails(error).message).not.toContain(quotedKey);
+    }
+  });
+
+  it('should log the refused upstream body, bounded and redacted, without forwarding it', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {
+      // Test-local logger sink.
+    });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify(vertexSchemaRefusal), {
+        status: 400,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const service = new DirectModelInvocationService(keyedConfig, {} as unknown as ModelService);
+
+    try {
+      await service.invoke(gatewayIntent());
+      expect.fail('The refused relay should throw');
+    } catch (error) {
+      // The envelope keeps only the provider's sentence; the rest of the body stays server-side.
+      expect(errorDetails(error).message).not.toContain('INVALID_ARGUMENT');
+    }
+
+    expect(warn).toHaveBeenCalledWith(
+      {
+        providerId: 'openai',
+        routeId: 'openai-gpt-5.6-luna',
+        modelId: 'gpt-5.6-luna',
+        upstreamStatus: 400,
+        upstreamBody: providerDiagnostic(vertexSchemaRefusal),
+      },
+      'Upstream model provider refused the request',
+    );
+    // The log keeps the provider's vocabulary and drops its sentences, which can quote the request.
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).toContain('INVALID_ARGUMENT');
+    expect(logged).not.toContain(vertexSchemaRefusal.error.message);
+    expect(logged).not.toContain('ya29');
+  });
+
+  it('should answer an upstream 429 as RATE_LIMITED carrying the upstream retry estimate', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: { type: 'rate_limit_error', message: 'Rate limit reached.' } }), {
+        status: 429,
+        headers: { 'content-type': 'application/json', 'retry-after': '7' },
+      }),
+    );
+    const service = new DirectModelInvocationService(keyedConfig, {} as unknown as ModelService);
+
+    try {
+      await service.invoke(gatewayIntent());
+      expect.fail('The rate-limited relay should throw');
+    } catch (error) {
+      expect((error as LlmGatewayError).getStatus()).toBe(429);
+      expect(errorDetails(error)).toMatchObject({
+        type: 'RATE_LIMITED',
+        details: { retryAfterSeconds: 7 },
+      });
+    }
+  });
+
+  it('should carry the retry estimate a Vertex 429 states only in its RetryInfo body', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            error: {
+              code: 429,
+              message: 'Resource exhausted. Please try again later.',
+              status: 'RESOURCE_EXHAUSTED',
+              details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '37.2s' }],
+            },
+          },
+        ]),
+        { status: 429, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    const service = new DirectModelInvocationService(keyedConfig, {} as unknown as ModelService);
+
+    try {
+      await service.invoke(gatewayIntent());
+      expect.fail('The rate-limited relay should throw');
+    } catch (error) {
+      expect(errorDetails(error)).toMatchObject({ type: 'RATE_LIMITED', details: { retryAfterSeconds: 38 } });
+    }
+  });
+
+  it('should answer the Vertex 499 CANCELLED as a provider outage', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: { code: 499, message: 'The operation was cancelled.' } }), {
+        status: 499,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const service = new DirectModelInvocationService(keyedConfig, {} as unknown as ModelService);
+
+    try {
+      await service.invoke(gatewayIntent());
+      expect.fail('The cancelled relay should throw');
+    } catch (error) {
+      expect((error as LlmGatewayError).getStatus()).toBe(503);
+      expect(errorDetails(error).type).toBe('PROVIDER_UNAVAILABLE');
+    }
+  });
+
+  it('should replace a recognized in-stream refusal with the Tau-coded frame it relays', async () => {
+    const supplierFrame = `event: error\ndata: ${JSON.stringify({ type: 'error', ...exhaustedBody })}\n\n`;
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(supplierFrame, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    );
+    const service = new DirectModelInvocationService(keyedConfig, {} as unknown as ModelService);
+
+    const result = await service.invoke(gatewayIntent());
+    if (result.state !== 'streaming') {
+      throw new Error('Expected stream');
+    }
+
+    expect(await result.response.text()).toBe(
+      `event: error\ndata: {"type":"error","code":"PROVIDER_ACCOUNT_EXHAUSTED","message":"${providerMessage}","error":{"type":"tau_gateway","code":"PROVIDER_ACCOUNT_EXHAUSTED","message":"${providerMessage}","details":{"providerId":"openai","providerCode":"credit_balance_exhausted","accountOwner":"operator"}}}\n\n`,
+    );
+  });
+
+  it.each([
+    [
+      'response.failed',
+      `event: response.failed\ndata: ${JSON.stringify({
+        type: 'response.failed',
+        response: {
+          id: 'resp_1',
+          status: 'failed',
+          error: { code: 'server_error', message: 'The server had an error while processing your request.' },
+        },
+      })}\n\n`,
+      'The server had an error while processing your request.',
+    ],
+    [
+      'an error event',
+      `event: error\ndata: ${JSON.stringify({
+        type: 'error',
+        code: 'context_length_exceeded',
+        message: 'Your input exceeds the context window of this model.',
+      })}\n\n`,
+      'Your input exceeds the context window of this model.',
+    ],
+    [
+      // One failure, one line: providers that send both shapes for the same
+      // turn must not produce two ERROR lines.
+      'an error event followed by response.failed',
+      `event: error\ndata: ${JSON.stringify({
+        type: 'error',
+        code: 'server_error',
+        message: 'The server had an error while processing your request.',
+      })}\n\nevent: response.failed\ndata: ${JSON.stringify({
+        type: 'response.failed',
+        response: {
+          id: 'resp_1',
+          status: 'failed',
+          error: { code: 'server_error', message: 'The server had an error while processing your request.' },
+        },
+      })}\n\n`,
+      'The server had an error while processing your request.',
+    ],
+  ])('should log %s as the direct relay evidence of a terminal upstream failure', async (_label, frame, reason) => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(frame, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream', 'x-request-id': 'req_fixture_1' },
+      }),
+    );
+    const logged = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const service = new DirectModelInvocationService(keyedConfig, {} as unknown as ModelService);
+
+    const result = await service.invoke(gatewayIntent());
+    if (result.state !== 'streaming') {
+      throw new Error('Expected stream');
+    }
+
+    // The frame reaches the client byte for byte; only the operator's log is new.
+    expect(await result.response.text()).toBe(frame);
+    expect(logged).toHaveBeenCalledTimes(1);
+    const line = String(logged.mock.calls[0]?.[0]);
+    expect(line).toContain('Provider stream failed for openai');
+    expect(line).toContain('req_fixture_1');
+    expect(line).toContain(textMarker(reason));
+    expect(line).not.toContain(reason);
+  });
+
+  it('should refuse a helper turn before streaming when the provider account is exhausted', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify(exhaustedBody), { status: 429, headers: { 'content-type': 'application/json' } }),
+    );
+    const service = new DirectModelInvocationService(keyedConfig, helperModels(catalogRow('openai', 'gpt-5.6-luna')));
+
+    try {
+      await service.invoke(helperIntent());
+      expect.fail('The helper should refuse before it answers 200');
+    } catch (error) {
+      expect((error as LlmGatewayError).getStatus()).toBe(503);
+      expect(errorDetails(error)).toMatchObject({
+        type: 'PROVIDER_ACCOUNT_EXHAUSTED',
+        details: { providerId: 'openai', providerCode: 'credit_balance_exhausted', accountOwner: 'operator' },
+      });
+    }
+  });
+
+  it('should refuse a helper turn before streaming when the account refusal arrives as the first stream frame', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(providerSse([{ type: 'error', ...exhaustedBody }]));
+    const service = new DirectModelInvocationService(keyedConfig, helperModels(catalogRow('openai', 'gpt-5.6-luna')));
+
+    const refused = await service.invoke(helperIntent()).then(
+      () => expect.fail('The helper should refuse before it answers 200'),
+      (error: unknown) => error,
+    );
+
+    expect((refused as LlmGatewayError).getStatus()).toBe(503);
+    expect(errorDetails(refused)).toMatchObject({
+      type: 'PROVIDER_ACCOUNT_EXHAUSTED',
+      details: { providerId: 'openai', providerCode: 'credit_balance_exhausted', accountOwner: 'operator' },
+    });
+  });
+
+  it.each([
+    ['an unrecognized provider refusal', async () => new Response('{"error":{"message":"boom"}}', { status: 500 })],
+    [
+      'a transport failure',
+      async () => {
+        throw new TypeError('fetch failed');
+      },
+    ],
+  ])('should report %s on a helper as a provider outage', async (_label, answer) => {
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(answer);
+    const service = new DirectModelInvocationService(keyedConfig, helperModels(catalogRow('openai', 'gpt-5.6-luna')));
+
+    try {
+      await service.invoke(helperIntent());
+      expect.fail('The helper should refuse before it answers 200');
+    } catch (error) {
+      expect((error as LlmGatewayError).getStatus()).toBe(503);
+      expect(errorDetails(error).type).toBe('PROVIDER_UNAVAILABLE');
+      expect(errorDetails(error).details).toBeUndefined();
+    }
+  });
+
+  it('should let a helper abort through untouched instead of calling it a provider outage', async () => {
+    const controller = new AbortController();
+    const abort = new Error('aborted');
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      controller.abort();
+      await Promise.resolve();
+      throw abort;
+    });
+    const service = new DirectModelInvocationService(keyedConfig, helperModels(catalogRow('openai', 'gpt-5.6-luna')));
+
+    await expect(service.invoke({ ...helperIntent(), signal: controller.signal })).rejects.toBe(abort);
+  });
+});

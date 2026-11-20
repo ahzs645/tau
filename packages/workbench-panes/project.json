@@ -1,0 +1,28 @@
+{
+  "name": "workbench-panes",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/workbench-panes",
+  "projectType": "library",
+  "tags": ["scope:shared", "type:package"],
+  "targets": {
+    "build": {
+      "dependsOn": ["^build"]
+    },
+    "validate-shell-parity": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "metadata": {
+        "description": "Fails unless the Tau app's viewer and the agent plugin's viewer page import the shared viewer shell, and when a host carries a copy of what it replaced. Reads the host files as text."
+      },
+      "options": {
+        "command": "node scripts/src/check-viewer-shell-parity.ts"
+      }
+    },
+    "test": {
+      "inputs": ["default", "^production", "serviceEnvironment", "reactEventLayer"]
+    },
+    "typecheck": {
+      "inputs": ["default", "^production", "reactEventLayer"]
+    }
+  }
+}

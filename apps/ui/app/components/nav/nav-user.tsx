@@ -1,62 +1,228 @@
-import { CreditCard, Settings, Sparkles } from 'lucide-react';
-import { DropdownMenuItem } from '#components/ui/dropdown-menu.js';
-import { ClientOnly } from '#components/ui/utils/client-only.js';
-import { openSettingsDialog } from '#hooks/use-settings-dialog.js';
+import { useState } from 'react';
+import {
+  BookOpen,
+  Bug,
+  CircleHelp,
+  Compass,
+  Files,
+  FileText,
+  Scale,
+  Settings,
+  Shield,
+  Sparkles,
+  WifiOff,
+} from 'lucide-react';
+import { Link } from 'react-router';
+import { Button } from '@taucad/ui/components/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@taucad/ui/components/dropdown-menu';
+import { useSettingsDialog } from '#hooks/use-settings-dialog.js';
 import { UserButton } from '#components/auth/user/user-button.js';
-import { ProBadge } from '#components/tier-badge.js';
+import { useNetworkConnectivity } from '#hooks/use-network-connectivity.js';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@taucad/ui/components/tooltip';
+import { metaConfig } from '#constants/meta.constants.js';
+import { legalUrl } from '#lib/legal-url.js';
+import { SvgIcon } from '@taucad/ui-kit/icons/svg-icon';
+import { isDesktopTarget } from '#lib/build-target.js';
+import { setEntryPreference } from '@taucad/ui-core/lib/entry-preference';
+import { pageOrigin, websiteOrigin } from '#lib/website-origin.js';
+import { CookiePreferencesDialog, CookiePreferencesMenuItem } from '#components/cookie-preferences.js';
+import { NavBillingItem, NavCreditsMeter } from '#cloud/nav-billing.js';
+import { useFeature } from '#flags/use-feature.js';
+import { setupEntryCopy } from '#components/onboarding/setup-copy.js';
+import { setupHref } from '#components/onboarding/setup-entry.js';
+import { TourHelpMenuItem } from '#components/tour/tour-menu.js';
 
 /**
  * Nav user button: delegates avatar, sign-in/up/out chrome to the registry
  * `<UserButton>`, and extends the dropdown with Tau-specific items (Billing,
  * Settings dialog) via the `links` prop.
  *
- * `hideSettings` suppresses the built-in navigation link so we can open the
+ * `shouldHideSettings` suppresses the built-in navigation link so we can open the
  * dialog instead (Tau's settings live in a modal, not a dedicated route).
  */
 export function NavUser(): React.JSX.Element {
+  const isOnline = useNetworkConnectivity();
+  const { open: openSettings } = useSettingsDialog();
+  const [isCookiePreferencesOpen, setIsCookiePreferencesOpen] = useState(false);
+  const website = websiteOrigin();
+  /* The edge serves the website on this hostname, so the entry preference selects it at `/`. The
+     document render has no `location`, so reading its origin threw there, which failed the sidebar
+     boundary and made every route carrying it answer 500. The menu this decides mounts only once a
+     pointer opens it, long after hydration has given the browser's own origin. */
+  const isWebsiteHere = !isDesktopTarget() && website === pageOrigin();
+  const isOnboardingEnabled = useFeature('onboarding');
+  const helpItems = [
+    /* Setup and its explainer, behind `onboarding`. */
+    ...(isOnboardingEnabled
+      ? [
+          <DropdownMenuItem key='set-up-tau' asChild>
+            <Link to={setupHref('help')}>
+              <Sparkles />
+              {setupEntryCopy.setUpTau}
+            </Link>
+          </DropdownMenuItem>,
+          <DropdownMenuItem key='how-tau-works' asChild>
+            <Link to={setupHref('help', 'how')}>
+              <Compass />
+              {setupEntryCopy.howTauWorks}
+            </Link>
+          </DropdownMenuItem>,
+          /* The product tour's one item, which changes with the tour's state. */
+          <TourHelpMenuItem key='tour' />,
+        ]
+      : []),
+    ...(isDesktopTarget()
+      ? []
+      : [
+          <DropdownMenuItem key='website' asChild>
+            <a
+              href={isWebsiteHere ? '/?website=1' : `${website}/`}
+              target={isWebsiteHere ? undefined : '_blank'}
+              rel={isWebsiteHere ? undefined : 'noopener noreferrer'}
+              onClick={(event) => {
+                if (
+                  isWebsiteHere &&
+                  event.button === 0 &&
+                  !event.metaKey &&
+                  !event.ctrlKey &&
+                  !event.shiftKey &&
+                  !event.altKey &&
+                  setEntryPreference('website')
+                ) {
+                  event.preventDefault();
+                  globalThis.location.assign('/');
+                }
+              }}
+            >
+              <BookOpen />
+              Visit website
+            </a>
+          </DropdownMenuItem>,
+        ]),
+    <DropdownMenuItem key='documentation' asChild>
+      <a href='https://docs.tau.new' target='_blank' rel='noopener noreferrer'>
+        <BookOpen />
+        Documentation
+      </a>
+    </DropdownMenuItem>,
+    <DropdownMenuItem key='privacy' asChild>
+      <a href={legalUrl('privacy')} target='_blank' rel='noopener noreferrer'>
+        <Shield />
+        Privacy
+      </a>
+    </DropdownMenuItem>,
+    <DropdownMenuItem key='terms' asChild>
+      <a href={legalUrl('terms')} target='_blank' rel='noopener noreferrer'>
+        <FileText />
+        Terms
+      </a>
+    </DropdownMenuItem>,
+    <DropdownMenuItem key='open-source' asChild>
+      <a href={legalUrl('open-source')} target='_blank' rel='noopener noreferrer'>
+        <Scale />
+        Open-source notices
+      </a>
+    </DropdownMenuItem>,
+    <CookiePreferencesMenuItem
+      key='cookies'
+      onSelect={() => {
+        setIsCookiePreferencesOpen(true);
+      }}
+    />,
+    <DropdownMenuItem key='bug' asChild>
+      <a href={`${metaConfig.githubUrl}/issues/new?labels=bug`} target='_blank' rel='noopener noreferrer'>
+        <Bug />
+        Report a bug
+      </a>
+    </DropdownMenuItem>,
+    <DropdownMenuItem key='github' asChild>
+      <a href={metaConfig.githubUrl} target='_blank' rel='noopener noreferrer'>
+        <SvgIcon id='github' />
+        GitHub
+      </a>
+    </DropdownMenuItem>,
+    <DropdownMenuItem key='discord' asChild>
+      <a href={metaConfig.discordUrl} target='_blank' rel='noopener noreferrer'>
+        <CircleHelp />
+        Community Discord
+      </a>
+    </DropdownMenuItem>,
+  ];
+
+  /* Server-rendered at its final 38px height: the account trigger draws avatar and name skeletons
+     until the session is known, so the footer never appears late. */
   return (
-    <ClientOnly>
-      <UserButton
-        size='icon'
-        variant='ghost'
-        className='select-none'
-        align='end'
-        sideOffset={8}
-        hideSettings
-        links={[
-          <DropdownMenuItem
-            key='upgrade'
-            className='cursor-pointer'
-            onSelect={() => {
-              openSettingsDialog('billing');
-            }}
+    <div className='flex w-full items-center gap-1'>
+      <div className='relative min-w-0 flex-1'>
+        <UserButton
+          variant='ghost'
+          size='sm'
+          className='h-7 w-full justify-start px-2.5 select-none'
+          align='start'
+          side='top'
+          sideOffset={8}
+          shouldHideSettings
+          header={<NavCreditsMeter />}
+          links={[
+            ...(isOnline
+              ? []
+              : [
+                  <DropdownMenuItem key='offline' disabled>
+                    <WifiOff />
+                    You’re offline. Some features need a connection.
+                  </DropdownMenuItem>,
+                ]),
+            <NavBillingItem key='billing' />,
+            { label: 'Files', href: '/files', icon: <Files /> },
+            <DropdownMenuItem
+              key='settings'
+              onSelect={() => {
+                openSettings('general');
+              }}
+            >
+              <Settings />
+              Settings
+            </DropdownMenuItem>,
+          ]}
+        />
+        {isOnline ? null : (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                role='status'
+                aria-label='Offline'
+                className='absolute top-1 left-5 size-1.5 rounded-full border border-sidebar bg-feature'
+              />
+            </TooltipTrigger>
+            <TooltipContent side='top'>You’re offline. Some features need a connection.</TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+      <DropdownMenu isResponsive>
+        <DropdownMenuTrigger asChild>
+          <Button
+            aria-label='Help'
+            variant='ghost'
+            size='icon-sm'
+            className='size-7 text-muted-foreground data-[state=open]:bg-accent/50'
           >
-            <Sparkles />
-            Upgrade to Pro
-            <ProBadge className='ml-auto' />
-          </DropdownMenuItem>,
-          <DropdownMenuItem
-            key='billing'
-            className='cursor-pointer'
-            onSelect={() => {
-              openSettingsDialog('billing');
-            }}
-          >
-            <CreditCard />
-            Billing
-          </DropdownMenuItem>,
-          <DropdownMenuItem
-            key='settings'
-            className='cursor-pointer'
-            onSelect={() => {
-              openSettingsDialog('general');
-            }}
-          >
-            <Settings />
-            Settings
-          </DropdownMenuItem>,
-        ]}
-      />
-    </ClientOnly>
+            <CircleHelp />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent drawerTitle='Help' side='top' align='end' sideOffset={8} className='min-w-52'>
+          {helpItems}
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel className='font-normal text-muted-foreground'>Tau v{metaConfig.version}</DropdownMenuLabel>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <CookiePreferencesDialog isOpen={isCookiePreferencesOpen} onOpenChange={setIsCookiePreferencesOpen} />
+    </div>
   );
 }

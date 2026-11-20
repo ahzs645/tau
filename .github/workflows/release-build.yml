@@ -1,0 +1,1544 @@
+# Build application releases from their exact tags. UI/API deploy through their
+# existing production jobs. Desktop candidates attach their assets to a draft
+# GitHub Release, mirror them to isolated channel R2 buckets, and advance public
+# downloads/feeds only after a real signed macOS A→B replacement and
+# installed-payload verification.
+# Releases are immutable (charter I13, go-live DEL-20): release.yml and
+# release-desktop-staging.yml create each release as a draft and then its tag,
+# whose push starts this workflow. Every asset is attached to the draft through
+# ./.github/actions/release-assets, which never replaces one: a rerun accepts an
+# asset holding the same sha256 and refuses a different one. A release is
+# published once its assets are complete: a UI or API release after verification
+# (and the UI's source kit), a desktop release after native OTA qualification.
+# A UI release also builds the serve UI layer `tau serve` downloads by digest
+# and publishes it as its own immutable release (serve-ui-layer-*).
+# Staging keeps Developer ID signing and release hardening but skips notarization
+# unless release-desktop-staging.yml was dispatched with `notarize` (its tag carries a
+# `Notarize: true` line); production always notarizes and staples. Both retain source/relink release assets:
+# the kit is the taucad/geospec release asset for the `geospec-engine` catalog
+# pin, and while that asset is missing, the releases that ship OCCT refuse.
+# The first mirrored candidate establishes a baseline without changing live feeds.
+# Signing credentials stay in desktop/desktop-staging; R2 credentials are separately
+# scoped to each download bucket. Nothing here publishes npm packages.
+name: Release build
+run-name: ${{ inputs.tag || github.ref_name }}
+
+on:
+  push:
+    tags: ['ui@*', 'api@*', 'desktop@*', 'desktop-staging@*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to rebuild, e.g. desktop@0.2.0 or desktop-staging@0.2.0-staging.3'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-build-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  pnpm_config_verify_deps_before_run: warn
+  NX_NO_CLOUD: 'true'
+
+jobs:
+  resolve:
+    if: ${{ github.repository == 'taucad/tau' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      project: ${{ steps.tag.outputs.project }}
+      version: ${{ steps.tag.outputs.version }}
+      kind: ${{ steps.tag.outputs.kind }}
+      channel: ${{ steps.tag.outputs.channel }}
+      macos: ${{ steps.tag.outputs.macos }}
+      macos-targets: ${{ steps.tag.outputs.macos-targets }}
+      notarize: ${{ steps.tag.outputs.notarize }}
+      sentry-release: ${{ steps.tag.outputs.sentry-release }}
+    steps:
+      - name: Resolve the release tag
+        id: tag
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+          EVENT: ${{ github.event_name }}
+          DELETED: ${{ github.event.deleted || false }}
+          AUTHOR: ${{ github.actor }}
+          RELEASE_BOT_LOGIN: ${{ vars.RELEASE_BOT_LOGIN || 'tau-release-bot[bot]' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          channel=production
+          if [ "$DELETED" = true ]; then
+            echo "::notice::$TAG was deleted; nothing to build."
+            echo "kind=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$TAG" =~ ^desktop-staging@([0-9]+\.[0-9]+\.[0-9]+)-staging\.[0-9]+$ ]]; then
+            # A staging desktop prerelease builds the desktop app at its manifest version.
+            project=desktop
+            version=${BASH_REMATCH[1]}
+            channel=staging
+          elif [[ "$TAG" =~ ^([a-z0-9-]+)@([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            project=${BASH_REMATCH[1]}
+            version=${BASH_REMATCH[2]}
+          else
+            echo "::notice::$TAG is not an application release; nothing to build."
+            echo "kind=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          kind=app
+          sentry_release=
+          if [ "$project" = desktop ]; then
+            kind=desktop
+            # One Sentry release per desktop tag, whatever the platform: `tau-desktop@0.2.0` or
+            # `tau-desktop@0.2.0-staging.3`. Baked into main (`tauSentryRelease`) and given its commits on promotion.
+            sentry_release="tau-desktop@${TAG#*@}"
+          fi
+
+          # Only build what release.yml released: a tag the bot pushed, naming a
+          # commit already on main. Release managers can push release tags too,
+          # and a desktop build signs and ships what it builds.
+          if [ "$EVENT" = push ] && [ "$AUTHOR" != "$RELEASE_BOT_LOGIN" ]; then
+            echo "::error::$TAG was pushed by $AUTHOR, not $RELEASE_BOT_LOGIN; refusing to build it."
+            exit 1
+          fi
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$TAG" --jq .status)
+          if [ "$status" != behind ] && [ "$status" != identical ]; then
+            echo "::error::$TAG is not on main (compare status: $status); refusing to build it."
+            exit 1
+          fi
+          # Mac architectures: a production release packages both. A staging candidate packages Intel
+          # only when release-desktop-staging.yml annotated its tag with the line below (a dispatch with `intel`,
+          # which the promotion gate requests for an Apple silicon-only candidate);
+          # every other staging candidate is Apple silicon only.
+          # Notarization likewise: production always, a staging candidate only when its tag carries
+          # `Notarize: true` (a dispatch that asked for it).
+          arches='arm64 x64'
+          notarize=true
+          if [ "$channel" = staging ]; then
+            arches=arm64
+            notarize=false
+            object=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object | "\(.type) \(.sha)"')
+            if [ "${object%% *}" = tag ]; then
+              message=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/${object#* }" --jq .message)
+              if grep -qx 'Mac architectures: arm64 x64' <<< "$message"; then arches='arm64 x64'; fi
+              if grep -qx 'Notarize: true' <<< "$message"; then notarize=true; fi
+            fi
+          fi
+          macos=$(jq -cn --arg arches "$arches" '[
+            {arch: "arm64", runner: "macos-26", machine: "arm64", "package-target": "package-macos-release"},
+            {arch: "x64", runner: "macos-26-intel", machine: "x86_64", "package-target": "package-macos-release-intel"}
+          ] | map(select(.arch as $arch | $arches | split(" ") | index($arch)))')
+          echo "Mac architectures: $arches"
+          echo "Notarize: $notarize"
+          {
+            echo "tag=$TAG"
+            echo "project=$project"
+            echo "version=$version"
+            echo "kind=$kind"
+            echo "channel=$channel"
+            echo "macos=$macos"
+            echo "macos-targets=$(sed -E 's/(^| )/\1darwin-/g' <<< "$arches")"
+            echo "notarize=$notarize"
+            echo "sentry-release=$sentry_release"
+          } >> "$GITHUB_OUTPUT"
+
+  verify-app:
+    needs: resolve
+    if: ${{ github.repository == 'taucad/tau' && (needs.resolve.outputs.kind == 'app' || needs.resolve.outputs.kind == 'desktop') }}
+    name: Verify ${{ needs.resolve.outputs.tag }}
+    runs-on: ubuntu-24.04
+    # Includes waiting for the release commit's main CI run, which starts with
+    # the same merge and whose macOS GeoSpec producer takes over an hour.
+    timeout-minutes: 300
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout the release
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+
+      - name: Require a release application at the released version
+        env:
+          PROJECT: ${{ needs.resolve.outputs.project }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          # pnpm can print warnings ahead of the JSON, which is always the last line.
+          pnpm nx show project "$PROJECT" --json | tail -1 > "$RUNNER_TEMP/project.json"
+          jq -e '.tags | index("release:app")' "$RUNNER_TEMP/project.json" > /dev/null \
+            || { echo "::error::$PROJECT is not tagged release:app"; exit 1; }
+          root=$(jq -r .root "$RUNNER_TEMP/project.json")
+          actual=$(jq -r .version "$root/package.json")
+          test "$actual" = "$VERSION" \
+            || { echo "::error::$root/package.json is $actual, the tag says $VERSION"; exit 1; }
+
+      # A release is built only once main is green on its commit.
+      - name: Require the release commit's main CI run to have passed
+        uses: ./.github/actions/main-ci-success
+        with:
+          wait-minutes: '180'
+          github-token: ${{ github.token }}
+
+      # The API's `test` target needs Postgres, Redis and MinIO; CI's
+      # "API tests (Postgres + MinIO)" job starts them the same way. Without
+      # them every repository-store suite fails on ECONNREFUSED :9000.
+      - name: Start Postgres + Redis + MinIO for the API suites
+        if: needs.resolve.outputs.project == 'api'
+        run: |
+          set -euo pipefail
+          cp apps/api/.env.example apps/api/.env
+          docker compose -f infra/docker-compose.yml up -d postgres redis minio minio-bootstrap
+          bash infra/docker-compose.test.sh
+          BILLING_DATABASE_URL=postgresql://dev_user:dev_password@localhost:5432/tau_dev pnpm nx run-many -t db-migrate --projects tag:scope:api
+
+      - name: Lint, typecheck, test and build the release
+        env:
+          PROJECT: ${{ needs.resolve.outputs.project }}
+          # The UI build validates these, as in CI; the deploys set their own.
+          TAU_API_URL: http://localhost:4000
+          TAU_WEBSOCKET_URL: ws://localhost:4001
+          TAU_FRONTEND_URL: http://localhost:3000
+        run: |
+          set -euo pipefail
+          # Named here, as in CI's API job, so the suites' database is stated where they run.
+          if [ "$PROJECT" = api ]; then export DATABASE_URL=postgresql://dev_user:dev_password@localhost:5432/tau_dev; fi
+          # One task at a time with full output, as CI's lanes run them.
+          pnpm nx run-many -t lint typecheck test build --projects="$PROJECT" --parallel=1 --outputStyle=static
+
+  # OCCT (LGPL-2.1 with the Open CASCADE exception) is compiled into the GeoSpec
+  # engine that the UI serves as Wasm and the desktop app bundles, so each UI
+  # and desktop release carries the complete source and relink kit, the OCCT
+  # licence and exception, and the GeoSpec notices as release assets. The kit
+  # is the taucad/geospec release asset for the installed `geospec-engine` pin
+  # and must match the receipt in that package's licenses/SOURCE-RELINK.json;
+  # without it the job refuses.
+  source-kit:
+    needs: [resolve, verify-app]
+    if: ${{ github.repository == 'taucad/tau' && (needs.resolve.outputs.project == 'ui' || needs.resolve.outputs.project == 'desktop') }}
+    name: Attach the GeoSpec source and relink kit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    environment:
+      name: release-pr
+      deployment: false
+    steps:
+      - name: Checkout the release
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+
+      - name: Take the GeoSpec source and relink kit for the engine pin
+        id: kit
+        uses: ./.github/actions/geospec-source-relink
+        with:
+          github-token: ${{ github.token }}
+
+      - name: Gather the kit and notices
+        env:
+          KIT: ${{ steps.kit.outputs.archive }}
+          LICENSES: ${{ steps.kit.outputs.licenses }}
+        run: |
+          set -euo pipefail
+          licenses="$LICENSES"
+          kit="$KIT"
+          mkdir -p "$RUNNER_TEMP/source-kit"
+          cp "$kit" "$RUNNER_TEMP/source-kit/"
+          cp "$licenses/OCCT-LGPL-2.1.txt" "$licenses/OCCT-LGPL-exception.txt" "$RUNNER_TEMP/source-kit/"
+          cp "$licenses/NOTICE.txt" "$RUNNER_TEMP/source-kit/GeoSpec-NOTICE.txt"
+          cp "$licenses/THIRD-PARTY-NOTICES.txt" "$RUNNER_TEMP/source-kit/GeoSpec-THIRD-PARTY-NOTICES.txt"
+          cp "$licenses/SOURCE-RELINK.md" "$RUNNER_TEMP/source-kit/GeoSpec-SOURCE-RELINK.md"
+
+      - name: Mint tau-release-bot token
+        id: bot
+        uses: actions/create-github-app-token@064492a9a1762067169d50c792a7dc02bc3d1254 # v2.0.0
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Attach the kit and notices
+        uses: ./.github/actions/release-assets
+        with:
+          tag: ${{ needs.resolve.outputs.tag }}
+          files: ${{ runner.temp }}/source-kit/*
+          github-token: ${{ steps.bot.outputs.token }}
+
+  # A UI or API release becomes public, and with immutable releases unchangeable,
+  # once it is verified and the UI's source kit is attached. desktop-promote
+  # publishes a desktop release after its OTA qualification.
+  app-release:
+    needs: [resolve, verify-app, source-kit]
+    if: ${{ github.repository == 'taucad/tau' && (!cancelled() && needs.resolve.outputs.kind == 'app' && needs.verify-app.result == 'success' && (needs.source-kit.result == 'success' || needs.source-kit.result == 'skipped')) }}
+    name: Publish ${{ needs.resolve.outputs.tag }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: release-pr
+      deployment: false
+    steps:
+      - name: Checkout the release
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+          sparse-checkout: .github/actions
+
+      - name: Mint tau-release-bot token
+        id: bot
+        uses: actions/create-github-app-token@064492a9a1762067169d50c792a7dc02bc3d1254 # v2.0.0
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Publish the release
+        uses: ./.github/actions/release-assets
+        with:
+          tag: ${{ needs.resolve.outputs.tag }}
+          publish: 'true'
+          github-token: ${{ steps.bot.outputs.token }}
+
+  desktop-macos:
+    needs: [resolve, verify-app]
+    if: ${{ github.repository == 'taucad/tau' && (needs.resolve.outputs.kind == 'desktop') }}
+    name: Package macOS ${{ matrix.arch }} (signed)
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # arm64 always; x64 on production tags and full staging candidates (resolve).
+        include: ${{ fromJSON(needs.resolve.outputs.macos) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    environment:
+      name: ${{ needs.resolve.outputs.channel == 'staging' && 'desktop-staging' || 'desktop' }}
+    env:
+      GEOSPEC_WORKERS: 1
+      # Public DSN owned by tau-repo Terraform on each signed desktop environment.
+      SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+      # The explicit Sentry release every event of this build reports (`tauSentryRelease`), never the SDK's
+      # `<productName>@<appVersion>` default; desktop-promote attaches its commits.
+      SENTRY_RELEASE: ${{ needs.resolve.outputs.sentry-release }}
+      # Baked into the desktop main bundle (`tauPostHogClientKey`) from POSTHOG_CLIENT_KEY_PRODUCTION or _STAGING; unset leaves desktop analytics inert.
+      POSTHOG_CLIENT_KEY: ${{ vars[format('POSTHOG_CLIENT_KEY_{0}', needs.resolve.outputs.channel)] }}
+      TAU_DESKTOP_CHANNEL: ${{ needs.resolve.outputs.channel }}
+      # Runtime telemetry's own build signal (`tauTelemetryHostCloudBuild`), never the billing gate. A literal, so every
+      # official desktop artifact on both channels reports, and only to the API its own `TAU_API_URL` default names.
+      TAU_TELEMETRY_HOST: cloud
+      TAU_DESKTOP_RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+      TAU_DESKTOP_NOTARIZE: ${{ needs.resolve.outputs.notarize }}
+      TAU_MACOS_PACKAGE_OUTPUT_ROOT: ${{ github.workspace }}/out/desktop/macos-${{ matrix.arch }}
+    steps:
+      - name: Checkout the release
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+        with:
+          node-version: '24.10.0'
+
+      - name: Check the packaging host
+        run: |
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = "${{ matrix.machine }}"
+
+      # The engine's darwin-arm64 binding installs with the workspace; its LGPL
+      # source and relink kit comes from the engine pin's taucad/geospec release,
+      # and package-macos-release refuses to package without it. The Intel
+      # package ships no native GeoSpec engine, so it takes no kit.
+      - name: Take the GeoSpec source and relink kit for the engine pin
+        if: matrix.arch == 'arm64'
+        id: geospec-kit
+        uses: ./.github/actions/geospec-source-relink
+        with:
+          github-token: ${{ github.token }}
+
+      # prepare-build123d-python resolves its wheels with uv, as on the
+      # portable hosts.
+      - name: Install uv
+        run: |
+          command -v uv || pipx install uv
+          uv --version
+
+      - name: Record package source identity
+        shell: bash
+        run: echo "TAU_DESKTOP_SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      # A throwaway keychain holds the Developer ID identity and the notary
+      # profile for this job only; it is deleted in the last step.
+      - name: Import the Developer ID identity and notary credentials
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          ENVIRONMENT: ${{ needs.resolve.outputs.channel == 'staging' && 'desktop-staging' || 'desktop' }}
+        run: |
+          set -euo pipefail
+          names=(MACOS_CERTIFICATE_P12_BASE64 MACOS_CERTIFICATE_PASSWORD APPLE_TEAM_ID)
+          if [ "$TAU_DESKTOP_NOTARIZE" = true ]; then
+            names+=(APPLE_API_KEY_P8_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER_ID)
+          fi
+          for name in "${names[@]}"; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is not set on the $ENVIRONMENT environment"
+              exit 1
+            fi
+          done
+          keychain="$RUNNER_TEMP/tau-signing.keychain-db"
+          keychain_password=$(openssl rand -hex 24)
+          certificate="$RUNNER_TEMP/developer-id.p12"
+          api_key="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          search_list=("$keychain")
+          while IFS= read -r entry; do
+            entry=${entry//\"/}
+            search_list+=("${entry#"${entry%%[![:space:]]*}"}")
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "${search_list[@]}"
+          security default-keychain -d user -s "$keychain"
+          rm -f "$certificate"
+          identity=$(security find-identity -v -p codesigning "$keychain" \
+            | sed -nE "s/.*\"(Developer ID Application: .*\($APPLE_TEAM_ID\))\".*/\1/p" | head -1)
+          if [ -z "$identity" ]; then
+            echo "::error::No Developer ID Application identity for team $APPLE_TEAM_ID in the imported certificate"
+            exit 1
+          fi
+          # package-macos.mts notarizes through this keychain profile.
+          if [ "$TAU_DESKTOP_NOTARIZE" = true ]; then
+          printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$api_key"
+          xcrun notarytool store-credentials tau-notary --key "$api_key" --key-id "$APPLE_API_KEY_ID" \
+            --issuer "$APPLE_API_ISSUER_ID" --keychain "$keychain"
+          rm -f "$api_key"
+          fi
+          {
+            echo "TAU_CODESIGN_IDENTITY=$identity"
+            echo "TAU_NOTARYTOOL_PROFILE=tau-notary"
+            echo "TAU_SIGNING_KEYCHAIN=$keychain"
+          } >> "$GITHUB_ENV"
+
+      - name: Package and sign; notarize production and requested staging
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          TAU_GEOSPEC_SOURCE_RELINK_ARCHIVE: ${{ steps.geospec-kit.outputs.archive }}
+        run: |
+          config=()
+          if [ "$TAU_DESKTOP_CHANNEL" = staging ]; then
+            config+=(--configuration="$([ "$TAU_DESKTOP_NOTARIZE" = true ] && echo staging-notarized || echo staging)")
+          fi
+          pnpm nx run desktop:${{ matrix.package-target }} --parallel=1 "${config[@]}"
+
+      # Uploaded before verification so a failed verify leaves the signed app
+      # for verify-desktop-macos.yml. Publishing still needs this whole job.
+      - name: Upload the macOS archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-darwin-${{ matrix.arch }}
+          path: ${{ env.TAU_MACOS_PACKAGE_OUTPUT_ROOT }}/Tau-macos-${{ matrix.arch }}.zip
+          if-no-files-found: error
+          retention-days: 7
+
+      # The Tau PicoGK layer (charter W4, D13): the framework-dependent ReadyToRun
+      # worker with the engine prepare-picogk-dotnet built and ad-hoc signed, as a
+      # deterministic tar.gz digested with its record. Built before verification so
+      # verify-macos-release launches it through the runtime archive's dotnet muxer;
+      # picogk-layer-release and picogk-layer-mirror publish it by digest.
+      - name: Build the Tau PicoGK layer
+        if: matrix.arch == 'arm64'
+        run: pnpm nx run picogk:prepare-layer
+
+      - name: Upload the Tau PicoGK layer
+        if: matrix.arch == 'arm64'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: picogk-layer-darwin-arm64
+          path: |
+            out/picogk-layer/darwin-arm64/tau-picogk-layer-darwin-arm64.tar.gz
+            out/picogk-layer/darwin-arm64/tau-layer.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Verify the signed package
+        env:
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          config=()
+          if [ "$TAU_DESKTOP_CHANNEL" = staging ]; then
+            config+=(--configuration="$([ "$TAU_DESKTOP_NOTARIZE" = true ] && echo staging-notarized || echo staging)")
+          fi
+          pnpm nx run desktop:verify-macos-release "${config[@]}"
+
+      - name: Delete the signing keychain
+        if: always()
+        run: |
+          if [ -n "${TAU_SIGNING_KEYCHAIN:-}" ]; then
+            security delete-keychain "$TAU_SIGNING_KEYCHAIN" || true
+          fi
+
+  # The Tau PicoGK layer for linux-x64 (glibc 2.28): the same framework-dependent
+  # ReadyToRun worker, with the engine prepare-picogk-dotnet compiles from the same
+  # pins in the manylinux_2_28 builder image it names by digest (no network in the
+  # builder), audited for its bundled libraries and glibc/libstdc++ symbol floors.
+  # Nothing is signed or published here; the release and mirror jobs publish it by
+  # digest exactly as the darwin-arm64 layer.
+  picogk-layer-linux:
+    needs: [resolve, verify-app]
+    if: ${{ github.repository == 'taucad/tau' && (needs.resolve.outputs.kind == 'desktop') }}
+    name: Build the Tau PicoGK linux-x64 layer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Checkout the release
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-nx
+      - name: Build the Tau PicoGK layer
+        run: pnpm nx run picogk:prepare-layer-linux --outputStyle=stream
+      - name: Upload the Tau PicoGK layer
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: picogk-layer-linux-x64
+          path: |
+            out/picogk-layer/linux-x64/tau-picogk-layer-linux-x64.tar.gz
+            out/picogk-layer/linux-x64/tau-layer.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # One immutable GitHub Release per layer digest, created draft → upload →
+  # publish and never clobbered (charter I13, DEL-20): a rerun or a later desktop
+  # release that builds the same bytes finds the published release and only
+  # re-verifies it. One leg per layer target, each gated on its own build job, so a
+  # failed Linux build never holds back the darwin-arm64 layer. The composed
+  # tau-plugin.json of each leg is the pin a follow-up PR lands.
+  picogk-layer-release:
+    needs: [resolve, desktop-macos, picogk-layer-linux]
+    if: ${{ github.repository == 'taucad/tau' && (!cancelled() && needs.resolve.outputs.kind == 'desktop') }}
+    name: Publish the Tau PicoGK ${{ matrix.target }} layer release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            build: desktop-macos
+          - target: linux-x64
+            build: picogk-layer-linux
+    environment:
+      name: release-pr
+      deployment: false
+    steps:
+      - name: Require the layer build
+        env:
+          RESULT: ${{ needs[matrix.build].result }}
+          BUILD: ${{ matrix.build }}
+        run: |
+          if [ "$RESULT" != success ]; then
+            echo "::error::$BUILD ended $RESULT; the ${{ matrix.target }} layer is not published."
+            exit 1
+          fi
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-nx
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: picogk-layer-${{ matrix.target }}
+          path: out/picogk-layer/${{ matrix.target }}
+      # A target the manifest does not pin yet takes its variant from tau-plugin.variants.json.
+      - name: Verify the layer against its record and compose the pin
+        id: layer
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          node --import @oxc-node/core/register packages/plugins/picogk/scripts/compose-tau-plugin.mts \
+            --layer "out/picogk-layer/$TARGET/tau-layer.json" \
+            --archive "out/picogk-layer/$TARGET/tau-picogk-layer-$TARGET.tar.gz" \
+            --write out/picogk-layer/tau-plugin.json --outputs >> "$GITHUB_OUTPUT"
+      - name: Mint tau-release-bot token
+        id: bot
+        uses: actions/create-github-app-token@064492a9a1762067169d50c792a7dc02bc3d1254 # v2.0.0
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - name: Create, fill and publish the layer release
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          LAYER_TAG: ${{ steps.layer.outputs.tag }}
+          LAYER_ASSET: ${{ steps.layer.outputs.asset }}
+          LAYER_SHA256: ${{ steps.layer.outputs.sha256 }}
+          LAYER_DIR: out/picogk-layer/${{ matrix.target }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          # gh resolves a draft by its tag name too, so an interrupted run's draft is reused.
+          if ! draft=$(gh release view "$LAYER_TAG" --json isDraft --jq .isDraft 2> "$RUNNER_TEMP/release-error"); then
+            if ! grep -qi 'release not found' "$RUNNER_TEMP/release-error"; then cat "$RUNNER_TEMP/release-error" >&2; exit 1; fi
+            gh release create "$LAYER_TAG" --draft --target "$(git rev-parse HEAD)" --latest=false \
+              --title "$LAYER_TAG" \
+              --notes "Tau PicoGK layer for $TARGET, sha256 $LAYER_SHA256. Immutable: pinned by the tau-plugin.json of @taucad/picogk."
+            draft=true
+          fi
+          assets=$(gh release view "$LAYER_TAG" --json assets --jq '[.assets[].name] | join(" ")')
+          for name in "$LAYER_ASSET" tau-layer.json; do
+            if [[ " $assets " != *" $name "* ]]; then
+              if [ "$draft" != true ]; then
+                echo "::error::$LAYER_TAG is published without $name; published assets are never replaced."
+                exit 1
+              fi
+              gh release upload "$LAYER_TAG" "$LAYER_DIR/$name"
+            fi
+          done
+          gh release download "$LAYER_TAG" --pattern "$LAYER_ASSET" --dir "$RUNNER_TEMP/released"
+          echo "$LAYER_SHA256  $RUNNER_TEMP/released/$LAYER_ASSET" | sha256sum --check --strict
+          if [ "$draft" = true ]; then
+            gh release edit "$LAYER_TAG" --draft=false --latest=false
+          fi
+          {
+            echo "### Tau PicoGK layer: $TARGET"
+            echo
+            echo "- sha256 \`$LAYER_SHA256\`"
+            echo "- release \`$LAYER_TAG\`"
+            echo "- pin: the \`picogk-tau-plugin-$TARGET\` artifact (\`tau-plugin.json\` and its SBOM \`tau-plugin.cdx.json\`)"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: picogk-tau-plugin-${{ matrix.target }}
+          path: |
+            out/picogk-layer/tau-plugin.json
+            out/picogk-layer/tau-plugin.cdx.json
+          if-no-files-found: error
+          retention-days: 30
+
+  # The same bytes under `blobs/sha256/<hex>` of the release channel's locked dependency
+  # bucket, the digest-addressed mirror layout (D2, D25) its dependency host serves: a
+  # production tag writes `tau-prod-dependencies` from environment `dependencies` (a required
+  # reviewer) and reads back from dependencies.tau.new; a staging tag, a full candidate's
+  # included, writes `tau-staging-au-dependencies` from `dependencies-staging` and reads back
+  # from dependencies.taucad.dev. No staging run holds a production credential, and neither
+  # credential reaches user content (Brain incident 2026-11-09-r2-shared-bucket-blast-radius,
+  # blueprint phase 4). The bucket lock refuses an overwrite or delete with 409, so the job
+  # checks for the key first and a re-run verifies instead of writing; a refused write fails
+  # the job rather than retrying. A missing credential, endpoint or bucket, or a bucket other
+  # than the channel's own, fails the job: it never skips and never defaults a bucket.
+  # The pin picogk-layer composes names dependencies.tau.new first (`dependencyBaseUrl`,
+  # `@taucad/dotnet-kernel-core/layer`), so a production layer is mirrored before its pin lands
+  # on `main`, and `main` never pins a URL that does not serve (I13, `check-dependency-urls.yml`).
+  picogk-layer-mirror:
+    needs: [resolve, desktop-macos, picogk-layer-linux]
+    if: ${{ github.repository == 'taucad/tau' && (!cancelled() && needs.resolve.outputs.kind == 'desktop') }}
+    name: Mirror the Tau PicoGK ${{ matrix.target }} layer to the ${{ needs.resolve.outputs.channel }} dependency host
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            build: desktop-macos
+          - target: linux-x64
+            build: picogk-layer-linux
+    environment:
+      name: ${{ needs.resolve.outputs.channel == 'production' && 'dependencies' || 'dependencies-staging' }}
+      deployment: false
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.DEPENDENCY_R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.DEPENDENCY_R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      DEPENDENCY_R2_ENDPOINT: ${{ vars.DEPENDENCY_R2_ENDPOINT }}
+      DEPENDENCY_R2_BUCKET: ${{ vars.DEPENDENCY_R2_BUCKET }}
+      CHANNEL: ${{ needs.resolve.outputs.channel }}
+      DEPENDENCY_BASE_URL: ${{ needs.resolve.outputs.channel == 'production' && 'https://dependencies.tau.new/' || 'https://dependencies.taucad.dev/' }}
+    steps:
+      - name: Require the layer build
+        env:
+          RESULT: ${{ needs[matrix.build].result }}
+          BUILD: ${{ matrix.build }}
+        run: |
+          if [ "$RESULT" != success ]; then
+            echo "::error::$BUILD ended $RESULT; the ${{ matrix.target }} layer is not mirrored."
+            exit 1
+          fi
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: picogk-layer-${{ matrix.target }}
+          path: layer
+      - name: Verify the layer against its record
+        id: layer
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          sha256=$(jq -r .sha256 layer/tau-layer.json)
+          asset=$(jq -r .asset layer/tau-layer.json)
+          [[ "$sha256" =~ ^[0-9a-f]{64}$ ]] && [ "$asset" = "tau-picogk-layer-$TARGET.tar.gz" ]
+          echo "$sha256  layer/$asset" | sha256sum --check --strict
+          {
+            echo "sha256=$sha256"
+            echo "asset=$asset"
+            echo "key=blobs/sha256/$sha256"
+          } >> "$GITHUB_OUTPUT"
+      - name: Require the channel's dependency upload credential
+        run: |
+          set -euo pipefail
+          case "$CHANNEL" in
+            production) environment=dependencies expected=tau-prod-dependencies ;;
+            staging) environment=dependencies-staging expected=tau-staging-au-dependencies ;;
+            *)
+              echo "::error::Unknown release channel '$CHANNEL'; nothing is mirrored."
+              exit 1
+              ;;
+          esac
+          missing=()
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY DEPENDENCY_R2_ENDPOINT DEPENDENCY_R2_BUCKET; do
+            if [ -z "${!name}" ]; then missing+=("$name"); fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::The $environment environment lacks ${missing[*]} (secrets DEPENDENCY_R2_ACCESS_KEY_ID, DEPENDENCY_R2_SECRET_ACCESS_KEY, variables DEPENDENCY_R2_ENDPOINT, DEPENDENCY_R2_BUCKET); nothing is mirrored."
+            exit 1
+          fi
+          if [ "$DEPENDENCY_R2_BUCKET" != "$expected" ]; then
+            echo "::error::The $environment environment names bucket '$DEPENDENCY_R2_BUCKET', not its own '$expected'; nothing is mirrored."
+            exit 1
+          fi
+      - name: Write the layer once under its digest
+        env:
+          KEY: ${{ steps.layer.outputs.key }}
+          SHA256: ${{ steps.layer.outputs.sha256 }}
+          ASSET: ${{ steps.layer.outputs.asset }}
+        run: |
+          set -euo pipefail
+          s3() { aws --endpoint-url "$DEPENDENCY_R2_ENDPOINT" s3api "$@"; }
+          if s3 get-object --bucket "$DEPENDENCY_R2_BUCKET" --key "$KEY" "$RUNNER_TEMP/existing" > /dev/null 2> "$RUNNER_TEMP/get-error"; then
+            echo "$SHA256  $RUNNER_TEMP/existing" | sha256sum --check --strict
+            echo "::notice::$KEY already holds these bytes; nothing written."
+          else
+            if ! grep -Eq '\((NoSuchKey|404)\)' "$RUNNER_TEMP/get-error"; then cat "$RUNNER_TEMP/get-error" >&2; exit 1; fi
+            s3 put-object --bucket "$DEPENDENCY_R2_BUCKET" --key "$KEY" --body "layer/$ASSET" \
+              --content-type application/gzip --cache-control 'public, max-age=31536000, immutable' \
+              --if-none-match '*' > /dev/null
+          fi
+      - name: Read the layer back from the channel's dependency host
+        env:
+          KEY: ${{ steps.layer.outputs.key }}
+          SHA256: ${{ steps.layer.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+            --output "$RUNNER_TEMP/public" "$DEPENDENCY_BASE_URL$KEY"
+          echo "$SHA256  $RUNNER_TEMP/public" | sha256sum --check --strict
+
+  # The Tau UI that `tau serve` serves (charter W18, D29): the serve build,
+  # without its hidden source maps, as one deterministic tar.gz no larger than
+  # 150 MB (X2). Before anything is published the built CLI prepares it from a
+  # file:// mirror into an empty dependency store and serves it from there, and the
+  # serve-build gate runs against that store path with the in-tree build moved
+  # aside. The layer holds no cadmpeg engine: the daemon mounts the CLI's own
+  # installed cadmpeg-ts engines same-origin (cadmpeg engine delivery charter
+  # W6), and the smoke test fetches one from it and checks its digest against
+  # cadmpeg-ts/digests. The pin is composed here and landed by a follow-up PR; until then
+  # `packages/cli/serve-ui-layer.json` is a fail-closed placeholder.
+  serve-ui-layer:
+    needs: [resolve, verify-app]
+    if: ${{ github.repository == 'taucad/tau' && (needs.resolve.outputs.project == 'ui') }}
+    name: Build and verify the Tau serve UI layer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      NX_DAEMON: 'false'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-nx
+      # The published layer is the UI `tau serve` hands users, so it is built with the production origins the `ui`
+      # release serves tau.new with (ruling X58): the public values the production desktop channel also pins
+      # (apps/desktop/src/main/environment.ts). ci.yml and e2e-nightly.yml keep their localhost origins for test builds.
+      # `build:serve` does not key its cache on these variables, so a cached localhost build must not be reused here.
+      - name: Build the serve UI with production origins
+        env:
+          TAU_API_URL: https://api.tau.new
+          TAU_WEBSOCKET_URL: wss://api.tau.new
+          TAU_FRONTEND_URL: https://tau.new
+        run: |
+          set -euo pipefail
+          pnpm nx run ui:build:serve --skip-nx-cache --outputStyle=stream
+          shell=apps/ui/serve/build/client/index.html
+          grep -q 'https://api.tau.new' "$shell"
+          if grep -Eq 'localhost:(3000|4000|4001)' "$shell"; then
+            echo "::error::The serve UI shell carries a localhost origin; the published layer must use production origins."
+            exit 1
+          fi
+      - name: Build the layer and its record
+        run: |
+          set -euo pipefail
+          node --import @oxc-node/core/register packages/cli/scripts/serve-ui-layer.mts build \
+            --client apps/ui/serve/build/client --out out/serve-ui-layer
+          jq . out/serve-ui-layer/tau-layer.json
+      # The pin is written into this checkout only, so the CLI built next embeds it; the mirror is
+      # the one source the preparation host may use (no fallback to the pinned URLs, which are not
+      # published yet). `--smoke-test` fetches the smallest cadmpeg engine from the daemon serving the
+      # prepared store's UI and refuses unless it answers as application/wasm with the isolation headers
+      # and the exact bytes cadmpeg-ts/digests states; `engines == "mounted"` proves it ran, so a layer
+      # built against another cadmpeg-ts than this checkout installs (EQ1) fails here.
+      - name: Prepare and serve the layer from an empty dependency store
+        run: |
+          set -euo pipefail
+          sha256=$(jq -r .sha256 out/serve-ui-layer/tau-layer.json)
+          asset=$(jq -r .asset out/serve-ui-layer/tau-layer.json)
+          node --import @oxc-node/core/register packages/cli/scripts/serve-ui-layer.mts pin \
+            --layer out/serve-ui-layer/tau-layer.json --archive "out/serve-ui-layer/$asset" \
+            --write packages/cli/serve-ui-layer.json
+          mkdir -p "$RUNNER_TEMP/mirror/blobs/sha256" "$RUNNER_TEMP/project"
+          cp "out/serve-ui-layer/$asset" "$RUNNER_TEMP/mirror/blobs/sha256/$sha256"
+          pnpm nx run cli:build --outputStyle=stream
+          mv apps/ui/serve/build/client apps/ui/serve/build/client.in-tree
+          TAU_CONFIG_DIR="$RUNNER_TEMP/tau-config" TAU_DEPENDENCY_MIRROR="file://$RUNNER_TEMP/mirror/" \
+            TAU_DEPENDENCY_MIRROR_NO_FALLBACK=1 node packages/cli/dist/bin/tau.mjs serve "$RUNNER_TEMP/project" \
+            --smoke-test --json --port=0 --no-external-agents | tee "$RUNNER_TEMP/serve.json"
+          jq -e '.kind == "serve" and .ok == true and .ui == true and .engines == "mounted"' "$RUNNER_TEMP/serve.json" > /dev/null
+          root=$(find "$RUNNER_TEMP/tau-config/dependencies/closures/sha256" -mindepth 3 -maxdepth 3 \
+            -path '*/client/index.html' -printf '%h\n')
+          test "$(wc -l <<< "$root")" = 1
+          echo "STORE_UI_ROOT=$root" >> "$GITHUB_ENV"
+          echo "The store serves the UI from $root"
+      - name: Run the serve-build gate against the store path
+        run: |
+          set -euo pipefail
+          generated=apps/ui-e2e/src/support/serve-ui-build.store.test.ts
+          sed "s|^const uiRoot = resolvePath(repoRoot, 'apps/ui/serve/build/client');\$|const uiRoot = process.env['STORE_UI_ROOT'] ?? '';|" \
+            apps/ui-e2e/src/support/serve-ui-build.test.ts > "$generated"
+          test "$(diff apps/ui-e2e/src/support/serve-ui-build.test.ts "$generated" | grep -c '^>' || true)" = 1
+          pnpm exec vitest run --dir apps/ui-e2e "$generated" --environment=node
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: serve-ui-layer
+          path: |
+            out/serve-ui-layer/tau-serve-ui.tar.gz
+            out/serve-ui-layer/tau-layer.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # One immutable GitHub Release per serve UI layer digest, draft → upload →
+  # publish and never clobbered (I13, DEL-20), exactly as picogk-layer-release.
+  # The composed serve-ui-layer.json is the pin a follow-up PR lands.
+  serve-ui-layer-release:
+    needs: [resolve, serve-ui-layer]
+    if: ${{ github.repository == 'taucad/tau' && (needs.resolve.outputs.project == 'ui') }}
+    name: Publish the Tau serve UI layer release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: release-pr
+      deployment: false
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-nx
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: serve-ui-layer
+          path: out/serve-ui-layer
+      - name: Verify the layer against its record and compose the pin
+        id: layer
+        run: |
+          set -euo pipefail
+          node --import @oxc-node/core/register packages/cli/scripts/serve-ui-layer.mts pin \
+            --layer out/serve-ui-layer/tau-layer.json --archive out/serve-ui-layer/tau-serve-ui.tar.gz \
+            --write out/serve-ui-layer/serve-ui-layer.json --outputs >> "$GITHUB_OUTPUT"
+      - name: Mint tau-release-bot token
+        id: bot
+        uses: actions/create-github-app-token@064492a9a1762067169d50c792a7dc02bc3d1254 # v2.0.0
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - name: Create, fill and publish the layer release
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          LAYER_TAG: ${{ steps.layer.outputs.tag }}
+          LAYER_ASSET: ${{ steps.layer.outputs.asset }}
+          LAYER_SHA256: ${{ steps.layer.outputs.sha256 }}
+          LAYER_DIR: out/serve-ui-layer
+          UI_TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # gh resolves a draft by its tag name too, so an interrupted run's draft is reused.
+          if ! draft=$(gh release view "$LAYER_TAG" --json isDraft --jq .isDraft 2> "$RUNNER_TEMP/release-error"); then
+            if ! grep -qi 'release not found' "$RUNNER_TEMP/release-error"; then cat "$RUNNER_TEMP/release-error" >&2; exit 1; fi
+            gh release create "$LAYER_TAG" --draft --target "$(git rev-parse HEAD)" --latest=false \
+              --title "$LAYER_TAG" \
+              --notes "Tau serve UI layer built from $UI_TAG, sha256 $LAYER_SHA256. Immutable: pinned by the serve-ui-layer.json of @taucad/cli."
+            draft=true
+          fi
+          assets=$(gh release view "$LAYER_TAG" --json assets --jq '[.assets[].name] | join(" ")')
+          for name in "$LAYER_ASSET" tau-layer.json; do
+            if [[ " $assets " != *" $name "* ]]; then
+              if [ "$draft" != true ]; then
+                echo "::error::$LAYER_TAG is published without $name; published assets are never replaced."
+                exit 1
+              fi
+              gh release upload "$LAYER_TAG" "$LAYER_DIR/$name"
+            fi
+          done
+          gh release download "$LAYER_TAG" --pattern "$LAYER_ASSET" --dir "$RUNNER_TEMP/released"
+          echo "$LAYER_SHA256  $RUNNER_TEMP/released/$LAYER_ASSET" | sha256sum --check --strict
+          if [ "$draft" = true ]; then
+            gh release edit "$LAYER_TAG" --draft=false --latest=false
+          fi
+          {
+            echo "### Tau serve UI layer"
+            echo
+            echo "- sha256 \`$LAYER_SHA256\`"
+            echo "- release \`$LAYER_TAG\`"
+            echo "- pin: the \`serve-ui-layer-pin\` artifact (\`serve-ui-layer.json\`)"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: serve-ui-layer-pin
+          path: out/serve-ui-layer/serve-ui-layer.json
+          if-no-files-found: error
+          retention-days: 30
+
+  # The same bytes under `blobs/sha256/<hex>` of the release channel's locked dependency
+  # bucket, the first URL the pin names; written once and never replaced, routed by channel
+  # and failing closed as picogk-layer-mirror. `ui@*` is the production channel (environment
+  # `dependencies`). The routing is by channel, so a staging UI tag (`ui-staging@*`, which
+  # `dependencies-staging` admits but nothing mints or resolves yet) takes the staging bucket.
+  serve-ui-layer-mirror:
+    needs: [resolve, serve-ui-layer]
+    if: ${{ github.repository == 'taucad/tau' && (needs.resolve.outputs.project == 'ui') }}
+    name: Mirror the Tau serve UI layer to the ${{ needs.resolve.outputs.channel }} dependency host
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: ${{ needs.resolve.outputs.channel == 'production' && 'dependencies' || 'dependencies-staging' }}
+      deployment: false
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.DEPENDENCY_R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.DEPENDENCY_R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      DEPENDENCY_R2_ENDPOINT: ${{ vars.DEPENDENCY_R2_ENDPOINT }}
+      DEPENDENCY_R2_BUCKET: ${{ vars.DEPENDENCY_R2_BUCKET }}
+      CHANNEL: ${{ needs.resolve.outputs.channel }}
+      DEPENDENCY_BASE_URL: ${{ needs.resolve.outputs.channel == 'production' && 'https://dependencies.tau.new/' || 'https://dependencies.taucad.dev/' }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: serve-ui-layer
+          path: layer
+      - name: Verify the layer against its record
+        id: layer
+        run: |
+          set -euo pipefail
+          sha256=$(jq -r .sha256 layer/tau-layer.json)
+          asset=$(jq -r .asset layer/tau-layer.json)
+          [[ "$sha256" =~ ^[0-9a-f]{64}$ ]] && [ "$asset" = tau-serve-ui.tar.gz ]
+          echo "$sha256  layer/$asset" | sha256sum --check --strict
+          {
+            echo "sha256=$sha256"
+            echo "asset=$asset"
+            echo "key=blobs/sha256/$sha256"
+          } >> "$GITHUB_OUTPUT"
+      - name: Require the channel's dependency upload credential
+        run: |
+          set -euo pipefail
+          case "$CHANNEL" in
+            production) environment=dependencies expected=tau-prod-dependencies ;;
+            staging) environment=dependencies-staging expected=tau-staging-au-dependencies ;;
+            *)
+              echo "::error::Unknown release channel '$CHANNEL'; nothing is mirrored."
+              exit 1
+              ;;
+          esac
+          missing=()
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY DEPENDENCY_R2_ENDPOINT DEPENDENCY_R2_BUCKET; do
+            if [ -z "${!name}" ]; then missing+=("$name"); fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::The $environment environment lacks ${missing[*]} (secrets DEPENDENCY_R2_ACCESS_KEY_ID, DEPENDENCY_R2_SECRET_ACCESS_KEY, variables DEPENDENCY_R2_ENDPOINT, DEPENDENCY_R2_BUCKET); nothing is mirrored."
+            exit 1
+          fi
+          if [ "$DEPENDENCY_R2_BUCKET" != "$expected" ]; then
+            echo "::error::The $environment environment names bucket '$DEPENDENCY_R2_BUCKET', not its own '$expected'; nothing is mirrored."
+            exit 1
+          fi
+      - name: Write the layer once under its digest
+        env:
+          KEY: ${{ steps.layer.outputs.key }}
+          SHA256: ${{ steps.layer.outputs.sha256 }}
+          ASSET: ${{ steps.layer.outputs.asset }}
+        run: |
+          set -euo pipefail
+          s3() { aws --endpoint-url "$DEPENDENCY_R2_ENDPOINT" s3api "$@"; }
+          if s3 get-object --bucket "$DEPENDENCY_R2_BUCKET" --key "$KEY" "$RUNNER_TEMP/existing" > /dev/null 2> "$RUNNER_TEMP/get-error"; then
+            echo "$SHA256  $RUNNER_TEMP/existing" | sha256sum --check --strict
+            echo "::notice::$KEY already holds these bytes; nothing written."
+          else
+            if ! grep -Eq '\((NoSuchKey|404)\)' "$RUNNER_TEMP/get-error"; then cat "$RUNNER_TEMP/get-error" >&2; exit 1; fi
+            s3 put-object --bucket "$DEPENDENCY_R2_BUCKET" --key "$KEY" --body "layer/$ASSET" \
+              --content-type application/gzip --cache-control 'public, max-age=31536000, immutable' \
+              --if-none-match '*' > /dev/null
+          fi
+      - name: Read the layer back from the channel's dependency host
+        env:
+          KEY: ${{ steps.layer.outputs.key }}
+          SHA256: ${{ steps.layer.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+            --output "$RUNNER_TEMP/public" "$DEPENDENCY_BASE_URL$KEY"
+          echo "$SHA256  $RUNNER_TEMP/public" | sha256sum --check --strict
+
+  desktop-portable:
+    needs: [resolve, verify-app]
+    if: ${{ github.repository == 'taucad/tau' && (needs.resolve.outputs.kind == 'desktop') }}
+    name: Package ${{ matrix.platform }} (unsigned)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-24.04
+            target: package-linux
+            archive: Tau-linux-x64.tar.gz
+          - platform: win32-x64
+            runner: windows-2025
+            target: package-windows
+            archive: Tau-win32-x64.zip
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
+    env:
+      # Baked into the desktop main bundle (`tauPostHogClientKey`) from POSTHOG_CLIENT_KEY_PRODUCTION or _STAGING; unset leaves desktop analytics inert.
+      POSTHOG_CLIENT_KEY: ${{ vars[format('POSTHOG_CLIENT_KEY_{0}', needs.resolve.outputs.channel)] }}
+      TAU_DESKTOP_CHANNEL: ${{ needs.resolve.outputs.channel }}
+      # Runtime telemetry's own build signal, as in `desktop-macos`; this matrix has no `environment:`, hence a literal.
+      TAU_TELEMETRY_HOST: cloud
+      TAU_DESKTOP_RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+      # Inert while this matrix bakes no DSN; set so a reporting portable build names the same release as macOS.
+      SENTRY_RELEASE: ${{ needs.resolve.outputs.sentry-release }}
+      TAU_DESKTOP_PACKAGE_OUTPUT_ROOT: ${{ github.workspace }}/out/desktop/${{ matrix.platform }}
+    steps:
+      # Windows checkouts default to CRLF, which breaks the lockfile parse; keep
+      # the committed bytes.
+      - name: Keep committed line endings
+        run: git config --global core.autocrlf false
+
+      - name: Checkout the release
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+      # The checkout above can be a commit older than this workflow, so the apt installer comes from this
+      # workflow's own commit (scripts/src/apt-resilience.test.ts).
+      - name: Check out this workflow's apt installer
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          path: .tau-ci
+          sparse-checkout: .github/actions/apt-install
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+
+      # prepare-build123d-python resolves its wheels with uv on both hosts;
+      # prepare-git builds git on Linux against libcurl and zlib.
+      - name: Install packaging tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          pipx install uv
+          uv --version
+      - name: Install the libcurl and zlib headers for prepare-git
+        if: runner.os == 'Linux'
+        uses: ./.tau-ci/.github/actions/apt-install
+        with:
+          packages: libcurl4-openssl-dev zlib1g-dev
+
+      # The Linux package seals the build123d closure it ships (charter W6), and its
+      # seal step compiles bytecode inside the native sandbox.
+      - name: Setup Linux sandbox prerequisites
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/setup-linux-sandbox
+
+      # On Windows the archive uses the inbox bsdtar,
+      # which must come before Git Bash's GNU tar on PATH.
+      - name: Record package source identity
+        shell: bash
+        run: echo "TAU_DESKTOP_SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = Windows ]; then
+            export PATH="/c/Windows/System32:$PATH"
+          fi
+          pnpm nx run "desktop:${{ matrix.target }}" --parallel=1
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-${{ matrix.platform }}
+          path: ${{ env.TAU_DESKTOP_PACKAGE_OUTPUT_ROOT }}/${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 7
+
+  desktop-publish:
+    needs: [resolve, desktop-macos, desktop-portable, source-kit]
+    if: ${{ github.repository == 'taucad/tau' && (needs.resolve.outputs.kind == 'desktop') }}
+    name: Attach immutable candidate assets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: release-pr
+      deployment: false
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-nx
+      - name: Mint tau-release-bot token
+        id: bot
+        uses: actions/create-github-app-token@064492a9a1762067169d50c792a7dc02bc3d1254 # v2.0.0
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: desktop-*
+          path: out/desktop/assets
+          merge-multiple: true
+      - name: Prepare the immutable candidate
+        env:
+          DESKTOP_RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          DESKTOP_ASSETS_DIR: out/desktop/assets
+        run: |
+          set -euo pipefail
+          TAU_DESKTOP_SOURCE_SHA=$(git rev-parse HEAD)
+          export TAU_DESKTOP_SOURCE_SHA
+          pnpm nx run desktop:publish --args=prepare
+      # A rerun never replaces signed bytes under an existing release/version:
+      # the draft keeps the first attempt's assets and different bytes refuse.
+      - name: Attach the candidate to the draft release
+        uses: ./.github/actions/release-assets
+        with:
+          tag: ${{ needs.resolve.outputs.tag }}
+          files: |
+            out/desktop/assets/Tau-*
+            out/desktop/assets/*.json
+            out/desktop/assets/SHA256SUMS.txt
+          github-token: ${{ steps.bot.outputs.token }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-metadata
+          path: out/desktop/assets/*.json
+          retention-days: 30
+
+  desktop-mirror:
+    if: ${{ github.repository == 'taucad/tau' }}
+    needs: [resolve, desktop-publish]
+    name: Mirror candidate to R2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    environment:
+      name: ${{ needs.resolve.outputs.channel == 'staging' && 'desktop-staging' || 'desktop' }}
+      deployment: false
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-nx
+      - name: Mirror and verify public bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DESKTOP_RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          DESKTOP_ASSETS_DIR: out/desktop/assets
+          DESKTOP_R2_BUCKET: ${{ vars.DESKTOP_R2_BUCKET }}
+          DESKTOP_R2_ENDPOINT: ${{ vars.DESKTOP_R2_ENDPOINT }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.DESKTOP_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DESKTOP_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          set -euo pipefail
+          TAU_DESKTOP_SOURCE_SHA=$(git rev-parse HEAD)
+          export TAU_DESKTOP_SOURCE_SHA
+          gh release download "$DESKTOP_RELEASE_TAG" --dir "$DESKTOP_ASSETS_DIR" --pattern 'Tau-*' --pattern '*.json' --pattern SHA256SUMS.txt
+          pnpm nx run desktop:publish --args=mirror
+          jq '{tag, sourceCommit, verified: true}' "$DESKTOP_ASSETS_DIR/download.json" > "$DESKTOP_ASSETS_DIR/mirror-receipt.json"
+      - name: Attach the mirror receipt
+        uses: ./.github/actions/release-assets
+        with:
+          tag: ${{ needs.resolve.outputs.tag }}
+          files: out/desktop/assets/mirror-receipt.json
+          github-token: ${{ github.token }}
+
+  desktop-ota:
+    if: ${{ github.repository == 'taucad/tau' }}
+    needs: [resolve, desktop-mirror]
+    name: Verify native macOS ${{ matrix.arch }} OTA replacement
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.resolve.outputs.macos) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-nx
+        with:
+          node-version: '24.10.0'
+      # The candidate is still a draft, which this job's read-only token cannot
+      # see: take the archive and download.json desktop-publish attached from the
+      # run's artifacts, whose public R2 bytes desktop-mirror verified.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: desktop-darwin-${{ matrix.arch }}
+          path: out/desktop/assets
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-metadata
+          path: out/desktop/assets
+      - name: Find a qualified older candidate or establish the first baseline
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          CHANNEL: ${{ needs.resolve.outputs.channel }}
+          TARGET: darwin-${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          test -f 'out/desktop/assets/Tau-macos-${{ matrix.arch }}.zip'
+          jq --exit-status --arg tag "$TAG" '.tag == $tag' out/desktop/assets/download.json > /dev/null
+          version=$(jq -r .version out/desktop/assets/download.json)
+          prefix=desktop@
+          if [ "$CHANNEL" = staging ]; then prefix=desktop-staging@; fi
+          found=false
+          origin=https://downloads.tau.new
+          if [ "$CHANNEL" = staging ]; then origin=https://downloads.taucad.dev; fi
+          status=$(curl --silent --show-error --retry 3 --output "$RUNNER_TEMP/current.json" --write-out '%{http_code}' "$origin/latest/download.json")
+          if [ "$status" != 200 ] && [ "$status" != 404 ]; then echo "Current download pointer returned $status" >&2; exit 1; fi
+          # Prefer the actual installed channel baseline. Only initial bootstrap
+          # (or a retry of an already-promoted tag) falls back to mirrored candidates.
+          if [ "$status" = 200 ]; then jq -r .tag "$RUNNER_TEMP/current.json" > "$RUNNER_TEMP/baselines"; else : > "$RUNNER_TEMP/baselines"; fi
+          # Drafts are invisible to this token, so only published releases are listed.
+          gh release list --limit 100 --json tagName --jq ".[] | select(.tagName | startswith(\"$prefix\")) | .tagName" >> "$RUNNER_TEMP/baselines"
+          while IFS= read -r previous; do
+            if [ "$previous" = "$TAG" ]; then continue; fi
+            # A fresh directory per candidate, so nothing is downloaded over an earlier file.
+            previous_dir=$(mktemp -d "$RUNNER_TEMP/previous.XXXXXX")
+            if ! gh release download "$previous" --pattern mirror-receipt.json --dir "$previous_dir" 2> "$RUNNER_TEMP/previous-error"; then
+              # Publication is not qualification: only completely mirrored candidates can bootstrap.
+              if grep -Eq '^(no assets match|no assets to download$)' "$RUNNER_TEMP/previous-error"; then continue; fi
+              cat "$RUNNER_TEMP/previous-error" >&2; exit 1
+            fi
+            gh release download "$previous" --pattern download.json --dir "$previous_dir"
+            jq --exit-status --arg tag "$previous" '.verified == true and .tag == $tag' "$previous_dir/mirror-receipt.json" > /dev/null
+            old=$(jq -r .version "$previous_dir/download.json")
+            if [ "$old" = "$version" ] || [ "$(printf '%s\n%s\n' "$old" "$version" | sort -V | tail -1)" != "$version" ]; then continue; fi
+            sha=$(jq -r .sourceCommit "$previous_dir/download.json")
+            test "$sha" = "$(jq -r .sourceCommit "$previous_dir/mirror-receipt.json")"
+            if ! git merge-base --is-ancestor "$sha" HEAD; then continue; fi
+            # Older ARM-only releases cannot serve as an Intel baseline.
+            if ! jq -e --arg target "$TARGET" '.assets[$target]' "$previous_dir/download.json" > /dev/null; then continue; fi
+            url=$(jq -r --arg target "$TARGET" '.assets[$target].url' "$previous_dir/download.json")
+            curl --fail --location --retry 3 "$url" --output "$RUNNER_TEMP/baseline.zip"
+            expected=$(jq -r --arg target "$TARGET" '.assets[$target].sha256' "$previous_dir/download.json")
+            printf '%s  %s\n' "$expected" "$RUNNER_TEMP/baseline.zip" | shasum -a 256 -c -
+            found=true
+            break
+          done < "$RUNNER_TEMP/baselines"
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+          if [ "$found" = false ]; then
+            echo 'First OTA-capable candidate established as baseline. Publish a second candidate to exercise native OTA; no live feed or website pointer was changed.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Observe the actual signed A to B update
+        if: steps.baseline.outputs.found == 'true'
+        env:
+          DESKTOP_RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          DESKTOP_ASSETS_DIR: out/desktop/assets
+          OTA_BASELINE_ZIP: ${{ runner.temp }}/baseline.zip
+        run: |
+          TAU_DESKTOP_SOURCE_SHA=$(git rev-parse HEAD)
+          export TAU_DESKTOP_SOURCE_SHA
+          pnpm nx run desktop:verify-ota
+      - name: Record architecture qualification
+        env:
+          ACCEPTED: ${{ steps.baseline.outputs.found }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          TARGET: darwin-${{ matrix.arch }}
+        run: |
+          if [ "$ACCEPTED" = true ]; then test -f "out/desktop/assets/ota-receipt-$TARGET.json"; fi
+          jq -n --arg tag "$TAG" --arg target "$TARGET" --argjson accepted "$ACCEPTED" \
+            '{tag:$tag,target:$target,accepted:$accepted}' > "out/desktop/assets/ota-qualification-$TARGET.json"
+      - name: Retain OTA receipts and diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ota-acceptance-${{ matrix.arch }}
+          path: |
+            out/desktop/assets/ota-receipt-*.json
+            out/desktop/assets/ota-qualification-*.json
+            ~/Library/Application Support/Tau Staging/ota-probe*.json
+            ~/Library/Application Support/Tau Staging/logs/
+            ~/Library/Application Support/Tau/ota-probe*.json
+            ~/Library/Application Support/Tau/logs/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  desktop-promote:
+    if: ${{ github.repository == 'taucad/tau' }}
+    needs: [resolve, desktop-ota]
+    name: Promote the tested channel release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    concurrency:
+      group: desktop-promotion-${{ needs.resolve.outputs.channel }}
+      cancel-in-progress: false
+    # The one production desktop step that reaches users, so the release-manager approval is here and nowhere else in
+    # this workflow (approvals audit R3): `desktop-ota-promotion` admits only `desktop@*` tags.
+    environment:
+      name: ${{ needs.resolve.outputs.channel == 'staging' && 'desktop-staging' || 'desktop-ota-promotion' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-nx
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: ota-acceptance-*
+          merge-multiple: true
+          path: out/desktop/acceptance
+      # Every Mac architecture this release packaged: both on production, arm64 alone on most
+      # staging candidates, whose promotion leaves the Intel feed and archive on the last full one.
+      - name: Require qualification for every packaged Mac architecture
+        id: qualification
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+          TARGETS: ${{ needs.resolve.outputs.macos-targets }}
+        run: |
+          accepted=true
+          for target in $TARGETS; do
+            file=$(find out/desktop/acceptance -name "ota-qualification-$target.json")
+            test -n "$file"
+            jq -e --arg tag "$TAG" --arg target "$target" '.tag == $tag and .target == $target and (.accepted | type == "boolean")' "$file" > /dev/null
+            if [ "$(jq -r .accepted "$file")" != true ]; then accepted=false; fi
+          done
+          echo "accepted=$accepted" >> "$GITHUB_OUTPUT"
+          if [ "$accepted" = false ]; then echo "Each packaged Mac architecture ($TARGETS) needs an older qualified baseline. No channel pointers changed." >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Gather the release metadata and OTA receipts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DESKTOP_RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          DESKTOP_ASSETS_DIR: out/desktop/assets
+          ACCEPTED: ${{ steps.qualification.outputs.accepted }}
+          TARGETS: ${{ needs.resolve.outputs.macos-targets }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$DESKTOP_ASSETS_DIR" out/desktop/receipts
+          gh release download "$DESKTOP_RELEASE_TAG" --dir "$DESKTOP_ASSETS_DIR" --pattern 'desktop-update-*.json' --pattern download.json
+          if [ "$ACCEPTED" = true ]; then
+            for target in $TARGETS; do
+              receipt=$(find out/desktop/acceptance -name "ota-receipt-$target.json")
+              test -n "$receipt"
+              cp "$receipt" "out/desktop/receipts/ota-receipt-$target.json"
+              cp "$receipt" "$DESKTOP_ASSETS_DIR/ota-receipt-$target.json"
+            done
+          fi
+      # The draft becomes public and immutable here, with its OTA receipts when
+      # both architectures qualified; a first baseline is published without
+      # them so the next candidate can find it. Publishing precedes the R2
+      # promotion because installed apps link the release page of the update.
+      - name: Attach the OTA receipts and publish the release
+        uses: ./.github/actions/release-assets
+        with:
+          tag: ${{ needs.resolve.outputs.tag }}
+          files: ${{ steps.qualification.outputs.accepted == 'true' && 'out/desktop/receipts/ota-receipt-*.json' || '' }}
+          publish: 'true'
+          latest: ${{ steps.qualification.outputs.accepted == 'true' && needs.resolve.outputs.channel == 'production' }}
+          github-token: ${{ github.token }}
+      - name: Promote the R2 pointers
+        if: steps.qualification.outputs.accepted == 'true'
+        env:
+          DESKTOP_RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          DESKTOP_ASSETS_DIR: out/desktop/assets
+          DESKTOP_R2_BUCKET: ${{ vars.DESKTOP_R2_BUCKET }}
+          DESKTOP_R2_ENDPOINT: ${{ vars.DESKTOP_R2_ENDPOINT }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.DESKTOP_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DESKTOP_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          set -euo pipefail
+          TAU_DESKTOP_SOURCE_SHA=$(git rev-parse HEAD)
+          export TAU_DESKTOP_SOURCE_SHA
+          pnpm nx run desktop:publish --args=promote
+
+      # Commits and the deploy marker go to the release this build reports, once users can receive it
+      # (bookkeeping, never a promotion gate; see .github/actions/sentry-release-commits).
+      - name: Attach this release's commits to its Sentry release
+        if: steps.qualification.outputs.accepted == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/sentry-release-commits
+        with:
+          release: ${{ needs.resolve.outputs.sentry-release }}
+          project: tau-desktop
+          environment: ${{ needs.resolve.outputs.channel }}
+          auth-token: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          cli: scripts/node_modules/.bin/sentry-cli
+
+  production-api:
+    needs: [resolve, verify-app, app-release]
+    # `app-release` needs `source-kit`, which an API release skips; a skipped
+    # ancestor fails the implicit success(), so state the result explicitly.
+    if: ${{ github.repository == 'taucad/tau' && (!cancelled() && needs.app-release.result == 'success' && github.event_name == 'push' && needs.resolve.outputs.project == 'api' && github.ref == format('refs/tags/{0}', needs.resolve.outputs.tag)) }}
+    name: Production API
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: production
+      app: api
+    secrets: inherit
+
+  # tau-mirror and tau-maintenance run the API image, so they ship with each API
+  # release, after the API's release command has migrated the database and
+  # created their logins. One at a time: maintenance must stay a singleton.
+  production-mirror:
+    needs: [production-api]
+    if: ${{ github.repository == 'taucad/tau' && (!cancelled() && needs.production-api.result == 'success') }}
+    name: Production mirror
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: production
+      app: mirror
+    secrets: inherit
+
+  production-maintenance:
+    needs: [production-mirror]
+    if: ${{ github.repository == 'taucad/tau' && (!cancelled() && needs.production-mirror.result == 'success') }}
+    name: Production maintenance
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: production
+      app: maintenance
+    secrets: inherit
+
+  # The UI serves OCCT compiled into the GeoSpec engine, so it ships only once
+  # `source-kit` has attached that engine's source and relink kit.
+  production-ui:
+    needs: [resolve, verify-app, source-kit, app-release]
+    if: ${{ github.repository == 'taucad/tau' && (github.event_name == 'push' && needs.resolve.outputs.project == 'ui' && github.ref == format('refs/tags/{0}', needs.resolve.outputs.tag)) }}
+    name: Production UI
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/deploy-ui.yml
+    with:
+      environment: production
+    secrets: inherit
+
+  # The marketing pages tau.new's edge proxies (prod `MARKETING_ORIGIN`).
+  production-www:
+    if: ${{ github.repository == 'taucad/tau' }}
+    needs: [production-ui]
+    name: Production marketing site
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/deploy-www-review.yml
+    with:
+      alias: prod
+    secrets: inherit
+
+  production-docs:
+    needs: [resolve, verify-app, app-release]
+    if: ${{ github.repository == 'taucad/tau' && (github.event_name == 'push' && needs.resolve.outputs.project == 'ui' && github.ref == format('refs/tags/{0}', needs.resolve.outputs.tag)) }}
+    name: Production docs
+    # `deploy-docs.yml` asks for `actions: read` for its staging supersede check.
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/deploy-docs.yml
+    with:
+      environment: production
+      tag: ${{ needs.resolve.outputs.tag }}
+    secrets: inherit

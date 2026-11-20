@@ -1,10 +1,12 @@
-import type { FileSystemBackend } from '@taucad/types';
 import type { FileSystemProvider } from '#types.js';
 import { MemoryProvider } from '#backend/memory-provider.js';
 import { DirectIdbProvider } from '#backend/direct-idb-provider.js';
 import { OPFSProvider } from '#backend/opfs-provider.js';
 import { FileSystemAccessProvider } from '#backend/fs-access-provider.js';
+import { NodeFsChannel, NodeFsImportSources, NodeFsProviderClient } from '#backend/node/client.js';
+import type { NodeFsPort } from '#backend/node/port.js';
 import type { WorkspaceScope } from '#mount-table.js';
+import { resolveStorageRootKey } from '#storage-root-key.js';
 import { MissingWorkspaceHandleError } from '#workspace-errors.js';
 /**
  * Configuration for {@link ProviderRegistry}.
@@ -12,6 +14,13 @@ import { MissingWorkspaceHandleError } from '#workspace-errors.js';
  */
 export type ProviderRegistryOptions = {
   databasePrefix?: string;
+  /**
+   * Opens the port to the node filesystem host. Injected rather than statically
+   * imported so `node:fs` never follows a static import into this bundle: the
+   * host lives in another process and only the shell knows how to reach it.
+   * Absent on the web build, where a `node` scope is simply unreachable.
+   */
+  createNodeFsPort?: () => Promise<NodeFsPort>;
 };
 
 /**
@@ -24,18 +33,24 @@ export type ProviderRegistryOptions = {
  * ambient handle; multiple concurrent webaccess scopes coexist
  * without cross-contamination.
  *
- * Mount providers (created via {@link createMountProvider}) are
- * uncached — the caller owns their lifecycle. Standalone providers
- * (created via {@link getStandaloneProvider}) are cached for the
- * cross-backend `/files` browse use-case and keyed by
- * `(backend, workspaceId)` so two workspaces with the same folder
- * name never collide.
+ * The registry is the sole provider owner. Mounts and scoped reads resolve
+ * through the same cache, keyed by physical storage-root identity.
  *
  * @public
  */
 export class ProviderRegistry {
-  private readonly _standaloneProviders = new Map<string, FileSystemProvider>();
+  private readonly _providers = new Map<string, Promise<FileSystemProvider>>();
   private readonly _databasePrefix: string;
+  private readonly _createNodeFsPort: (() => Promise<NodeFsPort>) | undefined;
+  /** One channel serves every node root; each request names its own rooted view. */
+  private _nodeFsChannel: Promise<NodeFsChannel> | undefined;
+  /** The channel the memo above resolved to, so a stale close cannot evict a newer one. */
+  private _liveNodeFsChannel: NodeFsChannel | undefined;
+  /** Told the provider paths a root's recovery removed (I1). */
+  private _recoveryListener: ((storageRootKey: string, providerPaths: readonly string[]) => void) | undefined;
+  /** Recoveries that finished before a listener was set. */
+  private readonly _pendingRecoveries: Array<Readonly<{ storageRootKey: string; providerPaths: readonly string[] }>> =
+    [];
 
   /**
    * Create a ProviderRegistry.
@@ -44,6 +59,7 @@ export class ProviderRegistry {
    */
   public constructor(options?: ProviderRegistryOptions) {
     this._databasePrefix = options?.databasePrefix ?? 'tau';
+    this._createNodeFsPort = options?.createNodeFsPort;
   }
 
   /**
@@ -60,17 +76,59 @@ export class ProviderRegistry {
    * @param scope - Workspace scope (carries `directoryHandle` + `workspaceId` for webaccess).
    * @returns Standalone provider instance.
    */
-  public async getStandaloneProvider(scope: WorkspaceScope): Promise<FileSystemProvider> {
-    const cacheKey = scope.backend === 'webaccess' ? `webaccess:${scope.workspaceId}` : scope.backend;
-
-    const cached = this._standaloneProviders.get(cacheKey);
-    if (cached) {
-      return cached;
+  public async getProvider(scope: WorkspaceScope): Promise<FileSystemProvider> {
+    const cacheKey = this.resolveStorageRootKey(scope);
+    let pending = this._providers.get(cacheKey);
+    if (!pending) {
+      pending = this._createProvider(scope);
+      this._providers.set(cacheKey, pending);
     }
 
-    const provider = await this._createProvider(scope);
-    this._standaloneProviders.set(cacheKey, provider);
-    return provider;
+    try {
+      const provider = await pending;
+      if (this._providers.get(cacheKey) !== pending) {
+        throw new Error(`Provider root was revoked during initialization: ${cacheKey}`);
+      }
+      return provider;
+    } catch (error) {
+      if (this._providers.get(cacheKey) === pending) {
+        this._providers.delete(cacheKey);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Return an already-owned provider without constructing or reviving a root.
+   *
+   * @param storageRootKey - Canonical physical storage-root identity.
+   * @returns The existing provider promise, or `undefined` when the root is not owned.
+   */
+  public getOwnedProvider(storageRootKey: string): Promise<FileSystemProvider> | undefined {
+    return this._providers.get(storageRootKey);
+  }
+
+  /**
+   * Set who is told the provider paths a root removed while it opened: the
+   * empty files of creates a crashed realm left (I1). Recoveries that ran
+   * before the listener was set are delivered to it at once.
+   *
+   * @param listener - Called with the storage-root key and the provider paths removed.
+   */
+  public setRecoveryListener(listener: (storageRootKey: string, providerPaths: readonly string[]) => void): void {
+    this._recoveryListener = listener;
+    for (const { storageRootKey, providerPaths } of this._pendingRecoveries.splice(0)) {
+      listener(storageRootKey, providerPaths);
+    }
+  }
+
+  /**
+   * Every storage root this registry owns a provider for, initialized or not.
+   *
+   * @returns The canonical storage-root keys.
+   */
+  public ownedStorageRootKeys(): string[] {
+    return [...this._providers.keys()];
   }
 
   /**
@@ -79,48 +137,116 @@ export class ProviderRegistry {
    * cached entry is dropped; otherwise every entry for the backend is
    * cleared (used by `disposeAll` and bulk recovery flows).
    *
-   * @param backend - Backend whose standalone providers to invalidate.
-   * @param workspaceId - Optional webaccess workspace id; when set, only that workspace's entry is dropped.
+   * @param storageRootKey - Stable physical storage-root identity to dispose.
    */
-  public invalidateStandaloneProvider(backend: FileSystemBackend, workspaceId?: string): void {
-    const keysToRemove: string[] = [];
-    if (backend === 'webaccess' && workspaceId !== undefined) {
-      const targetKey = `webaccess:${workspaceId}`;
-      if (this._standaloneProviders.has(targetKey)) {
-        keysToRemove.push(targetKey);
-      }
-    } else {
-      for (const key of this._standaloneProviders.keys()) {
-        if (key === backend || key.startsWith(`${backend}:`)) {
-          keysToRemove.push(key);
+  public disposeRoot(storageRootKey: string): void {
+    const pending = this._providers.get(storageRootKey);
+    this._providers.delete(storageRootKey);
+    if (pending) {
+      // async-iife: bootstrap -- revocation is synchronous; a provider still initializing is disposed on settlement.
+      void (async () => {
+        try {
+          const provider = await pending;
+          provider.dispose();
+        } catch {
+          // Failed initialization has no provider resource to dispose.
         }
-      }
+      })();
     }
+  }
 
-    for (const key of keysToRemove) {
-      this._standaloneProviders.get(key)?.dispose();
-      this._standaloneProviders.delete(key);
+  /** Dispose every registry-owned provider. */
+  public disposeAll(): void {
+    const pending = [...this._providers.values()];
+    this._providers.clear();
+    for (const provider of pending) {
+      // async-iife: bootstrap -- registry teardown cannot await providers that are still initializing.
+      void (async () => {
+        try {
+          const resolved = await provider;
+          resolved.dispose();
+        } catch {
+          // Failed initialization has no provider resource to dispose.
+        }
+      })();
     }
   }
 
   /**
-   * Create a fresh provider instance for use as a mount target.
-   * Does not cache the instance. The caller owns the provider's lifecycle
-   * and must dispose it.
+   * Resolve the canonical physical storage-root identity used for provider
+   * caching, authority locks, and cross-tab invalidation.
    *
-   * @param scope - Workspace scope (carries `directoryHandle` + `workspaceId` for webaccess).
-   * @returns A new, uncached provider instance.
+   * @param scope - Explicit workspace/provider scope.
+   * @returns Canonical storage-root key.
    */
-  public async createMountProvider(scope: WorkspaceScope): Promise<FileSystemProvider> {
-    return this._createProvider(scope);
+  public resolveStorageRootKey(scope: WorkspaceScope): string {
+    return resolveStorageRootKey(scope, this._databasePrefix);
   }
 
-  /** Dispose all cached standalone providers. */
-  public disposeAll(): void {
-    for (const provider of this._standaloneProviders.values()) {
-      provider.dispose();
+  /**
+   * The sources a person chose on the node host for an import (W7.4), over
+   * the node transport, or `undefined` on a host without one.
+   *
+   * @returns The host's import sources.
+   */
+  public async importSources(): Promise<NodeFsImportSources | undefined> {
+    if (this._createNodeFsPort === undefined) {
+      return undefined;
     }
-    this._standaloneProviders.clear();
+    return new NodeFsImportSources(await this._nodeFsChannelFrom(this._createNodeFsPort));
+  }
+
+  /**
+   * The node transport's channel, opened once and shared by every node provider.
+   * Only a failed open drops the memo, so the next resolution asks the shell for
+   * a fresh port. A request that fails on an open channel leaves it memoized: the
+   * channel stays live for the providers bound to it, and a channel that closes
+   * drops itself through its close listener.
+   *
+   * @param createPort - The host's port factory.
+   * @returns The open channel.
+   */
+  private async _nodeFsChannelFrom(createPort: () => Promise<NodeFsPort>): Promise<NodeFsChannel> {
+    this._nodeFsChannel ??= this._openNodeFsChannel(createPort);
+    const opening = this._nodeFsChannel;
+    try {
+      return await opening;
+    } catch (error) {
+      if (this._nodeFsChannel === opening) {
+        this._nodeFsChannel = undefined;
+      }
+      throw error;
+    }
+  }
+
+  private _recovered(storageRootKey: string, providerPaths: readonly string[]): void {
+    if (this._recoveryListener === undefined) {
+      this._pendingRecoveries.push({ storageRootKey, providerPaths });
+      return;
+    }
+    this._recoveryListener(storageRootKey, providerPaths);
+  }
+
+  private async _openNodeFsChannel(createPort: () => Promise<NodeFsPort>): Promise<NodeFsChannel> {
+    const channel = new NodeFsChannel(await createPort());
+    this._liveNodeFsChannel = channel;
+    // A dead host would otherwise stay memoized forever: every later provider
+    // resolution would hand back a client bound to a channel that can only
+    // reject. Dropping both the memo and the providers built on it makes the
+    // next resolution ask the shell for a fresh port.
+    channel.onClose(() => {
+      if (this._liveNodeFsChannel !== channel) {
+        return;
+      }
+      this._liveNodeFsChannel = undefined;
+      this._nodeFsChannel = undefined;
+      // Snapshot first: `disposeRoot` mutates the map being read.
+      const nodeRootKeys = [...this._providers.keys()].filter((key) => key.startsWith('node:'));
+      for (const storageRootKey of nodeRootKeys) {
+        this.disposeRoot(storageRootKey);
+      }
+    });
+    return channel;
   }
 
   private async _createProvider(scope: WorkspaceScope): Promise<FileSystemProvider> {
@@ -131,7 +257,13 @@ export class ProviderRegistry {
         return provider;
       }
       case 'opfs': {
-        const provider = new OPFSProvider();
+        const storageRootKey = this.resolveStorageRootKey(scope);
+        const provider = new OPFSProvider({
+          root: storageRootKey,
+          onRecovered: (paths) => {
+            this._recovered(storageRootKey, paths);
+          },
+        });
         await provider.initialize();
         return provider;
       }
@@ -145,10 +277,31 @@ export class ProviderRegistry {
         if (!scope.directoryHandle) {
           throw new MissingWorkspaceHandleError({ workspaceId: scope.workspaceId });
         }
-        return new FileSystemAccessProvider(scope.directoryHandle);
+        // The stored handle's id keys the root's create records (I1). A root
+        // without one keeps none, so its creates are staged as siblings and moved.
+        const storageRootKey = this.resolveStorageRootKey(scope);
+        const provider = new FileSystemAccessProvider(scope.directoryHandle, {
+          ...(scope.workspaceId === '' ? { stageCreates: true } : { uncommitted: { root: storageRootKey } }),
+          onRecovered: (paths) => {
+            this._recovered(storageRootKey, paths);
+          },
+        });
+        await provider.recoverUncommitted();
+        return provider;
       }
       case 'memory': {
         return new MemoryProvider();
+      }
+      case 'node': {
+        if (this._createNodeFsPort === undefined) {
+          throw new Error('This host has no node filesystem transport; a node storage root is unreachable.');
+        }
+        const channel = await this._nodeFsChannelFrom(this._createNodeFsPort);
+        // The host may run in another process or on another machine: whether files
+        // keep a mode is its disk's answer, never this worker's platform. A failed
+        // ask keeps the channel; the next resolution asks it again.
+        const { fileModes } = await channel.describeHost();
+        return new NodeFsProviderClient(channel, scope.path, { fileModes });
       }
       default: {
         throw new Error(`Unknown backend: ${(scope as { backend: string }).backend}`);

@@ -1,10 +1,11 @@
 import { useCallback } from 'react';
-import { DefaultChatTransport, readUIMessageStream } from 'ai';
 import { generatePrefixedId } from '@taucad/utils/id';
 import { idPrefix } from '@taucad/types/constants';
 import type { MyUIMessage } from '@taucad/chat';
 import { messageRole } from '@taucad/chat/constants';
 import { ENV } from '#environment.config.js';
+import { parseErrorForPersistence } from '@taucad/chat-ui/utils/error.utils';
+import { recordApiRequestId } from '@taucad/ui-core/lib/api-request-id';
 
 /**
  * Error thrown by the project-name / commit-name client when the
@@ -17,16 +18,19 @@ import { ENV } from '#environment.config.js';
 export class NameGeneratorRequestError extends Error {
   public override readonly name = 'NameGeneratorRequestError';
   public readonly status: number;
+  public readonly code?: string;
 
-  public constructor(status: number, message: string) {
+  public constructor(status: number, message: string, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
 type NameProfile = 'project_name' | 'commit_name';
 
-type GenerateName = (prompt: string) => Promise<string>;
+type GenerateName = (prompt: string, projectId: string) => Promise<string>;
+type GenerateNameFromParts = (parts: MyUIMessage['parts'], projectId: string) => Promise<string>;
 
 /**
  * Public surface of the simple-text name clients (project + commit). These
@@ -37,6 +41,11 @@ type GenerateName = (prompt: string) => Promise<string>;
  */
 export type NameGeneratorClient = {
   readonly generate: GenerateName;
+};
+
+/** @internal */
+export type NameGeneratorPartsClient = {
+  readonly generateFromParts: GenerateNameFromParts;
 };
 
 /**
@@ -51,9 +60,14 @@ const nameGeneratorFetch: typeof globalThis.fetch = async (input, init) => {
 
   if (!response.ok) {
     const detail = await response.text().catch(() => '');
-    throw new NameGeneratorRequestError(
-      response.status,
-      `POST /v1/chat failed with ${response.status} ${response.statusText}: ${detail}`,
+    const parsed = parseErrorForPersistence(new Error(detail));
+    throw recordApiRequestId(
+      new NameGeneratorRequestError(
+        response.status,
+        `POST /v1/chat failed with ${response.status} ${response.statusText}: ${parsed.message}`,
+        parsed.code,
+      ),
+      response,
     );
   }
 
@@ -65,54 +79,54 @@ const nameGeneratorFetch: typeof globalThis.fetch = async (input, init) => {
 };
 
 /**
- * Dedicated transport for the simple-text name profiles. Distinct from
- * `sharedChatTransport` (consumed by the CAD `Chat<MyUIMessage>` factory)
- * because we need a name-profile-specific fetch wrapper to preserve the
- * `NameGeneratorRequestError` contract; the CAD path uses the SDK's
- * default error shape.
- */
-// oxlint-disable-next-line tau-lint/require-public-export-jsdoc -- @internal, scoped to name-generator-client
-const nameGeneratorTransport = new DefaultChatTransport<MyUIMessage>({
-  api: `${ENV.TAU_API_URL}/v1/chat`,
-  credentials: 'include',
-  fetch: nameGeneratorFetch,
-});
-
-/**
  * Factory for the simple-text profile clients. The `profile` discriminator
  * is the only thing that varies between project-name and commit-name; the
  * wire body and streaming pipeline are delegated entirely to the AI SDK.
  *
  * @internal
  */
-export const useNameGeneratorClient = (profile: NameProfile): NameGeneratorClient => {
-  const generate = useCallback<GenerateName>(
-    async (prompt) => {
+export const useNameGeneratorPartsClient = (profile: NameProfile): NameGeneratorPartsClient => {
+  const generateFromParts = useCallback<GenerateNameFromParts>(
+    async (parts, projectId) => {
+      // Mounting the project manager does not need a naming transport.
+      const sdk = await import('ai');
       const chatId = generatePrefixedId(idPrefix.chat);
       const messageId = generatePrefixedId(idPrefix.message);
       const userMessage: MyUIMessage = {
         id: messageId,
         role: messageRole.user,
-        parts: [{ type: 'text', text: prompt }],
+        parts,
       };
 
-      const stream = await nameGeneratorTransport.sendMessages({
+      const transport = new sdk.DefaultChatTransport<MyUIMessage>({
+        api: `${ENV.TAU_API_URL}/v1/chat`,
+        credentials: 'include',
+        fetch: nameGeneratorFetch,
+      });
+      const stream = await transport.sendMessages({
         chatId,
         messageId: undefined,
         messages: [userMessage],
         trigger: 'submit-message',
-        body: { agent: { profile } },
-        abortSignal: undefined,
+        body: {
+          projectId,
+          agent: { profile },
+          admission: {
+            version: 1,
+            idempotencyKey: generatePrefixedId(idPrefix.request),
+          },
+        },
+        abortSignal: AbortSignal.timeout(10_000),
       });
 
       let assembled: MyUIMessage | undefined;
-      for await (const message of readUIMessageStream<MyUIMessage>({ stream })) {
+      for await (const message of sdk.readUIMessageStream<MyUIMessage>({ stream })) {
         assembled = message;
       }
 
-      const parts = assembled?.parts ?? [];
+      const responseParts = assembled?.parts ?? [];
       let text = '';
-      for (const part of parts) {
+      for (const part of responseParts) {
         if (part.type === 'text') {
           text += part.text;
         }
@@ -122,5 +136,14 @@ export const useNameGeneratorClient = (profile: NameProfile): NameGeneratorClien
     [profile],
   );
 
+  return { generateFromParts };
+};
+
+export const useNameGeneratorClient = (profile: NameProfile): NameGeneratorClient => {
+  const { generateFromParts } = useNameGeneratorPartsClient(profile);
+  const generate = useCallback<GenerateName>(
+    async (prompt, projectId) => generateFromParts([{ type: 'text', text: prompt }], projectId),
+    [generateFromParts],
+  );
   return { generate };
 };

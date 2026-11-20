@@ -1,0 +1,12 @@
+{
+  "$schema": "https://tau.new/schemas/tau-v1.json",
+  "name": "Planetary Gear Stage",
+  "description": "A 12-tooth sun, three 12-tooth planets on a carrier and a 36-tooth ring with mounting ears, all generated from involute profiles.",
+  "tags": ["mechanism", "gears", "jscad"],
+  "assets": {
+    "main": {
+      "entryPath": "main.ts",
+      "thumbnail": "thumbnail.webp"
+    }
+  }
+}

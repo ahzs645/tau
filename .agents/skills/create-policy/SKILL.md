@@ -5,7 +5,7 @@ description: Create or update policy documents in docs/policy/. Use when writing
 
 # Create Policy
 
-Guide for authoring policy documents in `docs/policy/`. Policies are internal reference docs that codify decisions, conventions, and rules for the codebase. They are consumed by both humans and AI agents (via `.cursor/rules/*.mdc` summaries).
+Guide for authoring policy documents in `docs/policy/`. Policies are internal reference docs that codify decisions, conventions, and rules for the codebase. They are consumed by both humans and AI agents (through concise root/nested AGENTS policy routes).
 
 ## Structure Template
 
@@ -68,7 +68,7 @@ Explicit "do not" rules when the wrong approach is common or tempting.
 
 ## Frontmatter Pitfalls
 
-Two errors that repeatedly break `pnpm docs:validate`:
+Three errors that repeatedly break `pnpm docs:validate`:
 
 1. **Unquoted dates** — YAML auto-parses bare `YYYY-MM-DD` as `Date` objects. The validator expects strings. Always single-quote dates.
 
@@ -112,6 +112,20 @@ description: 'One-line description'
 status: active
 related:
   - docs/research/some-research.md
+```
+
+3. **Overlong description** — the validator (`scripts/src/validate-frontmatter.ts`) caps `description` at 300 characters and fails with `description: Too big: expected string to have <=300 characters`. Keep `description` to one sentence; the Rationale section holds the longer explanation.
+
+CORRECT:
+
+```yaml
+description: 'Rules for authoring and registering custom tau-lint oxlint rules.'
+```
+
+INCORRECT:
+
+```yaml
+description: 'Comprehensive policy covering the authoring, testing, registration, configuration, severity selection, autofix requirements, and maintenance lifecycle of custom tau-lint oxlint rules, including AST visitor patterns, RuleTester conventions, and the mapping between policies and their enforcing rules…' # >300 chars
 ```
 
 ## Section Guide
@@ -180,22 +194,11 @@ Link to related policies and research docs. Use relative paths:
 Policies are discoverable through a tiered system (see `docs/policy/agents-md-policy.md`). Use the cheapest tier that provides adequate discoverability:
 
 1. **Most policies** need no companion rule. `AGENTS.md` points to `docs/policy/` and the agent can search/read on demand.
-2. **Create a glob-scoped `.cursor/rules/*.mdc`** only when the policy governs code patterns during active editing (e.g., `*.test.ts` → testing, `*.tsx` → React patterns). Keep the rule under 50 lines — it references the policy, it does not duplicate it.
-3. **Never create an `alwaysApply` rule** for a policy.
+2. **Update the applicable AGENTS policy route** when the policy governs active editing. Put directory-local routes in the nearest boundary; retain explicit root file-type or cross-directory routes for tests, TypeScript, XState and overlapping concerns. Link the normative policy without duplicating its body. Follow `agents-md-policy` for budgets and native AGENTS discovery.
+3. **Keep one normative owner.** The route activates the policy; it does not copy its rules.
 
 ```markdown
----
-description: Brief description
-globs: relevant/file/patterns/**/*.ts
-alwaysApply: false
----
-
-# Rule Title
-
-Follow `docs/policy/{name}-policy.md` for the full policy. Key rules:
-
-- Rule 1 summary
-- Rule 2 summary
+For XState machines or actors, read [XState policy](docs/policy/xstate-policy.md).
 ```
 
 ## Programmatic Enforcement
@@ -265,7 +268,7 @@ This creates a bidirectional link: the policy explains _why_, the lint rule enfo
 Before finalizing a policy:
 
 - [ ] Filename matches `docs/policy/{name}-policy.md`
-- [ ] YAML frontmatter with title, description, status, created, updated — dates single-quoted
+- [ ] YAML frontmatter with title, description, status, created, updated — dates single-quoted, description ≤300 characters, status one of draft | active | deprecated | superseded
 - [ ] Frontmatter `title` matches H1 heading
 - [ ] Frontmatter `related` lists cross-referenced docs
 - [ ] Opens with one-line scope statement
@@ -275,5 +278,5 @@ Before finalizing a policy:
 - [ ] Tables used for classification (not prose)
 - [ ] Under 500 lines
 - [ ] Passes `pnpm docs:validate`
-- [ ] Companion `.cursor/rules/*.mdc` only if policy governs active editing patterns
+- [ ] Applicable root/nested AGENTS routes activate the policy for its directory, file types and cross-directory concerns
 - [ ] Lint rules created for any programmatically enforceable rules (strong preference)

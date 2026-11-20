@@ -20,7 +20,7 @@
  *   provider — marketing-route composers consume these for clearDraft /
  *   draft-image dispatch without pulling the rest of the contract.
  * - **Session-required** ({@link useChatContext} / {@link useChatSelector} /
- *   {@link useChatActions} / {@link useChatById} / {@link useChatRetrySnapshot}):
+ *   {@link useChatActions} / {@link useChatById}):
  *   work under `<ActiveChatProvider>` only. The session's existence is a
  *   compile-time guarantee through {@link useActiveChatSession}.
  *
@@ -32,51 +32,48 @@
  *   `<ChatComposerProvider>` cannot call these hooks.
  * - Passing `chatId` resolves to that exact chat from the store. The
  *   caller is responsible for keeping the session live (typically by
- *   wrapping the subtree in `<ActiveChatProvider chatId={chatId}>` or
- *   calling `useChatSession(chatId)` directly). When the explicit chat is
+ *   wrapping the subtree in `<ActiveChatProvider chatId={chatId} projectId={projectId}>` or
+ *   calling `useChatSession(chatId, projectId)` directly). When the explicit chat is
  *   not the active session (cross-chat read), action mutators warn-and-no-op
  *   on missing sessions to keep cross-chat dispatch safe.
  */
 
-import type { Chat as AiSdkChat } from '@ai-sdk/react';
+import type { ChatView } from '#services/deferred-chat.js';
 import { useSelector } from '@xstate/react';
-import { useCallback, useMemo, useSyncExternalStore } from 'react';
-import type { MyUIMessage } from '@taucad/chat';
+import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react';
+import type { CadAgentExecution, MyUIMessage } from '@taucad/chat';
+import type { CadReference } from '@taucad/chat/references';
 import type { ChatError } from '@taucad/types';
+import type { ChatProjection } from '#machines/chat-projection.logic.js';
 import type { KernelId } from '@taucad/types/constants';
 import type { ActorRefFrom } from 'xstate';
 import { useActiveChatSession, useChatComposer } from '#hooks/active-chat-provider.js';
 import { useChatSessionStore } from '#hooks/chat-session-store-provider.js';
 import { useChatSessionSnapshot } from '#hooks/use-chat-session.js';
-import type { ChatSession } from '#services/chat-session-store.js';
-import type { chatPersistenceMachine } from '#hooks/chat-persistence.machine.js';
-import type { draftMachine } from '#hooks/draft.machine.js';
-import type { ChatMode } from '#routes/projects_.$id/chat-mode-selector.js';
+import { selectChatTranscript } from '#services/chat-session-store.js';
+import type { ChatSession, ChatTranscriptState, StopOrigin } from '#services/chat-session-store.js';
+import { noComposerTrays } from '@taucad/chat-ui/services/chat-composer-trays';
+import type { ComposerTray } from '@taucad/chat-ui/services/chat-composer-trays';
+import type { ChatMessageQueueIntent } from '@taucad/chat-ui/db/chat-message-queue-store';
+import type { TurnGroup } from '#routes/w.$workspace.$project/chat-turn-groups.js';
+import { selectVisibleChatStatus } from '#services/chat-visible-status.js';
+import type { chatPersistenceMachine } from '@taucad/chat-ui/hooks/chat-persistence.machine';
+import type {
+  DraftAttachment,
+  DraftAttachmentModel,
+  DraftAttachmentSource,
+  draftMachine,
+  PendingDraftImage,
+} from '@taucad/chat-ui/hooks/draft.machine';
+import { pendingDraftImages } from '@taucad/chat-ui/hooks/draft.machine';
+import type { StoredAttachmentRef } from '@taucad/chat-ui/utils/attachment.utils';
+import type { ChatMode } from '#routes/w.$workspace.$project/chat-mode-selector.js';
 
-type ChatInstance = AiSdkChat<MyUIMessage>;
+type ChatInstance = ChatView;
 
 type SendMessageInput = Parameters<ChatInstance['sendMessage']>[0];
 
 const emptyMessages: readonly MyUIMessage[] = Object.freeze([]);
-const emptyMessageOrder: readonly string[] = Object.freeze([]);
-const emptyMessagesById: ReadonlyMap<string, MyUIMessage> = new Map();
-
-const messagesByIdCache = new WeakMap<readonly MyUIMessage[], Map<string, MyUIMessage>>();
-
-function getMessagesById(messages: readonly MyUIMessage[]): ReadonlyMap<string, MyUIMessage> {
-  if (messages === emptyMessages) {
-    return emptyMessagesById;
-  }
-  let cached = messagesByIdCache.get(messages);
-  if (!cached) {
-    cached = new Map<string, MyUIMessage>();
-    for (const message of messages) {
-      cached.set(message.id, message);
-    }
-    messagesByIdCache.set(messages, cached);
-  }
-  return cached;
-}
 
 // ---------------------------------------------------------------------------
 // Context surface (session-required)
@@ -114,17 +111,11 @@ export type ChatContextValue = {
 type SessionSnapshotFields = {
   chat: ChatInstance | undefined;
   persistenceActorRef: ActorRefFrom<typeof chatPersistenceMachine> | undefined;
-  messages: readonly MyUIMessage[];
-  status: ChatInstance['status'];
-  error: Error | undefined;
 };
 
 const emptySessionSnapshot: SessionSnapshotFields = {
   chat: undefined,
   persistenceActorRef: undefined,
-  messages: emptyMessages,
-  status: 'ready',
-  error: undefined,
 };
 
 function selectSessionSnapshot(session: ChatSession | undefined): SessionSnapshotFields {
@@ -134,9 +125,6 @@ function selectSessionSnapshot(session: ChatSession | undefined): SessionSnapsho
   return {
     chat: session.chat,
     persistenceActorRef: session.persistenceActorRef,
-    messages: session.chat.messages,
-    status: session.chat.status,
-    error: session.chat.error,
   };
 }
 
@@ -169,17 +157,24 @@ export type CombinedChatState = {
   messages: readonly MyUIMessage[];
   messagesById: ReadonlyMap<string, MyUIMessage>;
   messageOrder: readonly string[];
+  turnGroups: readonly TurnGroup[];
+  agentInvocations: string;
+  /** The transcript's load state (I21): the lane draws no empty-chat state while it is `loading`. */
+  transcript: ChatTranscriptState;
+  /** The composer trays whose height the lane reserves while their reads are pending (U10). */
+  rememberedComposerTrays: readonly ComposerTray[];
   status: ChatInstance['status'];
   error: Error | undefined;
   /** Persisted error survives reload (from the chat entity in IndexedDB). */
   persistedError: ChatError | undefined;
+  /** Durable host facts and the current read-only attachment, not SDK stream state. */
+  projection?: ChatProjection;
+  attachmentStatus?: ReturnType<ReturnType<typeof useChatSessionStore>['getAttachmentStatus']>;
+  /** The host whose log the chat is attached to, which is where its refusals came from. */
+  attachedHostId?: ReturnType<ReturnType<typeof useChatSessionStore>['getAttachedHostId']>;
   isLoading: boolean;
-  /**
-   * Chat-scoped active model id, mirrored from the persistence machine's
-   * `Chat.activeModel`. When undefined the consumer falls back to the
-   * cookie default (see `useActiveChatModel`).
-   */
-  activeModel: string | undefined;
+  /** Chat-scoped execution target mirrored from durable persistence. */
+  activeExecution: CadAgentExecution | undefined;
   /**
    * Chat-scoped active CAD kernel, mirrored from the persistence machine's
    * `Chat.activeKernel`. When undefined the consumer falls back to the
@@ -187,78 +182,40 @@ export type CombinedChatState = {
    */
   activeKernel: KernelId | undefined;
   draftText: string;
-  draftImages: string[];
+  draftAttachments: readonly DraftAttachment[];
   draftToolChoice: string | string[];
   draftMode: ChatMode;
   messageEdits: Record<string, MyUIMessage>;
   activeEditMessageId: string | undefined;
   editDraftText: string;
-  editDraftImages: string[];
+  editDraftAttachments: readonly DraftAttachment[];
 };
 
-type PersistenceSliceFields = {
-  persistedError: ChatError | undefined;
-  activeModel: string | undefined;
-  activeKernel: KernelId | undefined;
-};
-
-const emptyPersistenceSlice: PersistenceSliceFields = {
-  persistedError: undefined,
-  activeModel: undefined,
-  activeKernel: undefined,
-};
-
-const persistenceSliceCache = new WeakMap<
-  ActorRefFrom<typeof chatPersistenceMachine>,
-  { context: unknown; slice: PersistenceSliceFields }
->();
-
-/**
- * Subscribe to a possibly-undefined persistence actor's chat-scoped fields
- * (`persistedError`, `activeModel`, `activeKernel`) without violating the
- * rules of hooks when the actor is not yet present. Slices are cached per
- * actor + context reference so `useSyncExternalStore` returns the same
- * object reference across notifications that did not change the slice.
- */
-function usePersistenceSlice(
-  persistenceActorRef: ActorRefFrom<typeof chatPersistenceMachine> | undefined,
-): PersistenceSliceFields {
-  const subscribe = useCallback(
-    (callback: () => void) => {
-      if (!persistenceActorRef) {
-        return () => undefined;
-      }
-      const sub = persistenceActorRef.subscribe(callback);
-      return () => {
-        sub.unsubscribe();
-      };
-    },
-    [persistenceActorRef],
-  );
-  const getSnapshot = useCallback((): PersistenceSliceFields => {
-    if (!persistenceActorRef) {
-      return emptyPersistenceSlice;
-    }
-    const { context } = persistenceActorRef.getSnapshot();
-    const cached = persistenceSliceCache.get(persistenceActorRef);
-    if (
-      cached &&
-      cached.context === context &&
-      cached.slice.persistedError === context.persistedError &&
-      cached.slice.activeModel === context.activeModel &&
-      cached.slice.activeKernel === context.activeKernel
-    ) {
-      return cached.slice;
-    }
-    const slice: PersistenceSliceFields = {
-      persistedError: context.persistedError,
-      activeModel: context.activeModel,
-      activeKernel: context.activeKernel,
-    };
-    persistenceSliceCache.set(persistenceActorRef, { context, slice });
-    return slice;
-  }, [persistenceActorRef]);
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+function shallowEqual<T>(a: T, b: T): boolean {
+  if (Object.is(a, b)) {
+    return true;
+  }
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') {
+    return false;
+  }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((value, index) => Object.is(value, b[index]))
+    );
+  }
+  if (Object.getPrototypeOf(a) !== Object.prototype || Object.getPrototypeOf(b) !== Object.prototype) {
+    return false;
+  }
+  const aRecord = a as Record<string, unknown>;
+  const bRecord = b as Record<string, unknown>;
+  const aKeys = Object.keys(aRecord);
+  if (aKeys.length !== Object.keys(bRecord).length) {
+    return false;
+  }
+  return aKeys.every((key) => Object.is(aRecord[key], bRecord[key]));
 }
 
 /**
@@ -267,93 +224,93 @@ function usePersistenceSlice(
  * Session-required — composer-only subtrees should call
  * {@link useDraftSelector} instead.
  *
- * Selectors run on every notification — the `messagesById` and
- * `messageOrder` derivations are memoised on the message array reference
- * so equivalent reads are O(1).
+ * The combined external-store subscription caches the selected value, so a
+ * token update only re-renders consumers whose selected data changed.
  */
 export function useChatSelector<T>(selector: (state: CombinedChatState) => T, chatId?: string): T {
-  const { chat, persistenceActorRef, draftActorRef } = useChatContext(chatId);
-  const draftContext = useSelector(draftActorRef, (state) => state.context);
-  const persistenceSlice = usePersistenceSlice(persistenceActorRef);
+  const { activeChatId, persistenceActorRef, draftActorRef } = useChatContext(chatId);
+  const store = useChatSessionStore();
+  const cacheRef = useRef<{ readonly value: T } | undefined>(undefined);
 
-  const messages = chat?.messages ?? emptyMessages;
-  const status = chat?.status ?? 'ready';
-  const error = chat?.error;
-  const isLoading = status === 'streaming';
-
-  const messagesById = getMessagesById(messages);
-  const messageOrder = useMemo<readonly string[]>(
-    () => (messages === emptyMessages ? emptyMessageOrder : messages.map((m) => m.id)),
-    [messages],
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      const unsubscribeChat = store.subscribeChat(activeChatId, listener);
+      const unsubscribeProjection = store.subscribeProjection(activeChatId, listener);
+      const draftSubscription = draftActorRef.subscribe(listener);
+      const persistenceSubscription = persistenceActorRef?.subscribe(listener);
+      return () => {
+        unsubscribeChat();
+        unsubscribeProjection();
+        draftSubscription.unsubscribe();
+        persistenceSubscription?.unsubscribe();
+      };
+    },
+    [activeChatId, draftActorRef, persistenceActorRef, store],
   );
-
-  const combinedState = useMemo<CombinedChatState>(
-    () => ({
+  const getSnapshot = useCallback((): T => {
+    const session = store.get(activeChatId);
+    const chat = session?.chat;
+    const messages = session?.messages ?? emptyMessages;
+    const projection = store.getProjection(activeChatId);
+    const status = selectVisibleChatStatus(chat?.status ?? 'ready', projection);
+    const draftContext = draftActorRef.getSnapshot().context;
+    const persistenceContext = persistenceActorRef?.getSnapshot().context;
+    const state: CombinedChatState = {
       messages,
-      messagesById,
-      messageOrder,
+      get messagesById() {
+        return store.getMessagePresentation(activeChatId).messagesById;
+      },
+      get messageOrder() {
+        return store.getMessagePresentation(activeChatId).order;
+      },
+      get turnGroups() {
+        return store.getMessagePresentation(activeChatId).groups;
+      },
+      get agentInvocations() {
+        return store.getMessagePresentation(activeChatId).agentInvocations;
+      },
+      transcript: selectChatTranscript(session),
+      rememberedComposerTrays: session?.rememberedComposerTrays ?? noComposerTrays,
       status,
-      error,
-      persistedError: persistenceSlice.persistedError,
-      isLoading,
-      activeModel: persistenceSlice.activeModel,
-      activeKernel: persistenceSlice.activeKernel,
+      error: chat?.error,
+      persistedError: persistenceContext?.persistedError,
+      projection,
+      attachmentStatus: store.getAttachmentStatus(activeChatId),
+      attachedHostId: store.getAttachedHostId(activeChatId),
+      isLoading: status === 'streaming',
+      activeExecution: persistenceContext?.activeExecution,
+      activeKernel: persistenceContext?.activeKernel,
       draftText: draftContext.draftText,
-      draftImages: draftContext.draftImages,
+      draftAttachments: draftContext.draftAttachments,
       draftToolChoice: draftContext.draftToolChoice,
       // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- ChatMode is the agent/plan superset narrowed at the consumer layer
       draftMode: draftContext.draftMode as ChatMode,
       messageEdits: draftContext.messageEdits,
       activeEditMessageId: draftContext.activeEditMessageId,
       editDraftText: draftContext.editDraftText,
-      editDraftImages: draftContext.editDraftImages,
-    }),
-    [messages, messagesById, messageOrder, status, error, persistenceSlice, isLoading, draftContext],
-  );
+      editDraftAttachments: draftContext.editDraftAttachments,
+    };
+    const next = selector(state);
+    const cached = cacheRef.current;
+    if (cached && shallowEqual(cached.value, next)) {
+      return cached.value;
+    }
+    cacheRef.current = { value: next };
+    return next;
+  }, [activeChatId, draftActorRef, persistenceActorRef, selector, store]);
 
-  return selector(combinedState);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 /**
  * Read state from a non-active chat (e.g. an agents-panel row showing a
  * background chat's status while a different chat is focused). The caller
  * is responsible for ensuring a session for `chatId` is alive (typically
- * by mounting `<ActiveChatProvider chatId={chatId}>` higher up or calling
- * `useChatSession(chatId)` in the same component).
+ * by mounting `<ActiveChatProvider chatId={chatId} projectId={projectId}>` higher up or calling
+ * `useChatSession(chatId, projectId)` in the same component).
  */
 export function useChatById<T>(chatId: string, selector: (state: CombinedChatState) => T): T {
   return useChatSelector(selector, chatId);
-}
-
-/**
- * Snapshot of the chatPersistenceMachine's transparent auto-retry counters
- * for the resolved chat. Returns `{ retryAttempt: 0 }` when no session is
- * mounted so consumers can render unconditionally.
- *
- * Components use this (instead of reaching into `persistenceActorRef`
- * directly) to render a "Reconnecting... N/M" indicator while the
- * `requestLifecycle.retrying` substate is active between attempts.
- */
-export type ChatRetrySnapshot = {
-  retryAttempt: number;
-  retryMaxAttempts: number;
-};
-
-const emptyRetrySnapshot: ChatRetrySnapshot = { retryAttempt: 0, retryMaxAttempts: 0 };
-
-export function useChatRetrySnapshot(chatId?: string): ChatRetrySnapshot {
-  const { persistenceActorRef } = useChatContext(chatId);
-  return useSelector(
-    persistenceActorRef,
-    (state) => {
-      if (!state) {
-        return emptyRetrySnapshot;
-      }
-      const { retryAttempt, retryMaxAttempts } = state.context;
-      return { retryAttempt, retryMaxAttempts };
-    },
-    (a, b) => a.retryAttempt === b.retryAttempt && a.retryMaxAttempts === b.retryMaxAttempts,
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -367,17 +324,26 @@ export function useChatRetrySnapshot(chatId?: string): ChatRetrySnapshot {
 
 /**
  * Draft-only state shape. Strict subset of {@link CombinedChatState} that
- * doesn't depend on a live `Chat` session.
+ * doesn't depend on a live `Chat` session. A composer derives its send gate
+ * from `draftAttachments` with `attachmentSendBlockReason` (`#utils/chat.utils.js`).
  */
 export type DraftState = {
   draftText: string;
-  draftImages: string[];
+  draftAttachments: readonly DraftAttachment[];
   draftToolChoice: string | string[];
   draftMode: ChatMode;
   messageEdits: Record<string, MyUIMessage>;
   activeEditMessageId: string | undefined;
   editDraftText: string;
-  editDraftImages: string[];
+  editDraftAttachments: readonly DraftAttachment[];
+  /** An attachment for the main draft is still resizing or storing, so it is not in `draftAttachments` yet. */
+  attachingMain: boolean;
+  /** The same for the open edit. */
+  attachingEdit: boolean;
+  /** The main draft's images still converting or storing, whose thumbnail slots the composer holds. */
+  pendingMain: readonly PendingDraftImage[];
+  /** The same for the open edit. */
+  pendingEdit: readonly PendingDraftImage[];
 };
 
 /**
@@ -387,20 +353,33 @@ export type DraftState = {
 export function useDraftSelector<T>(selector: (state: DraftState) => T): T {
   const { draftActorRef } = useChatComposer();
   const draftContext = useSelector(draftActorRef, (state) => state.context);
+  /* Derived only when the queue or the open edit changes, so a keystroke keeps the lists' identity. */
+  const { attachmentQueue, activeEditMessageId } = draftContext;
+  const pending = useMemo(
+    () => ({
+      main: pendingDraftImages({ attachmentQueue, activeEditMessageId }, 'main'),
+      edit: pendingDraftImages({ attachmentQueue, activeEditMessageId }, 'edit'),
+    }),
+    [attachmentQueue, activeEditMessageId],
+  );
 
   const draftState = useMemo<DraftState>(
     () => ({
       draftText: draftContext.draftText,
-      draftImages: draftContext.draftImages,
+      draftAttachments: draftContext.draftAttachments,
       draftToolChoice: draftContext.draftToolChoice,
       // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- ChatMode is the agent/plan superset narrowed at the consumer layer
       draftMode: draftContext.draftMode as ChatMode,
       messageEdits: draftContext.messageEdits,
       activeEditMessageId: draftContext.activeEditMessageId,
       editDraftText: draftContext.editDraftText,
-      editDraftImages: draftContext.editDraftImages,
+      editDraftAttachments: draftContext.editDraftAttachments,
+      attachingMain: draftContext.attachmentQueue.some((entry) => entry.target === 'main'),
+      attachingEdit: draftContext.attachmentQueue.some((entry) => entry.target === 'edit'),
+      pendingMain: pending.main,
+      pendingEdit: pending.edit,
     }),
-    [draftContext],
+    [draftContext, pending],
   );
 
   return selector(draftState);
@@ -411,20 +390,36 @@ export function useDraftSelector<T>(selector: (state: DraftState) => T): T {
  * the session-required {@link ChatActions} so marketing-route composers can
  * write to the draft without a session.
  */
+export type DraftAttachmentOptions = {
+  /** The selected model; an attachment kind it cannot read is refused before any byte is stored (D20). */
+  readonly model: DraftAttachmentModel;
+  /** Shown on a document chip and sent to the provider. */
+  readonly filename?: string;
+  /** Keep a generated lossless artifact byte-for-byte instead of applying the upload compression policy. */
+  readonly preserveOriginal?: boolean;
+  /** The picked, dropped or pasted file's declared `type`, for the intake counter; the bytes decide the label (I1). */
+  readonly declaredType?: string;
+};
+
+const sourceFields = (
+  source: DraftAttachmentSource,
+): { dataUrl: string } | { bytes: Uint8Array<ArrayBuffer>; mediaType: string } =>
+  typeof source === 'string' ? { dataUrl: source } : source;
+
 export type DraftActions = {
   setDraftText: (text: string) => void;
   /**
-   * Add a raw image data URL to the new-message draft. Synchronous: the
-   * `draftMachine` enqueues the URL and resizes it through the single
-   * `imageProcessing` chokepoint (see `apps/ui/app/hooks/draft.machine.ts`).
-   * Pass the original (un-resized) data URL — the machine handles
-   * dimension/compression caps via `resizeImageForChat()`. Failures surface
-   * as a single global `toast.error` from the provider's
-   * `useDraftImageErrorToast` subscriber, so callers MUST NOT wrap this in
-   * try/catch or await any resize step.
+   * Add a raw image or PDF data URL to the new-message draft. Synchronous: the
+   * `draftMachine` enqueues it through its single `attachmentProcessing`
+   * chokepoint (see `apps/libs/chat-ui/src/hooks/draft.machine.ts`), which converts
+   * images through the storage policy and stores the bytes before the draft references them. Pass the
+   * original data URL. Generated captures pass `preserveOriginal` so their
+   * lossless bytes bypass upload compression. Failures and refusals are
+   * emitted by the machine for one toast subscriber, so callers MUST NOT wrap
+   * this in try/catch.
    */
-  addDraftImage: (image: string) => void;
-  removeDraftImage: (index: number) => void;
+  addDraftAttachment: (source: DraftAttachmentSource, options: DraftAttachmentOptions) => void;
+  removeDraftAttachment: (index: number) => void;
   setDraftToolChoice: (toolChoice: string | string[]) => void;
   setDraftMode: (mode: string) => void;
   clearDraft: () => void;
@@ -432,11 +427,11 @@ export type DraftActions = {
   exitEditMode: () => void;
   setEditDraftText: (text: string) => void;
   /**
-   * Add a raw image data URL to the message-edit draft. Same contract as
-   * {@link DraftActions.addDraftImage}.
+   * Add a raw data URL (or a document's bytes) to the message-edit draft. Same contract as
+   * {@link DraftActions.addDraftAttachment}.
    */
-  addEditDraftImage: (image: string) => void;
-  removeEditDraftImage: (index: number) => void;
+  addEditDraftAttachment: (source: DraftAttachmentSource, options: DraftAttachmentOptions) => void;
+  removeEditDraftAttachment: (index: number) => void;
   clearMessageEdit: (messageId: string) => void;
 };
 
@@ -448,11 +443,11 @@ export function useDraftActions(): DraftActions {
       setDraftText(text: string) {
         draftActorRef.send({ type: 'setDraftText', text });
       },
-      addDraftImage(image: string) {
-        draftActorRef.send({ type: 'addDraftImage', image });
+      addDraftAttachment(source: DraftAttachmentSource, options: DraftAttachmentOptions) {
+        draftActorRef.send({ type: 'addDraftAttachment', ...sourceFields(source), ...options });
       },
-      removeDraftImage(index: number) {
-        draftActorRef.send({ type: 'removeDraftImage', index });
+      removeDraftAttachment(index: number) {
+        draftActorRef.send({ type: 'removeDraftAttachment', index });
       },
       setDraftToolChoice(toolChoice: string | string[]) {
         draftActorRef.send({ type: 'setDraftToolChoice', toolChoice });
@@ -473,11 +468,11 @@ export function useDraftActions(): DraftActions {
       setEditDraftText(text: string) {
         draftActorRef.send({ type: 'setEditDraftText', text });
       },
-      addEditDraftImage(image: string) {
-        draftActorRef.send({ type: 'addEditDraftImage', image });
+      addEditDraftAttachment(source: DraftAttachmentSource, options: DraftAttachmentOptions) {
+        draftActorRef.send({ type: 'addEditDraftAttachment', ...sourceFields(source), ...options });
       },
-      removeEditDraftImage(index: number) {
-        draftActorRef.send({ type: 'removeEditDraftImage', index });
+      removeEditDraftAttachment(index: number) {
+        draftActorRef.send({ type: 'removeEditDraftAttachment', index });
       },
       clearMessageEdit(messageId: string) {
         draftActorRef.send({ type: 'clearMessageEdit', messageId });
@@ -491,25 +486,36 @@ export function useDraftActions(): DraftActions {
 // Session action surface
 // ---------------------------------------------------------------------------
 
+/*
+ * The verbs are gestures, not dispatches (C3).
+ *
+ * None of them carries a `body` any more: the chat's session actor owns the
+ * turn, so it is the actor's admission that derives the rewind point, leases
+ * the checkout and composes the wire body. A verb that composed its own body
+ * was a second admission policy, and the two disagreed (F10).
+ */
 export type ChatActions = DraftActions & {
-  sendMessage: (message: SendMessageInput, options?: { body?: Readonly<Record<string, unknown>> }) => void;
-  regenerate: (options?: { body?: Readonly<Record<string, unknown>> }) => void;
+  sendMessage: (
+    message: SendMessageInput,
+    options?: {
+      attachments?: readonly StoredAttachmentRef[];
+      execution?: CadAgentExecution;
+      queueIntent?: ChatMessageQueueIntent;
+    },
+  ) => Promise<void>;
+  regenerate: () => void;
   /**
-   * Resume an interrupted stream WITHOUT re-running the trailing user
-   * message or slicing any assistant parts that already landed. Use this
-   * for the network-error banner's primary CTA -- `regenerate()` would
-   * destroy partial assistant content and is the wrong tool for transient
-   * transport failures.
+   * Resume a run the host still holds, preserving its already-settled work.
+   * An unavailable resume is refused; replay is the separate regenerate verb.
    */
   continueChat: () => void;
-  stop: () => void;
+  stop: (origin: StopOrigin) => void;
   setMessages: (messages: MyUIMessage[]) => void;
   editMessage: (
     messageId: string,
     content: string,
-    options?: { imageUrls?: string[]; body?: Readonly<Record<string, unknown>> },
+    options?: { attachments?: readonly StoredAttachmentRef[]; references?: readonly CadReference[] },
   ) => void;
-  retryMessage: (messageId: string, options?: { body?: Readonly<Record<string, unknown>> }) => void;
 };
 
 function warnNoCrossChatSession(action: string, chatId: string): void {
@@ -559,48 +565,52 @@ export function useChatActions(chatId?: string): ChatActions {
 
     return {
       ...draftActions,
-      sendMessage(message: SendMessageInput, options) {
-        draftActorRef.send({ type: 'clearDraft' });
-        const session = requireSession('sendMessage');
-        if (!session) {
+      async sendMessage(message: SendMessageInput, options) {
+        if (!requireSession('sendMessage')) {
           return;
         }
-        session.persistenceActorRef.send({
-          type: 'startRequest',
-          // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- AI SDK sendMessage union narrows to MyUIMessage at all call sites
-          request: { kind: 'send', message: message as MyUIMessage, body: options?.body },
+        // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- AI SDK sendMessage union narrows to MyUIMessage at all call sites
+        const outgoingMessage = message as MyUIMessage;
+        /* I5: the composer is this message's only copy until the dispatch
+         * appends it to the transcript, so `requestTurn` owns when it is
+         * cleared — and when the draft-stage bytes behind it are released. It
+         * is the only caller that knows whether the gesture was taken, queued,
+         * displaced or refused. Clearing here first meant the last two deleted
+         * what the person wrote; releasing here afterwards
+         * deleted the files of the very message it had just handed back. */
+        await store.requestTurn(resolvedChatId, {
+          kind: 'send',
+          message: outgoingMessage,
+          ...(options?.queueIntent === undefined ? {} : { queueIntent: options.queueIntent }),
+          ...(options?.execution === undefined ? {} : { execution: options.execution }),
+          ...(options?.attachments === undefined ? {} : { attachments: options.attachments }),
         });
       },
-      regenerate(options) {
-        const session = requireSession('regenerate');
-        if (!session) {
+      regenerate() {
+        if (!requireSession('regenerate')) {
           return;
         }
-        session.persistenceActorRef.send({
-          type: 'startRequest',
-          request: { kind: 'regenerate', body: options?.body },
-        });
+        void store.requestTurn(resolvedChatId, { kind: 'regenerate' });
       },
       continueChat() {
-        const session = requireSession('continueChat');
-        if (!session) {
+        if (!requireSession('continueChat')) {
           return;
         }
-        session.persistenceActorRef.send({ type: 'startRequest', request: { kind: 'continue' } });
+        void store.requestTurn(resolvedChatId, { kind: 'continue' });
       },
-      stop() {
+      stop(origin) {
         const session = requireSession('stop');
         if (!session) {
           return;
         }
-        session.persistenceActorRef.send({ type: 'stopRequest' });
+        store.stopRun(resolvedChatId, origin);
       },
       setMessages(messages: MyUIMessage[]) {
         const session = requireSession('setMessages');
         if (!session) {
           return;
         }
-        session.chat.messages = messages;
+        store.replaceMessages(resolvedChatId, messages);
       },
 
       startEditingMessage(messageId: string, originalMessage?: MyUIMessage) {
@@ -618,23 +628,12 @@ export function useChatActions(chatId?: string): ChatActions {
         if (!session.chat.messages.some((m) => m.id === messageId)) {
           return;
         }
-        session.persistenceActorRef.send({
-          type: 'startRequest',
-          request: { kind: 'edit', messageId, content, imageUrls: options?.imageUrls, body: options?.body },
-        });
-      },
-
-      retryMessage(messageId: string, options?) {
-        const session = requireSession('retryMessage');
-        if (!session) {
-          return;
-        }
-        if (!session.chat.messages.some((m) => m.id === messageId)) {
-          return;
-        }
-        session.persistenceActorRef.send({
-          type: 'startRequest',
-          request: { kind: 'retry', messageId, body: options?.body },
+        void store.requestTurn(resolvedChatId, {
+          kind: 'edit',
+          messageId,
+          text: content,
+          ...(options?.attachments === undefined ? {} : { attachments: options.attachments }),
+          ...(options?.references === undefined ? {} : { references: options.references }),
         });
       },
     };

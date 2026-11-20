@@ -1,10 +1,60 @@
 // @vitest-environment node
 /* eslint-disable @typescript-eslint/naming-convention -- mock for AI SDK's Chat / DefaultChatTransport classes uses the SDK's own PascalCase names and `~`-prefixed subscriber method names verbatim so the mock surface matches the real one. */
 /* eslint-disable @typescript-eslint/explicit-member-accessibility -- mock class constructors omit the `public` keyword to mirror the AI SDK's published shape. */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Chat as ChatEntity, MyUIMessage } from '@taucad/chat';
-import { chatTurnRequestSchema } from '@taucad/chat/schemas';
-import { clearLedger, recordRpcOutcome } from '#services/rpc-ledger.js';
+import { writeChatPlacement } from '@taucad/chat-ui/db/chat-placements';
+import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { loadChatSdk } from '@taucad/chat-ui/services/chat-sdk-loader';
+import { mock } from 'vitest-mock-extended';
+import { KeyedMutex } from '@taucad/utils/keyed-mutex';
+import { chatMessageQueuePath } from '@taucad/chat-ui/db/chat-message-queue-store';
+import { readFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createAgentLauncher } from '@taucad/agent-host/launcher';
+import { createNodeChatStore } from '@taucad/agent-host/node';
+import { createTauCloudGatewayModelTransport } from '@taucad/agent-host';
+import { createAgentHostClient } from '#services/agent-host-client.js';
+import type { AgentHostClient } from '#services/agent-host-client.js';
+import type { AgentHostTransport } from '@taucad/chat-ui/services/agent-host-transport';
+import { pathToFileURL } from 'node:url';
+import { createActor, createAsyncLogic } from 'xstate';
+import type { Chat as ChatEntity, ModelSupport, MyUIMessage } from '@taucad/chat';
+import { errorCategory } from '@taucad/types/constants';
+import type * as AiSdk from 'ai';
+import type { WatchEvent } from '@taucad/filesystem';
+import type { CatchUpFrame, CommandAnswer, HostCommand } from '@taucad/agent-host/wire';
+import { chatSessionMachine } from '#machines/chat-session.machine.js';
+import { StepClock } from '@taucad/xstate-testing/clock';
+import { resetAutoResumes } from '@taucad/ui-core/utils/run-auto-resume';
+import { chunksOf, selectRunElsewhere, selectRunElsewhereAwaitsPull } from '#machines/chat-projection.logic.js';
+import { sha256Bytes } from '@taucad/utils/hash';
+import { uint8ArrayToBase64 } from 'uint8array-extras';
+import type { ChatRequest, ChatTurnGesture } from '#machines/chat-session.machine.js';
+import type { ProjectSessionActorRef } from '#machines/project-session.machine.js';
+import { projectSessionMachine } from '#machines/project-session.machine.js';
+import { spyOnSend } from '@taucad/ui-core/lib/xstate-test.utils';
+import { focusedProjectStandIn } from '#services/focused-project.fixture.js';
+import type { FocusedProjectStandIn } from '#services/focused-project.fixture.js';
+import {
+  chatTurnAdmission,
+  publishChatTurnAdmission,
+  resetChatTurnServices,
+} from '#chat-clients/_internal/chat-host-binding.js';
+import {
+  compactRow,
+  lifecycleRow,
+  logRow,
+  publishLogPage,
+  publishLogRows,
+  runningRows,
+  writerOwnedCatchUp,
+} from '#machines/chat-projection.fixture.js';
+import { projectSessionsStandIn } from '#services/project-sessions.fixture.js';
+import type { LiveProjectSessions } from '#services/chat-session-store.js';
+
+/** The live project sessions every store in this file follows, as the runtime hands it the registry's (A7c). */
+const liveSessions = projectSessionsStandIn();
 
 // ---------------------------------------------------------------------------
 // Hoisted test harness
@@ -25,11 +75,16 @@ type FakeChatInstance = {
   messages: MyUIMessage[];
   sendMessage: ReturnType<typeof vi.fn>;
   regenerate: ReturnType<typeof vi.fn>;
+  resumeStream: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
-  // Private in AI SDK source; the chat-session-store reaches it via a typed
-  // shim. The mock exposes it as a public spy so tests can assert the
-  // continuation path calls it with the expected arg shape.
   makeRequest: ReturnType<typeof vi.fn>;
+  finish: (
+    options?: Partial<{
+      isAbort: boolean;
+      isError: boolean;
+      isDisconnect: boolean;
+    }>,
+  ) => void;
   // Test driver — invoke any registered messages callback
   emitMessagesChange: () => void;
   emitStatusChange: () => void;
@@ -38,6 +93,19 @@ type FakeChatInstance = {
   '~registerStatusCallback': (onChange: () => void) => () => void;
   '~registerErrorCallback': (onChange: () => void) => () => void;
 };
+
+/**
+ * Finish a run that streamed a reply: the status walk the AI SDK makes before `onFinish`.
+ *
+ * @param chat - The chat whose request ends.
+ */
+function finishRun(chat: FakeChatInstance): void {
+  for (const status of ['submitted', 'streaming', 'ready'] as const) {
+    chat.status = status;
+    chat.emitStatusChange();
+  }
+  chat.finish();
+}
 
 const harness = vi.hoisted(() => ({
   created: [] as FakeChatInstance[],
@@ -53,13 +121,23 @@ vi.mock('@ai-sdk/react', () => ({
     public messages: MyUIMessage[] = [];
     public sendMessage = vi.fn().mockResolvedValue(undefined);
     public regenerate = vi.fn().mockResolvedValue(undefined);
+    public resumeStream = vi.fn().mockResolvedValue(undefined);
     public stop = vi.fn().mockResolvedValue(undefined);
     public makeRequest = vi.fn().mockResolvedValue(undefined);
     readonly #messagesListeners = new Set<() => void>();
     readonly #statusListeners = new Set<() => void>();
     readonly #errorListeners = new Set<() => void>();
 
-    constructor(init: { id: string; messages?: MyUIMessage[] }) {
+    constructor(init: {
+      id: string;
+      messages?: MyUIMessage[];
+      onFinish?: (input: {
+        messages: MyUIMessage[];
+        isAbort: boolean;
+        isError: boolean;
+        isDisconnect: boolean;
+      }) => void;
+    }) {
       this.id = init.id;
       this.messages = init.messages ?? [];
       const fake: FakeChatInstance = Object.assign(this, {
@@ -77,6 +155,20 @@ vi.mock('@ai-sdk/react', () => ({
           for (const listener of this.#errorListeners) {
             listener();
           }
+        },
+        finish: (
+          options?: Partial<{
+            isAbort: boolean;
+            isError: boolean;
+            isDisconnect: boolean;
+          }>,
+        ) => {
+          init.onFinish?.({
+            messages: this.messages,
+            isAbort: options?.isAbort ?? false,
+            isError: options?.isError ?? false,
+            isDisconnect: options?.isDisconnect ?? false,
+          });
         },
       });
       harness.created.push(fake);
@@ -105,9 +197,12 @@ vi.mock('@ai-sdk/react', () => ({
   },
 }));
 
-vi.mock('ai', () => ({
+vi.mock('ai', async (importOriginal) => ({
+  // The composer record store validates drafts with the real `safeValidateUIMessages`.
+  ...(await importOriginal<typeof AiSdk>()),
   // oxlint-disable-next-line typescript-eslint/no-extraneous-class -- mock requires a `new`able value
   DefaultChatTransport: class {},
+  lastAssistantMessageIsCompleteWithApprovalResponses: vi.fn(() => false),
 }));
 
 vi.mock('#environment.config.js', () => ({
@@ -119,6 +214,8 @@ vi.mock('#machines/inspector.js', () => ({
 }));
 
 const { ChatSessionStore } = await import('#services/chat-session-store.js');
+const { selectVisibleChatError } = await import('#routes/w.$workspace.$project/chat-error.js');
+const { attachmentSendBlockReason, buildUserMessage } = await import('#utils/chat.utils.js');
 type StoreType = InstanceType<typeof ChatSessionStore>;
 type ChatSessionDeps = Parameters<StoreType['setDependencies']>[0];
 
@@ -129,31 +226,4065 @@ type ChatSessionDeps = Parameters<StoreType['setDependencies']>[0];
  * that doesn't structurally match the typed closure fields.
  */
 type StubDeps = {
-  [K in keyof ChatSessionDeps]: ReturnType<typeof vi.fn<ChatSessionDeps[K]>>;
-};
+  [K in Exclude<
+    keyof ChatSessionDeps,
+    | 'client'
+    | 'watchRecordFile'
+    | 'queueLock'
+    | 'adoptLegacyChatPlacement'
+    | 'isPlacementOnThisDevice'
+    | 'isPlacementOnThisDeviceNow'
+    | 'onPlacementReachabilityChanged'
+    | 'pullRemote'
+  >]: ReturnType<typeof vi.fn<ChatSessionDeps[K]>>;
+} & { client: MemoryClient; queueLock: NonNullable<ChatSessionDeps['queueLock']> };
 
-function createStubDeps(): StubDeps {
+const notFound = (path: string): Error => Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+
+/**
+ * The worker filesystem client, in memory. One instance stands for one
+ * device's disk, so two stores over it are a reload.
+ */
+function createMemoryClient() {
+  const files = new Map<string, Uint8Array<ArrayBuffer>>();
+  const under = (path: string): string[] =>
+    [...files.keys()].filter((entry) => entry.startsWith(`${path}/`)).map((entry) => entry.slice(path.length + 1));
+  return {
+    files,
+    /** Paths whose reads reject with an I/O error rather than a not-found. */
+    failingReads: new Set<string>(),
+    json(path: string): unknown {
+      const bytes = files.get(path);
+      return bytes === undefined ? undefined : JSON.parse(new TextDecoder().decode(bytes));
+    },
+    namesUnder(path: string): string[] {
+      return under(path).sort();
+    },
+    async readFile(path: string): Promise<Uint8Array<ArrayBuffer>> {
+      if (this.failingReads.has(path)) {
+        throw Object.assign(new Error(`EIO: ${path}`), { code: 'EIO' });
+      }
+      const bytes = files.get(path);
+      if (bytes === undefined) {
+        throw notFound(path);
+      }
+      return bytes;
+    },
+    async writeFile(path: string, data: Uint8Array<ArrayBuffer>): Promise<void> {
+      files.set(path, data);
+    },
+    async exists(path: string): Promise<boolean> {
+      return files.has(path) || under(path).length > 0;
+    },
+    async readdir(path: string): Promise<string[]> {
+      const names = under(path);
+      if (names.length === 0) {
+        throw notFound(path);
+      }
+      return names;
+    },
+    async unlink(path: string): Promise<void> {
+      if (!files.delete(path)) {
+        throw notFound(path);
+      }
+    },
+    async rmdir(path: string): Promise<void> {
+      for (const name of under(path)) {
+        files.delete(`${path}/${name}`);
+      }
+    },
+  };
+}
+type MemoryClient = ReturnType<typeof createMemoryClient>;
+
+function createStubDeps(client: MemoryClient = createMemoryClient()): StubDeps {
+  const mutex = new KeyedMutex<string>();
   return {
     getChat: vi.fn<ChatSessionDeps['getChat']>().mockResolvedValue(undefined),
     patchChat: vi.fn<ChatSessionDeps['patchChat']>().mockResolvedValue(undefined),
-    setMessageEdit: vi.fn<ChatSessionDeps['setMessageEdit']>().mockResolvedValue(undefined),
-    clearMessageEdit: vi.fn<ChatSessionDeps['clearMessageEdit']>().mockResolvedValue(undefined),
+    touchChatRecency: vi.fn<ChatSessionDeps['touchChatRecency']>().mockResolvedValue(undefined),
+    consumeChatStartupRequest: vi.fn<ChatSessionDeps['consumeChatStartupRequest']>().mockResolvedValue(undefined),
+    commitCancelledDraftRestore: vi.fn<ChatSessionDeps['commitCancelledDraftRestore']>().mockResolvedValue(undefined),
+    client,
+    queueLock: mutex.run.bind(mutex),
   };
 }
 
-function createStore(): StoreType {
-  const store = new ChatSessionStore();
+const pngBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
+const pdfBytes = new TextEncoder().encode('%PDF-1.7\nbracket: hole 7.3 mm, plate 4.5 mm\n');
+const pngHash = await sha256Bytes(pngBytes);
+const pdfHash = await sha256Bytes(pdfBytes);
+const pngUrl = `attachments/${pngHash}.png`;
+const pdfUrl = `attachments/${pdfHash}.pdf`;
+const dataUrlOf = (mediaType: string, bytes: Uint8Array<ArrayBuffer>): string =>
+  `data:${mediaType};base64,${uint8ArrayToBase64(bytes)}`;
+const composerPath = (projectId: string, chatId: string): string => `/.tau/composers/chats/${projectId}/${chatId}.json`;
+const draftAttachmentsDirectory = (projectId: string, chatId: string): string =>
+  `/.tau/composers/chats/${projectId}/${chatId}/attachments`;
+const chatAttachmentsDirectory = (projectId: string, chatId: string): string =>
+  `/projects/${projectId}/.tau/chats/${chatId}/attachments`;
+
+/** A chat row owned by `projectId`, as `getChat` returns it. */
+function chatRow(chatId: string, projectId: string, overrides: Partial<ChatEntity> = {}): ChatEntity {
+  return { id: chatId, resourceId: projectId, name: '', messages: [], createdAt: 0, updatedAt: 0, ...overrides };
+}
+
+/** Let promise chains and zero-delay timers run out. */
+async function settle(): Promise<void> {
+  for (let round = 0; round < 5; round += 1) {
+    // oxlint-disable-next-line no-await-in-loop -- each round drains what the previous one scheduled
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
+}
+
+/** Every store here runs its chats on this logic, so a row can record the turns a chat ends (PV-S5: the store owns each chat's root). */
+const chatSession = chatSessionMachine.provide({
+  actors: { admitTurn: chatTurnAdmission },
+});
+
+function createStore(focus?: FocusedProjectStandIn): StoreType {
+  const store = new ChatSessionStore({
+    projectSessions: liveSessions,
+    chatSession,
+    ...(focus === undefined ? {} : { focusedProject: focus }),
+  });
   store.setDependencies(createStubDeps());
   return store;
 }
 
+/** Project sessions a row started, stopped after it. */
+const turnOwners: Array<{ stop: () => void }> = [];
+
+/**
+ * Register the project session that owns a chat's turns (C3).
+ *
+ * `store.requestTurn` reaches the chat's session actor and nothing else, so a
+ * row that drives a verb — or a seeded first turn — has to give the chat the
+ * owner the app gives it.
+ *
+ * @param _store - The store under test.
+ * @param projectId - The project whose session owns the chat.
+ */
+function startTurnOwner(_store: StoreType, projectId: string): void {
+  const session = createActor(projectSessionMachine, { input: { projectId } });
+  session.start();
+  turnOwners.push(session);
+  liveSessions.set(projectId, session);
+}
+
+/**
+ * Publish what one chat's admission composes, as its route would.
+ *
+ * Deliberately separable from {@link startTurnOwner}: a loaded seed remains
+ * durable and pending until the focused admission and connector both publish.
+ *
+ * @param chatId - The chat this admission belongs to.
+ * @param request - What the admission composes, or a throw to refuse the turn.
+ */
+function publishAdmission(
+  chatId: string,
+  request: (gesture: ChatTurnGesture) => Promise<ChatRequest> | ChatRequest,
+): void {
+  publishChatTurnAdmission(chatId, async (gesture) => ({
+    runId: `run_${chatId}`,
+    leaseTurnId: undefined,
+    request: await request(gesture),
+  }));
+}
+
+/* PL1: the chat's AI SDK loads once per page; once it has, a session builds its `Chat` at acquire, as these cases
+ * read it. The deferred path before that load is `services/deferred-chat.test.ts`. */
+beforeAll(async () => {
+  await loadChatSdk();
+});
+
+describe('ChatSessionStore — host command/watch cutover (PV-S10/S11)', () => {
+  // An SDK watch requires a visible admitted input; lifecycle-only logs cannot
+  // seed a new response safely from an earlier assistant.
+  const runningUserRows = (runId: string): Array<Record<string, unknown>> => {
+    const message = {
+      id: `user_${runId}`,
+      role: 'user',
+      content: 'Continue this turn',
+    };
+    return [
+      {
+        ...lifecycleRow(0, 'admitted', runId),
+        admission: { kind: 'tau', turnId: message.id, message },
+      },
+      lifecycleRow(1, 'running', runId),
+    ];
+  };
+  it.each([
+    'changed host',
+    'same host',
+    'failed save',
+    'released save',
+    'superseded save',
+    'prepared save',
+    'unconnected prepared save',
+    'cancelled rebase',
+  ] as const)('hands the chat observation over only after a current placement save: %s', async (scenario) => {
+    const store = createStore();
+    const chatId = 'chat_placement';
+    const projectId = 'project_placement';
+    const deps = createStubDeps();
+    let row = chatRow(chatId, projectId, {
+      activeExecution: { kind: 'tau', model: 'model-a', hostId: 'host-a' },
+    });
+    deps.getChat.mockImplementation(async (id) => ({ ...row, id }));
+    const pending = Promise.withResolvers<void>();
+    deps.patchChat.mockImplementation(async (_id, key, value) => {
+      if (key !== 'activeExecution') {
+        return;
+      }
+      if (scenario === 'failed save') {
+        throw new Error('Placement save failed');
+      }
+      row = { ...row, activeExecution: value as ChatEntity['activeExecution'] };
+      if (scenario === 'released save' || (scenario === 'superseded save' && deps.patchChat.mock.calls.length === 1)) {
+        await pending.promise;
+      }
+    });
+    store.setDependencies(deps);
+    const prepared = {
+      id: 'saved_message',
+      requestId: 'saved_request',
+      message: { id: 'saved_message', role: 'user', parts: [{ type: 'text', text: 'saved' }] },
+      command: {
+        type: 'start',
+        commandId: 'saved_request',
+        payload: {
+          chatId,
+          runId: 'saved_request',
+          trigger: 'submit',
+          message: { id: 'saved_message', role: 'user', content: 'saved' },
+        },
+      },
+    };
+    await deps.client.writeFile(
+      chatMessageQueuePath(projectId, chatId),
+      new TextEncoder().encode(
+        JSON.stringify({
+          version: 1,
+          afterRunId: 'legacy_run',
+          items: scenario.endsWith('prepared save') ? [prepared] : [],
+        }),
+      ),
+    );
+    const rebaseStarted = Promise.withResolvers<void>();
+    const write = deps.client.writeFile.bind(deps.client);
+    if (scenario === 'cancelled rebase') {
+      vi.spyOn(deps.client, 'writeFile').mockImplementation(async (path, bytes) => {
+        if (
+          path === chatMessageQueuePath(projectId, chatId) &&
+          new TextDecoder().decode(bytes).includes('rebasedPlacement')
+        ) {
+          rebaseStarted.resolve();
+          await pending.promise;
+        }
+        await write(path, bytes);
+      });
+    }
+    const unsubscribeA = vi.fn();
+    const closeA = vi.fn(async () => undefined);
+    const subscribeA = vi.fn((..._args: Parameters<AgentHostClient['subscribe']>) => unsubscribeA);
+    const subscribeB = vi.fn((...args: Parameters<AgentHostClient['subscribe']>) => {
+      queueMicrotask(() =>
+        args[3]?.({
+          status: 'batch',
+          chatId: args[0].chatId,
+          sourceHealth: { historyIntact: true, newerHistory: false, quarantined: false },
+          cursor: 0,
+          nextCursor: 3,
+          endCursor: 3,
+          events: [lifecycleRow(0, 'admitted'), lifecycleRow(1, 'running'), lifecycleRow(2, 'completed')],
+        }),
+      );
+      return vi.fn();
+    });
+    const connect = vi.fn(async (id: string) => ({
+      placement:
+        scenario === 'unconnected prepared save' && row.activeExecution?.hostId === 'host-a'
+          ? undefined
+          : { hostId: id === chatId ? row.activeExecution?.hostId : 'host-a' },
+      catchUp: writerOwnedCatchUp,
+      read: vi.fn<AgentHostClient['read']>(),
+      subscribe: id === chatId && row.activeExecution?.hostId === 'host-b' ? subscribeB : subscribeA,
+      hostCommand: vi.fn<AgentHostClient['hostCommand']>(),
+      close: closeA,
+    }));
+    const unpublish = store.publishProjectHostConnector(projectId, connect);
+    const unobserve = store.observe(chatId, projectId);
+    const unobserveOther = store.observe('chat_other', projectId);
+    const session = store.acquire(chatId, projectId);
+    try {
+      await vi.waitFor(() => {
+        expect(subscribeA).toHaveBeenCalledTimes(2);
+        expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+      });
+      session.persistenceActorRef.send({
+        type: 'setActiveExecution',
+        execution: { kind: 'tau', model: 'model-b', hostId: scenario === 'same host' ? 'host-a' : 'host-b' },
+      });
+      await vi.waitFor(() => {
+        expect(deps.patchChat).toHaveBeenCalled();
+      });
+      if (scenario === 'cancelled rebase') {
+        await rebaseStarted.promise;
+        session.persistenceActorRef.send({
+          type: 'setActiveExecution',
+          execution: { kind: 'tau', model: 'model-c', hostId: 'host-a' },
+        });
+        await vi.waitFor(() => {
+          expect(deps.patchChat).toHaveBeenCalledTimes(2);
+        });
+        pending.resolve();
+      }
+      if (scenario === 'released save') {
+        // Disposing the session cancels its persistence effect; a late write
+        // must not replace the observation belonging to a future session.
+        store.release(chatId);
+        pending.resolve();
+      }
+      if (scenario === 'superseded save') {
+        // B is durable before the first save resolves. A second B choice
+        // cancels that effect while the actual subscription still belongs to A.
+        session.persistenceActorRef.send({
+          type: 'setActiveExecution',
+          execution: { kind: 'tau', model: 'model-c', hostId: 'host-b' },
+        });
+        await vi.waitFor(() => {
+          expect(deps.patchChat).toHaveBeenCalledTimes(2);
+        });
+        pending.resolve();
+      }
+      await vi.waitFor(() => {
+        expect(
+          session.persistenceActorRef.getSnapshot().matches({ activeExecutionPersistence: 'idle' }) ||
+            scenario === 'released save',
+        ).toBe(true);
+      });
+      await settle();
+      if (scenario === 'changed host' || scenario === 'superseded save' || scenario.endsWith('prepared save')) {
+        await vi.waitFor(() => {
+          expect(subscribeB).toHaveBeenCalledOnce();
+        });
+        expect(unsubscribeA).toHaveBeenCalledOnce();
+        expect(closeA).toHaveBeenCalledOnce();
+        expect(store.getProjection(chatId)?.ledger.runs['run_1']?.lifecycle).toBe('completed');
+      } else {
+        expect(subscribeB).not.toHaveBeenCalled();
+        expect(unsubscribeA).not.toHaveBeenCalled();
+        expect(closeA).not.toHaveBeenCalled();
+      }
+      expect(subscribeA).toHaveBeenCalledTimes(2);
+      const saved = deps.client.json(chatMessageQueuePath(projectId, chatId));
+      if (scenario === 'changed host' || scenario === 'superseded save') {
+        expect(saved).toHaveProperty('rebasedPlacement', 'host:host-b');
+      }
+      expect(saved).toHaveProperty('afterRunId', 'legacy_run');
+      if (scenario === 'cancelled rebase') {
+        expect(saved).toHaveProperty('rebasedPlacement', 'host:host-b');
+        expect(row.activeExecution?.hostId).toBe('host-a');
+      }
+      if (scenario.endsWith('prepared save')) {
+        expect(saved).toHaveProperty('items', [{ ...prepared, commandPlacement: 'unconfirmed' }]);
+      }
+    } finally {
+      unpublish();
+      unobserve();
+      unobserveOther();
+      if (scenario !== 'released save') {
+        store.release(chatId);
+      }
+    }
+  });
+
+  it('should reopen the transcript watch when an external approval resumes the same attempt', async () => {
+    const store = createStore();
+    const chatId = 'chat_external_approval';
+    const runId = 'run_external_approval';
+    const session = store.acquire(chatId, 'project_external_approval');
+    await vi.waitFor(() => {
+      expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+    });
+    const message = { id: 'user_approval', role: 'user', content: 'Build a cube' };
+    publishLogRows(store, chatId, [
+      { ...lifecycleRow(0, 'admitted', runId), admission: { kind: 'external', turnId: message.id, message } },
+      lifecycleRow(1, 'running', runId),
+    ]);
+    const chat = harness.created.find((entry) => entry.id === chatId)!;
+    await vi.waitFor(() => {
+      expect(chat.resumeStream).toHaveBeenCalledTimes(1);
+    });
+    publishLogRows(store, chatId, [lifecycleRow(2, 'paused', runId)], 2);
+    publishLogRows(store, chatId, [lifecycleRow(3, 'running', runId)], 3);
+    await vi.waitFor(() => {
+      expect(chat.resumeStream).toHaveBeenCalledTimes(2);
+    });
+    publishLogRows(store, chatId, [lifecycleRow(4, 'completed', runId)], 4);
+    store.release(chatId);
+  });
+
+  it('reopens a projected run watch after live delivery drops without another durable row or command', async () => {
+    const store = createStore();
+    const chatId = 'chat_live_drop';
+    const projectId = 'project_live_drop';
+    const hostCommand = vi.fn<AgentHostClient['hostCommand']>();
+    let endLive: (() => void) | undefined;
+    let deliverLive: Parameters<AgentHostClient['subscribeLive']>[1] | undefined;
+    const subscribe = vi.fn((...parameters: Parameters<AgentHostClient['subscribe']>) => {
+      const [{ cursor }] = parameters;
+      queueMicrotask(() =>
+        parameters[3]?.({
+          status: 'batch',
+          sourceHealth: { historyIntact: true, newerHistory: false, quarantined: false },
+          sourceGeneration: 'writer-live-drop',
+          chatId,
+          cursor,
+          nextCursor: 2,
+          endCursor: 2,
+          events: cursor === 0 ? runningUserRows('run_live_drop') : [],
+        }),
+      );
+      return vi.fn();
+    });
+    const connect = vi.fn(async () => ({
+      hostCommand,
+      catchUp: writerOwnedCatchUp,
+      read: vi.fn<AgentHostClient['read']>(async ({ cursor }) => ({
+        status: 'batch',
+        chatId,
+        sourceGeneration: 'writer-live-drop',
+        sourceHealth: { historyIntact: true, newerHistory: false, quarantined: false },
+        cursor,
+        nextCursor: cursor,
+        endCursor: 2,
+        events: [],
+      })),
+      subscribe,
+      subscribeLive: (
+        _chatId: string,
+        listener: Parameters<AgentHostClient['subscribeLive']>[1],
+        onEnded?: () => void,
+      ) => {
+        deliverLive = listener;
+        endLive = onEnded;
+        return vi.fn();
+      },
+      close: vi.fn(async () => undefined),
+    }));
+    const session = store.acquire(chatId, projectId);
+    const unobserve = store.observe(chatId, projectId);
+    const unpublish = store.publishProjectHostConnector(projectId, connect);
+    const chat = harness.created.find((entry) => entry.id === chatId)!;
+    await vi.waitFor(() => {
+      expect(chat.resumeStream).toHaveBeenCalledTimes(1);
+    });
+    deliverLive?.(chatId, {
+      sourceGeneration: 'writer-live-drop',
+      type: 'text-delta',
+      chatId,
+      runId: 'run_live_drop',
+      messageId: 'assistant-live',
+      contentIndex: 0,
+      delta: 'Preview',
+    });
+    expect(chunksOf(store.getProjection(chatId)?.live?.chunks)).toContainEqual(
+      expect.objectContaining({ delta: 'Preview' }),
+    );
+    endLive?.();
+    expect(store.getProjection(chatId)?.live).toBeUndefined();
+    await vi.waitFor(
+      () => {
+        expect(connect).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 2000 },
+    );
+    await vi.waitFor(() => {
+      expect(chat.resumeStream).toHaveBeenCalledTimes(2);
+    });
+    expect(subscribe.mock.calls.map(([input]) => input.cursor)).toEqual([0, 2]);
+    expect(store.getProjection(chatId)?.ledger.runs['run_live_drop']?.lifecycle).toBe('running');
+    expect(hostCommand).not.toHaveBeenCalled();
+    expect(session.chat).toBeDefined();
+    unpublish();
+    unobserve();
+    store.release(chatId);
+  });
+
+  it('should prepare the latest transcript when another projection supersedes an in-flight handoff', async () => {
+    const store = createStore();
+    const session = store.acquire('chat_handoff', 'project_handoff');
+    await vi.waitFor(() => {
+      expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+    });
+    publishLogRows(store, session.chatId, [
+      lifecycleRow(0, 'admitted'),
+      logRow(1, { type: 'message.appended', message: { id: 'old-message', role: 'user', content: 'Original' } }),
+      lifecycleRow(2, 'completed'),
+    ]);
+    const prepared = store.preparePresentation(session.chatId, new AbortController().signal);
+    const alsoPrepared = store.preparePresentation(session.chatId, new AbortController().signal);
+    // Both readers enter the existing materialization before the next projection supersedes it.
+    await Promise.resolve();
+    publishLogRows(
+      store,
+      session.chatId,
+      [
+        lifecycleRow(3, 'admitted', 'run_2'),
+        logRow(4, {
+          runId: 'run_2',
+          type: 'message.appended',
+          message: { id: 'new-message', role: 'user', content: 'Updated' },
+        }),
+        lifecycleRow(5, 'completed', 'run_2'),
+      ],
+      3,
+    );
+    await Promise.all([prepared, alsoPrepared]);
+    expect(session.chat.messages.filter((message) => message.role === 'user').map((message) => message.id)).toEqual([
+      'old-message',
+      'new-message',
+    ]);
+    store.release(session.chatId);
+    expect(store.get(session.chatId)).toBeUndefined();
+  });
+
+  it('reacquires an already observed completed transcript without another host answer', async () => {
+    const store = createStore();
+    const deps = createStubDeps();
+    let finishMetadata!: (chat: ChatEntity | undefined) => void;
+    const heldMetadata = new Promise<ChatEntity | undefined>((resolve) => {
+      finishMetadata = resolve;
+    });
+    deps.getChat.mockResolvedValueOnce(undefined).mockReturnValue(heldMetadata);
+    store.setDependencies(deps);
+    const chatId = 'chat_retained_completed';
+    const projectId = 'project_retained_completed';
+    const rows: unknown[] = readFileSync(
+      new URL(
+        '../../../../packages/agent-host/specs/ChatLog/recorded/in-project-ping-pong-turn.jsonl',
+        pathToFileURL(import.meta.filename),
+      ),
+      'utf8',
+    )
+      .trim()
+      .split('\n')
+      .map((line: string) => JSON.parse(line) as unknown);
+    const unobserve = store.observe(chatId, projectId);
+    const first = store.acquire(chatId, projectId);
+    publishLogRows(store, chatId, rows);
+    await vi.waitFor(() => {
+      expect(first.messages.some((message) => message.role === 'assistant')).toBe(true);
+    });
+    const expected = first.messages;
+    store.release(chatId);
+    expect(store.get(chatId)).toBeUndefined();
+    const replacement = store.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(replacement.messages).toEqual(expected);
+    });
+    expect(replacement).not.toBe(first);
+    finishMetadata(undefined);
+    await heldMetadata;
+    store.release(chatId);
+    unobserve();
+  });
+
+  for (const resetCurrentWatch of [false, true]) {
+    it(`retained display ${resetCurrentWatch ? 'retires on current foreign watch reset' : 'survives ordinary detach'} while a new scan is held`, async () => {
+      const projectId = 'project_display_foreign_reset';
+      const chatId = 'chat_display_foreign_reset';
+      const directory = `/projects/${projectId}/.tau/chats/${chatId}/events`;
+      const client = createMemoryClient();
+      const rows = readFileSync(
+        new URL(
+          '../../../../packages/agent-host/specs/ChatLog/recorded/in-project-ping-pong-turn.jsonl',
+          pathToFileURL(import.meta.filename),
+        ),
+        'utf8',
+      );
+      await client.writeFile(`${directory}/other-device.jsonl`, new TextEncoder().encode(rows));
+      const scan = Promise.withResolvers<string[]>();
+      let holdScan = false;
+      const originalReadDirectory = client.readdir.bind(client);
+      const readDirectory = vi.spyOn(client, 'readdir').mockImplementation(async (path) => {
+        if (holdScan && path === directory) {
+          return scan.promise;
+        }
+        return originalReadDirectory(path);
+      });
+      const callbacks: Array<(event: WatchEvent) => void> = [];
+      const watch: NonNullable<ChatSessionDeps['watchRecordFile']> = (_path, listener) => {
+        if (_path === directory) {
+          callbacks.push(listener);
+        }
+        return {
+          ready: Promise.resolve(),
+          closed: new Promise<void>(() => {
+            /* Owner-controlled watch. */
+          }),
+          dispose: vi.fn(),
+        };
+      };
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      store.setDependencies({ ...createStubDeps(client), watchRecordFile: watch });
+      const capture = Promise.withResolvers<void>();
+      let captures = 0;
+      const catchUp = async function* (): AsyncIterable<CatchUpFrame> {
+        captures += 1;
+        if (captures > 1) {
+          await capture.promise;
+        }
+        yield {
+          type: 'validated',
+          health: { historyIntact: true, newerHistory: false, quarantined: false },
+          position: {
+            cursor: 0,
+            sourceGeneration: captures === 1 ? 'display-local-source' : 'display-replacement-source',
+          },
+          observedEndCursor: 0,
+        };
+      };
+      const hostCommand = vi.fn<AgentHostClient['hostCommand']>();
+      const subscribe = vi.fn<AgentHostClient['subscribe']>(() => () => undefined);
+      const unpublish = store.publishProjectHostConnector(projectId, async () => ({
+        catchUp,
+        hostCommand,
+        // Force the held-capture branch through a real source replacement observation.
+        read: vi.fn<AgentHostClient['read']>(async () => ({ status: 'refused', chatId, reason: 'identity-mismatch' })),
+        subscribe,
+        close: async () => undefined,
+      }));
+      let unobserve = store.observe(chatId, projectId);
+      try {
+        const first = store.acquire(chatId, projectId);
+        await vi.waitFor(() => {
+          expect(first.messages.some((message) => message.role === 'assistant')).toBe(true);
+          expect(store.historicalUsageReady(chatId, projectId)).toBe(true);
+        });
+        const expected = first.messages;
+        unobserve();
+        store.release(chatId);
+        expect(store.get(chatId)).toBeUndefined();
+        holdScan = true;
+        readDirectory.mockClear();
+        unobserve = store.observe(chatId, projectId);
+        await vi.waitFor(() => {
+          expect(callbacks).toHaveLength(2);
+          expect(readDirectory).toHaveBeenCalledWith(directory);
+          expect(captures).toBe(2);
+        });
+        if (resetCurrentWatch) {
+          callbacks[1]!({ type: 'reset' });
+          capture.resolve();
+          await vi.waitFor(() => {
+            expect(subscribe).toHaveBeenCalledTimes(2);
+          });
+        }
+        const replacement = store.acquire(chatId, projectId);
+        await vi.waitFor(() => {
+          expect(replacement.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+        });
+        if (resetCurrentWatch) {
+          expect(replacement.messages).toEqual([]);
+        } else {
+          await vi.waitFor(() => {
+            expect(replacement.messages).toEqual(expected);
+          });
+          callbacks[0]!({ type: 'reset' });
+          expect(replacement.messages).toEqual(expected);
+        }
+        expect(store.historicalUsageReady(chatId, projectId)).toBe(false);
+        expect(hostCommand).not.toHaveBeenCalled();
+      } finally {
+        holdScan = false;
+        scan.resolve(await originalReadDirectory(directory));
+        capture.resolve();
+        unobserve();
+        store.release(chatId);
+        unpublish();
+      }
+    });
+  }
+
+  it('materializes a reopened completed chat from a foreign segment and refreshes changed bytes', async () => {
+    const projectId = 'project_remote_transcript';
+    const chatId = 'chat_remote_transcript';
+    const path = `/projects/${projectId}/.tau/chats/${chatId}/events/other-device.jsonl`;
+    const rows = readFileSync(
+      new URL(
+        '../../../../packages/agent-host/specs/ChatLog/recorded/in-project-ping-pong-turn.jsonl',
+        pathToFileURL(import.meta.filename),
+      ),
+      'utf8',
+    );
+    const client = createMemoryClient();
+    await client.writeFile(path, new TextEncoder().encode(rows));
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    store.setDependencies(createStubDeps(client));
+    const hostCommand = vi.fn();
+    const unpublish = store.publishProjectHostConnector(
+      projectId,
+      async () =>
+        ({
+          hostCommand,
+          catchUp: writerOwnedCatchUp,
+          read: vi.fn(),
+          subscribe: (...parameters: Parameters<AgentHostClient['subscribe']>) => {
+            queueMicrotask(() =>
+              parameters[3]?.({
+                status: 'batch',
+                sourceHealth: { historyIntact: true, newerHistory: false, quarantined: false },
+                chatId,
+                cursor: 0,
+                nextCursor: 0,
+                endCursor: 0,
+                events: [],
+              }),
+            );
+            return vi.fn();
+          },
+          close: vi.fn(async () => undefined),
+        }) as unknown as AgentHostClient,
+    );
+    const unobserve = store.observe(chatId, projectId);
+    const session = store.acquire(chatId, projectId);
+
+    await store.refreshRemoteSegments(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(session.chat.messages.some((message) => message.role === 'assistant')).toBe(true);
+    });
+
+    await client.writeFile(
+      path,
+      new TextEncoder().encode(
+        rows.replace('Browser host completed the workspace change.', 'Browser host verified the workspace change.'),
+      ),
+    );
+    await store.refreshRemoteSegments(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(JSON.stringify(session.chat.messages)).toContain('Browser host verified the workspace change.');
+    });
+    expect(hostCommand).not.toHaveBeenCalled();
+    store.release(chatId);
+    unobserve();
+    unpublish();
+  });
+
+  it('materializes a turn logged during a foreign segment rescan once the rescan finds nothing new', async () => {
+    const projectId = 'project_foreign_rescan';
+    const chatId = 'chat_foreign_rescan';
+    const directory = `/projects/${projectId}/.tau/chats/${chatId}/events`;
+    const rows: unknown[] = readFileSync(
+      new URL(
+        '../../../../packages/agent-host/specs/ChatLog/recorded/in-project-ping-pong-turn.jsonl',
+        pathToFileURL(import.meta.filename),
+      ),
+      'utf8',
+    )
+      .trim()
+      .split('\n')
+      .map((line: string) => JSON.parse(line) as unknown);
+    const client = createMemoryClient();
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    store.setDependencies(createStubDeps(client));
+    const unobserve = store.observe(chatId, projectId);
+    const session = store.acquire(chatId, projectId);
+    try {
+      await store.refreshRemoteSegments(chatId, projectId);
+      await vi.waitFor(() => {
+        expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+        expect(store.getProjection(chatId)?.remote).toBeDefined();
+      });
+      // The first scan found no foreign segments; a second one is still out when the local turn is logged.
+      const scan = Promise.withResolvers<string[]>();
+      const originalReadDirectory = client.readdir.bind(client);
+      vi.spyOn(client, 'readdir').mockImplementation(async (path) =>
+        path === directory ? scan.promise : originalReadDirectory(path),
+      );
+      const rescan = store.refreshRemoteSegments(chatId, projectId);
+      publishLogRows(store, chatId, rows);
+      await settle();
+      expect(session.chat.messages.some((message) => message.role === 'assistant')).toBe(false);
+
+      // The rescan ends with the same (empty) foreign history, so the projection itself does not change.
+      scan.resolve([]);
+      await rescan;
+      await vi.waitFor(() => {
+        expect(session.chat.messages.some((message) => message.role === 'assistant')).toBe(true);
+      });
+    } finally {
+      store.release(chatId);
+      unobserve();
+    }
+  });
+
+  it('hydrates a new project seed using the acquired project id before global project discovery', async () => {
+    const chatId = 'chat_cold_project_seed';
+    const projectId = 'project_cold_seed';
+    const seed: MyUIMessage = {
+      id: 'msg_cold_seed',
+      role: 'user',
+      parts: [{ type: 'text', text: 'Make a cube' }],
+      metadata: { status: 'pending' },
+    };
+    const deps = createStubDeps();
+    deps.getChat.mockImplementation(async (_chatId, knownProjectId) =>
+      knownProjectId === projectId
+        ? chatRow(chatId, projectId, {
+            messages: [seed],
+            startupRequest: {
+              id: 'req_cold_seed',
+              kind: 'regenerate-tail',
+              messageId: seed.id,
+              message: seed,
+              source: 'homepage-initial-message',
+              createdAt: 1,
+            },
+          })
+        : undefined,
+    );
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    store.setDependencies(deps);
+    const session = store.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(session.chat.messages).toContainEqual(seed);
+    });
+    expect(deps.getChat).toHaveBeenCalledWith(chatId, projectId);
+    store.release(chatId);
+  });
+
+  it('does not resend an observed seed before its reset projection refetches the foreign accepted user', async () => {
+    const chatId = 'chat_remote_seed';
+    const projectId = 'project_remote_seed';
+    const path = `/projects/${projectId}/.tau/chats/${chatId}/events/other-device.jsonl`;
+    const seed: MyUIMessage = {
+      id: 'msg_remote_seed',
+      role: 'user',
+      parts: [{ type: 'text', text: 'Make a cube' }],
+      metadata: { status: 'pending' },
+    };
+    const client = createMemoryClient();
+    await client.writeFile(
+      path,
+      new TextEncoder().encode(
+        [
+          lifecycleRow(0, 'admitted', 'req_remote_seed'),
+          logRow(1, {
+            runId: 'req_remote_seed',
+            type: 'message.appended',
+            message: { id: seed.id, role: 'user', content: 'Make a cube' },
+          }),
+          lifecycleRow(2, 'completed', 'req_remote_seed'),
+        ]
+          .map((row) => JSON.stringify(row))
+          .join('\n'),
+      ),
+    );
+    const deps = createStubDeps(client);
+    deps.getChat.mockResolvedValue(
+      chatRow(chatId, projectId, {
+        messages: [seed],
+        startupRequest: {
+          id: 'req_remote_seed',
+          kind: 'regenerate-tail',
+          messageId: seed.id,
+          message: seed,
+          source: 'homepage-initial-message',
+          createdAt: 1,
+        },
+      }),
+    );
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    store.setDependencies(deps);
+    const unobserve = store.observe(chatId, projectId);
+    await store.refreshRemoteSegments(chatId, projectId);
+    expect(
+      Object.values(store.getProjection(chatId)?.remote?.views ?? {}).some((view) => view.user?.id === seed.id),
+    ).toBe(true);
+
+    const remoteReads = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    let remoteReadCount = 0;
+    const originalRead = client.readFile.bind(client);
+    vi.spyOn(client, 'readFile').mockImplementation(async (file) => {
+      if (file === path) {
+        await remoteReads[remoteReadCount++]?.promise;
+      }
+      return originalRead(file);
+    });
+    const hostCommand = vi.fn<AgentHostClient['hostCommand']>();
+    const unpublish = store.publishProjectHostConnector(projectId, async () =>
+      mock<AgentHostClient>({ catchUp: writerOwnedCatchUp, hostCommand, close: vi.fn(async () => undefined) }),
+    );
+    publishAdmission(chatId, (gesture) => {
+      if (gesture.kind !== 'regenerate' || gesture.requestId === undefined) {
+        throw new Error('Expected seeded regenerate.');
+      }
+      return {
+        kind: 'regenerate',
+        command: {
+          type: 'start',
+          commandId: gesture.requestId,
+          payload: {
+            chatId,
+            runId: gesture.requestId,
+            message: { id: seed.id, role: 'user', content: 'Make a cube' },
+            trigger: 'submit',
+          },
+        },
+      };
+    });
+    const session = store.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(session.chat.messages).toContainEqual(seed);
+      expect(remoteReadCount).toBe(1);
+    });
+    const newerRefresh = store.refreshRemoteSegments(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(remoteReadCount).toBe(2);
+    });
+    publishLogRows(store, chatId, []);
+    await settle();
+    expect(hostCommand).not.toHaveBeenCalled();
+    remoteReads[0]?.resolve();
+    await settle();
+    expect(hostCommand).not.toHaveBeenCalled();
+    expect(deps.consumeChatStartupRequest).not.toHaveBeenCalled();
+    remoteReads[1]?.resolve();
+    await newerRefresh;
+    await vi.waitFor(() => {
+      expect(deps.consumeChatStartupRequest).toHaveBeenCalledWith(chatId, 'req_remote_seed');
+    });
+    expect(hostCommand).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(session.chat.messages.filter((message) => message.id === seed.id)).toHaveLength(1);
+    });
+    store.release(chatId);
+    unobserve();
+    unpublish();
+  });
+
+  it.each(['missing', 'zero-byte'] as const)(
+    'keeps a seed through reload and starts it when the %s host log long-polls',
+    async (localLogFile) => {
+      const deps = createStubDeps();
+      const seed: MyUIMessage = {
+        id: 'msg_seed_waiting_ack',
+        role: 'user',
+        parts: [{ type: 'text', text: 'Make a cube' }],
+        metadata: { status: 'pending' },
+      };
+      deps.getChat.mockResolvedValue(
+        chatRow('chat_seed_waiting_ack', 'project_seed_waiting_ack', {
+          messages: [seed],
+          startupRequest: {
+            id: 'req_seed_waiting_ack',
+            kind: 'regenerate-tail',
+            messageId: seed.id,
+            message: seed,
+            source: 'homepage-initial-message',
+            createdAt: 1,
+          },
+        }),
+      );
+      const first = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      first.setDependencies(deps);
+      first.acquire('chat_seed_waiting_ack', 'project_seed_waiting_ack');
+      await vi.waitFor(() => {
+        expect(first.get('chat_seed_waiting_ack')?.chat.messages).toContainEqual(seed);
+      });
+      expect(deps.consumeChatStartupRequest).not.toHaveBeenCalled();
+
+      if (localLogFile === 'zero-byte') {
+        await deps.client.writeFile(
+          '/projects/project_seed_waiting_ack/.tau/chats/chat_seed_waiting_ack/events.jsonl',
+          new Uint8Array(),
+        );
+      }
+      const reloaded = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      reloaded.setDependencies(deps);
+      // A sidebar read before this session exists is not a fresh seed-admission read.
+      publishLogRows(reloaded, 'chat_seed_waiting_ack', []);
+      expect(reloaded.observedChatIdsOf('project_seed_waiting_ack')).toEqual([]);
+      reloaded.acquire('chat_seed_waiting_ack', 'project_seed_waiting_ack');
+      await vi.waitFor(() => {
+        expect(reloaded.get('chat_seed_waiting_ack')?.chat.messages).toContainEqual(seed);
+      });
+      expect(deps.consumeChatStartupRequest).not.toHaveBeenCalled();
+      expect(
+        reloaded
+          .get('chat_seed_waiting_ack')
+          ?.stateActorRef.getSnapshot()
+          .matches({ run: { queued: 'admitting' } }),
+      ).toBe(false);
+
+      const hostCommand = vi.fn(
+        async (command: HostCommand): Promise<CommandAnswer> => ({
+          commandId: command.commandId,
+          generation: 0,
+          status: 'applied',
+          effect: 'durable',
+          cursor: 1,
+        }),
+      );
+      // The browser launcher parks an empty read; no batch is emitted until a writer wakes it.
+      const subscribe = vi.fn<AgentHostClient['subscribe']>(() => vi.fn());
+      const unpublishConnector = reloaded.publishProjectHostConnector('project_seed_waiting_ack', async () =>
+        mock<AgentHostClient>({
+          catchUp: writerOwnedCatchUp,
+          hostCommand,
+          subscribe,
+          close: vi.fn(async () => undefined),
+        }),
+      );
+      expect(hostCommand).not.toHaveBeenCalled();
+      const unpublishAdmission = publishChatTurnAdmission('chat_seed_waiting_ack', async (gesture) => {
+        if (gesture.kind !== 'regenerate' || gesture.requestId === undefined) {
+          throw new Error('Expected the durable seeded regenerate gesture.');
+        }
+        const runId = gesture.requestId;
+        return {
+          runId,
+          leaseTurnId: undefined,
+          request: {
+            kind: 'regenerate',
+            command: {
+              type: 'start',
+              commandId: runId,
+              payload: {
+                chatId: 'chat_seed_waiting_ack',
+                runId,
+                message: { id: seed.id, role: 'user', content: 'Make a cube' },
+                trigger: 'submit',
+              },
+            },
+          },
+        };
+      });
+      await vi.waitFor(() => {
+        expect(subscribe).toHaveBeenCalledOnce();
+      });
+      expect(reloaded.observedChatIdsOf('project_seed_waiting_ack')).toEqual(['chat_seed_waiting_ack']);
+      reloaded.startPendingSeed('chat_seed_waiting_ack');
+      await vi.waitFor(() => {
+        expect(hostCommand).toHaveBeenCalledOnce();
+        expect(deps.consumeChatStartupRequest).toHaveBeenCalledWith('chat_seed_waiting_ack', 'req_seed_waiting_ack');
+      });
+      reloaded.startPendingSeed('chat_seed_waiting_ack');
+      expect(hostCommand).toHaveBeenCalledOnce();
+      unpublishAdmission();
+      unpublishConnector();
+      first.release('chat_seed_waiting_ack');
+      reloaded.release('chat_seed_waiting_ack');
+    },
+  );
+
+  it.each(['unreadable', 'owner-fenced', 'identity-mismatch', 'local-io-error'] as const)(
+    'does not dispatch a seeded Start after %s before an authoritative host read',
+    async (failure) => {
+      const chatId = `chat_seed_${failure}`;
+      const projectId = `project_seed_${failure}`;
+      const seed: MyUIMessage = {
+        id: `msg_seed_${failure}`,
+        role: 'user',
+        parts: [{ type: 'text', text: 'Make a cube' }],
+        metadata: { status: 'pending' },
+      };
+      const deps = createStubDeps();
+      deps.getChat.mockResolvedValue(
+        chatRow(chatId, projectId, {
+          messages: [seed],
+          startupRequest: {
+            id: `req_seed_${failure}`,
+            kind: 'regenerate-tail',
+            messageId: seed.id,
+            message: seed,
+            source: 'homepage-initial-message',
+            createdAt: 1,
+          },
+        }),
+      );
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      store.setDependencies(deps);
+      const originalRead = deps.client.readFile.bind(deps.client);
+      deps.client.readFile = async (path) => {
+        if (!path.endsWith('/events.jsonl')) {
+          return originalRead(path);
+        }
+        return new Promise<Uint8Array<ArrayBuffer>>((_resolve, reject) => {
+          queueMicrotask(() => {
+            if (failure !== 'local-io-error') {
+              store.receiveHostReadAnswer(chatId, { status: 'refused', reason: failure });
+            }
+            reject(failure === 'local-io-error' ? Object.assign(new Error('EIO'), { code: 'EIO' }) : notFound(path));
+          });
+        });
+      };
+      const hostCommand = vi.fn<AgentHostClient['hostCommand']>(async (command) => ({
+        commandId: command.commandId,
+        generation: 0,
+        status: 'applied',
+        effect: 'durable',
+        cursor: 1,
+      }));
+      const unpublishConnector = store.publishProjectHostConnector(projectId, async () =>
+        mock<AgentHostClient>({
+          catchUp: writerOwnedCatchUp,
+          hostCommand,
+          subscribe: vi.fn(() => vi.fn()),
+          close: vi.fn(async () => undefined),
+        }),
+      );
+      publishAdmission(chatId, (gesture) => {
+        if (gesture.kind !== 'regenerate' || gesture.requestId === undefined) {
+          throw new Error('Expected the durable seeded regenerate gesture.');
+        }
+        return {
+          kind: 'regenerate',
+          command: {
+            type: 'start',
+            commandId: gesture.requestId,
+            payload: {
+              chatId,
+              runId: gesture.requestId,
+              message: { id: seed.id, role: 'user', content: 'Make a cube' },
+              trigger: 'submit',
+            },
+          },
+        };
+      });
+      const session = store.acquire(chatId, projectId);
+      await vi.waitFor(() => {
+        expect(session.chat.messages).toContainEqual(seed);
+      });
+      await settle();
+      expect(hostCommand).not.toHaveBeenCalled();
+      expect(deps.consumeChatStartupRequest).not.toHaveBeenCalled();
+      if (failure === 'local-io-error') {
+        expect(session.persistenceActorRef.getSnapshot().context.persistedError).toBeDefined();
+      }
+      if (failure === 'identity-mismatch') {
+        publishLogRows(store, chatId, []);
+        await vi.waitFor(() => {
+          expect(hostCommand).toHaveBeenCalledOnce();
+        });
+      }
+      store.release(chatId);
+      unpublishConnector();
+    },
+  );
+
+  it('should not consume a seed from a previous session’s cached user before a fresh empty host read', async () => {
+    const chatId = 'chat_stale_seed_read';
+    const projectId = 'project_stale_seed_read';
+    const seed: MyUIMessage = {
+      id: 'msg_stale_seed_read',
+      role: 'user',
+      parts: [{ type: 'text', text: 'New design' }],
+      metadata: { status: 'pending' },
+    };
+    let stored = chatRow(chatId, projectId);
+    const deps = createStubDeps();
+    deps.getChat.mockImplementation(async () => stored);
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    store.setDependencies(deps);
+    store.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(deps.getChat).toHaveBeenCalledOnce();
+    });
+    publishLogRows(store, chatId, [
+      lifecycleRow(0, 'admitted', 'req_old_log'),
+      logRow(1, {
+        runId: 'req_old_log',
+        type: 'message.appended',
+        message: { id: 'msg_old_log', role: 'user', content: 'Old design' },
+      }),
+      lifecycleRow(2, 'completed', 'req_old_log'),
+    ]);
+    store.release(chatId);
+    await vi.waitFor(() => {
+      expect(store.get(chatId)).toBeUndefined();
+    });
+
+    stored = chatRow(chatId, projectId, {
+      messages: [seed],
+      startupRequest: {
+        id: 'req_stale_seed_read',
+        kind: 'regenerate-tail',
+        messageId: seed.id,
+        message: seed,
+        source: 'fix-with-ai-new-chat',
+        createdAt: 1,
+      },
+    });
+    const releaseSidebar = store.observe(chatId, projectId);
+    const session = store.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(session.chat.messages).toContainEqual(seed);
+    });
+    expect(deps.consumeChatStartupRequest).not.toHaveBeenCalled();
+    store.receiveHostReadAnswer(chatId, { status: 'refused', reason: 'identity-mismatch' });
+    publishLogRows(store, chatId, []);
+    await settle();
+    expect(session.chat.messages).toContainEqual(seed);
+    expect(deps.consumeChatStartupRequest).not.toHaveBeenCalled();
+    store.release(chatId);
+    await vi.waitFor(() => {
+      expect(store.get(chatId)).toBeUndefined();
+    });
+    expect(store.observedChatIdsOf(projectId)).toEqual([chatId]);
+    releaseSidebar();
+    expect(store.observedChatIdsOf(projectId)).toEqual([]);
+  });
+
+  it('should keep the seeded user message while an empty caught-up host log precedes Start', async () => {
+    const chatId = 'chat_seed_before_start';
+    const projectId = 'project_seed_before_start';
+    const seed: MyUIMessage = {
+      id: 'msg_seed_before_start',
+      role: 'user',
+      parts: [{ type: 'text', text: 'Make a cube' }],
+      metadata: { status: 'pending' },
+    };
+    const deps = createStubDeps();
+    deps.getChat.mockResolvedValue(
+      chatRow(chatId, projectId, {
+        messages: [seed],
+        startupRequest: {
+          id: 'req_seed_before_start',
+          kind: 'regenerate-tail',
+          messageId: seed.id,
+          message: seed,
+          source: 'homepage-initial-message',
+          createdAt: 1,
+        },
+      }),
+    );
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    store.setDependencies(deps);
+    const session = store.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(session.chat.messages).toContainEqual(seed);
+    });
+
+    publishLogRows(store, chatId, []);
+    await settle();
+
+    expect(session.chat.messages).toContainEqual(seed);
+    expect(deps.consumeChatStartupRequest).not.toHaveBeenCalled();
+
+    publishLogRows(store, chatId, [
+      lifecycleRow(0, 'admitted', 'req_seed_before_start'),
+      logRow(1, {
+        runId: 'req_seed_before_start',
+        type: 'message.appended',
+        message: { id: seed.id, role: 'user', content: 'Make a cube' },
+      }),
+      lifecycleRow(2, 'completed', 'req_seed_before_start'),
+    ]);
+    await settle();
+    expect(session.chat.messages.filter((message) => message.id === seed.id)).toHaveLength(1);
+    store.release(chatId);
+    expect(store.observedChatIdsOf(projectId)).toEqual([]);
+  });
+
+  it('does not overwrite a displayed transcript from a chat-record refresh with no transcript bytes', async () => {
+    const chatId = 'chat_projected_refresh';
+    const projectId = 'project_projected_refresh';
+    const client = createMemoryClient();
+    const rows = readFileSync(
+      new URL(
+        '../../../../packages/agent-host/specs/ChatLog/recorded/in-project-ping-pong-turn.jsonl',
+        pathToFileURL(import.meta.filename),
+      ),
+      'utf8',
+    );
+    const segmentPath = `/projects/${projectId}/.tau/chats/${chatId}/events/other-device.jsonl`;
+    await client.writeFile(segmentPath, new TextEncoder().encode(rows));
+    const deps = createStubDeps(client);
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId));
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    store.setDependencies(deps);
+    const session = store.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(deps.getChat).toHaveBeenCalledOnce();
+    });
+    await settle();
+    await store.refreshRemoteSegments(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(session.chat.messages.some((message) => message.role === 'assistant')).toBe(true);
+    });
+    await store.refreshFromStorage(chatId);
+    expect(session.chat.messages.some((message) => message.role === 'assistant')).toBe(true);
+    await client.writeFile(
+      segmentPath,
+      new TextEncoder().encode(
+        rows.replace('Browser host completed the workspace change.', 'Browser host verified the workspace change.'),
+      ),
+    );
+    await store.refreshFromStorage(chatId);
+    await vi.waitFor(() => {
+      expect(JSON.stringify(session.chat.messages)).toContain('Browser host verified the workspace change.');
+    });
+    store.release(chatId);
+  });
+
+  it('reads a refresh that arrived mid-run once the run settles', async () => {
+    const chatId = 'chat_projected_mid_run';
+    const projectId = 'project_projected_mid_run';
+    const client = createMemoryClient();
+    const rows = readFileSync(
+      new URL(
+        '../../../../packages/agent-host/specs/ChatLog/recorded/in-project-ping-pong-turn.jsonl',
+        pathToFileURL(import.meta.filename),
+      ),
+      'utf8',
+    );
+    const segmentPath = `/projects/${projectId}/.tau/chats/${chatId}/events/other-device.jsonl`;
+    await client.writeFile(segmentPath, new TextEncoder().encode(rows));
+    const deps = createStubDeps(client);
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId));
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    store.setDependencies(deps);
+    const session = store.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(deps.getChat).toHaveBeenCalledOnce();
+    });
+    await settle();
+    await store.refreshRemoteSegments(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(session.chat.messages.some((message) => message.role === 'assistant')).toBe(true);
+    });
+    const fake = harness.created.find((entry) => entry.id === chatId)!;
+    fake.status = 'streaming';
+    fake.emitStatusChange();
+    await client.writeFile(
+      segmentPath,
+      new TextEncoder().encode(
+        rows.replace('Browser host completed the workspace change.', 'Browser host verified the workspace change.'),
+      ),
+    );
+
+    await store.refreshFromStorage(chatId);
+    expect(JSON.stringify(session.chat.messages)).not.toContain('Browser host verified the workspace change.');
+
+    fake.status = 'ready';
+    fake.emitStatusChange();
+    await vi.waitFor(() => {
+      expect(JSON.stringify(session.chat.messages)).toContain('Browser host verified the workspace change.');
+    });
+    store.release(chatId);
+  });
+
+  it('should not replay a refused seed while a durable manual Start waits for intent clearing and log catch-up', async () => {
+    const chatId = 'chat_seed_superseded';
+    const projectId = 'project_seed_superseded';
+    const seed: MyUIMessage = {
+      id: 'msg_seed_superseded',
+      role: 'user',
+      parts: [{ type: 'text', text: 'First request' }],
+      metadata: { status: 'pending' },
+    };
+    const manual: MyUIMessage = {
+      id: 'msg_manual_after_seed',
+      role: 'user',
+      parts: [{ type: 'text', text: 'New request' }],
+      metadata: { status: 'pending' },
+    };
+    let stored = chatRow(chatId, projectId, {
+      messages: [seed],
+      startupRequest: {
+        id: 'req_seed_superseded',
+        kind: 'regenerate-tail',
+        messageId: seed.id,
+        message: seed,
+        source: 'homepage-initial-message',
+        createdAt: 1,
+      },
+    });
+    const deps = createStubDeps();
+    deps.getChat.mockImplementation(async () => stored);
+    const consumeGate = Promise.withResolvers<void>();
+    deps.consumeChatStartupRequest.mockImplementation(async (_chatId, requestId) => {
+      await consumeGate.promise;
+      if (stored.startupRequest?.id === requestId) {
+        stored = { ...stored, startupRequest: undefined };
+      }
+      return stored;
+    });
+    const manualAnswer = Promise.withResolvers<CommandAnswer>();
+    const hostCommand = vi.fn(
+      async (command: HostCommand): Promise<CommandAnswer> =>
+        command.commandId === 'req_seed_superseded'
+          ? {
+              commandId: command.commandId,
+              generation: 1,
+              status: 'refused',
+              effect: 'not-applied',
+              code: 'REVISIONS_UNAVAILABLE',
+              message: 'Try again.',
+            }
+          : manualAnswer.promise,
+    );
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    store.setDependencies(deps);
+    const session = store.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(session.chat.messages).toContainEqual(seed);
+    });
+    publishLogRows(store, chatId, []);
+    const unpublishAdmission = publishChatTurnAdmission(chatId, async (gesture) => {
+      const seeded = gesture.kind === 'regenerate';
+      const requestId = seeded ? 'req_seed_superseded' : 'req_manual_after_seed';
+      const command: HostCommand = {
+        type: 'start',
+        commandId: requestId,
+        payload: {
+          chatId,
+          runId: requestId,
+          message: {
+            id: seeded ? seed.id : manual.id,
+            role: 'user',
+            content: seeded ? 'First request' : 'New request',
+          },
+          trigger: 'submit',
+        },
+      };
+      return {
+        runId: requestId,
+        leaseTurnId: seeded ? seed.id : manual.id,
+        request: seeded
+          ? { kind: 'regenerate', command }
+          : { kind: 'send', message: manual, command, queueId: gesture.kind === 'send' ? gesture.queueId : undefined },
+      };
+    });
+    const unpublishConnector = store.publishProjectHostConnector(projectId, async () =>
+      mock<AgentHostClient>({
+        catchUp: writerOwnedCatchUp,
+        hostCommand,
+        subscribe: (...args) => {
+          queueMicrotask(() =>
+            args[3]?.({
+              status: 'batch',
+              sourceHealth: { historyIntact: true, newerHistory: false, quarantined: false },
+              chatId,
+              cursor: 0,
+              nextCursor: 0,
+              endCursor: 0,
+              events: [],
+            }),
+          );
+          return vi.fn();
+        },
+        close: vi.fn(async () => undefined),
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(hostCommand).toHaveBeenCalledTimes(1);
+      expect(session.stateActorRef.getSnapshot().matches({ run: 'failed' })).toBe(true);
+    });
+    expect(stored.startupRequest?.id).toBe('req_seed_superseded');
+    expect(deps.consumeChatStartupRequest).not.toHaveBeenCalled();
+
+    await store.requestTurn(chatId, { kind: 'send', message: manual, requestId: 'req_manual_after_seed' });
+    await vi.waitFor(() => {
+      expect(hostCommand).toHaveBeenCalledTimes(2);
+    });
+    expect(stored.startupRequest?.id).toBe('req_seed_superseded');
+    expect(deps.consumeChatStartupRequest).not.toHaveBeenCalled();
+    manualAnswer.resolve({
+      commandId: 'req_manual_after_seed',
+      generation: 1,
+      status: 'applied',
+      effect: 'durable',
+      cursor: 0,
+    });
+    await vi.waitFor(() => {
+      expect(deps.consumeChatStartupRequest).toHaveBeenCalledWith(chatId, 'req_seed_superseded');
+    });
+    expect(stored.startupRequest?.id).toBe('req_seed_superseded');
+    const manualRows = [
+      lifecycleRow(0, 'admitted', 'req_manual_after_seed'),
+      logRow(1, {
+        runId: 'req_manual_after_seed',
+        type: 'message.appended',
+        message: { id: manual.id, role: 'user', content: 'New request' },
+      }),
+      lifecycleRow(2, 'completed', 'req_manual_after_seed'),
+    ];
+    publishLogRows(store, chatId, manualRows);
+    await settle();
+    expect(session.chat.messages.some((message) => message.id === seed.id)).toBe(false);
+    expect(session.chat.messages.filter((message) => message.id === manual.id)).toHaveLength(1);
+
+    // The durable manual Start has written the local log even though this reloaded reader has not caught up to it.
+    await deps.client.writeFile(
+      `/projects/${projectId}/.tau/chats/${chatId}/events.jsonl`,
+      new TextEncoder().encode(manualRows.map((row) => JSON.stringify(row)).join('\n')),
+    );
+    const reloaded = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    reloaded.setDependencies(deps);
+    const reloadedSession = reloaded.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(reloadedSession.chat.messages).toContainEqual(seed);
+    });
+    const unpublishReloadConnector = reloaded.publishProjectHostConnector(projectId, async () =>
+      mock<AgentHostClient>({
+        catchUp: writerOwnedCatchUp,
+        hostCommand,
+        subscribe: () => vi.fn(),
+        close: vi.fn(async () => undefined),
+      }),
+    );
+    await settle();
+    expect(hostCommand).toHaveBeenCalledTimes(2);
+    publishLogPage(reloaded, chatId, manualRows.slice(0, 2), { cursor: 0, endCursor: 3 });
+    await settle();
+    expect(hostCommand).toHaveBeenCalledTimes(2);
+    expect(reloadedSession.chat.messages).toContainEqual(seed);
+    publishLogPage(reloaded, chatId, manualRows.slice(2), { cursor: 2, endCursor: 3 });
+    await vi.waitFor(() => {
+      expect(deps.consumeChatStartupRequest).toHaveBeenCalledTimes(2);
+    });
+    expect(deps.consumeChatStartupRequest).toHaveBeenLastCalledWith(chatId, 'req_seed_superseded');
+    await settle();
+    expect(reloadedSession.chat.messages.some((message) => message.id === seed.id)).toBe(false);
+    expect(reloadedSession.chat.messages.filter((message) => message.id === manual.id)).toHaveLength(1);
+    expect(hostCommand).toHaveBeenCalledTimes(2);
+    consumeGate.resolve();
+    await vi.waitFor(() => {
+      expect(stored.startupRequest).toBeUndefined();
+    });
+    unpublishReloadConnector();
+    reloaded.release(chatId);
+    store.release(chatId);
+    unpublishConnector();
+    unpublishAdmission();
+  });
+
+  it('dispatches one admitted Start before the SDK watches its projected run', async () => {
+    const store = createStore();
+    const chatId = 'chat_live_command';
+    const projectId = 'project_live_command';
+    const command: HostCommand = {
+      type: 'start',
+      commandId: 'req_live_command',
+      payload: {
+        chatId,
+        runId: 'req_live_command',
+        message: { id: 'msg_live_command', role: 'user', content: 'Make a cube' },
+        trigger: 'submit',
+      },
+    };
+    const reply = Promise.withResolvers<CommandAnswer>();
+    const hostCommand = vi.fn(async () => reply.promise);
+    const close = vi.fn(async () => undefined);
+    const unpublish = store.publishProjectHostConnector(projectId, async () =>
+      mock<AgentHostClient>({
+        catchUp: writerOwnedCatchUp,
+        hostCommand,
+        close,
+        subscribe: () => () => undefined,
+        subscribeLive: () => () => undefined,
+      }),
+    );
+    startTurnOwner(store, projectId);
+    store.acquire(chatId, projectId);
+    publishAdmission(chatId, () => ({
+      kind: 'send',
+      message: { id: 'msg_live_command', role: 'user', parts: [{ type: 'text', text: 'Make a cube' }] },
+      command,
+    }));
+    const requested = store.requestTurn(chatId, {
+      kind: 'send',
+      message: { id: 'msg_live_command', role: 'user', parts: [{ type: 'text', text: 'Make a cube' }] },
+    });
+    await vi.waitFor(() => {
+      expect(hostCommand).toHaveBeenCalledExactlyOnceWith(command);
+    });
+    const chat = harness.created.find((entry) => entry.id === chatId)!;
+    expect(chat.sendMessage).not.toHaveBeenCalled();
+    reply.resolve({ commandId: command.commandId, generation: 1, status: 'applied', effect: 'durable', cursor: 1 });
+    await requested;
+    await vi.waitFor(() => {
+      expect(chat.sendMessage).toHaveBeenCalledTimes(1);
+    });
+    expect(close).toHaveBeenCalledTimes(1);
+    unpublish();
+  });
+
+  it.each([
+    { outcome: 'acknowledgement', successor: 'pending' },
+    { outcome: 'failure', successor: 'pending' },
+    { outcome: 'acknowledgement', successor: 'watching' },
+    { outcome: 'failure', successor: 'watching' },
+  ] as const)(
+    'should preserve the $successor successor when a replaced dispatch returns a late $outcome',
+    async ({ outcome, successor }) => {
+      const store = createStore();
+      const chatId = `chat_dispatch_${outcome}_${successor}`;
+      const projectId = `project_dispatch_${outcome}_${successor}`;
+      const firstReply = Promise.withResolvers<CommandAnswer>();
+      const secondReply = Promise.withResolvers<CommandAnswer>();
+      const command = (id: string): Extract<HostCommand, { type: 'start' }> => ({
+        type: 'start',
+        commandId: id,
+        payload: {
+          chatId,
+          runId: id,
+          trigger: 'submit',
+          message: { id: `user_${id}`, role: 'user', content: id },
+        },
+      });
+      const firstCommand = command('dispatch-first');
+      const secondCommand = command('dispatch-second');
+      const hostCommand = vi.fn<AgentHostClient['hostCommand']>(async (request) => {
+        if (request.type === 'cancel') {
+          return { commandId: request.commandId, generation: 1, status: 'applied', effect: 'durable', cursor: 3 };
+        }
+        return request.commandId === firstCommand.commandId ? firstReply.promise : secondReply.promise;
+      });
+      const close = vi.fn(async () => undefined);
+      const unpublish = store.publishProjectHostConnector(projectId, async () =>
+        mock<AgentHostClient>({ catchUp: writerOwnedCatchUp, hostCommand, close }),
+      );
+      startTurnOwner(store, projectId);
+      const session = store.acquire(chatId, projectId);
+      const unadmit = publishChatTurnAdmission(chatId, async (gesture) => {
+        const admitted =
+          gesture.kind === 'regenerate' && gesture.requestId === firstCommand.commandId ? firstCommand : secondCommand;
+        return {
+          runId: admitted.payload.runId,
+          leaseTurnId: undefined,
+          request: { kind: 'regenerate', command: admitted },
+        };
+      });
+      const unsubscribeWatches: Array<ReturnType<typeof vi.fn>> = [];
+      const subscribe = store.subscribeProjection.bind(store);
+      const subscriptions = vi.spyOn(store, 'subscribeProjection').mockImplementation((id, listener) => {
+        const unsubscribe = vi.fn(subscribe(id, listener));
+        unsubscribeWatches.push(unsubscribe);
+        return unsubscribe;
+      });
+      const acknowledgeSecond = (): void => {
+        secondReply.resolve({
+          commandId: secondCommand.commandId,
+          generation: 1,
+          status: 'applied',
+          effect: 'durable',
+          cursor: 2,
+        });
+      };
+      try {
+        await store.requestTurn(chatId, { kind: 'regenerate', requestId: firstCommand.commandId });
+        await vi.waitFor(() => {
+          expect(hostCommand).toHaveBeenCalledExactlyOnceWith(firstCommand);
+        });
+        await store.requestTurn(chatId, { kind: 'regenerate', requestId: secondCommand.commandId });
+        // The host's terminal lifecycle frees the held regenerate before its command reply arrives.
+        session.stateActorRef.send({ type: 'runLifecycle', runId: firstCommand.payload.runId, phase: 'cancelled' });
+        await vi.waitFor(() => {
+          expect(hostCommand).toHaveBeenCalledTimes(2);
+          expect(hostCommand).toHaveBeenLastCalledWith(secondCommand);
+        });
+        const chat = harness.created.find((entry) => entry.id === chatId)!;
+        if (successor === 'watching') {
+          acknowledgeSecond();
+          await vi.waitFor(() => {
+            expect(chat.regenerate).toHaveBeenCalledOnce();
+          });
+          expect(unsubscribeWatches).toHaveLength(1);
+        }
+        if (outcome === 'acknowledgement') {
+          firstReply.resolve({
+            commandId: firstCommand.commandId,
+            generation: 1,
+            status: 'applied',
+            effect: 'durable',
+            cursor: 1,
+          });
+        } else {
+          firstReply.reject(new Error('First command failed after its successor started'));
+        }
+        await vi.waitFor(() => {
+          expect(close).toHaveBeenCalledTimes(successor === 'pending' ? 1 : 2);
+        });
+        await settle();
+        expect(session.stateActorRef.getSnapshot().context.activeRunId).toBe(secondCommand.payload.runId);
+        expect(session.persistenceActorRef.getSnapshot().context.persistedError).toBeUndefined();
+        if (successor === 'pending') {
+          // Stop must wait for B's own ACK. Clearing commandInFlight from A would cancel B prematurely.
+          publishLogRows(store, chatId, runningUserRows(secondCommand.payload.runId));
+          store.stopRun(chatId, 'stop-button');
+          await settle();
+          expect(chat.regenerate).not.toHaveBeenCalled();
+          expect(chat.resumeStream).not.toHaveBeenCalled();
+          expect(hostCommand).toHaveBeenCalledTimes(2);
+          acknowledgeSecond();
+          await vi.waitFor(() => {
+            expect(hostCommand).toHaveBeenCalledTimes(3);
+          });
+          expect(hostCommand).toHaveBeenLastCalledWith(
+            expect.objectContaining({ type: 'cancel', payload: { chatId, runId: secondCommand.payload.runId } }),
+          );
+          expect(unsubscribeWatches).toEqual([]);
+        } else {
+          expect(unsubscribeWatches).toHaveLength(1);
+          expect(unsubscribeWatches[0]).not.toHaveBeenCalled();
+          expect(hostCommand).toHaveBeenCalledTimes(2);
+        }
+      } finally {
+        firstReply.resolve({
+          commandId: firstCommand.commandId,
+          generation: 1,
+          status: 'applied',
+          effect: 'durable',
+          cursor: 1,
+        });
+        acknowledgeSecond();
+        subscriptions.mockRestore();
+        unadmit();
+        unpublish();
+        store.release(chatId);
+      }
+    },
+  );
+
+  for (const runningBeforeAck of [false, true]) {
+    it(`should watch a resumed attempt only after its running row ${runningBeforeAck ? 'already folded' : 'arrives later'}`, async () => {
+      const store = createStore();
+      const chatId = `chat_retry_watch_${runningBeforeAck}`;
+      const projectId = `project_retry_watch_${runningBeforeAck}`;
+      const runId = `req_retry_watch_${runningBeforeAck}`;
+      const command: HostCommand = {
+        type: 'resume',
+        commandId: `req_resume_watch_${runningBeforeAck}`,
+        payload: { chatId, runId },
+      };
+      const reply = Promise.withResolvers<CommandAnswer>();
+      const hostCommand = vi.fn(async () => reply.promise);
+      const close = vi.fn(async () => undefined);
+      const unpublish = store.publishProjectHostConnector(projectId, async () =>
+        mock<AgentHostClient>({ catchUp: writerOwnedCatchUp, hostCommand, close }),
+      );
+      startTurnOwner(store, projectId);
+      const session = store.acquire(chatId, projectId);
+      await vi.waitFor(() => {
+        expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+      });
+      publishLogRows(store, chatId, [...runningUserRows(runId), lifecycleRow(2, 'failed', runId)]);
+      expect(store.getProjection(chatId)?.ledger.runs[runId]?.lifecycle).toBe('failed');
+      const chat = harness.created.find((entry) => entry.id === chatId)!;
+      const unpublishAdmission = publishChatTurnAdmission(chatId, async () => ({
+        runId,
+        leaseTurnId: undefined,
+        request: { kind: 'continue', command },
+      }));
+      const requested = store.requestTurn(chatId, { kind: 'continue' });
+      await vi.waitFor(() => {
+        expect(hostCommand).toHaveBeenCalledExactlyOnceWith(command);
+      });
+      const reopened = logRow(3, { runId, type: 'run.lifecycle', state: 'running', attempt: 2 });
+      if (runningBeforeAck) {
+        publishLogRows(store, chatId, [reopened], 3);
+      }
+      reply.resolve({ commandId: command.commandId, generation: 1, status: 'applied', effect: 'durable', cursor: 4 });
+      await requested;
+      await vi.waitFor(() => {
+        expect(close).toHaveBeenCalledOnce();
+      });
+      if (!runningBeforeAck) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+        expect(chat.resumeStream).not.toHaveBeenCalled();
+        publishLogRows(store, chatId, [reopened], 3);
+      }
+      await vi.waitFor(() => {
+        expect(chat.resumeStream).toHaveBeenCalledOnce();
+      });
+      expect(hostCommand).toHaveBeenCalledOnce();
+      unpublishAdmission();
+      unpublish();
+      store.release(chatId);
+    });
+  }
+
+  it('should end a resumed attempt whose running and failed rows fold in one read', async () => {
+    const store = createStore();
+    const chatId = 'chat_retry_folded_end';
+    const projectId = 'project_retry_folded_end';
+    const runId = 'req_retry_folded_end';
+    const command: HostCommand = { type: 'resume', commandId: 'req_resume_folded_end', payload: { chatId, runId } };
+    const hostCommand = vi.fn(
+      async (): Promise<CommandAnswer> => ({
+        commandId: command.commandId,
+        generation: 1,
+        status: 'applied',
+        effect: 'durable',
+        cursor: 3,
+      }),
+    );
+    const unpublish = store.publishProjectHostConnector(projectId, async () =>
+      mock<AgentHostClient>({ catchUp: writerOwnedCatchUp, hostCommand, close: vi.fn(async () => undefined) }),
+    );
+    startTurnOwner(store, projectId);
+    const session = store.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+    });
+    const refused = { code: 'INVALID_REQUEST', message: 'Refused.', status: 400 };
+    publishLogRows(store, chatId, [
+      ...runningUserRows(runId),
+      logRow(2, { runId, type: 'run.lifecycle', state: 'failed', attempt: 1, detail: refused }),
+    ]);
+    const unpublishAdmission = publishChatTurnAdmission(chatId, async () => ({
+      runId: undefined,
+      leaseTurnId: undefined,
+      request: { kind: 'continue', command },
+    }));
+    await store.requestTurn(chatId, { kind: 'continue' });
+    expect(hostCommand).toHaveBeenCalledOnce();
+    expect(session.stateActorRef.getSnapshot().matches({ run: 'queued' })).toBe(true);
+
+    /* A refusal ends the resumed attempt at once, so one read answer carries its reopening and its end. */
+    publishLogRows(
+      store,
+      chatId,
+      [
+        logRow(3, { runId, type: 'run.lifecycle', state: 'running', attempt: 2 }),
+        logRow(4, { runId, type: 'run.lifecycle', state: 'failed', attempt: 2, detail: refused }),
+      ],
+      3,
+    );
+
+    await vi.waitFor(() => {
+      expect(session.stateActorRef.getSnapshot().matches({ run: 'failed' })).toBe(true);
+    });
+    unpublishAdmission();
+    unpublish();
+    store.release(chatId);
+  });
+
+  it('retires a hydrated legacy connection card after read-only catch-up, fresh output, and reload', async () => {
+    const chatId = 'chat_recovered_connection';
+    const projectId = 'project_recovered_connection';
+    const legacyError = {
+      category: errorCategory.generic,
+      title: 'Something went wrong',
+      message: 'Channel closed (local)',
+    };
+    const deps = createStubDeps();
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { error: legacyError }));
+    const rows = [
+      ...runningRows('run_recovered_connection'),
+      logRow(2, {
+        runId: 'run_recovered_connection',
+        type: 'message.appended',
+        message: { id: 'msg_recovered_reply', role: 'assistant', content: 'Resumed output' },
+      }),
+      lifecycleRow(3, 'completed', 'run_recovered_connection'),
+    ];
+    const hostCommand = vi.fn<AgentHostClient['hostCommand']>();
+    const close = vi.fn(async () => undefined);
+    const connect = async (): Promise<
+      Pick<AgentHostClient, 'hostCommand' | 'read' | 'catchUp' | 'subscribe' | 'close'>
+    > => ({
+      hostCommand,
+      close,
+      catchUp: writerOwnedCatchUp,
+      read: vi.fn<AgentHostClient['read']>(async () => ({
+        status: 'batch',
+        sourceHealth: { historyIntact: true, newerHistory: false, quarantined: false },
+        chatId,
+        cursor: 0,
+        nextCursor: rows.length,
+        endCursor: rows.length,
+        events: rows,
+      })),
+      subscribe: (...args) => {
+        args[3]?.({
+          status: 'batch',
+          sourceHealth: { historyIntact: true, newerHistory: false, quarantined: false },
+          chatId,
+          cursor: 0,
+          nextCursor: rows.length,
+          endCursor: rows.length,
+          events: rows,
+        });
+        return () => undefined;
+      },
+    });
+
+    const open = async () => {
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      store.setDependencies(deps);
+      const session = store.acquire(chatId, projectId);
+      await vi.waitFor(() => {
+        expect(session.persistenceActorRef.getSnapshot().context.persistedError).toEqual(legacyError);
+      });
+      const visibleError = () =>
+        selectVisibleChatError({
+          error: session.chat.error,
+          persistedError: session.persistenceActorRef.getSnapshot().context.persistedError,
+          projection: store.getProjection(chatId),
+          attachmentStatus: store.getAttachmentStatus(chatId),
+        });
+      expect(visibleError()).toEqual(legacyError);
+      const unobserve = store.observe(chatId, projectId);
+      const unpublish = store.publishProjectHostConnector(projectId, connect);
+      await vi.waitFor(() => {
+        expect(store.getAttachmentStatus(chatId)).toBe('attached');
+        expect(
+          session.chat.messages.some((message) =>
+            message.parts.some((part) => part.type === 'text' && part.text === 'Resumed output'),
+          ),
+        ).toBe(true);
+      });
+      expect(visibleError()).toBeUndefined();
+      store.release(chatId);
+      unobserve();
+      unpublish();
+    };
+
+    await open();
+    await open();
+    expect(hostCommand).not.toHaveBeenCalled();
+  });
+
+  it('keeps the chat root idle after an empty caught-up log retires a legacy error', async () => {
+    const chatId = 'chat_empty_recovery';
+    const projectId = 'project_empty_recovery';
+    const deps = createStubDeps();
+    deps.getChat.mockResolvedValue(
+      chatRow(chatId, projectId, {
+        error: { category: errorCategory.generic, title: 'Old fault', message: 'Old channel closed' },
+      }),
+    );
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    store.setDependencies(deps);
+    const session = store.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+    });
+    const unobserve = store.observe(chatId, projectId);
+    const hostCommand = vi.fn<AgentHostClient['hostCommand']>();
+    const unpublish = store.publishProjectHostConnector(
+      projectId,
+      async () =>
+        ({
+          hostCommand,
+          catchUp: writerOwnedCatchUp,
+          read: vi.fn<AgentHostClient['read']>(async () => ({
+            status: 'batch',
+            sourceHealth: { historyIntact: true, newerHistory: false, quarantined: false },
+            chatId,
+            cursor: 0,
+            nextCursor: 0,
+            endCursor: 0,
+            events: [],
+          })),
+          subscribe: (...args: Parameters<AgentHostClient['subscribe']>) => {
+            args[3]?.({
+              status: 'batch',
+              sourceHealth: { historyIntact: true, newerHistory: false, quarantined: false },
+              chatId,
+              cursor: 0,
+              nextCursor: 0,
+              endCursor: 0,
+              events: [],
+            });
+            return () => undefined;
+          },
+          close: vi.fn(async () => undefined),
+        }) as unknown as AgentHostClient,
+    );
+    await vi.waitFor(() => {
+      expect(store.getAttachmentStatus(chatId)).toBe('attached');
+    });
+    expect(session.stateActorRef.getSnapshot().matches({ run: 'idle' })).toBe(true);
+    expect(hostCommand).not.toHaveBeenCalled();
+    unpublish();
+    unobserve();
+    store.release(chatId);
+  });
+
+  it('ignores a retired attachment callback after a newer run fails', async () => {
+    const chatId = 'chat_attachment_generation';
+    const projectId = 'project_attachment_generation';
+    const store = createStore();
+    const answers: Array<Parameters<AgentHostClient['subscribe']>[3]> = [];
+    const hostCommand = vi.fn<AgentHostClient['hostCommand']>();
+    const connect = async (): Promise<
+      Pick<AgentHostClient, 'hostCommand' | 'read' | 'catchUp' | 'subscribe' | 'close'>
+    > => ({
+      hostCommand,
+      close: vi.fn(async () => undefined),
+      catchUp: writerOwnedCatchUp,
+      read: vi.fn<AgentHostClient['read']>(async () => ({
+        status: 'batch',
+        sourceHealth: { historyIntact: true, newerHistory: false, quarantined: false },
+        chatId,
+        cursor: 0,
+        nextCursor: 0,
+        endCursor: 0,
+        events: [],
+      })),
+      subscribe: (...args) => {
+        answers.push(args[3]);
+        return () => undefined;
+      },
+    });
+    const unpublishOld = store.publishProjectHostConnector(projectId, connect);
+    const unobserve = store.observe(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(answers).toHaveLength(1);
+    });
+    answers[0]?.({
+      status: 'batch',
+      sourceHealth: { historyIntact: true, newerHistory: false, quarantined: false },
+      chatId,
+      cursor: 0,
+      nextCursor: 2,
+      endCursor: 2,
+      events: runningRows('run_prior'),
+    });
+    expect(store.getAttachmentStatus(chatId)).toBe('attached');
+
+    const unpublishCurrent = store.publishProjectHostConnector(projectId, connect);
+    await vi.waitFor(() => {
+      expect(answers).toHaveLength(2);
+    });
+    answers[1]?.({
+      status: 'batch',
+      sourceHealth: { historyIntact: true, newerHistory: false, quarantined: false },
+      chatId,
+      cursor: 2,
+      nextCursor: 5,
+      endCursor: 5,
+      events: [
+        lifecycleRow(2, 'admitted', 'run_current'),
+        lifecycleRow(3, 'running', 'run_current'),
+        logRow(4, {
+          runId: 'run_current',
+          type: 'run.lifecycle',
+          state: 'failed',
+          attempt: 1,
+          detail: { message: 'Current failure' },
+        }),
+      ],
+    });
+    const visibleError = () =>
+      selectVisibleChatError({
+        error: undefined,
+        persistedError: undefined,
+        projection: store.getProjection(chatId),
+        attachmentStatus: store.getAttachmentStatus(chatId),
+      });
+    expect(store.getAttachmentStatus(chatId)).toBe('attached');
+    expect(store.getProjection(chatId)?.ledger.currentRunId).toBe('run_current');
+    expect(store.getProjection(chatId)?.ledger.runs['run_current']?.lifecycle).toBe('failed');
+    expect(store.getProjection(chatId)?.failure?.text).toContain('Current failure');
+    expect(visibleError()?.message).toContain('Current failure');
+
+    answers[0]?.({
+      status: 'batch',
+      sourceHealth: { historyIntact: true, newerHistory: false, quarantined: false },
+      chatId,
+      cursor: 2,
+      nextCursor: 3,
+      endCursor: 3,
+      events: [lifecycleRow(2, 'completed', 'run_prior')],
+    });
+    answers[0]?.({
+      status: 'batch',
+      sourceHealth: { historyIntact: true, newerHistory: false, quarantined: false },
+      chatId,
+      cursor: 2,
+      nextCursor: 3,
+      endCursor: 3,
+      events: [
+        logRow(2, {
+          runId: 'run_prior',
+          type: 'run.lifecycle',
+          state: 'failed',
+          attempt: 1,
+          detail: { message: 'Old failure' },
+        }),
+      ],
+    });
+    expect(visibleError()?.message).toContain('Current failure');
+    expect(hostCommand).not.toHaveBeenCalled();
+    unobserve();
+    unpublishCurrent();
+    unpublishOld();
+  });
+});
+
+describe('ChatSessionStore — run accounting per project (R2)', () => {
+  /**
+   * A project session, reduced to what the store sends it.
+   *
+   * The real machine is driven in `project-session.machine.test.ts`; what this
+   * pin is about is *which* session hears a run start and settle.
+   */
+  const fakeSession = (projectId: string) => {
+    const heard: Array<{
+      type: string;
+      runs: string[];
+      stoppableRuns: string[];
+    }> = [];
+    let runs: string[] = [];
+    let stoppableRuns: string[] = [];
+    return {
+      projectId,
+      heard,
+      ref: {
+        send: (event: { type: string; runs: string[]; stoppableRuns: string[] }) => {
+          heard.push(event);
+          if (event.type === 'projectedRunsChanged') {
+            runs = event.runs;
+            stoppableRuns = event.stoppableRuns;
+          }
+        },
+        getSnapshot: () => ({ context: { runs, stoppableRuns } }),
+      } as unknown as LiveProjectSessions[string],
+    };
+  };
+
+  it('projects a run to the chat’s own project, not the focused one', async () => {
+    const focus = focusedProjectStandIn();
+    const store = createStore(focus);
+    const projectA = fakeSession('proj_a');
+    const projectB = fakeSession('proj_b');
+
+    liveSessions.set('proj_a', projectA.ref);
+    focus.set('proj_a');
+    store.acquire('chat-a', 'proj_a');
+    const stopObserving = store.observe('chat-a', 'proj_a');
+    publishLogRows(store, 'chat-a', runningRows());
+    expect(projectA.heard).toContainEqual({ type: 'projectedRunsChanged', runs: ['chat-a'], stoppableRuns: [] });
+
+    /* The person navigates to B while A's run is still going. */
+    liveSessions.set('proj_b', projectB.ref);
+    focus.set('proj_b');
+    publishLogRows(store, 'chat-a', [lifecycleRow(2, 'completed')], 2);
+
+    expect(projectA.heard.at(-1)).toEqual({ type: 'projectedRunsChanged', runs: [], stoppableRuns: [] });
+    expect(projectB.heard).toEqual([]);
+    stopObserving();
+    store.release('chat-a');
+    liveSessions.set('proj_a', undefined);
+    liveSessions.set('proj_b', undefined);
+  });
+
+  it('should bind the focused project to its live session each time focus arrives there, and only then (A7b)', () => {
+    const focus = focusedProjectStandIn();
+    createStore(focus);
+    const projectA = fakeSession('proj_a');
+    liveSessions.set('proj_a', projectA.ref);
+    /* The session holds runs the store's projection no longer has: arriving there tells it again. */
+    const drift = (): void => {
+      projectA.ref.send({ type: 'projectedRunsChanged', runs: ['stale'], stoppableRuns: [] });
+      projectA.heard.length = 0;
+    };
+    drift();
+
+    focus.set('proj_a');
+    expect(projectA.heard).toEqual([{ type: 'projectedRunsChanged', runs: [], stoppableRuns: [] }]);
+
+    drift();
+    focus.set('proj_a');
+    focus.set(undefined);
+    focus.set('proj_b');
+    expect(projectA.heard).toEqual([]);
+    liveSessions.set('proj_a', undefined);
+  });
+
+  it('binds a retained project chat to its known owner while another project is focused', () => {
+    const focus = focusedProjectStandIn();
+    const store = createStore(focus);
+    const projectA = fakeSession('proj_a');
+    const projectB = fakeSession('proj_b');
+    liveSessions.set('proj_a', projectA.ref);
+    liveSessions.set('proj_b', projectB.ref);
+    focus.set('proj_b');
+
+    store.acquire('chat-a', 'proj_a');
+    store.acquire('chat-a', 'proj_a');
+    store.release('chat-a');
+
+    expect([...store.chatRootsOf('proj_a').keys()]).toEqual(['chat-a']);
+    expect(store.chatRootsOf('proj_b').size).toBe(0);
+    store.release('chat-a');
+    liveSessions.set('proj_a', undefined);
+    liveSessions.set('proj_b', undefined);
+  });
+
+  it('binds a chat acquired during a focus switch to its caller’s project before its row loads', async () => {
+    const focus = focusedProjectStandIn();
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession, focusedProject: focus });
+    const deps = createStubDeps();
+    let resolveLoadedChat!: (chat: ChatEntity) => void;
+    const loadedChat = new Promise<ChatEntity>((resolve) => {
+      resolveLoadedChat = resolve;
+    });
+    deps.getChat.mockImplementation(async () => loadedChat);
+    store.setDependencies(deps);
+
+    const projectA = fakeSession('proj_a');
+    const projectB = fakeSession('proj_b');
+    liveSessions.set('proj_a', projectA.ref);
+    liveSessions.set('proj_b', projectB.ref);
+    focus.set('proj_b');
+
+    /* React renders A's new chat before focus moves, so focus still says B.
+     * The caller names A (PV-S4). */
+    const session = store.acquire('chat_a', 'proj_a');
+    const stopObserving = store.observe('chat_a', 'proj_a');
+    expect(store.chatRootsOf('proj_a').get('chat_a')).toBe(session.stateActorRef);
+    expect(session.persistenceActorRef.getSnapshot().value).toMatchObject({ chatLoading: 'loading' });
+    await vi.waitFor(() => {
+      expect(deps.getChat).toHaveBeenCalledWith('chat_a', 'proj_a');
+    });
+    focus.set('proj_a');
+    resolveLoadedChat({
+      id: 'chat_a',
+      resourceId: 'proj_a',
+      name: 'A chat',
+      messages: [],
+      createdAt: 0,
+      updatedAt: 0,
+    });
+
+    await vi.waitFor(() => {
+      expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+    });
+    publishLogRows(store, 'chat_a', runningRows());
+
+    expect(projectB.heard).toEqual([]);
+    expect(projectA.heard).toContainEqual({ type: 'projectedRunsChanged', runs: ['chat_a'], stoppableRuns: [] });
+    stopObserving();
+    store.release('chat_a');
+    liveSessions.set('proj_a', undefined);
+    liveSessions.set('proj_b', undefined);
+  });
+
+  it('takes a gesture made before any route effect registered its project, rather than parking it (PV-S5)', () => {
+    const store = createStore();
+    const session = store.acquire('chat_unbound', 'proj_unbound');
+    const gesture: ChatTurnGesture = { kind: 'regenerate' };
+
+    void store.requestTurn('chat_unbound', gesture);
+
+    expect(session.stateActorRef.getSnapshot().context.pendingGesture).toBe(gesture);
+    store.release('chat_unbound');
+  });
+
+  it('keeps the agents pane’s chat machine across a project session re-registration (PV-S5)', () => {
+    const store = createStore();
+    liveSessions.set('proj_pane', fakeSession('proj_pane').ref);
+    const session = store.acquire('chat_pane', 'proj_pane');
+    const machine = session.stateActorRef;
+    expect(machine).toBeDefined();
+
+    /* The project's route remounts: its binding unregisters and registers a new session. */
+    liveSessions.set('proj_pane', undefined);
+    liveSessions.set('proj_pane', fakeSession('proj_pane').ref);
+
+    /* The pane subscribed to `machine` when the chat joined; it must still be the chat's machine. */
+    expect(session.stateActorRef).toBe(machine);
+    expect(machine.getSnapshot().status).toBe('active');
+    store.release('chat_pane');
+    liveSessions.set('proj_pane', undefined);
+  });
+
+  it('forwards its project’s revision facts to a chat, whether it joined before or after them (PV-S5)', () => {
+    const store = createStore();
+    const revisionOf = (chatId: string) =>
+      (
+        store.get(chatId)!.stateActorRef.getSnapshot().value as {
+          revision: Record<string, string>;
+        }
+      ).revision;
+
+    store.acquire('chat_facts_early', 'proj_facts');
+    store.setRevisionFacts('proj_facts', { dirty: true, sync: 'pending', branch: 'main' });
+    store.acquire('chat_facts_late', 'proj_facts');
+    store.acquire('chat_facts_other', 'proj_other');
+
+    for (const chatId of ['chat_facts_early', 'chat_facts_late']) {
+      expect(revisionOf(chatId)).toMatchObject({ tree: 'dirty', sync: 'pending' });
+    }
+    expect(revisionOf('chat_facts_other')).not.toMatchObject({ tree: 'dirty' });
+    for (const chatId of ['chat_facts_early', 'chat_facts_late', 'chat_facts_other']) {
+      store.release(chatId);
+    }
+  });
+
+  it('should ignore a delayed hydration after the session is released', async () => {
+    const focus = focusedProjectStandIn();
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession, focusedProject: focus });
+    const deps = createStubDeps();
+    let resolveLoadedChat!: (chat: ChatEntity) => void;
+    const loadedChat = new Promise<ChatEntity>((resolve) => {
+      resolveLoadedChat = resolve;
+    });
+    deps.getChat.mockImplementation(async () => loadedChat);
+    store.setDependencies(deps);
+    const projectA = fakeSession('proj_a');
+    const projectB = fakeSession('proj_b');
+    liveSessions.set('proj_a', projectA.ref);
+    liveSessions.set('proj_b', projectB.ref);
+    focus.set('proj_b');
+
+    try {
+      const root = store.acquire('chat_delayed_release', 'proj_b').stateActorRef;
+      await vi.waitFor(() => {
+        expect(deps.getChat).toHaveBeenCalledWith('chat_delayed_release', 'proj_b');
+      });
+      store.release('chat_delayed_release');
+      resolveLoadedChat({
+        id: 'chat_delayed_release',
+        resourceId: 'proj_b',
+        name: 'Released chat',
+        messages: [],
+        createdAt: 0,
+        updatedAt: 0,
+      });
+      await loadedChat;
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(store.get('chat_delayed_release')).toBeUndefined();
+      expect(root.getSnapshot().status).toBe('stopped');
+      expect(store.chatRootsOf('proj_b').size).toBe(0);
+      expect(projectA.heard).toEqual([]);
+      expect(projectB.heard).toEqual([]);
+    } finally {
+      liveSessions.set('proj_a', undefined);
+      liveSessions.set('proj_b', undefined);
+    }
+  });
+
+  it('should not let a released hydration close a reacquired replacement', async () => {
+    const focus = focusedProjectStandIn();
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession, focusedProject: focus });
+    const deps = createStubDeps();
+    let resolveFirstLoad!: (chat: ChatEntity) => void;
+    const firstLoad = new Promise<ChatEntity>((resolve) => {
+      resolveFirstLoad = resolve;
+    });
+    let resolveReplacementLoad!: (chat: ChatEntity) => void;
+    const replacementLoad = new Promise<ChatEntity>((resolve) => {
+      resolveReplacementLoad = resolve;
+    });
+    deps.getChat.mockImplementationOnce(async () => firstLoad).mockImplementationOnce(async () => replacementLoad);
+    store.setDependencies(deps);
+    const projectA = fakeSession('proj_a');
+    const projectB = fakeSession('proj_b');
+    liveSessions.set('proj_a', projectA.ref);
+    liveSessions.set('proj_b', projectB.ref);
+    focus.set('proj_b');
+
+    try {
+      const released = store.acquire('chat_reacquired', 'proj_b');
+      await vi.waitFor(() => {
+        expect(deps.getChat).toHaveBeenCalledTimes(1);
+      });
+      store.release('chat_reacquired');
+      const replacement = store.acquire('chat_reacquired', 'proj_b');
+      await vi.waitFor(() => {
+        expect(deps.getChat).toHaveBeenCalledTimes(2);
+      });
+      expect(replacement).not.toBe(released);
+
+      resolveFirstLoad({
+        id: 'chat_reacquired',
+        resourceId: 'proj_b',
+        name: 'Reacquired chat',
+        messages: [],
+        createdAt: 0,
+        updatedAt: 0,
+      });
+      await firstLoad;
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(store.get('chat_reacquired')).toBe(replacement);
+      expect(released.stateActorRef.getSnapshot().status).toBe('stopped');
+      expect(replacement.stateActorRef.getSnapshot().status).toBe('active');
+      expect(store.chatRootsOf('proj_b').get('chat_reacquired')).toBe(replacement.stateActorRef);
+      expect(projectA.heard).toEqual([]);
+    } finally {
+      store.release('chat_reacquired');
+      resolveReplacementLoad({
+        id: 'chat_reacquired',
+        resourceId: 'proj_b',
+        name: 'Replacement chat',
+        messages: [],
+        createdAt: 0,
+        updatedAt: 0,
+      });
+      liveSessions.set('proj_a', undefined);
+      liveSessions.set('proj_b', undefined);
+    }
+  });
+
+  it('should reread an empty replacement generation before certifying its read authority', async () => {
+    const chatId = 'chat_empty_generation_handoff';
+    const projectId = 'project_empty_generation_handoff';
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'tau-store-generation-'));
+    const model = { id: 'fixture-model', providerKind: 'vertexai', contextWindow: 200_000, maxTokens: 4096 } as const;
+    const createOwner = () =>
+      createAgentLauncher({
+        chats: createNodeChatStore({ workspaceRoot }),
+        modelTransport: createTauCloudGatewayModelTransport({
+          baseUrl: 'https://gateway.example',
+          model,
+          auth: () => 'fixture',
+          fetch: async () => {
+            throw new Error('Read-only generation handoff must not invoke a model.');
+          },
+        }),
+        credential: () => ({ mode: 'session' }),
+        systemPrompt: 'Read-only fixture',
+        model,
+        toolRegistry: { list: () => [], invoke: async () => ({ content: 'unused', isError: true }) },
+      });
+    const original = createOwner();
+    const replacement = createOwner();
+    const beginReplacement = Promise.withResolvers<void>();
+    const validationHeld = Promise.withResolvers<void>();
+    const releaseNextRead = Promise.withResolvers<void>();
+    let reads = 0;
+    let captures = 0;
+    const transport: AgentHostTransport = {
+      ready: Promise.resolve(),
+      execute: async (command) => replacement.execute(command),
+      async *catchUp(input) {
+        captures += 1;
+        const owner = captures === 1 ? original : replacement;
+        for await (const frame of owner.catchUp(input)) {
+          if (captures > 1 && frame.type === 'validated') {
+            validationHeld.resolve();
+            await releaseNextRead.promise;
+          }
+          yield frame;
+        }
+      },
+      liveEvents: (id, signal) => replacement.liveEvents({ chatId: id, signal }),
+      close: () => undefined,
+      read: async (input) => {
+        reads += 1;
+        if (reads === 1) {
+          await beginReplacement.promise;
+        }
+        return replacement.read(input);
+      },
+    };
+    const client = createAgentHostClient(transport);
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    const deps = createStubDeps();
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId));
+    store.setDependencies(deps);
+    const unpublish = store.publishProjectHostConnector(projectId, async () => client);
+    const unobserve = store.observe(chatId, projectId);
+    try {
+      await vi.waitFor(() => {
+        expect(reads).toBe(1);
+        expect(store.historicalUsageReady(chatId, projectId)).toBe(true);
+      });
+      beginReplacement.resolve();
+      await validationHeld.promise;
+      const requested = store.getProjection(chatId)?.ledger.position;
+      // Old authority is gone before fresh empty capture validates and ordinary follow resumes.
+      expect({
+        cursor: requested?.cursor,
+        sourceGeneration: requested?.sourceGeneration,
+        sourceHealth: store.getProjection(chatId)?.sourceHealth,
+        usageReady: store.historicalUsageReady(chatId, projectId),
+        attached: store.getAttachmentStatus(chatId) === 'attached',
+      }).toEqual({
+        cursor: 0,
+        sourceGeneration: undefined,
+        sourceHealth: undefined,
+        usageReady: false,
+        attached: false,
+      });
+      releaseNextRead.resolve();
+      await vi.waitFor(() => {
+        expect(reads).toBe(2);
+        expect(captures).toBe(2);
+        expect(store.historicalUsageReady(chatId, projectId)).toBe(true);
+        expect(store.getAttachmentStatus(chatId)).toBe('attached');
+      });
+    } finally {
+      beginReplacement.resolve();
+      releaseNextRead.resolve();
+      unobserve();
+      unpublish();
+      await client.close();
+      await original.close();
+      await replacement.close();
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  for (const replacementEmpty of [false, true]) {
+    it(`should retain mounted SDK messages until reset recapture validates ${replacementEmpty ? 'an empty' : 'a changed'} source`, async () => {
+      const chatId = 'chat_mounted_reset_capture';
+      const projectId = 'project_mounted_reset_capture';
+      const runId = 'run_mounted_reset_capture';
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const deps = createStubDeps();
+      deps.getChat.mockResolvedValue(chatRow(chatId, projectId));
+      store.setDependencies(deps);
+      const rows = (content: string) => [
+        ...runningRows(runId),
+        logRow(2, {
+          runId,
+          type: 'message.appended',
+          message: { id: 'mounted-reply', role: 'assistant', content },
+        }),
+        lifecycleRow(3, 'completed', runId),
+      ];
+      const reset = Promise.withResolvers<void>();
+      const validation = Promise.withResolvers<void>();
+      const caughtReplacement = Promise.withResolvers<void>();
+      const catchUp = vi.fn<AgentHostTransport['catchUp']>(async function* (): AsyncIterable<CatchUpFrame> {
+        const recovering = catchUp.mock.calls.length > 1;
+        const sourceGeneration = recovering ? 'replacement' : 'original';
+        const captured =
+          recovering && replacementEmpty ? [] : rows(recovering ? 'New validated reply' : 'Previous reply');
+        if (captured.length > 0) {
+          yield {
+            type: 'page',
+            answer: {
+              status: 'batch',
+              chatId,
+              sourceGeneration,
+              cursor: 0,
+              nextCursor: captured.length,
+              endCursor: captured.length,
+              facts: captured.map((row) => compactRow(row)),
+            },
+          };
+        }
+        if (recovering) {
+          caughtReplacement.resolve();
+          await validation.promise;
+        }
+        yield {
+          type: 'validated',
+          health: { historyIntact: true, newerHistory: false, quarantined: false },
+          position: {
+            cursor: captured.length,
+            sourceGeneration,
+            ...(captured.length === 0 ? {} : { last: { leaderEpoch: 'g1', sequence: 3 } }),
+          },
+          observedEndCursor: captured.length,
+        };
+      });
+      const read = vi.fn<AgentHostTransport['read']>(async (input) => {
+        if (read.mock.calls.length === 1) {
+          await reset.promise;
+          return { status: 'refused', chatId, reason: 'identity-mismatch' };
+        }
+        await new Promise<void>((resolve) => {
+          if (input.signal?.aborted) {
+            resolve();
+          } else {
+            input.signal?.addEventListener(
+              'abort',
+              () => {
+                resolve();
+              },
+              { once: true },
+            );
+          }
+        });
+        throw new DOMException('Read stopped', 'AbortError');
+      });
+      const client = createAgentHostClient({
+        ready: Promise.resolve(),
+        read,
+        catchUp,
+        async *liveEvents(_id, signal) {
+          await new Promise<void>((resolve) => {
+            signal.addEventListener(
+              'abort',
+              () => {
+                resolve();
+              },
+              { once: true },
+            );
+          });
+          yield* [];
+        },
+        execute: async () => {
+          throw new Error('Recovery must not send a command.');
+        },
+        close: () => undefined,
+      });
+      const unpublish = store.publishProjectHostConnector(projectId, async () => client);
+      const session = store.acquire(chatId, projectId);
+      try {
+        await vi.waitFor(() => {
+          expect(JSON.stringify(session.messages)).toContain('Previous reply');
+          expect(read).toHaveBeenCalledOnce();
+          expect(store.historicalUsageReady(chatId, projectId)).toBe(true);
+        });
+        const { messages } = session.chat;
+        const first = messages[0];
+        reset.resolve();
+        await vi.waitFor(() => {
+          expect(store.getProjection(chatId)?.ledger.position.cursor).toBe(0);
+          expect(store.historicalUsageReady(chatId, projectId)).toBe(false);
+        });
+        // Existing store/SDK boundary control: revoking authority must not overwrite mounted messages.
+        expect(session.chat.messages).toBe(messages);
+        expect(session.messages[0]).toBe(first);
+        expect(store.getAttachmentStatus(chatId)).not.toBe('attached');
+        expect(await store.steerProjectedRun(chatId, 'must not target the retired run')).toBe(false);
+        expect(await store.cancelProjectedRun(chatId)).toBe('absent');
+        await vi.waitFor(() => {
+          expect(catchUp).toHaveBeenCalledTimes(2);
+        });
+        await caughtReplacement.promise;
+        expect(session.chat.messages).toBe(messages);
+        expect(store.getProjection(chatId)?.ledger.runs[runId]).toBeUndefined();
+        expect(read).toHaveBeenCalledOnce();
+        validation.resolve();
+        await vi.waitFor(() => {
+          expect(store.historicalUsageReady(chatId, projectId)).toBe(true);
+          expect(store.getProjection(chatId)?.ledger.position.sourceGeneration).toBe('replacement');
+          if (replacementEmpty) {
+            expect(session.messages).toEqual([]);
+          } else {
+            expect(JSON.stringify(session.messages)).toContain('New validated reply');
+            expect(JSON.stringify(session.messages)).not.toContain('Previous reply');
+          }
+        });
+        expect(store.get(chatId)).toBe(session);
+      } finally {
+        reset.resolve();
+        validation.resolve();
+        store.release(chatId);
+        unpublish();
+        await client.close();
+      }
+    });
+  }
+
+  for (const nonempty of [false, true]) {
+    it(`should withhold currentness and retain live ownership during a cursor-zero ${nonempty ? 'nonempty' : 'empty'} generation reset`, async () => {
+      const chatId = 'chat_zero_generation_reset';
+      const projectId = 'project_zero_generation_reset';
+      const runId = 'run_zero_generation_reset';
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const deps = createStubDeps();
+      deps.getChat.mockResolvedValue(chatRow(chatId, projectId));
+      store.setDependencies(deps);
+      const rows = nonempty
+        ? [
+            ...runningRows(runId),
+            logRow(2, {
+              runId,
+              type: 'message.appended',
+              message: { id: 'zero-reply', role: 'assistant', content: 'New zero reply' },
+            }),
+            lifecycleRow(3, 'completed', runId),
+          ]
+        : [];
+      const reset = Promise.withResolvers<void>();
+      const validation = Promise.withResolvers<void>();
+      let liveSignal: AbortSignal | undefined;
+      const close = vi.fn();
+      const catchUp = vi.fn<AgentHostTransport['catchUp']>(async function* (): AsyncIterable<CatchUpFrame> {
+        const recovering = catchUp.mock.calls.length > 1;
+        const sourceGeneration = recovering ? 'replacement-zero' : 'original-zero';
+        const captured = recovering ? rows : [];
+        if (captured.length > 0) {
+          yield {
+            type: 'page',
+            answer: {
+              status: 'batch',
+              chatId,
+              sourceGeneration,
+              cursor: 0,
+              nextCursor: captured.length,
+              endCursor: captured.length,
+              facts: captured.map((row) => compactRow(row)),
+            },
+          };
+        }
+        if (recovering) {
+          await validation.promise;
+        }
+        yield {
+          type: 'validated',
+          health: { historyIntact: true, newerHistory: false, quarantined: false },
+          position: {
+            cursor: captured.length,
+            sourceGeneration,
+            ...(captured.length === 0 ? {} : { last: { leaderEpoch: 'g1', sequence: 3 } }),
+          },
+          observedEndCursor: captured.length,
+        };
+      });
+      const read = vi.fn<AgentHostTransport['read']>(async (input) => {
+        if (read.mock.calls.length === 1) {
+          await reset.promise;
+          return {
+            status: 'batch',
+            chatId,
+            sourceGeneration: 'replacement-zero',
+            sourceHealth: { historyIntact: true, newerHistory: false, quarantined: false },
+            cursor: 0,
+            nextCursor: rows.length,
+            endCursor: rows.length,
+            events: rows,
+          };
+        }
+        await new Promise<void>((resolve) => {
+          if (input.signal?.aborted) {
+            resolve();
+          } else {
+            input.signal?.addEventListener(
+              'abort',
+              () => {
+                resolve();
+              },
+              { once: true },
+            );
+          }
+        });
+        throw new DOMException('Read stopped', 'AbortError');
+      });
+      const liveEvents = vi.fn<AgentHostTransport['liveEvents']>(async function* (_id, signal) {
+        liveSignal = signal;
+        await new Promise<void>((resolve) => {
+          signal.addEventListener(
+            'abort',
+            () => {
+              resolve();
+            },
+            { once: true },
+          );
+        });
+        yield* [];
+      });
+      const client = createAgentHostClient({
+        ready: Promise.resolve(),
+        read,
+        catchUp,
+        liveEvents,
+        close,
+        execute: async () => {
+          throw new Error('Read reset cannot send commands.');
+        },
+      });
+      const unpublish = store.publishProjectHostConnector(projectId, async () => client);
+      const session = store.acquire(chatId, projectId);
+      let unsubscribe: () => void = () => undefined;
+      try {
+        await vi.waitFor(() => {
+          expect(read).toHaveBeenCalledOnce();
+          expect(store.historicalUsageReady(chatId, projectId)).toBe(true);
+          expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+        });
+        const { messages } = session.chat;
+        const snapshots: Array<{ current: boolean; attached: boolean }> = [];
+        unsubscribe = store.subscribeProjection(chatId, () => {
+          snapshots.push({
+            current: store.historicalUsageReady(chatId, projectId),
+            attached: store.getAttachmentStatus(chatId) === 'attached',
+          });
+        });
+        reset.resolve();
+        await vi.waitFor(() => {
+          expect(catchUp).toHaveBeenCalledTimes(2);
+        });
+        await settle();
+        expect.soft(snapshots.length).toBeGreaterThan(0);
+        expect.soft(snapshots.some((snapshot) => snapshot.current || snapshot.attached)).toBe(false);
+        expect.soft(store.historicalUsageReady(chatId, projectId)).toBe(false);
+        expect.soft(liveSignal?.aborted).toBe(false);
+        expect.soft(close).not.toHaveBeenCalled();
+        expect.soft(session.chat.messages).toBe(messages);
+        expect.soft(read).toHaveBeenCalledOnce();
+        unsubscribe();
+        validation.resolve();
+        await vi.waitFor(() => {
+          expect(store.historicalUsageReady(chatId, projectId)).toBe(true);
+          expect(store.getProjection(chatId)?.ledger.position.sourceGeneration).toBe('replacement-zero');
+          expect(store.getProjection(chatId)?.ledger.position.cursor).toBe(rows.length);
+        });
+        expect(liveEvents).toHaveBeenCalledOnce();
+      } finally {
+        unsubscribe();
+        reset.resolve();
+        validation.resolve();
+        store.release(chatId);
+        unpublish();
+        await client.close();
+      }
+    });
+  }
+
+  it('materializes validated warm catch-up before and after delayed metadata hydration', async () => {
+    const chatId = 'chat_validated_warm_hydration';
+    const projectId = 'project_validated_warm_hydration';
+    const runId = 'run_validated_warm_hydration';
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    const deps = createStubDeps();
+    const metadata = Promise.withResolvers<ChatEntity>();
+    const validation = Promise.withResolvers<void>();
+    deps.getChat.mockResolvedValueOnce(chatRow(chatId, projectId)).mockReturnValue(metadata.promise);
+    store.setDependencies(deps);
+    const rows = [
+      ...runningRows(runId),
+      logRow(2, {
+        runId,
+        type: 'message.appended',
+        message: { id: 'msg_validated_warm', role: 'assistant', content: 'Canonical warm reply' },
+      }),
+      lifecycleRow(3, 'completed', runId),
+    ];
+    let captures = 0;
+    const catchUp = async function* (): AsyncIterable<CatchUpFrame> {
+      captures += 1;
+      const capture = captures;
+      const sourceGeneration = capture === 1 ? 'warm-source' : 'fresh-warm-source';
+      const capturedRows =
+        capture === 1
+          ? rows
+          : [
+              ...runningRows(runId),
+              logRow(2, {
+                runId,
+                type: 'message.appended',
+                message: { id: 'msg_validated_warm', role: 'assistant', content: 'Fresh validated warm reply' },
+              }),
+              lifecycleRow(3, 'completed', runId),
+            ];
+      yield {
+        type: 'page',
+        answer: {
+          status: 'batch',
+          chatId,
+          sourceGeneration,
+          cursor: 0,
+          nextCursor: rows.length,
+          endCursor: rows.length,
+          facts: capturedRows.map((row) => compactRow(row)),
+        },
+      };
+      if (capture === 2) {
+        await validation.promise;
+      }
+      yield {
+        type: 'validated',
+        health: { historyIntact: true, newerHistory: false, quarantined: false },
+        position: { cursor: rows.length, sourceGeneration, last: { leaderEpoch: 'g1', sequence: 3 } },
+        observedEndCursor: rows.length,
+      };
+    };
+    // The replaced source refuses the retained prefix; only its validated capture can establish authority.
+    const read = vi.fn<AgentHostClient['read']>(async () => ({
+      status: 'refused',
+      chatId,
+      reason: 'identity-mismatch',
+    }));
+    const subscribe = vi.fn<AgentHostClient['subscribe']>(() => () => undefined);
+    const unpublish = store.publishProjectHostConnector(projectId, async () => ({
+      hostCommand: vi.fn<AgentHostClient['hostCommand']>(),
+      close: async () => undefined,
+      catchUp,
+      read,
+      subscribe,
+    }));
+    try {
+      const first = store.acquire(chatId, projectId);
+      await vi.waitFor(() => {
+        expect(first.messages.map((message) => message.id)).toEqual([runId]);
+        expect(JSON.stringify(first.messages)).toContain('Canonical warm reply');
+        expect(first.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+      });
+      const expected = first.messages;
+      store.release(chatId);
+      expect(store.get(chatId)).toBeUndefined();
+      const replacement = store.acquire(chatId, projectId);
+      expect(replacement).not.toBe(first);
+      await vi.waitFor(() => {
+        expect(captures).toBe(2);
+        expect(deps.getChat).toHaveBeenCalledTimes(2);
+      });
+      expect(replacement.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(true);
+      metadata.resolve(chatRow(chatId, projectId));
+      await vi.waitFor(() => {
+        expect(replacement.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+        // The last validated projection remains displayable while fresh private pages are held.
+        expect(replacement.messages).toEqual(expected);
+      });
+      // Displaying retained validated history must not certify current command or usage authority.
+      expect(store.historicalUsageReady(chatId, projectId)).toBe(false);
+      expect(read).toHaveBeenCalledExactlyOnceWith({
+        chatId,
+        cursor: rows.length,
+        sourceGeneration: 'warm-source',
+        last: { leaderEpoch: 'g1', sequence: 3 },
+      });
+      validation.resolve();
+      await vi.waitFor(() => {
+        expect(subscribe).toHaveBeenCalledTimes(2);
+        expect(JSON.stringify(replacement.messages)).toContain('Fresh validated warm reply');
+        expect(JSON.stringify(replacement.messages)).not.toContain('Canonical warm reply');
+      });
+      expect(replacement.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+      expect(JSON.stringify(replacement.chat.messages)).toContain('Fresh validated warm reply');
+      expect(read).toHaveBeenCalledExactlyOnceWith({
+        chatId,
+        cursor: rows.length,
+        sourceGeneration: 'warm-source',
+        last: { leaderEpoch: 'g1', sequence: 3 },
+      });
+    } finally {
+      validation.resolve();
+      metadata.resolve(chatRow(chatId, projectId));
+      store.release(chatId);
+      unpublish();
+    }
+  });
+
+  it('keeps an early projected run with its owner through hydration', async () => {
+    const focus = focusedProjectStandIn();
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession, focusedProject: focus });
+    const deps = createStubDeps();
+    let resolveLoadedChat!: (chat: ChatEntity) => void;
+    const loadedChat = new Promise<ChatEntity>((resolve) => {
+      resolveLoadedChat = resolve;
+    });
+    deps.getChat.mockImplementation(async () => loadedChat);
+    store.setDependencies(deps);
+
+    const projectA = fakeSession('proj_a');
+    const projectB = fakeSession('proj_b');
+    liveSessions.set('proj_a', projectA.ref);
+    liveSessions.set('proj_b', projectB.ref);
+    focus.set('proj_b');
+    const stopObserving = store.observe('chat_early_settlement', 'proj_a');
+
+    try {
+      const session = store.acquire('chat_early_settlement', 'proj_a');
+      await vi.waitFor(() => {
+        expect(deps.getChat).toHaveBeenCalledWith('chat_early_settlement', 'proj_a');
+      });
+      const runId = 'req_early_settlement';
+      publishLogRows(store, 'chat_early_settlement', runningRows(runId));
+      expect(projectA.heard).toContainEqual({
+        type: 'projectedRunsChanged',
+        runs: ['chat_early_settlement'],
+        stoppableRuns: [],
+      });
+
+      resolveLoadedChat({
+        id: 'chat_early_settlement',
+        resourceId: 'proj_a',
+        name: 'Early settlement chat',
+        messages: [],
+        createdAt: 0,
+        updatedAt: 0,
+      });
+      await vi.waitFor(() => {
+        expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+      });
+      publishLogRows(store, 'chat_early_settlement', [lifecycleRow(2, 'completed', runId)], 2);
+
+      const chatA = session.stateActorRef;
+      expect(chatA.getSnapshot().matches({ run: 'done' })).toBe(true);
+      expect(projectA.heard.at(-1)).toEqual({ type: 'projectedRunsChanged', runs: [], stoppableRuns: [] });
+      expect(projectB.heard).toEqual([]);
+    } finally {
+      stopObserving();
+      store.release('chat_early_settlement');
+      liveSessions.set('proj_a', undefined);
+      liveSessions.set('proj_b', undefined);
+    }
+  });
+});
+
+describe('ChatSessionStore — run phase from the log (PV-S7, G02)', () => {
+  const countingProject = () => {
+    const heard: Array<{
+      type: string;
+      runs: string[];
+      stoppableRuns: string[];
+    }> = [];
+    let runs: string[] = [];
+    let stoppableRuns: string[] = [];
+    const ref = {
+      send: (event: { type: string; runs: string[]; stoppableRuns: string[] }) => {
+        heard.push(event);
+        if (event.type === 'projectedRunsChanged') {
+          runs = event.runs;
+          stoppableRuns = event.stoppableRuns;
+        }
+      },
+      getSnapshot: () => ({ context: { runs, stoppableRuns } }),
+    } as unknown as ProjectSessionActorRef;
+    return { heard, ref };
+  };
+
+  it('shows an idle chat none of the history its log replays, and counts no run (W0.2)', () => {
+    const store = createStore();
+    const project = countingProject();
+    liveSessions.set('proj_history', project.ref);
+    const actor = store.acquire('chat_history', 'proj_history').stateActorRef;
+
+    publishLogRows(store, 'chat_history', [...runningRows('run_old'), lifecycleRow(2, 'completed', 'run_old')]);
+
+    expect(actor.getSnapshot().matches({ run: 'idle' })).toBe(true);
+    expect(project.heard).toEqual([]);
+    store.release('chat_history');
+    liveSessions.set('proj_history', undefined);
+  });
+
+  it('reports a replayed run only once the replay holds the log to its end', () => {
+    const store = createStore();
+    const project = countingProject();
+    liveSessions.set('proj_pages', project.ref);
+    const actor = store.acquire('chat_pages', 'proj_pages').stateActorRef;
+    const stopObserving = store.observe('chat_pages', 'proj_pages');
+
+    /* The first page of a three-row log: the run it shows running may have ended in the next. */
+    publishLogPage(store, 'chat_pages', runningRows(), { cursor: 0, endCursor: 3 });
+    expect(actor.getSnapshot().matches({ run: 'idle' })).toBe(true);
+    expect(project.heard).toEqual([]);
+
+    publishLogRows(
+      store,
+      'chat_pages',
+      [logRow(2, { type: 'message.appended', message: { id: 'm2', role: 'assistant', content: 'Hi.' } })],
+      2,
+    );
+    expect(actor.getSnapshot().matches({ run: 'running' })).toBe(true);
+    expect(project.heard).toEqual([{ type: 'projectedRunsChanged', runs: ['chat_pages'], stoppableRuns: [] }]);
+    stopObserving();
+    store.release('chat_pages');
+    liveSessions.set('proj_pages', undefined);
+  });
+});
+
+describe('ChatSessionStore — historical host outcomes from the projection (PV-S13)', () => {
+  it.each(['turn.failed', 'turn.conflicted'] as const)('retains a %s row without a page settlement replay', (type) => {
+    const store = createStore();
+    const chatId = `chat_historical_${type}`;
+    const runId = `run_historical_${type}`;
+    const stopObserving = store.observe(chatId, 'project_history');
+    publishLogRows(store, chatId, [
+      ...runningRows(runId),
+      lifecycleRow(2, type === 'turn.failed' ? 'failed' : 'completed', runId),
+      logRow(3, {
+        type,
+        runId,
+        turnId: 'turn_history',
+        chatId,
+        ...(type === 'turn.failed' ? { reason: 'revision cut failed' } : {}),
+      }),
+    ]);
+
+    expect(store.getProjection(chatId)?.ledger.runs[runId]?.settlements).toMatchObject([
+      { event: { type, runId, turnId: 'turn_history', chatId } },
+    ]);
+    expect(store.get(chatId)).toBeUndefined();
+    stopObserving();
+  });
+});
+describe('ChatSessionStore — persisted failure diagnosis (P59)', () => {
+  /* A chat-wide record error remains available to the card while attachment
+   * is unknown, but it never manufactures a host run for the sidebar. */
+  it('leaves a hydrated refusal diagnostic out of the chat run machine', async () => {
+    const focus = focusedProjectStandIn();
+    const store = createStore(focus);
+    const heard: Array<Record<string, unknown>> = [];
+    const projectHeard: Array<{ type: string }> = [];
+    const projectRef = {
+      send: (event: { type: string }) => {
+        projectHeard.push(event);
+      },
+      getSnapshot: () => ({ context: { runs: [] } }),
+    } as unknown as LiveProjectSessions[string];
+
+    focus.set('proj_reload');
+    liveSessions.set('proj_reload', projectRef);
+    const session = store.acquire('chat_reloaded', 'proj_reload');
+    spyOnSend(session.stateActorRef, (event) => {
+      heard.push(event);
+    });
+    const fake = harness.created.find((entry) => entry.id === 'chat_reloaded')!;
+    fake.status = 'error';
+    fake.error = new Error('the model refused');
+
+    /* The chat's row lands: that is when its persisted failure is known (PV-S5). */
+    await vi.waitFor(() => {
+      expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+    });
+
+    expect(heard).toEqual([]);
+    expect(session.stateActorRef.getSnapshot().matches({ run: 'idle' })).toBe(true);
+    /* A refused command has no projected run for the project to count. */
+    expect(projectHeard).toEqual([]);
+    store.release('chat_reloaded');
+    liveSessions.set('proj_reload', undefined);
+  });
+
+  it('leaves a live run alone, replaying nothing over it', async () => {
+    const focus = focusedProjectStandIn();
+    const store = createStore(focus);
+    const heard: Array<Record<string, unknown>> = [];
+    const projectRef = {
+      send: () => undefined,
+      getSnapshot: () => ({ context: { runs: [] } }),
+    } as unknown as LiveProjectSessions[string];
+
+    focus.set('proj_live');
+    liveSessions.set('proj_live', projectRef);
+    const session = store.acquire('chat_streaming', 'proj_live');
+    spyOnSend(session.stateActorRef, (event) => {
+      heard.push(event);
+    });
+    const fake = harness.created.find((entry) => entry.id === 'chat_streaming')!;
+    fake.status = 'streaming';
+    fake.emitStatusChange();
+    fake.error = new Error('an error from the turn before');
+
+    await vi.waitFor(() => {
+      expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+    });
+
+    expect(heard.filter((event) => event['phase'] === 'failed')).toEqual([]);
+    store.release('chat_streaming');
+    liveSessions.set('proj_live', undefined);
+  });
+});
+
 describe('ChatSessionStore', () => {
   beforeEach(() => {
     harness.created = [];
+    resetChatTurnServices();
   });
 
   afterEach(() => {
+    for (const owner of turnOwners.splice(0)) {
+      owner.stop();
+    }
+    resetChatTurnServices();
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  describe('bounded inactive projection retention (D25)', () => {
+    const completedRows = (text = 'Completed') => [
+      ...runningRows(),
+      logRow(2, { type: 'message.appended', message: { id: 'answer', role: 'assistant', content: text } }),
+      lifecycleRow(3, 'completed'),
+    ];
+    const retire = (store: StoreType, chatId: string, options: { projectId?: string; text?: string } = {}) => {
+      const release = store.observe(chatId, options.projectId ?? 'project_retention');
+      publishLogRows(store, chatId, completedRows(options.text));
+      const projection = store.getProjection(chatId);
+      expect(
+        chunksOf(projection!.views['run_1']!.chunks).reduce(
+          (length, chunk) => length + (chunk.type === 'text-delta' ? chunk.delta.length : 0),
+          0,
+        ),
+      ).toBe((options.text ?? 'Completed').length);
+      release();
+      return projection;
+    };
+
+    it('evicts the oldest of five inactive projections and keeps a recently reopened projection warm', () => {
+      const store = createStore();
+      const projections = Array.from({ length: 5 }, (_, index) => retire(store, `retired_${String(index)}`));
+      expect(store.getProjection('retired_0')).toBeUndefined();
+      for (let index = 1; index < 5; index++) {
+        expect(store.getProjection(`retired_${String(index)}`)).toBe(projections[index]);
+      }
+      const release = store.observe('retired_1', 'project_retention');
+      expect(store.getProjection('retired_1')).toBe(projections[1]);
+      release();
+      retire(store, 'retired_5');
+      expect(store.getProjection('retired_2')).toBeUndefined();
+      expect(store.getProjection('retired_1')).toBe(projections[1]);
+    });
+
+    it('bounds aggregate representation weight before reaching the entry limit', () => {
+      const store = createStore();
+      for (let index = 0; index < 3; index++) {
+        retire(store, `weighted_${String(index)}`, { text: 'x'.repeat(3 * 1024 * 1024) });
+      }
+      expect(store.getProjection('weighted_0')).toBeUndefined();
+      expect(store.getProjection('weighted_2')).toBeDefined();
+    });
+
+    it('immediately evicts one oversized projection after its final observation releases', () => {
+      const store = createStore();
+      const release = store.observe('oversized', 'project_retention');
+      publishLogRows(store, 'oversized', completedRows('x'.repeat(9 * 1024 * 1024)));
+      expect(store.getProjection('oversized')).toBeDefined();
+      release();
+      expect(store.getProjection('oversized')).toBeUndefined();
+    });
+
+    it('preserves observed and mounted projections under pressure and retires after the final owner releases', () => {
+      const store = createStore();
+      const release = store.observe('observed', 'project_retention');
+      publishLogRows(store, 'observed', completedRows());
+      const observed = store.getProjection('observed');
+      store.acquire('mounted', 'project_retention');
+      publishLogRows(store, 'mounted', completedRows());
+      const mounted = store.getProjection('mounted');
+      for (let index = 0; index < 8; index++) {
+        retire(store, `pressure_${String(index)}`);
+      }
+      expect(store.getProjection('observed')).toBe(observed);
+      expect(store.getProjection('mounted')).toBe(mounted);
+      store.release('mounted');
+      release();
+      expect(store.getProjection('mounted')).toBe(mounted);
+      expect(store.getProjection('observed')).toBe(observed);
+      for (let index = 8; index < 12; index++) {
+        retire(store, `pressure_${String(index)}`);
+      }
+      expect(store.getProjection('mounted')).toBeUndefined();
+      expect(store.getProjection('observed')).toBeUndefined();
+    });
+
+    it('keeps an admission-owned session and projection when its last view releases under pressure', async () => {
+      const store = createStore();
+      const session = store.acquire('admitting_retention', 'project_retention');
+      startTurnOwner(store, 'project_retention');
+      publishAdmission('admitting_retention', async () => Promise.withResolvers<never>().promise);
+      void store.requestTurn('admitting_retention', { kind: 'regenerate' });
+      await vi.waitFor(() => {
+        expect(session.stateActorRef.getSnapshot().matches({ run: { queued: 'admitting' } })).toBe(true);
+      });
+      store.release('admitting_retention');
+      for (let index = 0; index < 8; index++) {
+        retire(store, `admission_pressure_${String(index)}`);
+      }
+      expect(store.get('admitting_retention')).toBe(session);
+      expect(store.getProjection('admitting_retention')).toBeDefined();
+    });
+
+    it('pins an in-flight background command through deletion without implicit cancellation', async () => {
+      const store = createStore();
+      const chatId = 'background_retention';
+      const projectId = 'project_retention';
+      const message: MyUIMessage = { id: 'background_message', role: 'user', parts: [{ type: 'text', text: 'Work' }] };
+      const command: HostCommand = {
+        type: 'start',
+        commandId: 'background_command',
+        payload: {
+          chatId,
+          runId: 'background_run',
+          message: { id: message.id, role: 'user', content: 'Work' },
+          trigger: 'submit',
+        },
+      };
+      const reply = Promise.withResolvers<CommandAnswer>();
+      const hostCommand = vi.fn(async () => reply.promise);
+      const unpublish = store.publishProjectHostConnector(projectId, async () =>
+        mock<AgentHostClient>({
+          catchUp: writerOwnedCatchUp,
+          hostCommand,
+          close: async () => undefined,
+          subscribe: () => () => undefined,
+          subscribeLive: () => () => undefined,
+        }),
+      );
+      startTurnOwner(store, projectId);
+      const session = store.acquire(chatId, projectId);
+      publishAdmission(chatId, () => ({ kind: 'send', message, command }));
+      const requested = store.requestTurn(chatId, { kind: 'send', message });
+      await vi.waitFor(() => {
+        expect(hostCommand).toHaveBeenCalledExactlyOnceWith(command);
+      });
+      store.release(chatId);
+      await store.removeChat(chatId);
+      for (let index = 0; index < 8; index++) {
+        retire(store, `background_pressure_${String(index)}`);
+      }
+      expect(store.get(chatId)).toBe(session);
+      expect(store.getProjection(chatId)).toBeDefined();
+      expect(hostCommand).toHaveBeenCalledOnce();
+      reply.resolve({ commandId: command.commandId, generation: 1, status: 'applied', effect: 'durable', cursor: 0 });
+      await requested;
+      unpublish();
+    });
+
+    it('does not retain unowned incomplete or paused runs indefinitely', () => {
+      const store = createStore();
+      const releaseIncomplete = store.observe('incomplete', 'project_retention');
+      publishLogPage(store, 'incomplete', runningRows(), { cursor: 0, endCursor: 3 });
+      releaseIncomplete();
+      expect(store.getProjection('incomplete')).toBeUndefined();
+      const releasePaused = store.observe('paused', 'project_retention');
+      publishLogRows(store, 'paused', [...runningRows(), lifecycleRow(2, 'paused')]);
+      releasePaused();
+      for (let index = 0; index < 5; index++) {
+        retire(store, `after_pause_${String(index)}`);
+      }
+      expect(store.getProjection('paused')).toBeUndefined();
+    });
+
+    it('requires fresh catchup after eviction and preserves projection topic subscribers', () => {
+      const store = createStore();
+      const notify = vi.fn();
+      const unsubscribe = store.subscribeProjection('evicted', notify);
+      retire(store, 'evicted');
+      for (let index = 0; index < 4; index++) {
+        retire(store, `newer_${String(index)}`);
+      }
+      expect(store.getProjection('evicted')).toBeUndefined();
+      notify.mockClear();
+      const release = store.observe('evicted', 'project_retention');
+      expect(store.getProjection('evicted')?.ledger.position.cursor).toBe(0);
+      expect(store.historicalUsageReady('evicted', 'project_retention')).toBe(false);
+      publishLogRows(store, 'evicted', completedRows('Fresh answer'));
+      expect(notify).toHaveBeenCalled();
+      expect(store.getProjection('evicted')?.ledger.position.cursor).toBe(4);
+      release();
+      unsubscribe();
+    });
+
+    it('purges deleted inactive chats and projects without removing another project', async () => {
+      const store = createStore();
+      retire(store, 'deleted_chat');
+      await store.removeChat('deleted_chat');
+      expect(store.getProjection('deleted_chat')).toBeUndefined();
+      retire(store, 'deleted_project_chat', { projectId: 'deleted_project' });
+      const kept = retire(store, 'kept_project_chat', { projectId: 'kept_project' });
+      await store.removeProject('deleted_project');
+      expect(store.getProjection('deleted_project_chat')).toBeUndefined();
+      expect(store.getProjection('kept_project_chat')).toBe(kept);
+    });
+
+    it('keeps deletion ineligible through delayed answers but permits a fresh same-id actor after release', async () => {
+      const store = createStore();
+      const release = store.observe('deleted_owned', 'project_retention');
+      publishLogRows(store, 'deleted_owned', completedRows());
+      await store.refreshRemoteSegments('deleted_owned', 'project_retention');
+      expect(store.historicalUsageReady('deleted_owned', 'project_retention')).toBe(true);
+      await store.removeChat('deleted_owned');
+      publishLogRows(store, 'deleted_owned', [logRow(4, { type: 'unrecognized.future-event' })], 4);
+      expect(store.historicalUsageReady('deleted_owned', 'project_retention')).toBe(false);
+      await expect(store.getHistoricalUsage('deleted_owned')).rejects.toThrow(/superseded/iu);
+      release();
+      expect(store.getProjection('deleted_owned')).toBeUndefined();
+      const releaseFresh = store.observe('deleted_owned', 'project_retention');
+      publishLogRows(store, 'deleted_owned', completedRows('Newly created chat'));
+      await store.refreshRemoteSegments('deleted_owned', 'project_retention');
+      expect(store.historicalUsageReady('deleted_owned', 'project_retention')).toBe(true);
+      await expect(store.getHistoricalUsage('deleted_owned')).resolves.toBeDefined();
+      releaseFresh();
+      expect(store.getProjection('deleted_owned')).toBeDefined();
+    });
+
+    it('refuses delayed validated attachment eligibility after deletion of an observed actor', async () => {
+      const store = createStore();
+      const chatId = 'deleted_capture';
+      const validation = Promise.withResolvers<void>();
+      const pageSent = Promise.withResolvers<void>();
+      const rows = completedRows();
+      const catchUp = async function* (): AsyncIterable<CatchUpFrame> {
+        yield {
+          type: 'page',
+          answer: {
+            status: 'batch',
+            chatId,
+            sourceGeneration: 'deleted-capture-source',
+            cursor: 0,
+            nextCursor: rows.length,
+            endCursor: rows.length,
+            facts: rows.map((row) => compactRow(row)),
+          },
+        };
+        pageSent.resolve();
+        await validation.promise;
+        yield {
+          type: 'validated',
+          health: { historyIntact: true, newerHistory: false, quarantined: false },
+          position: {
+            cursor: rows.length,
+            sourceGeneration: 'deleted-capture-source',
+            last: { leaderEpoch: 'g1', sequence: 3 },
+          },
+          observedEndCursor: rows.length,
+        };
+      };
+      const subscribe = vi.fn<AgentHostClient['subscribe']>(() => () => undefined);
+      const unpublish = store.publishProjectHostConnector('project_retention', async () => ({
+        catchUp,
+        subscribe,
+        read: vi.fn<AgentHostClient['read']>(),
+        hostCommand: vi.fn<AgentHostClient['hostCommand']>(),
+        close: async () => undefined,
+      }));
+      const release = store.observe(chatId, 'project_retention');
+      try {
+        await pageSent.promise;
+        await store.removeChat(chatId);
+        validation.resolve();
+        await vi.waitFor(() => {
+          expect(subscribe).toHaveBeenCalledOnce();
+        });
+        expect(store.getAttachmentStatus(chatId)).not.toBe('attached');
+        expect(store.historicalUsageReady(chatId, 'project_retention')).toBe(false);
+        await expect(store.getHistoricalUsage(chatId)).rejects.toThrow(/superseded/iu);
+      } finally {
+        validation.resolve();
+        release();
+        unpublish();
+      }
+      expect(store.getProjection(chatId)).toBeUndefined();
+    });
+
+    it('refuses an obsolete usage summary without clearing a reacquired summary', async () => {
+      const store = createStore();
+      const release = store.observe('usage_replaced', 'project_retention');
+      publishLogRows(store, 'usage_replaced', completedRows('Old answer'));
+      const oldSummary = store.getHistoricalUsage('usage_replaced');
+      const rejected = expect(oldSummary).rejects.toThrow(/superseded/iu);
+      release();
+      const releaseCurrent = store.observe('usage_replaced', 'project_retention');
+      publishLogRows(store, 'usage_replaced', [logRow(4, { type: 'unrecognized.future-event' })], 4);
+      const current = store.getHistoricalUsage('usage_replaced');
+      await rejected;
+      const summary = await current;
+      expect(await store.getHistoricalUsage('usage_replaced')).toBe(summary);
+      releaseCurrent();
+    });
+
+    it('refuses an in-flight usage summary when its observed chat is deleted', async () => {
+      const store = createStore();
+      const release = store.observe('usage_deleted', 'project_retention');
+      publishLogRows(store, 'usage_deleted', completedRows());
+      const pending = store.getHistoricalUsage('usage_deleted');
+      const rejected = expect(pending).rejects.toThrow(/superseded/iu);
+      await store.removeChat('usage_deleted');
+      await rejected;
+      release();
+      expect(store.getProjection('usage_deleted')).toBeUndefined();
+    });
+  });
+
+  it('refreshes the presented middle assistant after a durable envelope correction with unchanged transcript edges', async () => {
+    const store = createStore();
+    const chatId = 'chat_middle_correction';
+    const session = store.acquire(chatId, 'project_middle_correction');
+    try {
+      await vi.waitFor(() => {
+        expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+      });
+      const rows = ['first', 'middle', 'last'].flatMap((name, index) => {
+        const sequence = index * 4;
+        const runId = `run_${name}`;
+        return [
+          lifecycleRow(sequence, 'admitted', runId),
+          logRow(sequence + 1, {
+            runId,
+            type: 'message.appended',
+            message: { id: `user_${name}`, role: 'user', content: `Question ${name}` },
+          }),
+          logRow(sequence + 2, {
+            runId,
+            type: 'message.appended',
+            message: { id: `assistant_${name}`, role: 'assistant', content: `Answer ${name}` },
+          }),
+          lifecycleRow(sequence + 3, 'completed', runId),
+        ];
+      });
+      publishLogRows(store, chatId, rows);
+      await store.preparePresentation(chatId, new AbortController().signal);
+      const original = session.messages;
+      expect(original.map((message) => message.role)).toEqual([
+        'user',
+        'assistant',
+        'user',
+        'assistant',
+        'user',
+        'assistant',
+      ]);
+      const middleId = original[3]!.id;
+      const before = store.getMessagePresentation(chatId);
+      expect(before.messagesById.get(middleId)?.parts).toContainEqual(
+        expect.objectContaining({ type: 'text', text: 'Answer middle' }),
+      );
+
+      publishLogRows(
+        store,
+        chatId,
+        [
+          logRow(12, {
+            runId: 'run_middle',
+            type: 'message.envelope-replaced',
+            messageId: 'assistant_middle',
+            replacement: { id: 'assistant_middle', role: 'assistant', content: 'Corrected durable answer' },
+          }),
+        ],
+        12,
+      );
+      await store.preparePresentation(chatId, new AbortController().signal);
+
+      expect(session.messages).toHaveLength(original.length);
+      expect(session.messages[0]).toBe(original[0]);
+      expect(session.messages.at(-1)).toBe(original.at(-1));
+      expect(session.messages.find((message) => message.id === middleId)?.parts).toContainEqual(
+        expect.objectContaining({ type: 'text', text: 'Corrected durable answer' }),
+      );
+      const after = store.getMessagePresentation(chatId);
+      expect(after.messagesById.get(middleId)?.parts).toContainEqual(
+        expect.objectContaining({ type: 'text', text: 'Corrected durable answer' }),
+      );
+      expect(after.order).toEqual(before.order);
+      expect(after.groups).toEqual(before.groups);
+    } finally {
+      store.release(chatId);
+    }
+  });
+
+  it('keeps structural and command selections stable across a long text-only stream', () => {
+    const store = createStore();
+    const session = store.acquire('chat_presented', 'project_1');
+    let indexedReads = 0;
+    const messages = new Proxy(
+      Array.from(
+        { length: 1000 },
+        (_, index): MyUIMessage => ({
+          id: `message-${String(index)}`,
+          role: index % 2 === 0 ? 'user' : 'assistant',
+          parts: [{ type: 'text', text: 'first' }],
+        }),
+      ),
+      {
+        get(target, key, receiver) {
+          if (typeof key === 'string' && /^\d+$/.test(key)) {
+            indexedReads++;
+          }
+          // oxlint-disable-next-line typescript-eslint/consistent-type-assertions -- Proxy's Reflect.get is dynamically typed.
+          return Reflect.get(target, key, receiver) as unknown;
+        },
+      },
+    );
+    session.chat.messages = messages;
+    const before = store.getMessagePresentation('chat_presented');
+    const replaceTail = (parts: MyUIMessage['parts']): void => {
+      const tail = messages.at(-1);
+      if (tail === undefined) {
+        throw new Error('Missing transcript tail');
+      }
+      messages[messages.length - 1] = { ...tail, parts };
+    };
+    indexedReads = 0;
+    replaceTail([{ type: 'text', text: 'next token' }]);
+    indexedReads = 0;
+    const after = store.getMessagePresentation('chat_presented');
+    expect(after.order).toBe(before.order);
+    expect(after.groups).toBe(before.groups);
+    expect(after.agentInvocations).toBe(before.agentInvocations);
+    expect(indexedReads).toBeLessThan(10);
+
+    const acp = (name: string): MyUIMessage['parts'][number] => ({
+      type: 'data-acp-session',
+      data: {
+        type: 'acp-session',
+        id: 'session-1',
+        agentId: 'codex',
+        commands: [{ name, description: '' }],
+        configOptions: [],
+      },
+    });
+    replaceTail([acp('help')]);
+    expect(store.getMessagePresentation('chat_presented').agentInvocations).toBe('/help');
+    replaceTail([acp('next')]);
+    expect(store.getMessagePresentation('chat_presented').agentInvocations).toBe('/next');
+
+    messages.push({ id: 'new-user', role: 'user', parts: [{ type: 'text', text: 'next turn' }] });
+    const appended = store.getMessagePresentation('chat_presented');
+    expect(appended.order.at(-1)).toBe('new-user');
+    expect(appended.groups.at(-1)?.messageIds).toEqual(['new-user']);
+    store.release('chat_presented');
+  });
+
+  it('retains completed active-message parts while accepting a changed earlier part', () => {
+    const store = createStore();
+    const session = store.acquire('chat_parts', 'project_1');
+    const first: MyUIMessage = {
+      id: 'assistant',
+      role: 'assistant',
+      parts: [
+        { type: 'text', text: 'Completed paragraph', state: 'done' },
+        { type: 'text', text: 'Live', state: 'streaming' },
+      ],
+    };
+    session.chat.messages = [first];
+    const before = store.getMessagePresentation('chat_parts').messagesById.get('assistant')!;
+    session.chat.messages = [
+      {
+        ...first,
+        parts: [{ ...first.parts[0]! }, { type: 'text', text: 'Live grows', state: 'streaming' }],
+      },
+    ];
+    const next = store.getMessagePresentation('chat_parts').messagesById.get('assistant')!;
+    expect(next.parts[0]).toBe(before.parts[0]);
+    expect(next.parts[1]).not.toBe(before.parts[1]);
+    session.chat.messages = [
+      {
+        ...first,
+        parts: [{ type: 'text', text: 'Corrected earlier paragraph', state: 'done' }, next.parts[1]!],
+      },
+    ];
+    const corrected = store.getMessagePresentation('chat_parts').messagesById.get('assistant')!;
+    expect(corrected.parts[0]).not.toBe(before.parts[0]);
+    expect(corrected.parts[1]).toBe(next.parts[1]);
+    store.release('chat_parts');
+  });
+
+  it('snapshots mutable SDK tail parts while retaining unchanged renderer identities', () => {
+    const store = createStore();
+    const session = store.acquire('chat_mutable_tail', 'project_1');
+    const raw: MyUIMessage = {
+      id: 'assistant',
+      role: 'assistant',
+      parts: [
+        { type: 'text', text: 'Completed paragraph', state: 'done' },
+        { type: 'reasoning', text: 'alpha', state: 'streaming' },
+      ],
+    };
+    session.chat.messages = [raw];
+    const before = store.getMessagePresentation('chat_mutable_tail');
+    const prior = before.messagesById.get('assistant')!;
+    const part = raw.parts[1];
+    if (part?.type !== 'reasoning') {
+      throw new Error('Missing live reasoning');
+    }
+    part.text = 'alpha beta';
+    const after = store.getMessagePresentation('chat_mutable_tail');
+    const next = after.messagesById.get('assistant')!;
+    expect(prior.parts[1]).toMatchObject({ text: 'alpha' });
+    expect(next.parts[1]).toMatchObject({ text: 'alpha beta' });
+    expect(next).not.toBe(prior);
+    expect(next.parts[0]).toBe(prior.parts[0]);
+    expect(after.order).toBe(before.order);
+    expect(after.groups).toBe(before.groups);
+    expect(store.getMessagePresentation('chat_mutable_tail').messagesById.get('assistant')).toBe(next);
+    part.text = 'alpha beta final';
+    session.chat.messages = [raw, { id: 'next-user', role: 'user', parts: [{ type: 'text', text: 'Next turn' }] }];
+    const promoted = store.getMessagePresentation('chat_mutable_tail').messagesById.get('assistant')!;
+    expect(promoted.parts[1]).toMatchObject({ text: 'alpha beta final' });
+    expect(promoted.parts[0]).toBe(next.parts[0]);
+    expect(next.parts[1]).toMatchObject({ text: 'alpha beta' });
+    store.release('chat_mutable_tail');
+  });
+
+  it('derives funded operation IDs and tokens from a foreign accepted host log', async () => {
+    const client = createMemoryClient();
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    store.setDependencies(createStubDeps(client));
+    const unobserve = store.observe('chat_usage', 'project_1');
+    const rows = [
+      ...runningRows(),
+      logRow(2, {
+        type: 'message.appended',
+        message: {
+          id: 'assistant-usage',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Done' }],
+          metadata: {
+            model: 'test-model',
+            usage: {
+              input: 12,
+              output: 7,
+              cacheRead: 3,
+              cacheWrite: 2,
+              totalTokens: 24,
+              cost: { input: 0.12, output: 0.07, cacheRead: 0.03, cacheWrite: 0.02, total: 0.24 },
+            },
+            tauInternal: {
+              kind: 'billing-invocation',
+              operationId: 'operation-1',
+              attemptId: 'attempt-1',
+              status: 'terminal',
+            },
+          },
+        },
+      }),
+      lifecycleRow(3, 'completed'),
+    ];
+    client.files.set(
+      '/projects/project_1/.tau/chats/chat_usage/events/foreign.jsonl',
+      new TextEncoder().encode(`${rows.map((row) => JSON.stringify(row)).join('\n')}\n`),
+    );
+    expect(store.historicalUsageReady('chat_usage', 'project_1')).toBe(false);
+    publishLogRows(store, 'chat_usage', []);
+    await store.refreshRemoteSegments('chat_usage', 'project_1');
+    expect(store.historicalUsageReady('chat_usage', 'project_1')).toBe(true);
+    expect(
+      chunksOf(store.getProjection('chat_usage')?.remote?.views['run_1']?.chunks).map((chunk) => chunk.type),
+    ).toContain('data-usage');
+    const first = await store.getHistoricalUsage('chat_usage');
+    expect(first).toMatchObject({
+      operationIds: ['operation-1'],
+      inputTokens: 12,
+      outputTokens: 7,
+      cacheReadTokens: 3,
+      cacheWriteTokens: 2,
+      parts: 1,
+    });
+    const priorProjection = store.getProjection('chat_usage');
+    publishLogRows(store, 'chat_usage', [logRow(0, { type: 'unrecognized.future-event' })]);
+    expect(store.getProjection('chat_usage')).not.toBe(priorProjection);
+    expect(await store.getHistoricalUsage('chat_usage')).toBe(first);
+    unobserve();
+  });
+
+  it('routes accepted user activity through the current dependency set', async () => {
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    const deps = createStubDeps();
+    store.setDependencies(deps);
+
+    await store.touchChatRecency('chat_activity', 123);
+
+    expect(deps.touchChatRecency).toHaveBeenCalledWith('chat_activity', 123);
+  });
+
+  it('acknowledges foreign watches before reading and fences a held read across a burst and final release', async () => {
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    const client = createMemoryClient();
+    const path = '/projects/project/.tau/chats/chat_foreign/events/peer.jsonl';
+    const bytes = (text: string): Uint8Array<ArrayBuffer> => {
+      const message = { id: 'user', role: 'user', content: text };
+      return new TextEncoder().encode(
+        [
+          {
+            ...lifecycleRow(0, 'admitted'),
+            admission: { kind: 'tau', turnId: message.id, message },
+          },
+          lifecycleRow(1, 'running'),
+          lifecycleRow(2, 'completed'),
+        ]
+          .map((row) => JSON.stringify(row))
+          .join('\n'),
+      );
+    };
+    client.files.set(path, bytes('Old input'));
+    const ready = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<void>();
+    const held = Promise.withResolvers<Uint8Array<ArrayBuffer>>();
+    const readFile = client.readFile.bind(client);
+    let first = true;
+    client.readFile = vi.fn(async (selected: string) => {
+      if (first && selected === path) {
+        first = false;
+        return held.promise;
+      }
+      return readFile(selected);
+    });
+    let listener: ((event: WatchEvent) => void) | undefined;
+    const dispose = vi.fn(() => {
+      closed.resolve();
+    });
+    const watchRecordFile = vi.fn((_directory: string, callback: (event: WatchEvent) => void) => {
+      listener = callback;
+      return { ready: ready.promise, closed: closed.promise, dispose };
+    });
+    store.setDependencies({ ...createStubDeps(client), watchRecordFile });
+    const published: string[] = [];
+    const unsubscribe = store.subscribeProjection('chat_foreign', () => {
+      const part = store.getProjection('chat_foreign')?.remote?.views['run_1']?.user?.parts[0];
+      if (part?.type === 'text') {
+        published.push(part.text);
+      }
+    });
+    const release = store.observe('chat_foreign', 'project');
+    await settle();
+    expect(client.readFile).not.toHaveBeenCalled();
+    ready.resolve();
+    await vi.waitFor(() => {
+      expect(client.readFile).toHaveBeenCalledOnce();
+    });
+    client.files.set(path, bytes('Current input'));
+    // Deliver separate microtasks while the first read remains held.
+    const deliverChangeAfter = async (previous: Promise<void>): Promise<void> => {
+      await previous;
+      listener?.({
+        type: 'change',
+        path: '.tau/chats/chat_foreign/events/peer.jsonl',
+      });
+    };
+    let burst = Promise.resolve();
+    for (let index = 0; index < 100; index++) {
+      burst = deliverChangeAfter(burst);
+    }
+    await burst;
+    held.resolve(bytes('Old input'));
+    await vi.waitFor(() => {
+      expect(published).toEqual(['Current input']);
+    });
+    expect(client.readFile).toHaveBeenCalledTimes(2);
+    release();
+    expect(dispose).toHaveBeenCalledOnce();
+    listener?.({ type: 'reset' });
+    await settle();
+    expect(client.readFile).toHaveBeenCalledTimes(2);
+    unsubscribe();
+  });
+
+  it.each([
+    ['a summary of an ancestor', { type: 'change', path: '.tau/chats' }, 2],
+    ['a summary of the project root', { type: 'change', path: '' }, 2],
+    ['a deletion of an ancestor', { type: 'delete', path: '.tau' }, 2],
+    ['a summary of a sibling chat', { type: 'change', path: '.tau/chats/chat_other' }, 1],
+    ['a summary of a sibling whose name shares a prefix', { type: 'change', path: '.tau/chat' }, 1],
+  ] satisfies Array<[string, WatchEvent, number]>)(
+    'refolds a foreign segment directory on %s',
+    async (_case, event, reads) => {
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const client = createMemoryClient();
+      client.files.set(
+        '/projects/project/.tau/chats/chat_foreign/events/peer.jsonl',
+        new TextEncoder().encode(JSON.stringify(lifecycleRow(0, 'running'))),
+      );
+      const readFile = vi.spyOn(client, 'readFile');
+      let listener: ((event: WatchEvent) => void) | undefined;
+      store.setDependencies({
+        ...createStubDeps(client),
+        watchRecordFile: (_directory, callback) => {
+          listener = callback;
+          return {
+            ready: Promise.resolve(),
+            closed: new Promise<void>(() => {
+              /* Owner-controlled watch. */
+            }),
+            dispose: vi.fn(),
+          };
+        },
+      });
+      const release = store.observe('chat_foreign', 'project');
+      try {
+        await vi.waitFor(() => {
+          expect(readFile).toHaveBeenCalledOnce();
+        });
+        listener?.(event);
+        await settle();
+        await vi.waitFor(() => {
+          expect(readFile).toHaveBeenCalledTimes(reads);
+        });
+        await settle();
+        expect(readFile).toHaveBeenCalledTimes(reads);
+      } finally {
+        release();
+      }
+    },
+  );
+
+  it('updates the active tool name from the log when counts stay unchanged (PV-S7)', () => {
+    const store = createStore();
+    const session = store.acquire('chat_tool_name', 'project_1');
+    const actor = session.stateActorRef;
+    const toolRow = (sequence: number, message: Readonly<{ role: string; toolCallId: string; toolName: string }>) =>
+      logRow(sequence, {
+        type: 'message.appended',
+        message: {
+          id: `m${String(sequence)}`,
+          content: {},
+          ...message,
+          ...(message.role === 'tool-output' ? { isError: false } : {}),
+        },
+      });
+
+    publishLogRows(store, 'chat_tool_name', [
+      ...runningRows(),
+      toolRow(2, { role: 'tool-input', toolCallId: 'tool_1', toolName: 'search' }),
+    ]);
+    expect(actor.getSnapshot().context).toMatchObject({ toolsInFlight: 1, toolName: 'search' });
+
+    publishLogRows(
+      store,
+      'chat_tool_name',
+      [
+        toolRow(3, { role: 'tool-output', toolCallId: 'tool_1', toolName: 'search' }),
+        toolRow(4, { role: 'tool-input', toolCallId: 'tool_2', toolName: 'edit_file' }),
+      ],
+      3,
+    );
+    expect(actor.getSnapshot().context).toMatchObject({ toolsInFlight: 1, toolName: 'edit_file' });
+    store.release('chat_tool_name');
+  });
+
+  /* Rewritten for W7: the store's unread decision is written to the project's
+   * unread record (D9) instead of `setChatUnreadState`, which is gone. Each row
+   * keeps its original trigger and asserts the record on disk. */
+  /* PV-S8: unread is derived. A chat is unread while its log's newest attention row (a run that completed or failed, or
+   * an interrupt it opened) is not the row its read receipt names; the store writes a receipt only when the person
+   * sees the chat. Nothing is written to say a chat is unread. */
+  describe('unread lifecycle (PV-S8)', () => {
+    const projectId = 'proj_unread';
+    const unreadPath = `/.tau/composers/chats/${projectId}/unread.json`;
+    const storeInProject = (): { store: StoreType; deps: StubDeps } => {
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const deps = createStubDeps();
+      deps.getChat.mockImplementation(async (chatId) => chatRow(chatId, projectId));
+      store.setDependencies(deps);
+      return { store, deps };
+    };
+    const ended = (store: StoreType, chatId: string, state: string): void => {
+      publishLogRows(store, chatId, [...runningRows(), lifecycleRow(2, state)]);
+    };
+    const requested = logRow(2, {
+      type: 'interrupt.recorded',
+      interruptId: 'i1',
+      phase: 'requested',
+      reason: 'approval',
+    });
+
+    it('marks an unattended run that completed or failed, and never one the person cancelled', async () => {
+      const { store, deps } = storeInProject();
+      for (const chatId of ['chat_success', 'chat_error', 'chat_cancelled']) {
+        store.acquire(chatId, projectId);
+      }
+
+      ended(store, 'chat_success', 'completed');
+      ended(store, 'chat_error', 'failed');
+      ended(store, 'chat_cancelled', 'cancelled');
+
+      expect(store.isUnread('chat_success')).toBe(true);
+      expect(store.isUnread('chat_error')).toBe(true);
+      expect(store.isUnread('chat_cancelled')).toBe(false);
+      await settle();
+      /* Unread is an answer, not a record: nothing is written until the person sees a chat. */
+      expect(deps.client.json(unreadPath)).toBeUndefined();
+    });
+
+    it('marks an interrupt opened while the person is away', () => {
+      const { store } = storeInProject();
+      store.acquire('chat_approval', projectId);
+
+      publishLogRows(store, 'chat_approval', [...runningRows(), requested]);
+
+      expect(store.isUnread('chat_approval')).toBe(true);
+    });
+
+    /* L3 D1: an empty resume appends no row. With W0.2's guard reverted the SDK finishes that request, and a store
+     * that marked unread on the request's finish marked a chat nothing ran in. */
+    it('never marks unread for an empty resume, even when the SDK finishes its request', async () => {
+      const { store } = storeInProject();
+      store.acquire('chat_opened', projectId);
+      store.focusChat('chat_opened');
+      ended(store, 'chat_opened', 'completed');
+      expect(store.isUnread('chat_opened')).toBe(false);
+      store.focusChat('chat_next');
+      store.blurChat('chat_opened');
+
+      /* The resume replays the rows the projection already holds, then the SDK walks submitted → ready. */
+      ended(store, 'chat_opened', 'completed');
+      finishRun(harness.created[0]!);
+      await settle();
+
+      expect(store.isUnread('chat_opened')).toBe(false);
+    });
+
+    it('reads a chat the person is looking at through each new attention row, writing that row as its receipt', async () => {
+      const { store, deps } = storeInProject();
+      store.acquire('chat_active', projectId);
+      store.focusChat('chat_active');
+
+      publishLogRows(store, 'chat_active', [...runningRows(), requested]);
+      publishLogRows(store, 'chat_active', [lifecycleRow(3, 'completed')], 3);
+
+      expect(store.isUnread('chat_active')).toBe(false);
+      await vi.waitFor(() => {
+        expect(deps.client.json(unreadPath)).toEqual({
+          version: 1,
+          readThrough: { chat_active: { leaderEpoch: 'g1', sequence: 3 } },
+        });
+      });
+    });
+
+    /* R3: every sidebar row holds a view of its chat, so a view alone is not the person reading it. */
+    it('should mark a chat that finishes while another chat is focused in an active document', () => {
+      const { store } = storeInProject();
+      store.acquire('chat_listed', projectId);
+      store.acquire('chat_focused', projectId);
+      store.focusChat('chat_focused');
+
+      ended(store, 'chat_listed', 'completed');
+
+      expect(store.isUnread('chat_listed')).toBe(true);
+    });
+
+    /* D-UI-06: a sidebar row observes its chat's log and never acquires it, so a chat the person is not in is answered
+     * from its observation: its project's record, its log's newest attention row and its receipt. */
+    it('answers unread for a chat the sidebar only observes', async () => {
+      const { store, deps } = storeInProject();
+      await deps.client.writeFile(
+        unreadPath,
+        new TextEncoder().encode(JSON.stringify({ version: 1, unread: { chat_marked: true } })),
+      );
+      // The focused chat's hook opens the project's record (`useFocusedChatReadState`).
+      store.unreadRecordRef(projectId);
+      const unobserveListed = store.observe('chat_listed', projectId);
+      const unobserveMarked = store.observe('chat_marked', projectId);
+      await vi.waitFor(() => {
+        expect(store.hasUnreadMark('chat_marked')).toBe(true);
+      });
+      expect(store.isUnread('chat_marked')).toBe(true);
+
+      ended(store, 'chat_listed', 'completed');
+
+      expect(store.isUnread('chat_listed')).toBe(true);
+      unobserveListed();
+      unobserveMarked();
+    });
+
+    it('marks a run that ends while its focused view is hidden, and clears it when the person looks', async () => {
+      vi.stubGlobal('document', { visibilityState: 'hidden', hasFocus: () => false });
+      const { store, deps } = storeInProject();
+      store.acquire('chat_hidden', projectId);
+      store.focusChat('chat_hidden');
+
+      ended(store, 'chat_hidden', 'completed');
+      expect(store.isUnread('chat_hidden')).toBe(true);
+
+      store.markViewed('chat_hidden');
+      expect(store.isUnread('chat_hidden')).toBe(false);
+      await vi.waitFor(() => {
+        expect(deps.client.json(unreadPath)).toEqual({
+          version: 1,
+          readThrough: { chat_hidden: { leaderEpoch: 'g1', sequence: 2 } },
+        });
+      });
+      /* A newer attention row is unread again: the receipt names the row the person saw. */
+      publishLogRows(
+        store,
+        'chat_hidden',
+        [
+          lifecycleRow(3, 'admitted', 'run_2'),
+          lifecycleRow(4, 'running', 'run_2'),
+          lifecycleRow(5, 'completed', 'run_2'),
+        ],
+        3,
+      );
+      expect(store.isUnread('chat_hidden')).toBe(true);
+    });
   });
 
   // ===========================================================================
@@ -161,9 +4292,73 @@ describe('ChatSessionStore', () => {
   // ===========================================================================
 
   describe('acquire / release', () => {
+    /*
+     * T3-D2. Disposing a chat mid-admission stopped its actor, then deleted the
+     * turn-service registries the abandoned admission's own release reads —
+     * with `?.`, so the release was a silent no-op and the checkout's lease
+     * stayed `admitted` forever. `drop` then refuses every later turn's release
+     * and the chat cannot run again until reload. An actor that holds a turn or
+     * is admitting one is a reference on the session, exactly as `runHeld` is.
+     */
+    it('should not dispose a chat whose turn owner is still admitting', async () => {
+      const store = createStore();
+      store.acquire('chat_dispose_admitting', 'resource_dispose_admitting');
+      startTurnOwner(store, 'resource_dispose_admitting');
+      publishChatTurnAdmission(
+        'chat_dispose_admitting',
+        async () =>
+          new Promise<never>(() => {
+            /* Never answers: the admission is in flight for the whole row. */
+          }),
+      );
+
+      void store.requestTurn('chat_dispose_admitting', { kind: 'regenerate' });
+      await vi.waitFor(() => {
+        expect(
+          store
+            .get('chat_dispose_admitting')
+            ?.stateActorRef.getSnapshot()
+            .matches({ run: { queued: 'admitting' } }),
+        ).toBe(true);
+      });
+
+      store.release('chat_dispose_admitting');
+
+      expect(store.list()).toContain('chat_dispose_admitting');
+    });
+
+    /*
+     * T3-D11 said an actor stopped mid-admission never emits again, so the composer's editable lock never settled.
+     * The project session no longer owns the chat (PV-S5): stopping it leaves the chat's root admitting, and the
+     * admission's answer is what releases the composer. The store never stops a root that is admitting.
+     */
+    it('keeps a turn admitting when its project session stops, since the store owns the chat (PV-S5)', async () => {
+      const store = createStore();
+      store.acquire('chat_stopped_admitting', 'resource_stopped_admitting');
+      startTurnOwner(store, 'resource_stopped_admitting');
+      const owner = turnOwners.at(-1)!;
+      const admission = Promise.withResolvers<ChatRequest>();
+      publishAdmission('chat_stopped_admitting', async () => admission.promise);
+      const root = store.get('chat_stopped_admitting')!.stateActorRef;
+
+      const requested = store.requestTurn('chat_stopped_admitting', { kind: 'regenerate' });
+      await vi.waitFor(() => {
+        expect(root.getSnapshot().matches({ run: { queued: 'admitting' } })).toBe(true);
+      });
+
+      // The idle policy stops the project session; the chat's root is the store's.
+      owner.stop();
+      expect(root.getSnapshot().status).toBe('active');
+
+      admission.resolve({ kind: 'regenerate' });
+      await expect(requested).resolves.toBeUndefined();
+      expect(root.getSnapshot().matches({ run: { queued: 'admitting' } })).toBe(false);
+      store.release('chat_stopped_admitting');
+    });
+
     it('creates a session lazily on first acquire', () => {
       const store = createStore();
-      const session = store.acquire('chat_a');
+      const session = store.acquire('chat_a', 'project_test');
 
       expect(session.chatId).toBe('chat_a');
       expect(session.chat.id).toBe('chat_a');
@@ -174,8 +4369,8 @@ describe('ChatSessionStore', () => {
 
     it('returns the same session on subsequent acquires for the same chatId', () => {
       const store = createStore();
-      const first = store.acquire('chat_a');
-      const second = store.acquire('chat_a');
+      const first = store.acquire('chat_a', 'project_test');
+      const second = store.acquire('chat_a', 'project_test');
 
       expect(second).toBe(first);
       expect(second.chat).toBe(first.chat);
@@ -186,8 +4381,8 @@ describe('ChatSessionStore', () => {
 
     it('keeps the session live until the final release', () => {
       const store = createStore();
-      store.acquire('chat_a');
-      store.acquire('chat_a');
+      store.acquire('chat_a', 'project_test');
+      store.acquire('chat_a', 'project_test');
 
       store.release('chat_a');
       expect(store.get('chat_a')).toBeDefined();
@@ -198,7 +4393,7 @@ describe('ChatSessionStore', () => {
 
     it('disposes the persistence and draft actors on the final release', () => {
       const store = createStore();
-      const session = store.acquire('chat_a');
+      const session = store.acquire('chat_a', 'project_test');
       const persistenceSnapshotBefore = session.persistenceActorRef.getSnapshot();
       const draftSnapshotBefore = session.draftActorRef.getSnapshot();
 
@@ -220,7 +4415,7 @@ describe('ChatSessionStore', () => {
 
     it('does not throw when releasing more times than acquired', () => {
       const store = createStore();
-      store.acquire('chat_a');
+      store.acquire('chat_a', 'project_test');
       store.release('chat_a');
 
       expect(() => {
@@ -231,10 +4426,10 @@ describe('ChatSessionStore', () => {
 
     it('creates a fresh session after a previous release (no zombie state)', () => {
       const store = createStore();
-      const first = store.acquire('chat_a');
+      const first = store.acquire('chat_a', 'project_test');
       store.release('chat_a');
 
-      const second = store.acquire('chat_a');
+      const second = store.acquire('chat_a', 'project_test');
       expect(second).not.toBe(first);
       expect(second.chat).not.toBe(first.chat);
       expect(harness.created).toHaveLength(2);
@@ -248,8 +4443,8 @@ describe('ChatSessionStore', () => {
   describe('per-chatId isolation', () => {
     it('creates an independent session for each chatId', () => {
       const store = createStore();
-      const a = store.acquire('chat_a');
-      const b = store.acquire('chat_b');
+      const a = store.acquire('chat_a', 'project_test');
+      const b = store.acquire('chat_b', 'project_test');
 
       expect(a.chat).not.toBe(b.chat);
       expect(a.persistenceActorRef).not.toBe(b.persistenceActorRef);
@@ -259,8 +4454,8 @@ describe('ChatSessionStore', () => {
 
     it('releasing one session does not affect the other', () => {
       const store = createStore();
-      const a = store.acquire('chat_a');
-      const b = store.acquire('chat_b');
+      const a = store.acquire('chat_a', 'project_test');
+      const b = store.acquire('chat_b', 'project_test');
 
       store.release('chat_a');
 
@@ -281,21 +4476,21 @@ describe('ChatSessionStore', () => {
       const listener = vi.fn();
       store.subscribeMembership(listener);
 
-      store.acquire('chat_a');
+      store.acquire('chat_a', 'project_test');
       // Membership notifications fan out on a microtask so an in-render
       // acquire never triggers a re-entrant React update.
       await Promise.resolve();
       expect(listener).toHaveBeenCalledTimes(1);
 
-      store.acquire('chat_a');
+      store.acquire('chat_a', 'project_test');
       await Promise.resolve();
       expect(listener).toHaveBeenCalledTimes(1);
     });
 
     it('notifies membership subscribers on final release only', async () => {
       const store = createStore();
-      store.acquire('chat_a');
-      store.acquire('chat_a');
+      store.acquire('chat_a', 'project_test');
+      store.acquire('chat_a', 'project_test');
       await Promise.resolve();
 
       const listener = vi.fn();
@@ -315,9 +4510,9 @@ describe('ChatSessionStore', () => {
       const listener = vi.fn();
       store.subscribeMembership(listener);
 
-      store.acquire('chat_a');
-      store.acquire('chat_b');
-      store.acquire('chat_c');
+      store.acquire('chat_a', 'project_test');
+      store.acquire('chat_b', 'project_test');
+      store.acquire('chat_c', 'project_test');
       expect(listener).not.toHaveBeenCalled();
 
       await Promise.resolve();
@@ -326,12 +4521,12 @@ describe('ChatSessionStore', () => {
 
     it('exposes a stable list reference until membership changes', () => {
       const store = createStore();
-      store.acquire('chat_a');
+      store.acquire('chat_a', 'project_test');
       const first = store.list();
       const second = store.list();
       expect(second).toBe(first);
 
-      store.acquire('chat_b');
+      store.acquire('chat_b', 'project_test');
       expect(store.list()).not.toBe(first);
       expect([...store.list()].sort()).toEqual(['chat_a', 'chat_b']);
     });
@@ -342,7 +4537,7 @@ describe('ChatSessionStore', () => {
       const unsubscribe = store.subscribeMembership(listener);
       unsubscribe();
 
-      store.acquire('chat_a');
+      store.acquire('chat_a', 'project_test');
       await Promise.resolve();
       expect(listener).not.toHaveBeenCalled();
     });
@@ -355,7 +4550,7 @@ describe('ChatSessionStore', () => {
   describe('subscribeChat', () => {
     it('fires when the underlying chat messages change', () => {
       const store = createStore();
-      store.acquire('chat_a');
+      store.acquire('chat_a', 'project_test');
       const fake = harness.created[0]!;
       const listener = vi.fn();
       store.subscribeChat('chat_a', listener);
@@ -366,7 +4561,7 @@ describe('ChatSessionStore', () => {
 
     it('fires when the underlying chat status changes', () => {
       const store = createStore();
-      store.acquire('chat_a');
+      store.acquire('chat_a', 'project_test');
       const fake = harness.created[0]!;
       const listener = vi.fn();
       store.subscribeChat('chat_a', listener);
@@ -377,8 +4572,8 @@ describe('ChatSessionStore', () => {
 
     it('does not wake subscribers from a different chatId', () => {
       const store = createStore();
-      store.acquire('chat_a');
-      store.acquire('chat_b');
+      store.acquire('chat_a', 'project_test');
+      store.acquire('chat_b', 'project_test');
       const fakeA = harness.created[0]!;
 
       const listenerA = vi.fn();
@@ -396,7 +4591,7 @@ describe('ChatSessionStore', () => {
       const listener = vi.fn();
       store.subscribeChat('chat_a', listener);
 
-      store.acquire('chat_a');
+      store.acquire('chat_a', 'project_test');
       const fake = harness.created[0]!;
       fake.emitMessagesChange();
 
@@ -405,7 +4600,7 @@ describe('ChatSessionStore', () => {
 
     it('stops invoking listeners after unsubscribe', () => {
       const store = createStore();
-      store.acquire('chat_a');
+      store.acquire('chat_a', 'project_test');
       const fake = harness.created[0]!;
       const listener = vi.fn();
       const unsubscribe = store.subscribeChat('chat_a', listener);
@@ -424,7 +4619,7 @@ describe('ChatSessionStore', () => {
     it('keeps every distinct session live and active under simultaneous acquires', () => {
       const store = createStore();
       const ids = ['chat_a', 'chat_b', 'chat_c', 'chat_d'];
-      const sessions = ids.map((id) => store.acquire(id));
+      const sessions = ids.map((id) => store.acquire(id, 'project_test'));
 
       for (const session of sessions) {
         expect(session.persistenceActorRef.getSnapshot().status).toBe('active');
@@ -436,8 +4631,8 @@ describe('ChatSessionStore', () => {
 
     it("releasing one chat does not stop another chat's actors or unsubscribe its listeners", () => {
       const store = createStore();
-      const a = store.acquire('chat_a');
-      const b = store.acquire('chat_b');
+      const a = store.acquire('chat_a', 'project_test');
+      const b = store.acquire('chat_b', 'project_test');
 
       const listenerA = vi.fn();
       const listenerB = vi.fn();
@@ -461,7 +4656,7 @@ describe('ChatSessionStore', () => {
 
     it('fans out a single chat event to every subscriber bound to that chatId', () => {
       const store = createStore();
-      store.acquire('chat_a');
+      store.acquire('chat_a', 'project_test');
       const fake = harness.created[0]!;
 
       const listeners = [vi.fn(), vi.fn(), vi.fn()];
@@ -478,14 +4673,14 @@ describe('ChatSessionStore', () => {
     it('per-chat listener buckets are isolated across re-acquire cycles', () => {
       const store = createStore();
       // First lifecycle: subscribe + drop the subscription via release.
-      store.acquire('chat_a');
+      store.acquire('chat_a', 'project_test');
       const stale = vi.fn();
       const unsubscribeStale = store.subscribeChat('chat_a', stale);
       store.release('chat_a');
       unsubscribeStale();
 
       // Second lifecycle: a brand-new Chat instance + a new subscriber.
-      store.acquire('chat_a');
+      store.acquire('chat_a', 'project_test');
       const fake = harness.created.at(-1)!;
       const fresh = vi.fn();
       store.subscribeChat('chat_a', fresh);
@@ -496,322 +4691,903 @@ describe('ChatSessionStore', () => {
       expect(stale).not.toHaveBeenCalled();
     });
 
-    it('subscribeStatus and subscribeUsage notify only their respective chatIds', () => {
+    it('keeps replacement listener buckets when the retired session unsubscribes late', () => {
       const store = createStore();
-      store.acquire('chat_a');
-      store.acquire('chat_b');
+      store.acquire('chat_a', 'project_test');
+      const stale = vi.fn();
+      const staleProjection = vi.fn();
+      const unsubscribeStale = store.subscribeChat('chat_a', stale);
+      const unsubscribeStaleProjection = store.subscribeProjection('chat_a', staleProjection);
+      store.release('chat_a');
 
-      const fakeA = harness.created.find((chat) => chat.id === 'chat_a')!;
-      const fakeB = harness.created.find((chat) => chat.id === 'chat_b')!;
-
-      const statusA = vi.fn();
-      const statusB = vi.fn();
-      store.subscribeStatus('chat_a', statusA);
-      store.subscribeStatus('chat_b', statusB);
-
-      fakeA.status = 'streaming';
-      fakeA.emitStatusChange();
-
-      expect(statusA).toHaveBeenCalledTimes(1);
-      expect(statusB).not.toHaveBeenCalled();
-
-      fakeB.status = 'submitted';
-      fakeB.emitStatusChange();
-
-      expect(statusA).toHaveBeenCalledTimes(1);
-      expect(statusB).toHaveBeenCalledTimes(1);
+      store.acquire('chat_a', 'project_test');
+      const replacement = harness.created.at(-1)!;
+      const fresh = vi.fn();
+      const freshProjection = vi.fn();
+      const unsubscribeFresh = store.subscribeChat('chat_a', fresh);
+      const unsubscribeFreshProjection = store.subscribeProjection('chat_a', freshProjection);
+      try {
+        unsubscribeStale();
+        unsubscribeStaleProjection();
+        replacement.emitMessagesChange();
+        expect(fresh).toHaveBeenCalledTimes(1);
+        publishLogRows(store, 'chat_a', runningRows());
+        expect(freshProjection).toHaveBeenCalledTimes(1);
+        expect(stale).not.toHaveBeenCalled();
+        expect(staleProjection).not.toHaveBeenCalled();
+      } finally {
+        unsubscribeFresh();
+        unsubscribeFreshProjection();
+        store.release('chat_a');
+      }
     });
   });
 
-  describe('milestone incremental persistence', () => {
-    it('queues debounced IndexedDB persistence when milestone parts appear on the trailing assistant row', async () => {
-      vi.useFakeTimers();
-      const chatIdForMilestonePersistence = 'chat_milestone_integration';
-      const store = new ChatSessionStore();
+  describe('projected empty-cancel draft restore', () => {
+    const open = async (chatId: string, projectId: string) => {
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
       const deps = createStubDeps();
+      deps.getChat.mockResolvedValue(chatRow(chatId, projectId));
       store.setDependencies(deps);
+      const session = store.acquire(chatId, projectId);
+      await vi.waitFor(() => {
+        expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+      });
+      const hostCommand = vi.fn<AgentHostClient['hostCommand']>(async (command) => ({
+        commandId: command.commandId,
+        generation: 1,
+        status: 'applied',
+        effect: 'durable',
+        cursor: 3,
+      }));
+      const unpublish = store.publishProjectHostConnector(
+        projectId,
+        async () => ({ hostCommand, close: vi.fn(async () => undefined) }) as unknown as AgentHostClient,
+      );
+      return { store, deps, session, hostCommand, unpublish };
+    };
 
-      store.acquire(chatIdForMilestonePersistence);
-      await vi.runOnlyPendingTimersAsync();
-      deps.patchChat.mockClear();
-
-      const fake = harness.created.at(-1)!;
-      fake.messages = [
-        {
-          id: 'm_as_ms',
-          role: 'assistant',
-          metadata: { createdAt: 1 },
-          parts: [
-            {
-              type: 'tool-create_file',
-              toolCallId: 'tc_done_ms',
-              state: 'output-available',
-              input: { targetFile: 'a.scad', content: '//' },
-              output: {
-                message: 'ok',
-                diffStats: {
-                  linesAdded: 1,
-                  linesRemoved: 0,
-                  originalContent: '',
-                  modifiedContent: '//',
-                },
-              },
+    const queueAdmission = (chatId: string) =>
+      publishChatTurnAdmission(chatId, async (gesture) => {
+        if (gesture.kind !== 'send' || gesture.requestId === undefined) {
+          throw new Error('Expected queued send');
+        }
+        const command = gesture.command ?? {
+          type: 'start',
+          commandId: gesture.requestId,
+          payload: {
+            chatId,
+            runId: gesture.requestId,
+            trigger: 'submit',
+            message: {
+              id: gesture.message.id,
+              role: 'user',
+              content: gesture.message.parts
+                .filter((part) => part.type === 'text')
+                .map((part) => part.text)
+                .join('\n'),
             },
-          ],
-        },
-      ];
-
-      fake.emitMessagesChange();
-      await vi.advanceTimersByTimeAsync(100);
-      await vi.runOnlyPendingTimersAsync();
-
-      expect(deps.patchChat).toHaveBeenCalledTimes(1);
-      expect(deps.patchChat).toHaveBeenCalledWith(chatIdForMilestonePersistence, 'messages', fake.messages);
-
-      vi.useRealTimers();
-
-      store.release(chatIdForMilestonePersistence);
-    });
-
-    it('preserves ledger-success tools through stop finalization while restoring output on the stalled tool part', async () => {
-      vi.useFakeTimers();
-
-      try {
-        const chatLedgerStopIntegration = 'chat_stop_ledger_integration';
-        const diffOutputB = {
-          message: '',
-          diffStats: {
-            linesAdded: 1,
-            linesRemoved: 0,
-            originalContent: '',
-            modifiedContent: '// b',
           },
         };
+        return {
+          runId: gesture.requestId,
+          leaseTurnId: gesture.message.id,
+          request: { kind: 'send', message: gesture.message, command, queueId: gesture.queueId },
+        };
+      });
+    const queuedGesture = (id: string): Extract<ChatTurnGesture, { kind: 'send' }> => ({
+      kind: 'send',
+      requestId: `req_${id}`,
+      message: { id, role: 'user', parts: [{ type: 'text', text: id }] },
+    });
 
-        const store = new ChatSessionStore();
-        const deps = createStubDeps();
-        store.setDependencies(deps);
+    it.each([
+      { previous: 'host:host-a', current: 'host-a', sends: false },
+      { previous: 'host:host-a', current: 'host-b', sends: true },
+      { previous: 'browser', current: 'host-b', sends: true },
+      { previous: 'host:host-a', current: undefined, sends: true },
+      { previous: undefined, current: 'host-b', sends: false },
+      { previous: undefined, current: 'host-b', rebase: 'host:host-b', sends: true },
+      { previous: undefined, current: 'host-a', rebase: 'host:host-b', sends: false },
+      { previous: 'host:host-a', current: 'host-b', preparedOn: 'host:host-a', sends: false },
+      { previous: 'host:host-a', current: 'host-a', preparedOn: 'host:host-a', sends: true },
+    ])(
+      'scopes a missing acknowledged run to its accepting host: $previous → $current',
+      async ({ previous, current, sends, rebase, preparedOn }) => {
+        const chatId = 'chat_queue_host';
+        const projectId = 'queue_host_project';
+        const { store, session, deps, hostCommand, unpublish } = await open(chatId, projectId);
+        unpublish();
+        await deps.client.writeFile(
+          chatMessageQueuePath(projectId, chatId),
+          new TextEncoder().encode(
+            JSON.stringify({
+              version: 1,
+              items:
+                preparedOn === undefined
+                  ? []
+                  : [
+                      {
+                        id: 'new_host_message',
+                        requestId: 'req_new_host_message',
+                        commandPlacement: preparedOn,
+                        message: { id: 'new_host_message', role: 'user', parts: [{ type: 'text', text: 'saved' }] },
+                        command: {
+                          type: 'start',
+                          commandId: 'req_new_host_message',
+                          payload: {
+                            chatId,
+                            runId: 'req_new_host_message',
+                            trigger: 'submit',
+                            message: { id: 'new_host_message', role: 'user', content: 'saved' },
+                          },
+                        },
+                      },
+                    ],
+              afterRunId: 'old_host_run',
+              afterPlacement: previous,
+              rebasedPlacement: rebase,
+            }),
+          ),
+        );
+        const unadmit = queueAdmission(chatId);
+        const stopConnector = store.publishProjectHostConnector(projectId, async () => ({
+          hostCommand,
+          placement: { hostId: current },
+          catchUp: writerOwnedCatchUp,
+          read: vi.fn<AgentHostClient['read']>(),
+          subscribe: (...args: Parameters<AgentHostClient['subscribe']>) => {
+            queueMicrotask(() =>
+              args[3]?.({
+                status: 'batch',
+                chatId,
+                cursor: 0,
+                nextCursor: 0,
+                endCursor: 0,
+                events: [],
+                sourceHealth: { historyIntact: true, newerHistory: false, quarantined: false },
+              }),
+            );
+            return vi.fn();
+          },
+          close: async () => undefined,
+        }));
+        const unobserve = store.observe(chatId, projectId);
+        try {
+          await vi.waitFor(() => {
+            expect(store.getAttachmentStatus(chatId)).toBe('attached');
+          });
+          if (preparedOn === undefined) {
+            await store.requestTurn(chatId, queuedGesture('new_host_message'));
+          }
+          await vi.waitFor(() => {
+            if (sends) {
+              expect(hostCommand).toHaveBeenCalledOnce();
+              expect(session.messageQueueRef.getSnapshot().context.items).toEqual([]);
+            } else {
+              expect(
+                session.messageQueueRef.getSnapshot().matches(preparedOn === undefined ? 'waiting' : 'failed'),
+              ).toBe(true);
+            }
+          });
+          if (sends) {
+            expect(deps.client.json(chatMessageQueuePath(projectId, chatId))).toMatchObject({
+              afterPlacement: current === undefined ? 'browser' : `host:${current}`,
+            });
+          } else {
+            expect(hostCommand).not.toHaveBeenCalled();
+            if (preparedOn !== undefined) {
+              expect(session.messageQueueRef.getSnapshot().context.error).toContain('original host');
+              expect(deps.client.json(chatMessageQueuePath(projectId, chatId))).toMatchObject({
+                items: [{ commandPlacement: preparedOn, command: { commandId: 'req_new_host_message' } }],
+              });
+            }
+          }
+        } finally {
+          unadmit();
+          stopConnector();
+          unobserve();
+          store.release(chatId);
+        }
+      },
+    );
 
-        const session = store.acquire(chatLedgerStopIntegration);
-        await Promise.resolve();
+    it('should wake a persisted queue once when draft attachment cleanup fails', async () => {
+      const chatId = 'queue_cleanup_failure';
+      const projectId = 'queue_project';
+      const { store, session, deps, hostCommand, unpublish } = await open(chatId, projectId);
+      const unadmit = queueAdmission(chatId);
+      const failure = new Error('Draft cleanup failed');
+      const release = vi.spyOn(store, 'releaseDraftAttachments').mockImplementation(async () => {
+        expect(deps.client.json(chatMessageQueuePath(projectId, chatId))).toMatchObject({
+          items: [{ id: 'cleanup', requestId: 'req_cleanup' }],
+        });
+        throw failure;
+      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        publishLogRows(store, chatId, []);
+        await vi.waitFor(() => {
+          expect(session.messageQueueRef.getSnapshot().matches('waiting')).toBe(true);
+        });
+        await expect(store.requestTurn(chatId, queuedGesture('cleanup'))).resolves.toBeUndefined();
+        await vi.waitFor(() => {
+          expect(hostCommand).toHaveBeenCalledTimes(1);
+          expect(session.messageQueueRef.getSnapshot().context.items).toEqual([]);
+        });
+        expect(hostCommand.mock.calls[0]?.[0]).toMatchObject({
+          type: 'start',
+          commandId: 'req_cleanup',
+          payload: { runId: 'req_cleanup', message: { id: 'cleanup' } },
+        });
+        expect(deps.client.json(chatMessageQueuePath(projectId, chatId))).toMatchObject({ items: [] });
+        expect(warn).toHaveBeenCalledWith('[ChatSessionStore] draft attachments could not be released', failure);
+        await settle();
+        expect(hostCommand).toHaveBeenCalledTimes(1);
+      } finally {
+        release.mockRestore();
+        warn.mockRestore();
+        unadmit();
+        unpublish();
+        store.release(chatId);
+      }
+    });
 
-        deps.patchChat.mockClear();
+    it.each(['cancelled', 'failed'] as const)('should send a new message after observing %s', async (phase) => {
+      const chatId = `queue_after_${phase}`;
+      const { store, hostCommand, unpublish } = await open(chatId, 'queue_project');
+      const unadmit = queueAdmission(chatId);
+      try {
+        publishLogRows(store, chatId, [...runningRows('old'), lifecycleRow(2, phase, 'old')]);
+        await store.requestTurn(chatId, queuedGesture('new'));
+        await vi.waitFor(() => {
+          expect(hostCommand).toHaveBeenCalledTimes(1);
+        });
+        expect(hostCommand.mock.calls[0]?.[0]).toMatchObject({
+          type: 'start',
+          commandId: 'req_new',
+          payload: { runId: 'req_new', message: { id: 'new' } },
+        });
+      } finally {
+        unadmit();
+        unpublish();
+        store.release(chatId);
+      }
+    });
 
-        const fake = harness.created.at(-1)!;
-        fake.messages = [
-          {
-            id: 'm_as_ls',
-            role: 'assistant',
-            metadata: { createdAt: 2 },
-            parts: [
-              {
-                type: 'tool-create_file',
-                toolCallId: 'tool_call_settled_integration',
-                state: 'output-available',
-                input: { targetFile: 'a.scad', content: '// a' },
-                output: {
-                  message: '',
-                  diffStats: {
-                    linesAdded: 1,
-                    linesRemoved: 0,
-                    originalContent: '',
-                    modifiedContent: '// a',
-                  },
-                },
-              },
-              {
-                type: 'tool-create_file',
-                toolCallId: 'tool_call_rpc_settled_but_ui_pending',
-                state: 'input-available',
-                input: { targetFile: 'b.scad', content: '// b' },
-              },
+    it.each(['cancelled', 'failed'] as const)(
+      'should keep pre-terminal messages ahead of new messages after %s and reopen',
+      async (phase) => {
+        const chatId = `queue_hold_${phase}`;
+        const projectId = 'queue_project';
+        const first = await open(chatId, projectId);
+        const terminal = [...runningRows('old'), lifecycleRow(2, phase, 'old')];
+        publishLogRows(first.store, chatId, runningRows('old'));
+        await first.store.requestTurn(chatId, queuedGesture('before'));
+        publishLogRows(first.store, chatId, terminal);
+        await first.store.requestTurn(chatId, queuedGesture('after'));
+        first.unpublish();
+        first.store.release(chatId);
+        const reopened = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+        reopened.setDependencies(first.deps);
+        const session = reopened.acquire(chatId, projectId);
+        const unadmit = queueAdmission(chatId);
+        const disconnect = reopened.publishProjectHostConnector(projectId, async () =>
+          mock<AgentHostClient>({
+            hostCommand: first.hostCommand,
+            catchUp: writerOwnedCatchUp,
+            close: async () => undefined,
+          }),
+        );
+        try {
+          publishLogRows(reopened, chatId, terminal);
+          reopened.refreshMessageQueue(chatId);
+          await vi.waitFor(() => {
+            expect(session.messageQueueRef.getSnapshot().matches('waiting')).toBe(true);
+            expect(session.messageQueueRef.getSnapshot().context.items.map((item) => item.id)).toEqual([
+              'before',
+              'after',
+            ]);
+          });
+          expect(first.hostCommand).not.toHaveBeenCalled();
+          await reopened.editQueuedMessage(chatId, 'before', undefined);
+          await vi.waitFor(() => {
+            expect(first.hostCommand).toHaveBeenCalledTimes(1);
+          });
+          expect(first.hostCommand.mock.calls[0]?.[0]).toMatchObject({
+            commandId: 'req_after',
+            payload: { runId: 'req_after' },
+          });
+        } finally {
+          disconnect();
+          unadmit();
+          reopened.release(chatId);
+        }
+      },
+    );
+
+    it.each(['running', 'cancelled', 'failed'] as const)(
+      'should not authorize delivery through a different %s run',
+      async (phase) => {
+        const chatId = `queue_changed_${phase}`;
+        const projectId = 'queue_project';
+        const { store, session, deps, hostCommand, unpublish } = await open(chatId, projectId);
+        const terminal = [...runningRows('old'), lifecycleRow(2, 'cancelled', 'old')];
+        publishLogRows(store, chatId, terminal);
+        await store.requestTurn(chatId, queuedGesture('new'));
+        expect(deps.client.json(chatMessageQueuePath(projectId, chatId))).toMatchObject({
+          items: [{ id: 'new', requestId: 'req_new', afterTerminalRunId: 'old' }],
+        });
+        publishLogRows(store, chatId, [
+          ...terminal,
+          lifecycleRow(3, 'admitted', 'different'),
+          lifecycleRow(4, phase, 'different'),
+        ]);
+        const unadmit = queueAdmission(chatId);
+        try {
+          store.refreshMessageQueue(chatId);
+          await vi.waitFor(() => {
+            expect(session.messageQueueRef.getSnapshot().matches('waiting')).toBe(true);
+            expect(session.messageQueueRef.getSnapshot().context.items.map((item) => item.id)).toEqual(['new']);
+          });
+          expect(hostCommand).not.toHaveBeenCalled();
+        } finally {
+          unadmit();
+          unpublish();
+          store.release(chatId);
+        }
+      },
+    );
+
+    it('should not authorize a pre-stop submission when terminal arrives during execution lookup', async () => {
+      const chatId = 'queue_lookup_terminal';
+      const projectId = 'queue_project';
+      const { store, session, deps, hostCommand, unpublish } = await open(chatId, projectId);
+      const gate = Promise.withResolvers<ChatEntity | undefined>();
+      const unadmit = queueAdmission(chatId);
+      try {
+        publishLogRows(store, chatId, runningRows('old'));
+        deps.getChat.mockReturnValueOnce(gate.promise);
+        const pending = store.requestTurn(chatId, queuedGesture('before'));
+        publishLogRows(store, chatId, [...runningRows('old'), lifecycleRow(2, 'cancelled', 'old')]);
+        gate.resolve(chatRow(chatId, projectId));
+        await pending;
+        await vi.waitFor(() => {
+          expect(session.messageQueueRef.getSnapshot().matches('waiting')).toBe(true);
+          expect(session.messageQueueRef.getSnapshot().context.items.map((item) => item.id)).toEqual(['before']);
+        });
+        expect(deps.client.json(chatMessageQueuePath(projectId, chatId))).toMatchObject({
+          items: [{ id: 'before', requestId: 'req_before' }],
+        });
+        expect(session.messageQueueRef.getSnapshot().context.items[0]).not.toHaveProperty('afterTerminalRunId');
+        expect(hostCommand).not.toHaveBeenCalled();
+      } finally {
+        gate.resolve(chatRow(chatId, projectId));
+        unadmit();
+        unpublish();
+        store.release(chatId);
+      }
+    });
+
+    it('should retain the empty intent captured before asynchronous attachment preparation', async () => {
+      const chatId = 'queue_captured_before_stop';
+      const { store, session, hostCommand, unpublish } = await open(chatId, 'queue_project');
+      const unadmit = queueAdmission(chatId);
+      try {
+        publishLogRows(store, chatId, runningRows('old'));
+        const queueIntent = store.captureMessageQueueIntent(chatId);
+        expect(queueIntent).toEqual({});
+        publishLogRows(store, chatId, [...runningRows('old'), lifecycleRow(2, 'cancelled', 'old')]);
+        expect(store.captureMessageQueueIntent(chatId)).toEqual({ afterTerminalRunId: 'old' });
+        await store.requestTurn(chatId, { ...queuedGesture('before'), queueIntent });
+        await vi.waitFor(() => {
+          expect(session.messageQueueRef.getSnapshot().matches('waiting')).toBe(true);
+          expect(session.messageQueueRef.getSnapshot().context.items.map((item) => item.id)).toEqual(['before']);
+        });
+        expect(session.messageQueueRef.getSnapshot().context.items[0]).not.toHaveProperty('afterTerminalRunId');
+        expect(hostCommand).not.toHaveBeenCalled();
+      } finally {
+        unadmit();
+        unpublish();
+        store.release(chatId);
+      }
+    });
+
+    it.each(['running', 'paused'] as const)(
+      'should not bypass a resumed %s run with matching terminal authorization',
+      async (phase) => {
+        const chatId = 'queue_resumed_terminal';
+        const { store, session, hostCommand, unpublish } = await open(chatId, 'queue_project');
+        const terminal = [...runningRows('old'), lifecycleRow(2, 'cancelled', 'old')];
+        publishLogRows(store, chatId, terminal);
+        await store.requestTurn(chatId, queuedGesture('after'));
+        publishLogRows(store, chatId, [...terminal, { ...lifecycleRow(3, phase, 'old'), attempt: 2 }]);
+        const unadmit = queueAdmission(chatId);
+        try {
+          store.refreshMessageQueue(chatId);
+          await vi.waitFor(() => {
+            expect(session.messageQueueRef.getSnapshot().matches('waiting')).toBe(true);
+            expect(session.messageQueueRef.getSnapshot().context.items).toMatchObject([
+              { id: 'after', afterTerminalRunId: 'old' },
+            ]);
+          });
+          expect(hostCommand).not.toHaveBeenCalled();
+        } finally {
+          unadmit();
+          unpublish();
+          store.release(chatId);
+        }
+      },
+    );
+
+    it.each(['incomplete', 'faulted'] as const)(
+      'should not authorize a message from a %s terminal projection',
+      async (state) => {
+        const chatId = `queue_unhealthy_${state}`;
+        const { store, session, hostCommand, unpublish } = await open(chatId, 'queue_project');
+        const terminal = [...runningRows('old'), lifecycleRow(2, 'cancelled', 'old')];
+        const unadmit = queueAdmission(chatId);
+        try {
+          if (state === 'incomplete') {
+            publishLogPage(store, chatId, terminal, { cursor: 0, endCursor: 4 });
+          } else {
+            publishLogRows(store, chatId, terminal);
+            store.receiveHostReadAnswer(chatId, { status: 'refused', reason: 'unreadable' });
+          }
+          await store.requestTurn(chatId, queuedGesture('unknown'));
+          publishLogRows(store, chatId, terminal);
+          store.refreshMessageQueue(chatId);
+          await vi.waitFor(() => {
+            expect(session.messageQueueRef.getSnapshot().matches('waiting')).toBe(true);
+            expect(session.messageQueueRef.getSnapshot().context.items.map((item) => item.id)).toEqual(['unknown']);
+          });
+          expect(session.messageQueueRef.getSnapshot().context.items[0]).not.toHaveProperty('afterTerminalRunId');
+          expect(hostCommand).not.toHaveBeenCalled();
+        } finally {
+          unadmit();
+          unpublish();
+          store.release(chatId);
+        }
+      },
+    );
+
+    it('should wait for full completion and preserve FIFO through a fast acknowledgement and delayed projection', async () => {
+      const chatId = 'queue_fifo';
+      const projectId = 'queue_project';
+      const { store, session, hostCommand, unpublish } = await open(chatId, projectId);
+      const unadmit = queueAdmission(chatId);
+      try {
+        publishLogRows(store, chatId, runningRows('old'));
+        await store.requestTurn(chatId, queuedGesture('one'));
+        await store.requestTurn(chatId, queuedGesture('two'));
+        await settle();
+        expect(hostCommand).not.toHaveBeenCalled();
+        publishLogRows(store, chatId, [...runningRows('old'), lifecycleRow(2, 'paused', 'old')]);
+        await settle();
+        expect(hostCommand).not.toHaveBeenCalled();
+        publishLogRows(store, chatId, [
+          ...runningRows('old'),
+          lifecycleRow(2, 'paused', 'old'),
+          lifecycleRow(3, 'completed', 'old'),
+        ]);
+        await vi.waitFor(() => {
+          expect(hostCommand).toHaveBeenCalledTimes(1);
+        });
+        await settle();
+        expect(hostCommand.mock.calls.map(([command]) => command.type)).toEqual(['start']);
+        expect(session.messageQueueRef.getSnapshot().context.items.map((item) => item.id)).toEqual(['two']);
+        publishLogRows(store, chatId, [
+          ...runningRows('old'),
+          lifecycleRow(2, 'paused', 'old'),
+          lifecycleRow(3, 'completed', 'old'),
+          lifecycleRow(4, 'admitted', 'req_one'),
+          lifecycleRow(5, 'running', 'req_one'),
+        ]);
+        await settle();
+        expect(hostCommand).toHaveBeenCalledTimes(1);
+        publishLogRows(store, chatId, [
+          ...runningRows('old'),
+          lifecycleRow(2, 'paused', 'old'),
+          lifecycleRow(3, 'completed', 'old'),
+          lifecycleRow(4, 'admitted', 'req_one'),
+          lifecycleRow(5, 'running', 'req_one'),
+          lifecycleRow(6, 'completed', 'req_one'),
+        ]);
+        await vi.waitFor(() => {
+          expect(hostCommand).toHaveBeenCalledTimes(2);
+        });
+        expect(hostCommand.mock.calls.map(([command]) => command.commandId)).toEqual(['req_one', 'req_two']);
+      } finally {
+        unadmit();
+        unpublish();
+        store.release(chatId);
+      }
+    });
+
+    it('should replay identical prepared bytes after close/reopen without another logical charge', async () => {
+      const chatId = 'queue_lost_ack';
+      const projectId = 'queue_lost_project';
+      const { store, deps, session, hostCommand, unpublish } = await open(chatId, projectId);
+      const unadmit = queueAdmission(chatId);
+      const charged = new Set<string>();
+      hostCommand.mockImplementation(async (command) => {
+        charged.add(command.commandId);
+        throw new Error('Acknowledgement lost after acceptance');
+      });
+      publishLogRows(store, chatId, []);
+      await store.requestTurn(chatId, queuedGesture('lost'));
+      await vi.waitFor(() => {
+        expect(session.messageQueueRef.getSnapshot().matches('failed')).toBe(true);
+      });
+      const original = hostCommand.mock.calls[0]![0];
+      expect(session.messageQueueRef.getSnapshot().context.items[0]?.command).toEqual(original);
+      unpublish();
+      store.release(chatId);
+      const reopened = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      reopened.setDependencies(deps);
+      const restored = reopened.acquire(chatId, projectId);
+      const unadmitReopened = queueAdmission(chatId);
+      const replay = vi.fn<AgentHostClient['hostCommand']>(async (command) => {
+        charged.add(command.commandId);
+        return { commandId: command.commandId, generation: 2, status: 'replayed', effect: 'durable', cursor: 1 };
+      });
+      const disconnect = reopened.publishProjectHostConnector(
+        projectId,
+        async () => ({ hostCommand: replay, close: async () => undefined }) as unknown as AgentHostClient,
+      );
+      try {
+        publishLogRows(reopened, chatId, []);
+        reopened.refreshMessageQueue(chatId);
+        await vi.waitFor(() => {
+          expect(replay).toHaveBeenCalledExactlyOnceWith(original);
+        });
+        await vi.waitFor(() => {
+          expect(restored.messageQueueRef.getSnapshot().context.items).toEqual([]);
+        });
+        expect(charged.size).toBe(1);
+      } finally {
+        disconnect();
+        unadmitReopened();
+        unadmit();
+        reopened.release(chatId);
+      }
+    });
+
+    it('should never cancel an unrelated live run when retrying a prepared command', async () => {
+      const chatId = 'queue_refused';
+      const projectId = 'queue_refused_project';
+      const { store, session, hostCommand, unpublish } = await open(chatId, projectId);
+      const unadmit = queueAdmission(chatId);
+      hostCommand.mockResolvedValue({
+        commandId: 'req_wait',
+        generation: 1,
+        status: 'refused',
+        effect: 'not-applied',
+        code: 'CHAT_RUN_LIVE',
+        message: 'Another run is live.',
+      });
+      try {
+        publishLogRows(store, chatId, []);
+        await store.requestTurn(chatId, queuedGesture('wait'));
+        await vi.waitFor(() => {
+          expect(session.messageQueueRef.getSnapshot().matches('failed')).toBe(true);
+        });
+        publishLogRows(store, chatId, runningRows('other'));
+        store.retryMessageQueue(chatId);
+        await settle();
+        expect(hostCommand).toHaveBeenCalledTimes(1);
+        expect(session.messageQueueRef.getSnapshot().context.items[0]?.command?.commandId).toBe('req_wait');
+      } finally {
+        unadmit();
+        unpublish();
+        store.release(chatId);
+      }
+    });
+
+    it('should retain a prepared message when retry has no durable host decision', async () => {
+      const chatId = 'queue_no_decision';
+      const { store, session, hostCommand, unpublish } = await open(chatId, 'queue_project');
+      const unadmit = queueAdmission(chatId);
+      hostCommand.mockRejectedValueOnce(new Error('Lost acknowledgement'));
+      try {
+        publishLogRows(store, chatId, []);
+        await store.requestTurn(chatId, queuedGesture('undecided'));
+        await vi.waitFor(() => {
+          expect(session.messageQueueRef.getSnapshot().matches('failed')).toBe(true);
+        });
+        const original = hostCommand.mock.calls[0]![0];
+        hostCommand.mockResolvedValue({
+          commandId: original.commandId,
+          generation: 1,
+          status: 'applied',
+          effect: 'not-applied',
+          details: {},
+        });
+        store.retryMessageQueue(chatId);
+        await vi.waitFor(() => {
+          expect(hostCommand).toHaveBeenCalledTimes(2);
+        });
+        await settle();
+        expect(session.messageQueueRef.getSnapshot().context.items[0]?.command).toEqual(original);
+        expect(session.messageQueueRef.getSnapshot().matches('failed')).toBe(true);
+      } finally {
+        unadmit();
+        unpublish();
+        store.release(chatId);
+      }
+    });
+
+    it.each(['chat', 'project'] as const)(
+      'should not send a prepared message after %s deletion during connection',
+      async (deleted) => {
+        const chatId = 'queue_delete_connect';
+        const projectId = 'queue_project';
+        const { store, deps, hostCommand, unpublish } = await open(chatId, projectId);
+        const unadmit = queueAdmission(chatId);
+        const gate = Promise.withResolvers<void>();
+        const disconnect = store.publishProjectHostConnector(projectId, async () => {
+          await gate.promise;
+          return { hostCommand, close: async () => undefined } as unknown as AgentHostClient;
+        });
+        try {
+          publishLogRows(store, chatId, []);
+          await store.requestTurn(chatId, queuedGesture('delete'));
+          await vi.waitFor(() => {
+            expect(deps.client.json(chatMessageQueuePath(projectId, chatId))).toMatchObject({
+              items: [{ command: { commandId: 'req_delete' } }],
+            });
+          });
+          await (deleted === 'chat' ? store.removeChat(chatId) : store.removeProject(projectId));
+          gate.resolve();
+          await settle();
+          expect(hostCommand).not.toHaveBeenCalled();
+          expect(deps.client.json(chatMessageQueuePath(projectId, chatId))).toBeUndefined();
+        } finally {
+          gate.resolve();
+          disconnect();
+          unadmit();
+          unpublish();
+          store.release(chatId);
+        }
+      },
+    );
+
+    it('should not recreate a deleted queue after pending execution lookup', async () => {
+      const chatId = 'queue_delete_lookup';
+      const projectId = 'queue_project';
+      const { store, deps, unpublish } = await open(chatId, projectId);
+      const gate = Promise.withResolvers<ChatEntity | undefined>();
+      deps.getChat.mockReturnValueOnce(gate.promise);
+      const pending = store.requestTurn(chatId, queuedGesture('delete'));
+      await store.removeChat(chatId);
+      gate.resolve(chatRow(chatId, projectId));
+      await expect(pending).rejects.toThrow('no longer open');
+      expect(deps.client.json(chatMessageQueuePath(projectId, chatId))).toBeUndefined();
+      unpublish();
+      store.release(chatId);
+    });
+
+    it('should target Steer at the observed run and wait for its durable cancellation', async () => {
+      const chatId = 'queue_steer';
+      const projectId = 'queue_steer_project';
+      const { store, hostCommand, unpublish } = await open(chatId, projectId);
+      const unadmit = queueAdmission(chatId);
+      try {
+        publishLogRows(store, chatId, runningRows('old'));
+        await store.requestTurn(chatId, queuedGesture('later'));
+        await store.requestTurn(chatId, queuedGesture('urgent'));
+        await store.steerQueuedMessage(chatId, 'urgent');
+        await vi.waitFor(() => {
+          expect(hostCommand).toHaveBeenCalledTimes(1);
+        });
+        expect(hostCommand.mock.calls[0]![0]).toMatchObject({ type: 'cancel', payload: { runId: 'old' } });
+        await settle();
+        expect(hostCommand).toHaveBeenCalledTimes(1);
+        publishLogRows(store, chatId, [...runningRows('old'), lifecycleRow(2, 'cancelled', 'old')]);
+        await vi.waitFor(() => {
+          expect(hostCommand).toHaveBeenCalledTimes(2);
+        });
+        expect(hostCommand.mock.calls[1]![0]).toMatchObject({ type: 'start', commandId: 'req_urgent' });
+      } finally {
+        unadmit();
+        unpublish();
+        store.release(chatId);
+      }
+    });
+
+    it('should serialize delivery across two tabs with stale follower history', async () => {
+      const chatId = 'queue_tabs';
+      const projectId = 'queue_tabs_project';
+      const first = await open(chatId, projectId);
+      const second = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      second.setDependencies(first.deps);
+      second.acquire(chatId, projectId);
+      const unadmit = queueAdmission(chatId);
+      const disconnect = second.publishProjectHostConnector(projectId, async () =>
+        mock<AgentHostClient>({
+          hostCommand: first.hostCommand,
+          catchUp: writerOwnedCatchUp,
+          subscribe: () => () => undefined,
+          close: async () => undefined,
+        }),
+      );
+      const old = [...runningRows('old'), lifecycleRow(2, 'completed', 'old')];
+      try {
+        publishLogRows(first.store, chatId, runningRows('old'));
+        publishLogRows(second, chatId, runningRows('old'));
+        await first.store.requestTurn(chatId, queuedGesture('one'));
+        await second.requestTurn(chatId, queuedGesture('two'));
+        publishLogRows(first.store, chatId, old);
+        await vi.waitFor(() => {
+          expect(first.hostCommand).toHaveBeenCalledTimes(1);
+        });
+        publishLogRows(second, chatId, old);
+        second.refreshMessageQueue(chatId);
+        await settle();
+        expect(first.hostCommand).toHaveBeenCalledTimes(1);
+        const finished = [...old, lifecycleRow(3, 'admitted', 'req_one'), lifecycleRow(4, 'completed', 'req_one')];
+        publishLogRows(first.store, chatId, finished);
+        publishLogRows(second, chatId, finished);
+        await vi.waitFor(() => {
+          expect(first.hostCommand).toHaveBeenCalledTimes(2);
+        });
+        await settle();
+        expect(first.hostCommand.mock.calls.map(([command]) => [command.type, command.commandId])).toEqual([
+          ['start', 'req_one'],
+          ['start', 'req_two'],
+        ]);
+      } finally {
+        unadmit();
+        disconnect();
+        first.unpublish();
+        first.store.release(chatId);
+        second.release(chatId);
+      }
+    });
+
+    it('should reconcile a lost acknowledgement from durable history without resending', async () => {
+      const chatId = 'queue_receipt';
+      const projectId = 'queue_receipt_project';
+      const { store, session, hostCommand, unpublish } = await open(chatId, projectId);
+      const unadmit = queueAdmission(chatId);
+      hostCommand.mockRejectedValue(new Error('Lost receipt'));
+      try {
+        publishLogRows(store, chatId, []);
+        await store.requestTurn(chatId, queuedGesture('receipt'));
+        await vi.waitFor(() => {
+          expect(session.messageQueueRef.getSnapshot().matches('failed')).toBe(true);
+        });
+        publishLogRows(store, chatId, [
+          { ...lifecycleRow(0, 'admitted', 'req_receipt'), commandId: 'req_receipt' },
+          lifecycleRow(1, 'completed', 'req_receipt'),
+        ]);
+        await vi.waitFor(() => {
+          expect(session.messageQueueRef.getSnapshot().context.items).toEqual([]);
+        });
+        expect(hostCommand).toHaveBeenCalledTimes(1);
+      } finally {
+        unadmit();
+        unpublish();
+        store.release(chatId);
+      }
+    });
+
+    it('should retain a streaming follow-up without cancelling the active run', async () => {
+      const { store, session, hostCommand, unpublish } = await open('chat_queue', 'project_queue');
+      try {
+        publishLogRows(store, 'chat_queue', runningRows('run_streaming'));
+        session.stateActorRef.send({ type: 'runLifecycle', phase: 'running', runId: 'run_streaming' });
+        await store.requestTurn('chat_queue', {
+          kind: 'send',
+          message: {
+            id: 'msg_followup',
+            role: 'user',
+            parts: [{ type: 'text', text: 'There is no scope too large here' }],
+          },
+        });
+        expect(hostCommand.mock.calls.filter(([command]) => command.type === 'cancel')).toEqual([]);
+      } finally {
+        unpublish();
+        store.release('chat_queue');
+      }
+    });
+
+    it('restores a cancelled user-only turn and its attachment only after the host confirms cancellation', async () => {
+      const chatId = 'chat_projected_empty_cancel';
+      const projectId = 'project_projected_empty_cancel';
+      const runId = 'run_projected_empty_cancel';
+      const { store, deps, session, hostCommand, unpublish } = await open(chatId, projectId);
+      deps.client.files.set(`${chatAttachmentsDirectory(projectId, chatId)}/${pngHash}.png`, pngBytes);
+      publishLogRows(store, chatId, [
+        ...runningRows(runId),
+        logRow(2, {
+          runId,
+          type: 'message.appended',
+          message: {
+            id: 'msg_projected_cancel',
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Keep my prompt' },
+              { type: 'file-ref', path: pngUrl, mimeType: 'image/png' },
             ],
           },
-        ];
+        }),
+      ]);
+      expect(store.getProjection(chatId)?.views[runId]?.user?.id).toBe('msg_projected_cancel');
 
-        session.persistenceActorRef.send({ type: 'startRequest', request: { kind: 'regenerate' } });
-        session.persistenceActorRef.send({ type: 'stopRequest' });
+      const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+      store.stopRun(chatId, 'stop-button');
+      await vi.waitFor(() => {
+        expect(hostCommand).toHaveBeenCalledTimes(1);
+      });
+      const cancel = hostCommand.mock.calls[0]?.[0];
+      expect(cancel?.type).toBe('cancel');
+      /* The host labels every cancel USER_STOPPED; only this line says which gesture sent it. */
+      // As JSON text: the desktop log flattens an object argument to `[object Object]`.
+      expect(info).toHaveBeenCalledWith(
+        '[ChatSessionStore] host cancel',
+        JSON.stringify({ chatId, runId, commandId: cancel?.commandId, origin: 'stop-button' }),
+      );
+      info.mockRestore();
+      expect(session.draftActorRef.getSnapshot().context.draftText).toBe('');
 
-        recordRpcOutcome(chatLedgerStopIntegration, 'tool_call_rpc_settled_but_ui_pending', {
-          kind: 'success',
-          output: diffOutputB,
+      publishLogRows(store, chatId, [lifecycleRow(3, 'cancelled', runId)], 3);
+      expect(store.getProjection(chatId)?.ledger.runs[runId]?.lifecycle).toBe('cancelled');
+      await vi.waitFor(() => {
+        expect(session.draftActorRef.getSnapshot().context).toMatchObject({
+          draftText: 'Keep my prompt',
+          draftAttachments: [{ hash: pngHash, mediaType: 'image/png' }],
         });
-
-        session.persistenceActorRef.send({
-          type: 'requestFinished',
-          messages: [...fake.messages],
-          isAbort: true,
-          isError: false,
-          isDisconnect: false,
-        });
-
-        await vi.advanceTimersByTimeAsync(100);
-        await vi.runOnlyPendingTimersAsync();
-
-        const lastPatchCallArgs = deps.patchChat.mock.calls.at(-1);
-        expect(lastPatchCallArgs).toBeDefined();
-        const persistedMessages = lastPatchCallArgs![2];
-        expect(Array.isArray(persistedMessages)).toBe(true);
-        const msgs = persistedMessages as MyUIMessage[];
-
-        const lastAssistant = msgs.at(-1);
-        expect(lastAssistant?.role).toBe('assistant');
-        const parts = lastAssistant?.parts ?? [];
-        expect((parts[0] as { state: string }).state).toBe('output-available');
-
-        expect((parts[1] as { state: string }).state).toBe('output-available');
-        expect((parts[1] as { output: typeof diffOutputB }).output).toEqual(diffOutputB);
-
-        store.release(chatLedgerStopIntegration);
-        clearLedger(chatLedgerStopIntegration);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-  });
-
-  describe('empty-cancel draft restore', () => {
-    it('lifts the cancelled user message back into the draft, truncates chat.messages, and persists the trimmed transcript', async () => {
-      vi.useFakeTimers();
-      try {
-        const chatId = 'chat_restore_empty_cancel';
-        const store = new ChatSessionStore();
-        const deps = createStubDeps();
-        store.setDependencies(deps);
-
-        const session = store.acquire(chatId);
-        await vi.runOnlyPendingTimersAsync();
-        deps.patchChat.mockClear();
-
-        const fake = harness.created.at(-1)!;
-        const priorUser: MyUIMessage = {
-          id: 'msg_user_prior',
-          role: 'user',
-          parts: [{ type: 'text', text: 'prior turn' }],
-          metadata: { createdAt: 0, status: 'pending' },
-        };
-        const priorAssistant: MyUIMessage = {
-          id: 'msg_assistant_prior',
-          role: 'assistant',
-          parts: [{ type: 'text', text: 'prior reply' }],
-          metadata: { createdAt: 1, status: 'pending' },
-        };
-        const cancelledUser: MyUIMessage = {
-          id: 'msg_user_cancelled',
-          role: 'user',
-          parts: [
-            { type: 'text', text: 'help me iterate on this' },
-            { type: 'file', url: 'data:image/png;base64,AAA', mediaType: 'image/png' },
-          ],
-          metadata: { createdAt: 2, status: 'pending' },
-        };
-        const emptyAssistantPlaceholder: MyUIMessage = {
-          id: 'msg_assistant_empty',
-          role: 'assistant',
-          parts: [],
-          metadata: { createdAt: 3, status: 'pending' },
-        };
-        fake.messages = [priorUser, priorAssistant, cancelledUser, emptyAssistantPlaceholder];
-
-        session.persistenceActorRef.send({
-          type: 'startRequest',
-          request: { kind: 'send', message: cancelledUser },
-        });
-        session.persistenceActorRef.send({ type: 'stopRequest' });
-        session.persistenceActorRef.send({
-          type: 'requestFinished',
-          messages: [...fake.messages],
-          isAbort: true,
-          isError: false,
-          isDisconnect: false,
-        });
-
-        // The trailing user message + empty assistant placeholder both come off
-        // chat.messages; only the older turn remains.
-        expect(fake.messages).toEqual([priorUser, priorAssistant]);
-
-        const draftSnapshot = session.draftActorRef.getSnapshot();
-        expect(draftSnapshot.context.draftText).toBe('help me iterate on this');
-        expect(draftSnapshot.context.draftImages).toEqual(['data:image/png;base64,AAA']);
-
-        // Flush the debounced persist of the truncated transcript.
-        await vi.advanceTimersByTimeAsync(100);
-        await vi.runOnlyPendingTimersAsync();
-
-        const messagesPersistCalls = deps.patchChat.mock.calls.filter(([, key]) => key === 'messages');
-        expect(messagesPersistCalls.length).toBeGreaterThanOrEqual(1);
-        expect(messagesPersistCalls.at(-1)?.[2]).toEqual([priorUser, priorAssistant]);
-
-        store.release(chatId);
-      } finally {
-        vi.useRealTimers();
-      }
+        expect(deps.client.files.get(`${draftAttachmentsDirectory(projectId, chatId)}/${pngHash}.png`)).toEqual(
+          pngBytes,
+        );
+      });
+      expect(store.getProjection(chatId)?.views[runId]?.user?.id).toBe('msg_projected_cancel');
+      expect(deps.commitCancelledDraftRestore).not.toHaveBeenCalled();
+      expect(deps.patchChat.mock.calls.some(([, key]) => key === 'messages')).toBe(false);
+      store.release(chatId);
+      unpublish();
     });
 
-    it('does not restore the draft when an assistant message has already streamed content (cancel-after-stream keeps applyStoppedRequest behaviour)', async () => {
-      vi.useFakeTimers();
-      try {
-        const chatId = 'chat_restore_after_stream';
-        const store = new ChatSessionStore();
-        const deps = createStubDeps();
-        store.setDependencies(deps);
+    it('keeps a cancelled turn with assistant output in the transcript instead of restoring its draft', async () => {
+      const chatId = 'chat_projected_partial_cancel';
+      const projectId = 'project_projected_partial_cancel';
+      const runId = 'run_projected_partial_cancel';
+      const { store, deps, session, hostCommand, unpublish } = await open(chatId, projectId);
+      publishLogRows(store, chatId, [
+        ...runningRows(runId),
+        logRow(2, {
+          runId,
+          type: 'message.appended',
+          message: { id: 'msg_partial_user', role: 'user', content: 'Keep working' },
+        }),
+        logRow(3, {
+          runId,
+          type: 'message.appended',
+          message: { id: 'msg_partial_assistant', role: 'assistant', content: 'Partial answer' },
+        }),
+      ]);
 
-        const session = store.acquire(chatId);
-        await vi.runOnlyPendingTimersAsync();
-        deps.patchChat.mockClear();
-
-        const fake = harness.created.at(-1)!;
-        const userMessage: MyUIMessage = {
-          id: 'msg_user_partial',
-          role: 'user',
-          parts: [{ type: 'text', text: 'should stay in transcript' }],
-          metadata: { createdAt: 0, status: 'pending' },
-        };
-        const assistantWithContent: MyUIMessage = {
-          id: 'msg_assistant_partial',
-          role: 'assistant',
-          parts: [{ type: 'text', text: 'partial token' }],
-          metadata: { createdAt: 1, status: 'pending' },
-        };
-        fake.messages = [userMessage, assistantWithContent];
-
-        session.persistenceActorRef.send({
-          type: 'startRequest',
-          request: { kind: 'send', message: userMessage },
-        });
-        session.persistenceActorRef.send({ type: 'stopRequest' });
-        session.persistenceActorRef.send({
-          type: 'requestFinished',
-          messages: [...fake.messages],
-          isAbort: true,
-          isError: false,
-          isDisconnect: false,
-        });
-
-        // `chat.messages` is preserved (both turns still on screen); the prior
-        // `applyStoppedRequest` path runs and finalises the partial assistant.
-        expect(fake.messages).toHaveLength(2);
-        expect(fake.messages[0]?.id).toBe('msg_user_partial');
-        expect(fake.messages[1]?.id).toBe('msg_assistant_partial');
-
-        // Draft must remain untouched.
-        const draftSnapshot = session.draftActorRef.getSnapshot();
-        expect(draftSnapshot.context.draftText).toBe('');
-        expect(draftSnapshot.context.draftImages).toEqual([]);
-
-        await vi.advanceTimersByTimeAsync(100);
-        await vi.runOnlyPendingTimersAsync();
-
-        store.release(chatId);
-      } finally {
-        vi.useRealTimers();
-      }
+      store.stopRun(chatId, 'stop-shortcut');
+      await vi.waitFor(() => {
+        expect(hostCommand).toHaveBeenCalledTimes(1);
+      });
+      publishLogRows(store, chatId, [lifecycleRow(4, 'cancelled', runId)], 4);
+      await vi.waitFor(() => {
+        expect(session.chat.messages.flatMap((message) => message.parts)).toEqual(
+          expect.arrayContaining([expect.objectContaining({ type: 'text', text: 'Partial answer' })]),
+        );
+      });
+      expect(session.draftActorRef.getSnapshot().context.draftText).toBe('');
+      expect(deps.commitCancelledDraftRestore).not.toHaveBeenCalled();
+      store.release(chatId);
+      unpublish();
     });
   });
 
   describe('hydration on acquire', () => {
     it('calls deps.getChat on first acquire so hydration kicks off', async () => {
-      const store = new ChatSessionStore();
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
       const deps = createStubDeps();
       store.setDependencies(deps);
 
@@ -825,555 +5601,2771 @@ describe('ChatSessionStore', () => {
       };
       deps.getChat.mockResolvedValue(sampleChat);
 
-      store.acquire('chat_a');
+      store.acquire('chat_a', 'resource_1');
 
       // Microtask flush so the persistence actor's loadChatActor invokes deps.getChat.
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(deps.getChat).toHaveBeenCalledWith('chat_a');
+      expect(deps.getChat).toHaveBeenCalledWith('chat_a', 'resource_1');
     });
 
-    /**
-     * Phase D / t20 regression coverage.
-     *
-     * A persisted chat with a pending-tail user message that carries legacy
-     * `metadata.kernel`/`metadata.model`/`metadata.testingEnabled` still
-     * exists for any chat row written before the blueprint cut. Hydration
-     * MUST NOT read that metadata onto the wire body — the auto-regenerate
-     * must use whatever `useCadChatClient` published into
-     * `setLatestAgentBody`, and the resulting body must parse cleanly
-     * through the shared `chatTurnRequestSchema`. Without this guard, a
-     * homepage-seeded chat reloaded after the schema cut would 400 on the
-     * first turn because the persisted metadata path is no longer
-     * read-through.
-     */
-    it('hydration auto-regenerate on a legacy pending-tail uses latestAgentBody (NOT persisted message metadata) and produces a wire body that parses through chatTurnRequestSchema', async () => {
-      const store = new ChatSessionStore();
+    it('persists both concurrent submissions without displacing either into the composer', async () => {
+      const store = createStore();
+      const session = store.acquire('chat_two_sends', 'resource_two_sends');
+      startTurnOwner(store, 'resource_two_sends');
+      const admitted = Promise.withResolvers<void>();
+      const second = buildUserMessage({ text: 'second message' });
+      publishChatTurnAdmission('chat_two_sends', async (gesture) => {
+        await admitted.promise;
+        return {
+          runId: 'run_two_sends',
+          leaseTurnId: undefined,
+          request:
+            gesture.kind === 'send'
+              ? { kind: 'send', message: gesture.message }
+              : { kind: 'edit', messageId: 'msg_edit', content: 'edited' },
+        };
+      });
+
+      const first = store.requestTurn('chat_two_sends', {
+        kind: 'send',
+        message: buildUserMessage({ text: 'first message' }),
+      });
+      await Promise.resolve();
+      const displacing = store.requestTurn('chat_two_sends', { kind: 'send', message: second });
+      admitted.resolve();
+      await Promise.all([first, displacing]);
+
+      await vi.waitFor(() => {
+        expect(session.messageQueueRef.getSnapshot().context.items.map((item) => item.message.parts)).toEqual([
+          [{ type: 'text', text: 'first message' }],
+          second.parts,
+        ]);
+      });
+
+      store.release('chat_two_sends');
+    });
+
+    /* The same ordering with an `edit` doing the displacing: the edit rewinds to
+     * a message the transcript still holds, so the only text at risk is the
+     * send's — and its own `requestTurn` resolves last, holding the clear. */
+    it('keeps a queued send intact when a transcript edit is submitted', async () => {
+      const store = createStore();
+      const session = store.acquire('chat_send_then_edit', 'resource_send_then_edit');
+      startTurnOwner(store, 'resource_send_then_edit');
+      const admitted = Promise.withResolvers<void>();
+      publishChatTurnAdmission('chat_send_then_edit', async (gesture) => {
+        await admitted.promise;
+        return {
+          runId: 'run_send_then_edit',
+          leaseTurnId: undefined,
+          request:
+            gesture.kind === 'send'
+              ? { kind: 'send', message: gesture.message }
+              : { kind: 'edit', messageId: 'msg_edit', content: 'edited' },
+        };
+      });
+
+      const sent = store.requestTurn('chat_send_then_edit', {
+        kind: 'send',
+        message: buildUserMessage({ text: 'unsent message' }),
+      });
+      await Promise.resolve();
+      const edited = store.requestTurn('chat_send_then_edit', {
+        kind: 'edit',
+        messageId: 'msg_edit',
+        text: 'edited',
+      });
+      admitted.resolve();
+      await Promise.all([sent, edited]);
+
+      await vi.waitFor(() => {
+        expect(session.messageQueueRef.getSnapshot().context.items[0]?.message.parts).toEqual([
+          { type: 'text', text: 'unsent message' },
+        ]);
+      });
+
+      store.release('chat_send_then_edit');
+    });
+
+    it('clears hydrated history only after an authoritative empty host answer', async () => {
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const deps = createStubDeps();
+      const previous: MyUIMessage = {
+        id: 'obsolete-user',
+        role: 'user',
+        parts: [{ type: 'text', text: 'Old source' }],
+      };
+      deps.getChat.mockResolvedValue(chatRow('chat_verified_empty', 'project_1', { messages: [previous] }));
+      store.setDependencies(deps);
+      const session = store.acquire('chat_verified_empty', 'project_1');
+      await settle();
+      expect(session.chat.messages).toEqual([previous]);
+      publishLogPage(store, 'chat_verified_empty', [], { cursor: 0, endCursor: 0 });
+      await vi.waitFor(() => {
+        expect(session.chat.messages).toEqual([]);
+      });
+      store.release('chat_verified_empty');
+    });
+
+    it('reports a loading transcript, never an empty one, before the load settles for a chat with history (U7)', async () => {
+      const chatId = 'chat_deferred_transcript';
+      const projectId = 'project_deferred_transcript';
+      const runId = 'run_deferred_transcript';
+      const emptyChatId = 'chat_deferred_transcript_empty';
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const deps = createStubDeps();
+      deps.getChat.mockImplementation(async (id) => chatRow(id, projectId));
+      store.setDependencies(deps);
+      /* I21: A12 makes the session report `transcript: loading | loaded | empty`, and this reads it once it exists.
+       * Until then the session reports only its chat-row load and its messages, and a session out of that load with
+       * no messages is what the lane shows as the empty chat. */
+      type TranscriptState = 'loading' | 'loaded' | 'empty';
+      const reportedTranscript = (session: ReturnType<StoreType['acquire']>): TranscriptState => {
+        const declared = (session as { readonly transcript?: TranscriptState }).transcript;
+        if (declared !== undefined) {
+          return declared;
+        }
+        if (session.persistenceActorRef.getSnapshot().context.isLoadingChat) {
+          return 'loading';
+        }
+        return session.messages.length === 0 ? 'empty' : 'loaded';
+      };
+      const session = store.acquire(chatId, projectId);
+      // Each report with the turns the session held when it made it.
+      const reported: Array<{ readonly transcript: TranscriptState; readonly messages: number }> = [];
+      const reports: TranscriptState[] = [];
+      const record = (): void => {
+        const transcript = reportedTranscript(session);
+        reports.push(transcript);
+        reported.push({ transcript, messages: session.messages.length });
+      };
+      record();
+      const unsubscribeChat = store.subscribeChat(chatId, record);
+      const unsubscribeProjection = store.subscribeProjection(chatId, record);
+      const persistence = session.persistenceActorRef.subscribe(record);
+      try {
+        // The transcript is the host log's, and the row holds its answer back: the load has not settled.
+        await settle();
+        record();
+        expect(reports[0]).toBe('loading');
+        expect(reports).not.toContain('empty');
+
+        publishLogRows(store, chatId, [
+          ...runningRows(runId),
+          logRow(2, {
+            runId,
+            type: 'message.appended',
+            message: { id: 'deferred-reply', role: 'assistant', content: 'The bracket is ready.' },
+          }),
+          lifecycleRow(3, 'completed', runId),
+        ]);
+        await vi.waitFor(() => {
+          expect(reportedTranscript(session)).toBe('loaded');
+        });
+        expect(session.messages.length).toBeGreaterThan(0);
+        // Nor between the host's answer and the turns appearing: never `empty` across the whole load.
+        expect(reports).not.toContain('empty');
+        // And `loaded` only with the turns it loaded: no report leaves `loading` for a blank lane (U19).
+        expect(reported.filter((report) => report.transcript === 'loaded' && report.messages === 0)).toEqual([]);
+
+        // A chat with no history still settles to `empty` once its log answers that it has none.
+        const emptySession = store.acquire(emptyChatId, projectId);
+        try {
+          publishLogPage(store, emptyChatId, [], { cursor: 0, endCursor: 0 });
+          await vi.waitFor(() => {
+            expect(reportedTranscript(emptySession)).toBe('empty');
+          });
+        } finally {
+          store.release(emptyChatId);
+        }
+      } finally {
+        unsubscribeChat();
+        unsubscribeProjection();
+        persistence.unsubscribe();
+        store.release(chatId);
+      }
+    });
+
+    it('serves the remembered composer trays before the transcript loads, and the settled ones after (U10)', async () => {
+      const memory = new Map<string, string>();
+      vi.stubGlobal('localStorage', {
+        getItem: (key: string) => memory.get(key) ?? null,
+        setItem: (key: string, value: string) => memory.set(key, value),
+        removeItem: (key: string) => memory.delete(key),
+      });
+      const chatId = 'chat_remembered_tray';
+      memory.set(`tau:chat-composer-trays:${chatId}`, 'todo');
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const deps = createStubDeps();
+      deps.getChat.mockImplementation(async (id) => chatRow(id, 'project_tray'));
+      store.setDependencies(deps);
+      try {
+        const session = store.acquire(chatId, 'project_tray');
+        await settle();
+        // Known before the log answers, so the lane can hold the tray's height from its first commit.
+        expect(session.transcript).toBe('loading');
+        expect(session.rememberedComposerTrays).toEqual(['todo']);
+
+        // The log settles with no task list: the tray is released, and the device forgets it.
+        publishLogPage(store, chatId, [], { cursor: 0, endCursor: 0 });
+        await vi.waitFor(() => {
+          expect(session.transcript).toBe('empty');
+        });
+        expect(session.rememberedComposerTrays).toEqual([]);
+        expect(memory.has(`tau:chat-composer-trays:${chatId}`)).toBe(false);
+      } finally {
+        store.release(chatId);
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('does not go back to loading once a retried read answers, and latches a refused read as settled (I21)', async () => {
+      const projectId = 'project_retried_read';
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const deps = createStubDeps();
+      deps.getChat.mockImplementation(async (id) => chatRow(id, projectId));
+      store.setDependencies(deps);
+      const retried = store.acquire('chat_retried_read', projectId);
+      const refused = store.acquire('chat_refused_read', projectId);
+      const reports: Array<ReturnType<StoreType['acquire']>['transcript']> = [];
+      const record = (): void => {
+        reports.push(retried.transcript);
+      };
+      const unsubscribeChat = store.subscribeChat('chat_retried_read', record);
+      const unsubscribeProjection = store.subscribeProjection('chat_retried_read', record);
+      try {
+        await settle();
+        // A read that is retried has not settled: the chat stays loading through it, never empty then loading.
+        store.receiveHostReadAnswer('chat_retried_read', { status: 'refused', reason: 'owner-fenced' });
+        record();
+        expect(retried.transcript).toBe('loading');
+        publishLogRows(store, 'chat_retried_read', [
+          ...runningRows('run_retried'),
+          logRow(2, {
+            runId: 'run_retried',
+            type: 'message.appended',
+            message: { id: 'retried-reply', role: 'assistant', content: 'Back again.' },
+          }),
+          lifecycleRow(3, 'completed', 'run_retried'),
+        ]);
+        await vi.waitFor(() => {
+          expect(retried.transcript).toBe('loaded');
+        });
+        const left = reports.findIndex((report) => report !== 'loading');
+        expect(reports.slice(left)).not.toContain('loading');
+        expect(reports).not.toContain('empty');
+
+        // Nothing answers a read the host refuses for good: that load has settled, and it stays settled.
+        store.receiveHostReadAnswer('chat_refused_read', { status: 'refused', reason: 'unreadable' });
+        expect(refused.transcript).toBe('empty');
+      } finally {
+        unsubscribeChat();
+        unsubscribeProjection();
+        store.release('chat_retried_read');
+        store.release('chat_refused_read');
+      }
+    });
+
+    it('shows a chat this tab created empty as empty at once, and its turns once the log has them (I21)', async () => {
+      const projectId = 'project_created_empty';
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const deps = createStubDeps();
+      deps.getChat.mockImplementation(async (id) => chatRow(id, projectId));
+      store.setDependencies(deps);
+      store.noteCreatedEmpty('chat_created_empty');
+      const session = store.acquire('chat_created_empty', projectId);
+      // A chat acquired without the note still waits for its log.
+      const other = store.acquire('chat_not_noted', projectId);
+      try {
+        expect(session.transcript).toBe('empty');
+        expect(other.transcript).toBe('loading');
+        publishLogRows(store, 'chat_created_empty', [
+          ...runningRows('run_created'),
+          logRow(2, {
+            runId: 'run_created',
+            type: 'message.appended',
+            message: { id: 'created-reply', role: 'assistant', content: 'Hello.' },
+          }),
+          lifecycleRow(3, 'completed', 'run_created'),
+        ]);
+        await vi.waitFor(() => {
+          expect(session.transcript).toBe('loaded');
+        });
+      } finally {
+        store.release('chat_created_empty');
+        store.release('chat_not_noted');
+      }
+    });
+
+    it('keeps a chat loading, and its remembered tray, while the history from other devices is still read (I21, U10)', async () => {
+      const projectId = 'project_foreign_pending';
+      const client = createMemoryClient();
+      const rows = readFileSync(
+        new URL(
+          '../../../../packages/agent-host/specs/ChatLog/recorded/in-project-ping-pong-turn.jsonl',
+          pathToFileURL(import.meta.filename),
+        ),
+        'utf8',
+      );
+      const eventsOf = (chatId: string): string => `/projects/${projectId}/.tau/chats/${chatId}/events`;
+      await client.writeFile(`${eventsOf('chat_foreign_pending')}/other-device.jsonl`, new TextEncoder().encode(rows));
+      const scan = Promise.withResolvers<string[]>();
+      const failedScan = Promise.withResolvers<string[]>();
+      const readDirectory = client.readdir.bind(client);
+      vi.spyOn(client, 'readdir').mockImplementation(async (path) => {
+        if (path === eventsOf('chat_foreign_pending')) {
+          return scan.promise;
+        }
+        if (path === eventsOf('chat_foreign_unreadable')) {
+          return failedScan.promise;
+        }
+        return readDirectory(path);
+      });
+      const memory = new Map<string, string>();
+      vi.stubGlobal('localStorage', {
+        getItem: (key: string) => memory.get(key) ?? null,
+        setItem: (key: string, value: string) => memory.set(key, value),
+        removeItem: (key: string) => memory.delete(key),
+      });
+      memory.set('tau:chat-composer-trays:chat_foreign_pending', 'todo');
+      memory.set('tau:chat-composer-trays:chat_foreign_unreadable', 'todo');
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const deps = createStubDeps(client);
+      deps.getChat.mockImplementation(async (id) => chatRow(id, projectId));
+      store.setDependencies(deps);
+      const session = store.acquire('chat_foreign_pending', projectId);
+      const unreadable = store.acquire('chat_foreign_unreadable', projectId);
+      const reports: Array<ReturnType<StoreType['acquire']>['transcript']> = [];
+      const unsubscribe = store.subscribeChat('chat_foreign_pending', () => {
+        reports.push(session.transcript);
+      });
+      try {
+        await settle();
+        // This device's own log answers empty first: the turns that ran elsewhere are still being read.
+        publishLogPage(store, 'chat_foreign_pending', [], { cursor: 0, endCursor: 0 });
+        publishLogPage(store, 'chat_foreign_unreadable', [], { cursor: 0, endCursor: 0 });
+        await settle();
+        expect(session.transcript).toBe('loading');
+        expect(session.rememberedComposerTrays).toEqual(['todo']);
+        expect(memory.get('tau:chat-composer-trays:chat_foreign_pending')).toBe('todo');
+
+        scan.resolve(['other-device.jsonl']);
+        await vi.waitFor(() => {
+          expect(session.transcript).toBe('loaded');
+        });
+        expect(reports).not.toContain('empty');
+
+        // A scan that fails has settled the load, and nothing was read to forget the tray by.
+        expect(unreadable.transcript).toBe('loading');
+        failedScan.reject(Object.assign(new Error('EIO'), { code: 'EIO' }));
+        await vi.waitFor(() => {
+          expect(unreadable.transcript).toBe('empty');
+        });
+        expect(memory.get('tau:chat-composer-trays:chat_foreign_unreadable')).toBe('todo');
+      } finally {
+        unsubscribe();
+        store.release('chat_foreign_pending');
+        store.release('chat_foreign_unreadable');
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('settles against the scan of other devices whatever order it ends in, and keeps the tray when it read nothing (I21, U10)', async () => {
+      const projectId = 'project_foreign_order';
+      const client = createMemoryClient();
+      const rows = readFileSync(
+        new URL(
+          '../../../../packages/agent-host/specs/ChatLog/recorded/in-project-ping-pong-turn.jsonl',
+          pathToFileURL(import.meta.filename),
+        ),
+        'utf8',
+      );
+      const eventsOf = (chatId: string): string => `/projects/${projectId}/.tau/chats/${chatId}/events`;
+      await client.writeFile(`${eventsOf('chat_refused_pending')}/other-device.jsonl`, new TextEncoder().encode(rows));
+      const scan = Promise.withResolvers<string[]>();
+      const readDirectory = client.readdir.bind(client);
+      vi.spyOn(client, 'readdir').mockImplementation(async (path) => {
+        if (path === eventsOf('chat_refused_pending')) {
+          return scan.promise;
+        }
+        if (path === eventsOf('chat_scan_failed_first')) {
+          throw Object.assign(new Error('EIO'), { code: 'EIO' });
+        }
+        return readDirectory(path);
+      });
+      const memory = new Map<string, string>([['tau:chat-composer-trays:chat_scan_failed_first', 'todo']]);
+      vi.stubGlobal('localStorage', {
+        getItem: (key: string) => memory.get(key) ?? null,
+        setItem: (key: string, value: string) => memory.set(key, value),
+        removeItem: (key: string) => memory.delete(key),
+      });
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const deps = createStubDeps(client);
+      deps.getChat.mockImplementation(async (id) => chatRow(id, projectId));
+      store.setDependencies(deps);
+      const failedFirst = store.acquire('chat_scan_failed_first', projectId);
+      const refused = store.acquire('chat_refused_pending', projectId);
+      const reports: Array<ReturnType<StoreType['acquire']>['transcript']> = [];
+      const unsubscribe = store.subscribeChat('chat_refused_pending', () => {
+        reports.push(refused.transcript);
+      });
+      try {
+        await settle();
+        // The scan failed before the local log answered: the load settles, and nothing was read to forget the tray by.
+        publishLogPage(store, 'chat_scan_failed_first', [], { cursor: 0, endCursor: 0 });
+        await vi.waitFor(() => {
+          expect(failedFirst.transcript).toBe('empty');
+        });
+        expect(memory.get('tau:chat-composer-trays:chat_scan_failed_first')).toBe('todo');
+
+        // A refused local read does not show the chat empty while the turns that ran elsewhere are on their way.
+        store.receiveHostReadAnswer('chat_refused_pending', { status: 'refused', reason: 'unreadable' });
+        await settle();
+        expect(refused.transcript).toBe('loading');
+        scan.resolve(['other-device.jsonl']);
+        await vi.waitFor(() => {
+          expect(refused.transcript).toBe('loaded');
+        });
+        expect(reports).not.toContain('empty');
+      } finally {
+        unsubscribe();
+        store.release('chat_scan_failed_first');
+        store.release('chat_refused_pending');
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('waits for the watched scan of other devices, and keeps the tray when that watch closes unread (I21, U10)', async () => {
+      const projectId = 'project_foreign_watch';
+      const client = createMemoryClient();
+      const rows = readFileSync(
+        new URL(
+          '../../../../packages/agent-host/specs/ChatLog/recorded/in-project-ping-pong-turn.jsonl',
+          pathToFileURL(import.meta.filename),
+        ),
+        'utf8',
+      );
+      const eventsOf = (chatId: string): string => `/projects/${projectId}/.tau/chats/${chatId}/events`;
+      await client.writeFile(`${eventsOf('chat_watched')}/other-device.jsonl`, new TextEncoder().encode(rows));
+      const scan = Promise.withResolvers<string[]>();
+      const readDirectory = client.readdir.bind(client);
+      vi.spyOn(client, 'readdir').mockImplementation(async (path) =>
+        path === eventsOf('chat_watched') ? scan.promise : readDirectory(path),
+      );
+      const watch: NonNullable<ChatSessionDeps['watchRecordFile']> = (path) => ({
+        ready: path === eventsOf('chat_watch_closed') ? Promise.reject(new Error('watch refused')) : Promise.resolve(),
+        closed: new Promise<void>(() => {
+          /* Owner-controlled watch. */
+        }),
+        dispose: vi.fn(),
+      });
+      const memory = new Map<string, string>([
+        ['tau:chat-composer-trays:chat_watched', 'todo'],
+        ['tau:chat-composer-trays:chat_watch_closed', 'todo'],
+      ]);
+      vi.stubGlobal('localStorage', {
+        getItem: (key: string) => memory.get(key) ?? null,
+        setItem: (key: string, value: string) => memory.set(key, value),
+        removeItem: (key: string) => memory.delete(key),
+      });
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const deps = createStubDeps(client);
+      deps.getChat.mockImplementation(async (id) => chatRow(id, projectId));
+      store.setDependencies({ ...deps, watchRecordFile: watch });
+      const watched = store.acquire('chat_watched', projectId);
+      const closed = store.acquire('chat_watch_closed', projectId);
+      const reports: Array<ReturnType<StoreType['acquire']>['transcript']> = [];
+      const unsubscribe = store.subscribeChat('chat_watched', () => {
+        reports.push(watched.transcript);
+      });
+      try {
+        await settle();
+        publishLogPage(store, 'chat_watched', [], { cursor: 0, endCursor: 0 });
+        publishLogPage(store, 'chat_watch_closed', [], { cursor: 0, endCursor: 0 });
+        await settle();
+        expect(watched.transcript).toBe('loading');
+        expect(memory.get('tau:chat-composer-trays:chat_watched')).toBe('todo');
+        scan.resolve(['other-device.jsonl']);
+        await vi.waitFor(() => {
+          expect(watched.transcript).toBe('loaded');
+        });
+        expect(reports).not.toContain('empty');
+
+        // A watch that closed before it read anything settles the load without forgetting the tray.
+        expect(closed.transcript).toBe('empty');
+        expect(memory.get('tau:chat-composer-trays:chat_watch_closed')).toBe('todo');
+      } finally {
+        unsubscribe();
+        store.release('chat_watched');
+        store.release('chat_watch_closed');
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('settles a chat whose read was refused before it was opened, or before it was opened again (I21)', async () => {
+      const projectId = 'project_refused_earlier';
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const deps = createStubDeps();
+      deps.getChat.mockImplementation(async (id) => chatRow(id, projectId));
+      store.setDependencies(deps);
+      const stopListed = store.observe('chat_refused_listed', projectId);
+      const stopReopened = store.observe('chat_refused_reopened', projectId);
+      try {
+        await settle();
+        // Refused while only listed in the sidebar, then opened.
+        store.receiveHostReadAnswer('chat_refused_listed', { status: 'refused', reason: 'unreadable' });
+        const listed = store.acquire('chat_refused_listed', projectId);
+        await settle();
+        expect(listed.transcript).toBe('empty');
+
+        // Refused while open, then left and opened again while the sidebar still lists it.
+        const first = store.acquire('chat_refused_reopened', projectId);
+        await settle();
+        store.receiveHostReadAnswer('chat_refused_reopened', { status: 'refused', reason: 'unreadable' });
+        expect(first.transcript).toBe('empty');
+        store.release('chat_refused_reopened');
+        const reopened = store.acquire('chat_refused_reopened', projectId);
+        await settle();
+        expect(reopened.transcript).toBe('empty');
+      } finally {
+        store.release('chat_refused_listed');
+        store.release('chat_refused_reopened');
+        stopListed();
+        stopReopened();
+      }
+    });
+
+    it('settles a listed chat opened, or opened again, after its foreign watch closed (I21)', async () => {
+      const projectId = 'project_listed_watch_closed';
+      const closings = new Map<string, PromiseWithResolvers<void>>();
+      const watch: NonNullable<ChatSessionDeps['watchRecordFile']> = (path) => {
+        const closing = Promise.withResolvers<void>();
+        closings.set(path, closing);
+        return { ready: Promise.resolve(), closed: closing.promise, dispose: vi.fn() };
+      };
+      const eventsOf = (chatId: string): string => `/projects/${projectId}/.tau/chats/${chatId}/events`;
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const deps = createStubDeps();
+      deps.getChat.mockImplementation(async (id) => chatRow(id, projectId));
+      store.setDependencies({ ...deps, watchRecordFile: watch });
+      const stopListed = store.observe('chat_listed_closed', projectId);
+      const stopReopened = store.observe('chat_reopened_closed', projectId);
+      try {
+        // Only listed when its watch closed and its log answered: opening it finds nothing more to wait for.
+        await settle();
+        closings.get(eventsOf('chat_listed_closed'))?.resolve();
+        await settle();
+        publishLogPage(store, 'chat_listed_closed', [], { cursor: 0, endCursor: 0 });
+        await settle();
+        const listed = store.acquire('chat_listed_closed', projectId);
+        await settle();
+        expect(listed.transcript).toBe('empty');
+
+        // Open when its watch closed, then left and opened again while the sidebar still lists it.
+        const first = store.acquire('chat_reopened_closed', projectId);
+        await settle();
+        closings.get(eventsOf('chat_reopened_closed'))?.resolve();
+        await settle();
+        publishLogPage(store, 'chat_reopened_closed', [], { cursor: 0, endCursor: 0 });
+        await vi.waitFor(() => {
+          expect(first.transcript).toBe('empty');
+        });
+        store.release('chat_reopened_closed');
+        await settle();
+        const reopened = store.acquire('chat_reopened_closed', projectId);
+        await settle();
+        expect(reopened.transcript).toBe('empty');
+      } finally {
+        store.release('chat_listed_closed');
+        store.release('chat_reopened_closed');
+        stopListed();
+        stopReopened();
+      }
+    });
+
+    it('settles a chat whose foreign watch closed after it read, without forgetting the tray (I21, U10)', async () => {
+      const projectId = 'project_watch_closed_after_read';
+      const closed = Promise.withResolvers<void>();
+      const watch: NonNullable<ChatSessionDeps['watchRecordFile']> = () => ({
+        ready: Promise.resolve(),
+        closed: closed.promise,
+        dispose: vi.fn(),
+      });
+      const memory = new Map<string, string>([['tau:chat-composer-trays:chat_closed_after_read', 'todo']]);
+      vi.stubGlobal('localStorage', {
+        getItem: (key: string) => memory.get(key) ?? null,
+        setItem: (key: string, value: string) => memory.set(key, value),
+        removeItem: (key: string) => memory.delete(key),
+      });
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const deps = createStubDeps();
+      deps.getChat.mockImplementation(async (id) => chatRow(id, projectId));
+      store.setDependencies({ ...deps, watchRecordFile: watch });
+      const session = store.acquire('chat_closed_after_read', projectId);
+      try {
+        await settle();
+        // The watch read once, then the connection dropped before the local log answered.
+        closed.resolve();
+        await settle();
+        publishLogPage(store, 'chat_closed_after_read', [], { cursor: 0, endCursor: 0 });
+        await vi.waitFor(() => {
+          expect(session.transcript).toBe('empty');
+        });
+        expect(memory.get('tau:chat-composer-trays:chat_closed_after_read')).toBe('todo');
+      } finally {
+        store.release('chat_closed_after_read');
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('does not settle from a log page that has not caught up when the foreign scan ends (I21, U10)', async () => {
+      const projectId = 'project_partial_page';
+      const client = createMemoryClient();
+      const events = `/projects/${projectId}/.tau/chats/chat_partial_page/events`;
+      const scan = Promise.withResolvers<string[]>();
+      const readDirectory = client.readdir.bind(client);
+      vi.spyOn(client, 'readdir').mockImplementation(async (path) =>
+        path === events ? scan.promise : readDirectory(path),
+      );
+      const memory = new Map<string, string>([['tau:chat-composer-trays:chat_partial_page', 'todo']]);
+      vi.stubGlobal('localStorage', {
+        getItem: (key: string) => memory.get(key) ?? null,
+        setItem: (key: string, value: string) => memory.set(key, value),
+        removeItem: (key: string) => memory.delete(key),
+      });
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const deps = createStubDeps(client);
+      deps.getChat.mockImplementation(async (id) => chatRow(id, projectId));
+      store.setDependencies(deps);
+      const session = store.acquire('chat_partial_page', projectId);
+      try {
+        await settle();
+        publishLogPage(store, 'chat_partial_page', [], { cursor: 0, endCursor: 0 });
+        await settle();
+        // The log grew: its first page is not its end.
+        publishLogPage(
+          store,
+          'chat_partial_page',
+          [
+            ...runningRows('run_partial'),
+            logRow(2, {
+              runId: 'run_partial',
+              type: 'message.appended',
+              message: { id: 'partial-reply', role: 'assistant', content: 'Part.' },
+            }),
+          ],
+          { cursor: 0, endCursor: 50 },
+        );
+        await settle();
+        scan.resolve([]);
+        await settle();
+        expect(session.transcript).toBe('loading');
+        expect(memory.get('tau:chat-composer-trays:chat_partial_page')).toBe('todo');
+      } finally {
+        store.release('chat_partial_page');
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('settles a refused read after a partial page once the foreign scan reads, since nothing will catch it up (I21)', async () => {
+      const projectId = 'project_refused_partial';
+      const client = createMemoryClient();
+      const events = `/projects/${projectId}/.tau/chats/chat_refused_partial/events`;
+      const scan = Promise.withResolvers<string[]>();
+      const readDirectory = client.readdir.bind(client);
+      vi.spyOn(client, 'readdir').mockImplementation(async (path) =>
+        path === events ? scan.promise : readDirectory(path),
+      );
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const deps = createStubDeps(client);
+      deps.getChat.mockImplementation(async (id) => chatRow(id, projectId));
+      store.setDependencies(deps);
+      const session = store.acquire('chat_refused_partial', projectId);
+      try {
+        await settle();
+        publishLogPage(store, 'chat_refused_partial', [...runningRows('run_refused_partial')], {
+          cursor: 0,
+          endCursor: 50,
+        });
+        await settle();
+        store.receiveHostReadAnswer('chat_refused_partial', { status: 'refused', reason: 'unreadable' });
+        await settle();
+        expect(session.transcript).toBe('loading');
+        scan.resolve([]);
+        await vi.waitFor(() => {
+          expect(session.transcript).toBe('empty');
+        });
+      } finally {
+        store.release('chat_refused_partial');
+      }
+    });
+
+    it('does not settle a partial page while a watched rescan has failed and may retry (I21)', async () => {
+      const projectId = 'project_rescan_failed';
+      const client = createMemoryClient();
+      const events = `/projects/${projectId}/.tau/chats/chat_rescan_failed/events`;
+      let scans = 0;
+      const readDirectory = client.readdir.bind(client);
+      vi.spyOn(client, 'readdir').mockImplementation(async (path) => {
+        if (path === events) {
+          scans += 1;
+          if (scans === 2) {
+            throw Object.assign(new Error('EIO'), { code: 'EIO' });
+          }
+        }
+        return readDirectory(path);
+      });
+      let notify: ((event: WatchEvent) => void) | undefined;
+      const watch: NonNullable<ChatSessionDeps['watchRecordFile']> = (path, listener) => {
+        if (path === events) {
+          notify = listener;
+        }
+        return {
+          ready: Promise.resolve(),
+          closed: new Promise<void>(() => {
+            /* Owner-controlled watch. */
+          }),
+          dispose: vi.fn(),
+        };
+      };
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const deps = createStubDeps(client);
+      deps.getChat.mockImplementation(async (id) => chatRow(id, projectId));
+      store.setDependencies({ ...deps, watchRecordFile: watch });
+      const session = store.acquire('chat_rescan_failed', projectId);
+      try {
+        await settle();
+        notify?.({ type: 'change', path: `${events}/other-device.jsonl` });
+        await settle();
+        expect(scans).toBe(2);
+        publishLogPage(
+          store,
+          'chat_rescan_failed',
+          [
+            ...runningRows('run_rescan_failed'),
+            logRow(2, {
+              runId: 'run_rescan_failed',
+              type: 'message.appended',
+              message: { id: 'rescan-reply', role: 'assistant', content: 'Part.' },
+            }),
+          ],
+          { cursor: 0, endCursor: 50 },
+        );
+        await settle();
+        expect(session.transcript).toBe('loading');
+      } finally {
+        store.release('chat_rescan_failed');
+      }
+    });
+
+    it('remembers trays only from a transcript that holds the local log (U10)', async () => {
+      const projectId = 'project_foreign_only';
+      const client = createMemoryClient();
+      const rows = readFileSync(
+        new URL(
+          '../../../../packages/agent-host/specs/ChatLog/recorded/in-project-ping-pong-turn.jsonl',
+          pathToFileURL(import.meta.filename),
+        ),
+        'utf8',
+      );
+      const eventsOf = (chatId: string): string => `/projects/${projectId}/.tau/chats/${chatId}/events`;
+      const scans = new Map<string, PromiseWithResolvers<string[]>>();
+      const foreignChats = ['chat_foreign_refused', 'chat_foreign_unanswered'];
+      await Promise.all(
+        foreignChats.map(async (chatId) =>
+          client.writeFile(`${eventsOf(chatId)}/other-device.jsonl`, new TextEncoder().encode(rows)),
+        ),
+      );
+      for (const chatId of foreignChats) {
+        scans.set(eventsOf(chatId), Promise.withResolvers<string[]>());
+      }
+      const readDirectory = client.readdir.bind(client);
+      vi.spyOn(client, 'readdir').mockImplementation(async (path) => scans.get(path)?.promise ?? readDirectory(path));
+      const memory = new Map<string, string>([
+        ['tau:chat-composer-trays:chat_foreign_refused', 'todo'],
+        ['tau:chat-composer-trays:chat_foreign_unanswered', 'todo'],
+      ]);
+      vi.stubGlobal('localStorage', {
+        getItem: (key: string) => memory.get(key) ?? null,
+        setItem: (key: string, value: string) => memory.set(key, value),
+        removeItem: (key: string) => memory.delete(key),
+      });
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const deps = createStubDeps(client);
+      deps.getChat.mockImplementation(async (id) => chatRow(id, projectId));
+      store.setDependencies(deps);
+      const refused = store.acquire('chat_foreign_refused', projectId);
+      const unanswered = store.acquire('chat_foreign_unanswered', projectId);
+      try {
+        await settle();
+        // This device's log is refused for good: the other device's turns show, but they are not the whole chat.
+        store.receiveHostReadAnswer('chat_foreign_refused', { status: 'refused', reason: 'unreadable' });
+        scans.get(eventsOf('chat_foreign_refused'))?.resolve(['other-device.jsonl']);
+        await vi.waitFor(() => {
+          expect(refused.transcript).toBe('loaded');
+        });
+        expect(memory.get('tau:chat-composer-trays:chat_foreign_refused')).toBe('todo');
+
+        // This device's log has not answered yet.
+        scans.get(eventsOf('chat_foreign_unanswered'))?.resolve(['other-device.jsonl']);
+        await vi.waitFor(() => {
+          expect(unanswered.transcript).toBe('loaded');
+        });
+        expect(memory.get('tau:chat-composer-trays:chat_foreign_unanswered')).toBe('todo');
+      } finally {
+        store.release('chat_foreign_refused');
+        store.release('chat_foreign_unanswered');
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('keeps the remembered tray when the foreign scan failed, even once local turns show (U10)', async () => {
+      const projectId = 'project_failed_scan_turns';
+      const client = createMemoryClient();
+      const events = `/projects/${projectId}/.tau/chats/chat_failed_scan_turns/events`;
+      const readDirectory = client.readdir.bind(client);
+      vi.spyOn(client, 'readdir').mockImplementation(async (path) => {
+        if (path === events) {
+          throw Object.assign(new Error('EIO'), { code: 'EIO' });
+        }
+        return readDirectory(path);
+      });
+      const memory = new Map<string, string>([['tau:chat-composer-trays:chat_failed_scan_turns', 'todo']]);
+      vi.stubGlobal('localStorage', {
+        getItem: (key: string) => memory.get(key) ?? null,
+        setItem: (key: string, value: string) => memory.set(key, value),
+        removeItem: (key: string) => memory.delete(key),
+      });
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      const deps = createStubDeps(client);
+      deps.getChat.mockImplementation(async (id) => chatRow(id, projectId));
+      store.setDependencies(deps);
+      const session = store.acquire('chat_failed_scan_turns', projectId);
+      try {
+        await settle();
+        publishLogRows(store, 'chat_failed_scan_turns', [
+          ...runningRows('run_failed_scan'),
+          logRow(2, {
+            runId: 'run_failed_scan',
+            type: 'message.appended',
+            message: { id: 'failed-scan-reply', role: 'assistant', content: 'Local.' },
+          }),
+          lifecycleRow(3, 'completed', 'run_failed_scan'),
+        ]);
+        await vi.waitFor(() => {
+          expect(session.transcript).toBe('loaded');
+        });
+        // The task list may live in the history the scan could not read.
+        expect(memory.get('tau:chat-composer-trays:chat_failed_scan_turns')).toBe('todo');
+      } finally {
+        store.release('chat_failed_scan_turns');
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('does not rewrite or replay a log-derived pending tail without a seed intent', async () => {
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
       const deps = createStubDeps();
       store.setDependencies(deps);
 
-      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- minimal MyUIMessage shape for test
-      const legacyPendingUserMessage: MyUIMessage = {
-        id: 'msg_legacy_pending',
+      const pendingUserMessage: MyUIMessage = {
+        id: 'msg_orphan_pending',
         role: 'user',
-        parts: [{ type: 'text', text: 'pre-blueprint prompt' }],
-        metadata: {
-          // Legacy fields previously stamped onto the persisted user message
-          // by `createMessage({ metadata: { kernel, model, mode, ... } })`.
-          // None of these should reach the wire body in the new architecture.
-          createdAt: 1_700_000_000_000,
-          status: 'pending',
-          model: 'legacy-stale-model',
-          kernel: 'replicad',
-          mode: 'agent',
-          toolChoice: 'auto',
-          testingEnabled: false,
-        },
-      } as MyUIMessage;
-
-      const legacyChat: ChatEntity = {
-        id: 'chat_legacy_hydration',
-        resourceId: 'resource_legacy',
-        name: 'Legacy chat',
-        messages: [legacyPendingUserMessage],
-        createdAt: 1_700_000_000_000,
-        updatedAt: 1_700_000_000_000,
-      };
-      deps.getChat.mockResolvedValue(legacyChat);
-
-      // Publish the *current* agent body before acquiring — mirrors what
-      // `useCadChatClient`'s mount effect does for the active chat.
-      const liveBody = {
-        agent: {
-          profile: 'cad',
-          model: 'openai-gpt-5.5',
-          kernel: 'replicad',
-          mode: 'agent',
-          toolChoice: 'auto',
-          testingEnabled: true,
-        },
-      };
-      store.acquire('chat_legacy_hydration');
-      store.setLatestAgentBody('chat_legacy_hydration', liveBody);
-
-      // Allow hydration → auto-regenerate dispatch → microtask deferral to drain.
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-
-      const fake = harness.created.find((entry) => entry.id === 'chat_legacy_hydration')!;
-      expect(fake.regenerate).toHaveBeenCalledTimes(1);
-      const dispatchedOptions = fake.regenerate.mock.calls[0]![0] as { body?: Record<string, unknown> } | undefined;
-      expect(dispatchedOptions?.body).toBe(liveBody);
-
-      const wireBody = {
-        id: 'chat_legacy_hydration',
-        messages: legacyChat.messages,
-        ...dispatchedOptions?.body,
-      };
-      const parsed = chatTurnRequestSchema.parse(wireBody);
-      expect(parsed.agent).toMatchObject({
-        profile: 'cad',
-        // Live agent values survive — never the legacy persisted metadata.
-        model: 'openai-gpt-5.5',
-        testingEnabled: true,
-      });
-
-      store.release('chat_legacy_hydration');
-    });
-  });
-
-  // ===========================================================================
-  // R4 + R1: onFinish forwards isDisconnect, dispatchRequest({kind:'continue'})
-  // calls makeRequest({trigger:'submit-message'}) without slicing chat.messages
-  // ===========================================================================
-  describe('resumable streams (R4 plumbing + R1 continue dispatch)', () => {
-    it('dispatchRequest { kind: "continue" } calls chat.makeRequest({ trigger: "submit-message" }) and does NOT mutate chat.messages', async () => {
-      const store = createStore();
-      const session = store.acquire('chat_resume');
-      const fake = harness.created.find((entry) => entry.id === 'chat_resume')!;
-      const before: MyUIMessage[] = [
-        // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- minimal MyUIMessage shape for test
-        {
-          id: 'msg_user_1',
-          role: 'user',
-          parts: [{ type: 'text', text: 'hi' }],
-          metadata: { createdAt: 0 },
-        } as MyUIMessage,
-      ];
-      fake.messages = before;
-      const beforeRef = fake.messages;
-
-      session.persistenceActorRef.send({ type: 'startRequest', request: { kind: 'continue' } });
-
-      // The dispatchRequest listener defers AI SDK calls onto a microtask
-      // so they never run nested inside an outer makeRequest's finally
-      // (see docs/research/chat-followup-message-swallow.md).
-      await Promise.resolve();
-
-      expect(fake.makeRequest).toHaveBeenCalledTimes(1);
-      expect(fake.makeRequest).toHaveBeenCalledWith({ trigger: 'submit-message' });
-      // Identity check: chat.messages reference unchanged.
-      expect(fake.messages).toBe(beforeRef);
-      expect(fake.regenerate).not.toHaveBeenCalled();
-      expect(fake.sendMessage).not.toHaveBeenCalled();
-    });
-
-    /**
-     * Regression: when the user clicks the "Retry" button on the
-     * `ChatErrorServiceUnavailable` banner (or the persistence machine's
-     * transparent auto-retry fires), the resumed POST must still carry the
-     * top-level `agent` block required by `chatTurnRequestSchema`. Before the
-     * fix the `continue` dispatch called `makeRequest({ trigger: 'submit-message' })`
-     * with no body, the AI SDK transport produced `{ id, messages, trigger }`,
-     * and the API rejected it with `agent: expected object, received undefined`.
-     */
-    it('forwards latestAgentBody as `body` on `continue` so the resumed POST carries the agent block', async () => {
-      const store = createStore();
-      const session = store.acquire('chat_resume_agent');
-      const fake = harness.created.find((entry) => entry.id === 'chat_resume_agent')!;
-
-      const latestBody = { agent: { profile: 'cad', model: 'cad-default', kernel: 'replicad' } };
-      store.setLatestAgentBody('chat_resume_agent', latestBody);
-
-      session.persistenceActorRef.send({ type: 'startRequest', request: { kind: 'continue' } });
-
-      await Promise.resolve();
-
-      expect(fake.makeRequest).toHaveBeenCalledTimes(1);
-      expect(fake.makeRequest).toHaveBeenCalledWith({ trigger: 'submit-message', body: latestBody });
-    });
-  });
-
-  // ===========================================================================
-  // Edit-resubmit dispatch
-  //
-  // The API reads agent config (model/kernel/mode/toolChoice/testingEnabled)
-  // from the top-level `agent` block on the wire body (built inside the
-  // chat-client from `useCadAgentConfig`), NOT from per-message metadata.
-  // `buildEditedMessage` therefore only resets the user-facing fields
-  // (text/image parts, createdAt, status) and forwards `request.body` to
-  // `chat.regenerate` so model selection travels via `body.agent`.
-  // ===========================================================================
-  describe('edit-resubmit dispatch', () => {
-    it('rebuilds the edited message with refreshed createdAt/status and forwards `request.body` to chat.regenerate', async () => {
-      const store = createStore();
-      const session = store.acquire('chat_edit_kernel');
-      const fake = harness.created.find((entry) => entry.id === 'chat_edit_kernel')!;
-
-      const originalMessage: MyUIMessage = {
-        id: 'msg_original',
-        role: 'user',
-        parts: [{ type: 'text', text: 'original prompt' }],
-        metadata: { createdAt: 100, status: 'error' },
-      };
-      fake.messages = [originalMessage];
-
-      const overrideBody = { agent: { profile: 'cad', model: 'new-model', kernel: 'replicad' } };
-      session.persistenceActorRef.send({
-        type: 'startRequest',
-        request: {
-          kind: 'edit',
-          messageId: 'msg_original',
-          content: 'edited prompt',
-          body: overrideBody,
-        },
-      });
-
-      await Promise.resolve();
-
-      expect(fake.regenerate).toHaveBeenCalledTimes(1);
-      expect(fake.regenerate).toHaveBeenCalledWith({ body: overrideBody });
-      const rebuilt = fake.messages.at(-1)!;
-      expect(rebuilt.id).toBe('msg_original');
-      expect(rebuilt.role).toBe('user');
-      const text = rebuilt.parts.find((part): part is { type: 'text'; text: string } => part.type === 'text');
-      expect(text?.text).toBe('edited prompt');
-      expect(rebuilt.metadata?.status).toBe('pending');
-      expect(typeof rebuilt.metadata?.createdAt).toBe('number');
-    });
-  });
-
-  // ===========================================================================
-  // Retry rebuild
-  //
-  // The retry helper slices the assistant tail and forwards `request.body`
-  // to `chat.regenerate`; model selection travels via `body.agent.model`
-  // (composed by the chat-client), never via metadata patching.
-  // ===========================================================================
-  describe('retry rebuild', () => {
-    it('slices the assistant tail and forwards `request.body` to chat.regenerate', async () => {
-      const store = createStore();
-      const session = store.acquire('chat_retry_metadata');
-      const fake = harness.created.find((entry) => entry.id === 'chat_retry_metadata')!;
-
-      const userMessage: MyUIMessage = {
-        id: 'msg_user_retry',
-        role: 'user',
-        parts: [{ type: 'text', text: 'do thing' }],
-        metadata: { createdAt: 1, status: 'success' },
-      };
-      const assistantMessage: MyUIMessage = {
-        id: 'msg_assistant_retry',
-        role: 'assistant',
-        parts: [{ type: 'text', text: 'partial reply', state: 'done' }],
-        metadata: { createdAt: 2, status: 'success' },
-      };
-      fake.messages = [userMessage, assistantMessage];
-
-      const overrideBody = { agent: { profile: 'cad', model: 'new-model', kernel: 'replicad' } };
-      session.persistenceActorRef.send({
-        type: 'startRequest',
-        request: {
-          kind: 'retry',
-          messageId: 'msg_assistant_retry',
-          body: overrideBody,
-        },
-      });
-
-      await Promise.resolve();
-
-      expect(fake.regenerate).toHaveBeenCalledTimes(1);
-      expect(fake.regenerate).toHaveBeenCalledWith({ body: overrideBody });
-      // The assistant turn was sliced off; the previous user message is
-      // unchanged (no metadata patching — model selection lives in
-      // `body.agent.model`).
-      expect(fake.messages).toHaveLength(1);
-      expect(fake.messages[0]!.id).toBe('msg_user_retry');
-    });
-  });
-
-  // ===========================================================================
-  // Hydration auto-regenerate (R10/t17)
-  //
-  // The legacy pending-tail hydration regenerate now flows through the same
-  // `dispatchRequest` listener; without an explicit `request.body` it falls
-  // back to `session.latestAgentBody` published by `useCadChatClient` so the
-  // very first turn of a homepage-seeded chat still carries an `agent` block.
-  // ===========================================================================
-  describe('hydration auto-regenerate (R10/t17)', () => {
-    it('falls back to latestAgentBody when no explicit body is supplied on regenerate', async () => {
-      const store = createStore();
-      const session = store.acquire('chat_hydration_regen');
-      const fake = harness.created.find((entry) => entry.id === 'chat_hydration_regen')!;
-
-      const latestBody = { agent: { profile: 'cad', model: 'cad-default', kernel: 'replicad' } };
-      store.setLatestAgentBody('chat_hydration_regen', latestBody);
-
-      session.persistenceActorRef.send({ type: 'startRequest', request: { kind: 'regenerate' } });
-
-      await Promise.resolve();
-
-      expect(fake.regenerate).toHaveBeenCalledTimes(1);
-      expect(fake.regenerate).toHaveBeenCalledWith({ body: latestBody });
-    });
-  });
-
-  // ===========================================================================
-  // Preempt-clobber defense: the dispatchRequest listener must not call into
-  // AI SDK's `Chat.sendMessage` / `Chat.regenerate` / `Chat.makeRequest`
-  // synchronously inside the persistence machine's emit transition.
-  //
-  // Why: `chat.onFinish` synchronously sends `requestFinished` to the
-  // machine from inside AI SDK's `Chat.makeRequest` finally block. When the
-  // machine resumes a queued `pendingRequest` from `stopping → invoking`,
-  // it emits `applyResumedRequest` followed by `dispatchRequest` in the
-  // same transition. If `dispatchRequest`'s listener calls `chat.sendMessage`
-  // synchronously, the new `makeRequest`'s `this.activeResponse = ...`
-  // assignment lands BEFORE the outer makeRequest's finally runs its trailing
-  // `this.activeResponse = void 0`. The outer finally clobbers the new
-  // activeResponse, and when the new makeRequest's own finally later accesses
-  // `this.activeResponse.state.message` (no optional chaining in ai@6.0.175)
-  // it throws a TypeError that the surrounding try/catch swallows --
-  // `onFinish` for the new request never fires, the machine never receives
-  // `requestFinished`, and follow-up sends are silently dropped.
-  //
-  // See docs/research/chat-followup-message-swallow.md for the full trace.
-  // ===========================================================================
-  describe('preempt-clobber defense', () => {
-    it('does NOT call chat.sendMessage synchronously inside startRequest dispatch (deferred onto a microtask)', async () => {
-      const store = createStore();
-      const session = store.acquire('chat_clobber_send');
-      const fake = harness.created.find((entry) => entry.id === 'chat_clobber_send')!;
-
-      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- minimal MyUIMessage shape for test
-      const message: MyUIMessage = {
-        id: 'msg_user_B',
-        role: 'user',
-        parts: [{ type: 'text', text: 'follow-up' }],
-        metadata: { createdAt: 0, status: 'pending' },
-      } as MyUIMessage;
-
-      session.persistenceActorRef.send({ type: 'startRequest', request: { kind: 'send', message } });
-
-      // Synchronous assertion: the listener has NOT touched the AI SDK yet.
-      // This is the core fix -- a synchronous call would re-enter
-      // `Chat.makeRequest` inside an outer makeRequest's finally and trigger
-      // the activeResponse clobber.
-      expect(fake.sendMessage).not.toHaveBeenCalled();
-
-      await Promise.resolve();
-
-      expect(fake.sendMessage).toHaveBeenCalledTimes(1);
-      expect(fake.sendMessage).toHaveBeenCalledWith(message);
-    });
-
-    it('does NOT call chat.regenerate synchronously inside startRequest dispatch', async () => {
-      const store = createStore();
-      const session = store.acquire('chat_clobber_regen');
-      const fake = harness.created.find((entry) => entry.id === 'chat_clobber_regen')!;
-
-      session.persistenceActorRef.send({ type: 'startRequest', request: { kind: 'regenerate' } });
-
-      expect(fake.regenerate).not.toHaveBeenCalled();
-
-      await Promise.resolve();
-
-      expect(fake.regenerate).toHaveBeenCalledTimes(1);
-    });
-
-    it('does NOT call chat.makeRequest synchronously inside continue dispatch', async () => {
-      const store = createStore();
-      const session = store.acquire('chat_clobber_continue');
-      const fake = harness.created.find((entry) => entry.id === 'chat_clobber_continue')!;
-
-      session.persistenceActorRef.send({ type: 'startRequest', request: { kind: 'continue' } });
-
-      expect(fake.makeRequest).not.toHaveBeenCalled();
-
-      await Promise.resolve();
-
-      expect(fake.makeRequest).toHaveBeenCalledTimes(1);
-      expect(fake.makeRequest).toHaveBeenCalledWith({ trigger: 'submit-message' });
-    });
-
-    it('end-to-end preempt path: applyResumedRequest mutates chat.messages SYNCHRONOUSLY, dispatchRequest defers chat.sendMessage onto the next microtask', async () => {
-      // This is the critical ordering. `applyResumedRequest` must mutate
-      // `chat.messages = sanitized` synchronously inside the transition so
-      // that when the deferred `dispatchRequest` listener fires
-      // `chat.sendMessage(B)` on the next microtask, the AI SDK sees the
-      // sanitized message tail (with the partial assistant turn finalised)
-      // rather than the in-flight pre-preempt array.
-      const store = createStore();
-      const session = store.acquire('chat_preempt_ordering');
-      const fake = harness.created.find((entry) => entry.id === 'chat_preempt_ordering')!;
-
-      const initialMessages: MyUIMessage[] = [
-        // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- minimal MyUIMessage shape for test
-        {
-          id: 'msg_user_A',
-          role: 'user',
-          parts: [{ type: 'text', text: 'first turn' }],
-          metadata: { createdAt: 0 },
-        } as MyUIMessage,
-      ];
-      fake.messages = initialMessages;
-
-      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- minimal MyUIMessage shape for test
-      const pendingMessage: MyUIMessage = {
-        id: 'msg_user_B',
-        role: 'user',
-        parts: [{ type: 'text', text: 'preempting follow-up' }],
+        parts: [{ type: 'text', text: 'do not auto run' }],
         metadata: { createdAt: 1, status: 'pending' },
-      } as MyUIMessage;
+      };
+      const logDerivedChat: ChatEntity = {
+        id: 'chat_orphan_pending',
+        resourceId: 'resource_orphan',
+        name: 'Log-derived pending',
+        messages: [pendingUserMessage],
+        createdAt: 0,
+        updatedAt: 0,
+      };
+      deps.getChat.mockResolvedValue(logDerivedChat);
 
-      // Kick off A (idle -> invoking).
-      session.persistenceActorRef.send({
-        type: 'startRequest',
-        request: { kind: 'send', message: initialMessages[0]! },
-      });
-      // Drain the microtask so the listener fires for A.
-      await Promise.resolve();
-      fake.sendMessage.mockClear();
-
-      // Preempt with B (invoking -> stopping, pendingRequest = B-send).
-      session.persistenceActorRef.send({
-        type: 'startRequest',
-        request: { kind: 'send', message: pendingMessage },
-      });
-      expect(session.persistenceActorRef.getSnapshot().matches({ requestLifecycle: 'stopping' })).toBe(true);
-
-      // Simulate AI SDK's onFinish wiring: AI SDK aborts A, then calls onFinish
-      // with the current messages. This is the synchronous re-entry we are
-      // defending against.
-      session.persistenceActorRef.send({
-        type: 'requestFinished',
-        messages: initialMessages,
-        isAbort: true,
-        isError: false,
-        isDisconnect: false,
+      const session = store.acquire('chat_orphan_pending', 'resource_orphan');
+      await vi.waitFor(() => {
+        expect(session.chat.messages).toContainEqual(pendingUserMessage);
       });
 
-      // Synchronous post-conditions:
-      // 1. Machine has transitioned stopping -> invoking (preempt branch).
-      expect(session.persistenceActorRef.getSnapshot().matches({ requestLifecycle: 'invoking' })).toBe(true);
-      // 2. applyResumedRequest fired synchronously and mutated chat.messages.
-      //    `finalizeInterruptedToolParts` returns the same reference when no
-      //    sanitisation is needed, so we observe identity preservation.
-      expect(fake.messages).toBe(initialMessages);
-      // 3. dispatchRequest's chat.sendMessage call was deferred (not yet seen).
-      expect(fake.sendMessage).not.toHaveBeenCalled();
+      const fake = harness.created.find((entry) => entry.id === 'chat_orphan_pending')!;
+      expect(fake.regenerate).not.toHaveBeenCalled();
+      expect(deps.consumeChatStartupRequest).not.toHaveBeenCalled();
+      expect(deps.commitCancelledDraftRestore).not.toHaveBeenCalled();
+      expect(fake.messages).toContainEqual(pendingUserMessage);
+      expect(session.draftActorRef.getSnapshot().context.draftText).toBe('');
 
-      // Drain the microtask: chat.sendMessage(B) now fires.
-      await Promise.resolve();
-      expect(fake.sendMessage).toHaveBeenCalledTimes(1);
-      expect(fake.sendMessage).toHaveBeenCalledWith(pendingMessage);
+      store.release('chat_orphan_pending');
     });
   });
+});
 
-  describe('tool cause attribution (TT3)', () => {
-    it('does not persist on disconnect retry; completion persists after streamResumed + messages', async () => {
-      vi.useFakeTimers();
-      try {
-        const chatId = 'chat_tt3_retry';
-        const store = new ChatSessionStore();
-        const deps = createStubDeps();
-        store.setDependencies(deps);
+// ===========================================================================
+// Composer records (W7): per-device drafts, unread and attachments through the
+// session store, on an in-memory filesystem that outlives each store.
+// ===========================================================================
+describe('ChatSessionStore — composer records (W7)', () => {
+  const projectId = 'proj_composer';
+  const chatId = 'chat_composer';
+  const unreadPath = `/.tau/composers/chats/${projectId}/unread.json`;
+  type SelectedModel = {
+    readonly name: string;
+    readonly support: ModelSupport;
+  };
+  const pdfModel: SelectedModel = {
+    name: 'Claude Test',
+    support: { modalities: { input: ['text', 'image', 'pdf'], output: ['text'] } },
+  };
+  const imageOnlyModel: SelectedModel = {
+    name: 'GPT Image',
+    support: { modalities: { input: ['text', 'image'], output: ['text'] } },
+  };
 
-        const session = store.acquire(chatId);
-        await Promise.resolve();
-        deps.patchChat.mockClear();
+  beforeEach(() => {
+    harness.created = [];
+  });
 
-        const fake = harness.created.at(-1)!;
-        fake.messages = [
-          {
-            id: 'm_as',
-            role: 'assistant',
-            metadata: { createdAt: 2 },
-            parts: [
-              {
-                type: 'tool-create_file',
-                toolCallId: 'tc_tt3',
-                state: 'input-streaming',
-                input: { targetFile: 'z.scad', content: '//' },
-              },
-            ],
-          },
-        ];
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllGlobals();
+  });
 
-        session.persistenceActorRef.send({ type: 'startRequest', request: { kind: 'regenerate' } });
+  const openStore = (client: MemoryClient, row: ChatEntity = chatRow(chatId, projectId)) => {
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    const deps = createStubDeps(client);
+    deps.getChat.mockImplementation(async (id) => (id === row.id ? row : undefined));
+    store.setDependencies(deps);
+    return { store, deps };
+  };
 
-        session.persistenceActorRef.send({
-          type: 'requestFinished',
-          messages: [...fake.messages],
-          isAbort: false,
-          isError: true,
-          isDisconnect: true,
-        });
+  const attachBoth = async (session: ReturnType<StoreType['acquire']>): Promise<void> => {
+    session.draftActorRef.send({
+      type: 'addDraftAttachment',
+      dataUrl: dataUrlOf('image/png', pngBytes),
+      preserveOriginal: true,
+      model: pdfModel,
+    });
+    session.draftActorRef.send({
+      type: 'addDraftAttachment',
+      dataUrl: dataUrlOf('application/pdf', pdfBytes),
+      filename: 'bracket-spec.pdf',
+      model: pdfModel,
+    });
+    await vi.waitFor(() => {
+      expect(session.draftActorRef.getSnapshot().context.draftAttachments).toHaveLength(2);
+    });
+  };
 
-        expect(session.persistenceActorRef.getSnapshot().matches({ requestLifecycle: 'retrying' })).toBe(true);
-        expect((fake.messages[0]!.parts[0] as { state: string }).state).toBe('input-streaming');
-        expect(deps.patchChat).not.toHaveBeenCalled();
+  it('restores the draft, both attachments, tool choice and mode through a fresh store', async () => {
+    const client = createMemoryClient();
+    const first = openStore(client);
+    const session = first.store.acquire(chatId, projectId);
+    await attachBoth(session);
+    session.draftActorRef.send({ type: 'setDraftText', text: 'model the bracket per the spec' });
+    session.draftActorRef.send({ type: 'setDraftToolChoice', toolChoice: 'none' });
+    session.draftActorRef.send({ type: 'setDraftMode', mode: 'plan' });
+    // Released inside the draft's debounce: the release itself must hand the text to the record.
+    first.store.release(chatId);
 
-        const output = {
-          message: '',
-          diffStats: {
-            linesAdded: 1,
-            linesRemoved: 0,
-            originalContent: '',
-            modifiedContent: '// ok',
-          },
-        };
+    await vi.waitFor(() => {
+      expect(client.json(composerPath(projectId, chatId))).toMatchObject({
+        draft: { parts: [{ type: 'text', text: 'model the bracket per the spec' }, {}, {}] },
+        toolChoice: 'none',
+        mode: 'plan',
+      });
+    });
+    expect(client.namesUnder(draftAttachmentsDirectory(projectId, chatId))).toEqual(
+      [`${pngHash}.png`, `${pdfHash}.pdf`].sort(),
+    );
 
-        fake.messages = [
-          {
-            ...fake.messages[0]!,
-            parts: [
-              {
-                type: 'tool-create_file',
-                toolCallId: 'tc_tt3',
-                state: 'output-available',
-                input: { targetFile: 'z.scad', content: '//' },
-                output,
-              },
-            ],
-          },
-        ];
+    const second = openStore(client);
+    const restored = second.store.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(restored.draftActorRef.getSnapshot().context).toMatchObject({
+        draftText: 'model the bracket per the spec',
+        draftAttachments: [
+          { hash: pngHash, mediaType: 'image/png' },
+          { hash: pdfHash, mediaType: 'application/pdf', filename: 'bracket-spec.pdf' },
+        ],
+        draftToolChoice: 'none',
+        draftMode: 'plan',
+      });
+    });
+    second.store.release(chatId);
+  });
 
-        session.persistenceActorRef.send({ type: 'streamResumed' });
-        fake.emitMessagesChange();
+  it('keeps a read receipt across a fresh store, and reads a legacy unread mark as a receipt that matches no row', async () => {
+    vi.stubGlobal('document', { visibilityState: 'hidden', hasFocus: () => false });
+    const client = createMemoryClient();
+    const log = [...runningRows(), lifecycleRow(2, 'completed')];
+    await client.writeFile(
+      unreadPath,
+      new TextEncoder().encode(JSON.stringify({ version: 1, unread: { [chatId]: true } })),
+    );
+    const first = openStore(client);
+    first.store.acquire(chatId, projectId);
+    /* Before this page reads the chat's log, the legacy mark answers (D9). */
+    await vi.waitFor(() => {
+      expect(first.store.isUnread(chatId)).toBe(true);
+    });
+    publishLogRows(first.store, chatId, log);
+    expect(first.store.isUnread(chatId)).toBe(true);
 
-        await vi.advanceTimersByTimeAsync(100);
-        await vi.runOnlyPendingTimersAsync();
+    first.store.markViewed(chatId);
+    expect(first.store.isUnread(chatId)).toBe(false);
+    await vi.waitFor(() => {
+      expect(client.json(unreadPath)).toEqual({
+        version: 1,
+        readThrough: { [chatId]: { leaderEpoch: 'g1', sequence: 2 } },
+      });
+    });
+    first.store.release(chatId);
 
-        expect(deps.patchChat).toHaveBeenCalled();
-        const persisted = deps.patchChat.mock.calls.at(-1)![2] as MyUIMessage[];
-        const persistedPart = persisted.at(-1)?.parts[0] as { state: string; output: typeof output };
-        expect(persistedPart.state).toBe('output-available');
-        expect(persistedPart.output).toEqual(output);
+    const second = openStore(client);
+    second.store.acquire(chatId, projectId);
+    publishLogRows(second.store, chatId, log);
+    await vi.waitFor(() => {
+      expect(second.store.unreadRecordRef(projectId).getSnapshot().matches({ lifecycle: 'usable' })).toBe(true);
+    });
+    expect(second.store.isUnread(chatId)).toBe(false);
+    second.store.release(chatId);
+  });
 
-        store.release(chatId);
-      } finally {
-        vi.useRealTimers();
+  /* D9, PV-S8: a legacy mark on a log with no attention row is not unread once the log is read, yet the record keeps
+   * it and a fresh page answers from it until that page reads the log; viewing the chat removes it. */
+  it('keeps a legacy mark a caught-up log no longer reads as unread until the chat is viewed', async () => {
+    vi.stubGlobal('document', { visibilityState: 'hidden', hasFocus: () => false });
+    const client = createMemoryClient();
+    await client.writeFile(
+      unreadPath,
+      new TextEncoder().encode(JSON.stringify({ version: 1, unread: { [chatId]: true } })),
+    );
+    const { store } = openStore(client);
+    store.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(store.hasUnreadMark(chatId)).toBe(true);
+    });
+    publishLogRows(store, chatId, []);
+    expect(store.isUnread(chatId)).toBe(false);
+    expect(store.hasUnreadMark(chatId)).toBe(true);
+
+    store.markViewed(chatId);
+    expect(store.hasUnreadMark(chatId)).toBe(false);
+    await vi.waitFor(() => {
+      expect(client.json(unreadPath)).toEqual({ version: 1 });
+    });
+    store.release(chatId);
+  });
+
+  it('should keep multiple queued messages and their promoted attachments across reopen', async () => {
+    const client = createMemoryClient();
+    const { store } = openStore(client);
+    const session = store.acquire(chatId, projectId);
+    await attachBoth(session);
+    const { draftAttachments } = session.draftActorRef.getSnapshot().context;
+    await store.promoteDraftAttachments(chatId, draftAttachments);
+    const first = buildUserMessage({ text: 'second message', attachments: draftAttachments });
+    const second = buildUserMessage({ text: 'third message' });
+    await store.requestTurn(chatId, { kind: 'send', message: first, attachments: draftAttachments });
+    await store.requestTurn(chatId, { kind: 'send', message: second });
+    store.release(chatId);
+    const reopened = openStore(client).store;
+    const restored = reopened.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(restored.messageQueueRef.getSnapshot().context.items.map((item) => item.message)).toEqual([first, second]);
+    });
+    expect(client.files.get(`${chatAttachmentsDirectory(projectId, chatId)}/${pngHash}.png`)).toEqual(pngBytes);
+    expect(client.files.get(`${chatAttachmentsDirectory(projectId, chatId)}/${pdfHash}.pdf`)).toEqual(pdfBytes);
+    reopened.release(chatId);
+  });
+
+  it('promotes both blobs into the chat directory and clears the draft-stage copies', async () => {
+    const client = createMemoryClient();
+    const { store } = openStore(client);
+    const session = store.acquire(chatId, projectId);
+    await attachBoth(session);
+    const { draftAttachments } = session.draftActorRef.getSnapshot().context;
+
+    await store.promoteDraftAttachments(chatId, draftAttachments);
+
+    expect(client.files.get(`${chatAttachmentsDirectory(projectId, chatId)}/${pngHash}.png`)).toEqual(pngBytes);
+    expect(client.files.get(`${chatAttachmentsDirectory(projectId, chatId)}/${pdfHash}.pdf`)).toEqual(pdfBytes);
+
+    const message = buildUserMessage({ text: 'read the spec', attachments: draftAttachments });
+    session.draftActorRef.send({ type: 'clearDraft' });
+    await store.releaseDraftAttachments(chatId);
+    expect(message).toMatchObject({
+      role: 'user',
+      parts: [
+        {
+          type: 'file',
+          mediaType: 'image/png',
+          url: pngUrl,
+          providerMetadata: { common: { byteLength: pngBytes.byteLength } },
+        },
+        {
+          type: 'file',
+          mediaType: 'application/pdf',
+          filename: 'bracket-spec.pdf',
+          url: pdfUrl,
+          providerMetadata: { common: { byteLength: pdfBytes.byteLength } },
+        },
+        { type: 'text', text: 'read the spec' },
+      ],
+    });
+    expect(client.namesUnder(draftAttachmentsDirectory(projectId, chatId))).toEqual([]);
+    await vi.waitFor(() => {
+      expect(client.json(composerPath(projectId, chatId))).not.toHaveProperty('draft');
+    });
+    store.release(chatId);
+  });
+
+  it('leaves the draft intact and copies nothing it cannot finish when promotion fails', async () => {
+    const client = createMemoryClient();
+    const { store } = openStore(client);
+    const session = store.acquire(chatId, projectId);
+    await attachBoth(session);
+    const before = session.draftActorRef.getSnapshot().context.draftAttachments;
+    client.files.delete(`${draftAttachmentsDirectory(projectId, chatId)}/${pdfHash}.pdf`);
+
+    await expect(store.promoteDraftAttachments(chatId, before)).rejects.toThrow(/missing/u);
+
+    expect(session.draftActorRef.getSnapshot().context.draftAttachments).toEqual(before);
+    /* The image copied before the PDF failed stays: it is content-addressed, so another tab's send may name it
+     * (PV-R12). An orphan lives until the chat is deleted. */
+    expect(client.namesUnder(chatAttachmentsDirectory(projectId, chatId))).toEqual([`${pngHash}.png`]);
+    store.release(chatId);
+  });
+
+  /*
+   * PV-A9 (L4 D-108, I37). Blobs are content-addressed, so another tab's send can reference the very bytes a failing
+   * promotion copied. The rollback that took them back deleted a blob a sent message names.
+   */
+  it('keeps a promoted blob when a concurrent send fails', async () => {
+    const client = createMemoryClient();
+    const tabA = openStore(client);
+    const tabB = openStore(client);
+    const sessionA = tabA.store.acquire(chatId, projectId);
+    tabB.store.acquire(chatId, projectId);
+    await attachBoth(sessionA);
+    const before = sessionA.draftActorRef.getSnapshot().context.draftAttachments;
+    const pdfDraft = `${draftAttachmentsDirectory(projectId, chatId)}/${pdfHash}.pdf`;
+    const pdfRead = Promise.withResolvers<void>();
+    const { readFile } = client;
+    client.readFile = async function (path: string) {
+      if (path === pdfDraft) {
+        await pdfRead.promise;
+        throw notFound(path);
       }
+      return readFile.call(this, path);
+    };
+    const failing = tabA.store.promoteDraftAttachments(chatId, before);
+    await vi.waitFor(() => {
+      expect(client.namesUnder(chatAttachmentsDirectory(projectId, chatId))).toEqual([`${pngHash}.png`]);
+    });
+
+    // Tab B sends the same image: the chat already holds it, so B copies nothing and its message names it.
+    await tabB.store.promoteDraftAttachments(chatId, before.slice(0, 1));
+    pdfRead.resolve();
+
+    await expect(failing).rejects.toThrow(/missing/u);
+    expect(client.namesUnder(chatAttachmentsDirectory(projectId, chatId))).toEqual([`${pngHash}.png`]);
+    tabA.store.release(chatId);
+    tabB.store.release(chatId);
+  });
+
+  it('should keep a blob an earlier message holds when a later promotion fails (G10)', async () => {
+    const client = createMemoryClient();
+    const { store } = openStore(client);
+    const session = store.acquire(chatId, projectId);
+    await attachBoth(session);
+    const before = session.draftActorRef.getSnapshot().context.draftAttachments;
+    await store.promoteDraftAttachments(chatId, before.slice(0, 1));
+    client.files.delete(`${draftAttachmentsDirectory(projectId, chatId)}/${pdfHash}.pdf`);
+
+    await expect(store.promoteDraftAttachments(chatId, before)).rejects.toThrow(/missing/u);
+
+    expect(client.namesUnder(chatAttachmentsDirectory(projectId, chatId))).toEqual([`${pngHash}.png`]);
+    store.release(chatId);
+  });
+
+  it('should let a chat whose row cannot be read still be deleted (F7)', async () => {
+    const client = createMemoryClient();
+    const { store, deps } = openStore(client);
+    deps.getChat.mockRejectedValue(new Error('row unreadable'));
+    store.acquire(chatId, projectId);
+    await settle();
+
+    await expect(store.removeChat(chatId)).resolves.toBeUndefined();
+    store.release(chatId);
+  });
+
+  it('should flush a chat released before its row loaded into the project it was opened in (F8)', async () => {
+    const client = createMemoryClient();
+    const { store, deps } = openStore(client);
+    deps.getChat.mockReturnValue(Promise.withResolvers<never>().promise);
+    const session = store.acquire(chatId, projectId);
+    session.draftActorRef.send({ type: 'setDraftMode', mode: 'plan' });
+
+    store.release(chatId);
+
+    await vi.waitFor(() => {
+      expect(client.json(composerPath(projectId, chatId))).toEqual({ version: 1, mode: 'plan' });
     });
   });
 
-  describe('streamResumed (R6)', () => {
-    it('T21: sends streamResumed to the persistence actor only on transition into streaming', () => {
-      const store = createStore();
-      const session = store.acquire('chat_r6');
-      const fake = harness.created.find((entry) => entry.id === 'chat_r6')!;
-      const sendSpy = vi.spyOn(session.persistenceActorRef, 'send');
-
-      const countStreamResumed = (): number =>
-        sendSpy.mock.calls.filter((call) => call[0].type === 'streamResumed').length;
-
-      fake.status = 'submitted';
-      fake.emitStatusChange();
-      const afterSubmitted = countStreamResumed();
-
-      fake.status = 'streaming';
-      fake.emitStatusChange();
-      const afterStreaming = countStreamResumed();
-
-      expect(afterSubmitted).toBe(0);
-      expect(afterStreaming).toBe(1);
-
-      // Idempotent repeated "streaming" emissions without a status change.
-      fake.emitStatusChange();
-      expect(countStreamResumed()).toBe(1);
+  it('should leave no record behind when a chat is deleted straight after release (F9)', async () => {
+    const client = createMemoryClient();
+    const { store } = openStore(client);
+    const session = store.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(session.composerRecordRef.getSnapshot().matches({ lifecycle: 'usable' })).toBe(true);
     });
+    session.draftActorRef.send({ type: 'setDraftText', text: 'typed then deleted' });
+
+    store.release(chatId);
+    await store.removeChat(chatId);
+    // What the chat store does once the live composer has let go.
+    client.files.delete(composerPath(projectId, chatId));
+    await settle();
+
+    expect(client.json(composerPath(projectId, chatId))).toBeUndefined();
+  });
+
+  it('should resolve flushComposerRecords only once the record write on the wire has landed (R9)', async () => {
+    const client = createMemoryClient();
+    const { store } = openStore(client);
+    const session = store.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(session.composerRecordRef.getSnapshot().matches({ lifecycle: 'usable' })).toBe(true);
+    });
+    const onWire = Promise.withResolvers<void>();
+    const write = client.writeFile.bind(client);
+    vi.spyOn(client, 'writeFile').mockImplementationOnce(async (path, data) => {
+      await onWire.promise;
+      await write(path, data);
+    });
+    session.draftActorRef.send({ type: 'setDraftText', text: 'typed before hiding' });
+
+    const flushing = store.flushComposerRecords();
+    const early = await Promise.race([flushing.then(() => 'flushed'), settle().then(() => 'pending')]);
+    expect(early).toBe('pending');
+
+    onWire.resolve();
+    await flushing;
+
+    expect(client.json(composerPath(projectId, chatId))).toMatchObject({
+      draft: { parts: [{ type: 'text', text: 'typed before hiding' }] },
+    });
+    store.release(chatId);
+  });
+
+  /* LT09: `waitFor` rejects when its actor stops first. A gone draft has nothing left to flush, and the close must
+   * still flush every other record rather than fail on it. */
+  it('flushes the other records when one draft actor is gone before its save lands (PV-S5, LT09)', async () => {
+    const client = createMemoryClient();
+    const { store } = openStore(client);
+    const session = store.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(session.composerRecordRef.getSnapshot().matches({ lifecycle: 'usable' })).toBe(true);
+    });
+    session.draftActorRef.send({ type: 'setDraftText', text: 'typed before the draft went away' });
+    session.draftActorRef.stop();
+
+    await expect(store.flushComposerRecords()).resolves.toBeUndefined();
+    store.release(chatId);
+  });
+
+  it('should write a record that is waiting out a retry when flushed (R9)', async () => {
+    const client = createMemoryClient();
+    const { store } = openStore(client);
+    const session = store.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(session.composerRecordRef.getSnapshot().matches({ lifecycle: 'usable' })).toBe(true);
+    });
+    vi.spyOn(client, 'writeFile').mockRejectedValueOnce(Object.assign(new Error('EIO'), { code: 'EIO' }));
+    session.draftActorRef.send({ type: 'setDraftMode', mode: 'plan' });
+    await vi.waitFor(() => {
+      expect(session.composerRecordRef.getSnapshot().matches({ writes: 'retrying' })).toBe(true);
+    });
+
+    await store.flushComposerRecords();
+
+    expect(client.json(composerPath(projectId, chatId))).toEqual({ version: 1, mode: 'plan' });
+    store.release(chatId);
+  });
+
+  it('should report a failed unread write on the project unread record actor (G2)', async () => {
+    vi.stubGlobal('document', { visibilityState: 'hidden', hasFocus: () => false });
+    const client = createMemoryClient();
+    const { store } = openStore(client);
+    store.acquire(chatId, projectId);
+    const failed = vi.fn();
+    store.unreadRecordRef(projectId).on('writeFailed', failed);
+    vi.spyOn(client, 'writeFile').mockRejectedValueOnce(Object.assign(new Error('EACCES'), { code: 'EACCES' }));
+
+    publishLogRows(store, chatId, [...runningRows(), lifecycleRow(2, 'completed')]);
+    store.markViewed(chatId);
+
+    await vi.waitFor(() => {
+      expect(failed).toHaveBeenCalledOnce();
+    });
+    store.release(chatId);
+  });
+
+  it('still opens the chat when its record cannot be read', async () => {
+    const client = createMemoryClient();
+    client.failingReads.add(composerPath(projectId, chatId));
+    const transcript: MyUIMessage[] = [{ id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'earlier' }] }];
+    const { store } = openStore(client, chatRow(chatId, projectId, { messages: transcript }));
+    const session = store.acquire(chatId, projectId);
+    const unreadable = vi.fn();
+    session.composerRecordRef.on('recordUnreadable', unreadable);
+
+    await vi.waitFor(() => {
+      expect(harness.created.at(-1)!.messages).toEqual(transcript);
+    });
+    await vi.waitFor(() => {
+      expect(session.composerRecordRef.getSnapshot().matches({ lifecycle: 'usable' })).toBe(true);
+    });
+    expect(unreadable).toHaveBeenCalledOnce();
+    expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+
+    // A read failure is not an absence, but the composer stays usable and writes still go out.
+    client.failingReads.clear();
+    session.draftActorRef.send({ type: 'setDraftMode', mode: 'plan' });
+    await vi.waitFor(() => {
+      expect(client.json(composerPath(projectId, chatId))).toEqual({ version: 1, mode: 'plan' });
+    });
+    store.release(chatId);
+  });
+
+  it('disables send with the reason when the selected model cannot read a PDF in the draft', async () => {
+    const client = createMemoryClient();
+    const { store } = openStore(client);
+    const session = store.acquire(chatId, projectId);
+    await attachBoth(session);
+    const gate = (model: SelectedModel): string | undefined =>
+      attachmentSendBlockReason(session.draftActorRef.getSnapshot().context.draftAttachments, model);
+
+    expect(gate(pdfModel)).toBeUndefined();
+    expect(gate(imageOnlyModel)).toBe("GPT Image can't read PDFs. Remove the PDF or pick another model.");
+
+    session.draftActorRef.send({ type: 'removeDraftAttachment', index: 1 });
+    expect(gate(imageOnlyModel)).toBeUndefined();
+    store.release(chatId);
+  });
+});
+
+/**
+ * The unread record is the one source of unread (D9), and deletion reaches the
+ * live composer (D11, W8).
+ */
+describe('ChatSessionStore — unread restore and live-record deletion (W8)', () => {
+  const projectId = 'proj_w8';
+  const chatId = 'chat_w8';
+  const unreadPath = `/.tau/composers/chats/${projectId}/unread.json`;
+
+  /** A store over one device's disk, with a live project session; the store owns the chat's machine (PV-S5). */
+  const openStore = (client: MemoryClient) => {
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    const deps = createStubDeps(client);
+    deps.getChat.mockImplementation(async (id) => chatRow(id, projectId));
+    store.setDependencies(deps);
+    const projectRef = {
+      send: () => undefined,
+      getSnapshot: () => ({ context: { runs: [] } }),
+    } as unknown as LiveProjectSessions[string];
+    liveSessions.set(projectId, projectRef);
+    return { store };
+  };
+
+  beforeEach(() => {
+    harness.created = [];
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('answers unread for a fresh store from the chat’s log and the receipt on disk', async () => {
+    vi.stubGlobal('document', { visibilityState: 'hidden', hasFocus: () => false });
+    const client = createMemoryClient();
+    const first = openStore(client);
+    first.store.acquire(chatId, projectId);
+    publishLogRows(first.store, chatId, [...runningRows(), lifecycleRow(2, 'completed')]);
+    expect(first.store.isUnread(chatId)).toBe(true);
+    first.store.release(chatId);
+
+    const second = openStore(client);
+    second.store.acquire(chatId, projectId);
+    const woke = vi.fn();
+    second.store.subscribeUnread(woke);
+    publishLogRows(second.store, chatId, [...runningRows(), lifecycleRow(2, 'completed')]);
+
+    expect(second.store.isUnread(chatId)).toBe(true);
+    expect(woke).toHaveBeenCalled();
+    second.store.release(chatId);
+  });
+
+  it('stops the live record actor when its chat is deleted, so a later patch cannot write the record back', async () => {
+    const client = createMemoryClient();
+    const { store } = openStore(client);
+    const session = store.acquire(chatId, projectId);
+    const draft = (text: string): MyUIMessage => ({
+      id: 'draft',
+      role: 'user',
+      metadata: { createdAt: 1, status: 'pending' },
+      parts: [{ type: 'text', text }],
+    });
+    session.composerRecordRef.send({ type: 'patch', fields: { draft: draft('before delete') } });
+    await vi.waitFor(() => {
+      expect(client.json(composerPath(projectId, chatId))).toMatchObject({ draft: { id: 'draft' } });
+    });
+
+    await store.removeChat(chatId);
+    expect(client.json(composerPath(projectId, chatId))).toBeUndefined();
+
+    session.composerRecordRef.send({ type: 'patch', fields: { draft: draft('after delete') } });
+    session.draftActorRef.send({ type: 'setDraftText', text: 'typed after delete' });
+    await settle();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 600);
+    });
+    expect(client.json(composerPath(projectId, chatId))).toBeUndefined();
+    expect(session.composerRecordRef.getSnapshot().status).toBe('done');
+    store.release(chatId);
+  });
+
+  it('does not recreate unread.json for a late unread decision after its project is deleted', async () => {
+    vi.stubGlobal('document', { visibilityState: 'hidden', hasFocus: () => false });
+    const client = createMemoryClient();
+    const { store } = openStore(client);
+    store.acquire(chatId, projectId);
+    store.markViewed(chatId);
+    await settle();
+
+    await store.removeProject(projectId);
+    finishRun(harness.created.at(-1)!);
+    await settle();
+
+    expect(client.json(unreadPath)).toBeUndefined();
+    expect(client.namesUnder(`/.tau/composers/chats/${projectId}`)).toEqual([]);
+    store.release(chatId);
+  });
+});
+
+/*
+ * XD2: the chat owns intent and the device owns placement. `chat.json` syncs to
+ * every device, so a placement that names a host only on this one — `origin`,
+ * `desktop`, a loopback daemon — is this device's composer record, never the
+ * chat's.
+ */
+describe('ChatSessionStore — this device places the chat (XD2)', () => {
+  const projectId = 'proj_handoff';
+  const model = 'anthropic-claude-opus-4.8';
+
+  const placementsPath = `/.tau/composers/chats/${projectId}/placements.json`;
+  /* This tab reaches every device-relative placement unless a test says otherwise. */
+  const openLoaded = async (deps: ChatSessionDeps, chatId: string) => {
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    store.setDependencies({ isPlacementOnThisDevice: async () => true, ...deps });
+    const session = store.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+    });
+    return { store, session };
+  };
+
+  const placementOnDisk = (deps: StubDeps, chatId: string): unknown =>
+    (deps.client.json(placementsPath) as { placements?: Record<string, unknown> } | undefined)?.placements?.[chatId];
+  const seedPlacement = (deps: StubDeps, chatId: string, placement: string): void => {
+    deps.client.files.set(
+      placementsPath,
+      new TextEncoder().encode(JSON.stringify({ version: 1, placements: { [chatId]: placement } })),
+    );
+  };
+
+  it('should write a local placement row with no device-relative hostId and keep no placement for it', async () => {
+    const chatId = 'chat_local_row';
+    const deps = createStubDeps();
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    const { store, session } = await openLoaded(deps, chatId);
+
+    session.persistenceActorRef.send({
+      type: 'setActiveExecution',
+      execution: { kind: 'tau', model: 'openai-gpt-5.5', hostId: 'desktop' },
+    });
+
+    await vi.waitFor(() => {
+      expect(deps.patchChat).toHaveBeenCalledWith(
+        chatId,
+        'activeExecution',
+        expect.objectContaining({ kind: 'tau', model: 'openai-gpt-5.5' }),
+      );
+    });
+    await settle();
+    expect(placementOnDisk(deps, chatId)).toBeUndefined();
+    store.release(chatId);
+  });
+
+  it('should keep an explicit daemon choice in this device’s composer record instead of chat.json', async () => {
+    const chatId = 'chat_origin_pin';
+    const deps = createStubDeps();
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    const { store, session } = await openLoaded(deps, chatId);
+
+    session.persistenceActorRef.send({
+      type: 'setActiveExecution',
+      execution: { kind: 'tau', model, hostId: 'origin' },
+    });
+
+    await vi.waitFor(() => {
+      expect(placementOnDisk(deps, chatId)).toBe('origin');
+    });
+    expect(deps.patchChat).toHaveBeenCalledWith(
+      chatId,
+      'activeExecution',
+      expect.objectContaining({ kind: 'tau', model }),
+    );
+    expect(session.persistenceActorRef.getSnapshot().context.activeExecution).toEqual({
+      kind: 'tau',
+      model,
+      hostId: 'origin',
+    });
+
+    session.persistenceActorRef.send({ type: 'setActiveExecution', execution: { kind: 'tau', model } });
+    await vi.waitFor(() => {
+      expect(placementOnDisk(deps, chatId)).toBeUndefined();
+    });
+    store.release(chatId);
+  });
+
+  it('should reopen a chat on the placement this device chose for it, for the composer and the read connector', async () => {
+    const chatId = 'chat_reopened_pin';
+    const deps = createStubDeps();
+    seedPlacement(deps, chatId, 'origin');
+    deps.getChat.mockResolvedValue(
+      chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model }, activeKernel: 'replicad' }),
+    );
+    const { store, session } = await openLoaded(deps, chatId);
+
+    expect(session.persistenceActorRef.getSnapshot().context.activeExecution).toEqual({
+      kind: 'tau',
+      model,
+      hostId: 'origin',
+    });
+    await expect(store.getChatHostSettings(chatId)).resolves.toEqual({
+      activeExecution: { kind: 'tau', model, hostId: 'origin' },
+      activeKernel: 'replicad',
+    });
+    await expect(store.getChatExecution(chatId)).resolves.toEqual({ kind: 'tau', model, hostId: 'origin' });
+    store.release(chatId);
+  });
+
+  /* Another tab can change this chat's composer record; a choice made here is written, never skipped as unchanged. */
+  it('should write a placement change even when this session last saw the same placement', async () => {
+    const chatId = 'chat_cross_tab';
+    const deps = createStubDeps();
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    const { store, session } = await openLoaded(deps, chatId);
+    /* Another tab pins the chat to the daemon that served it. */
+    seedPlacement(deps, chatId, 'origin');
+
+    session.persistenceActorRef.send({ type: 'setActiveExecution', execution: { kind: 'tau', model } });
+
+    await vi.waitFor(() => {
+      expect(placementOnDisk(deps, chatId)).toBeUndefined();
+    });
+    store.release(chatId);
+  });
+
+  /* The read connector asks for the chat's placement right after a choice; it never sees the one before it. */
+  it('should answer the host settings with the open session’s placement before its record write lands', async () => {
+    const chatId = 'chat_unwritten_pin';
+    const deps = createStubDeps();
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    const { store, session } = await openLoaded(deps, chatId);
+    const held = Promise.withResolvers<void>();
+    const writeFile = deps.client.writeFile.bind(deps.client);
+    vi.spyOn(deps.client, 'writeFile').mockImplementation(async (path, data) => {
+      if (path === placementsPath) {
+        await held.promise;
+      }
+      return writeFile(path, data);
+    });
+
+    session.persistenceActorRef.send({
+      type: 'setActiveExecution',
+      execution: { kind: 'tau', model, hostId: 'origin' },
+    });
+
+    await expect(store.getChatHostSettings(chatId)).resolves.toMatchObject({
+      activeExecution: { kind: 'tau', model, hostId: 'origin' },
+    });
+    expect(placementOnDisk(deps, chatId)).toBeUndefined();
+    held.resolve();
+    await vi.waitFor(() => {
+      expect(placementOnDisk(deps, chatId)).toBe('origin');
+    });
+    store.release(chatId);
+  });
+
+  /* A pre-XD2 record's daemon is adopted once, on open, where it is reachable, and written out of the chat record. */
+  it('should adopt a reachable legacy placement once on open, through the chat store’s adopting write', async () => {
+    const chatId = 'chat_legacy_pin';
+    const deps = createStubDeps();
+    let legacy: string | undefined = 'origin';
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    const adoptLegacyChatPlacement = vi.fn<NonNullable<ChatSessionDeps['adoptLegacyChatPlacement']>>(
+      async (_chatId, _projectId, accept) => {
+        if (legacy === undefined || !(await accept(legacy))) {
+          return undefined;
+        }
+        const adopted = legacy;
+        legacy = undefined;
+        return adopted;
+      },
+    );
+    const withLegacy = {
+      ...deps,
+      adoptLegacyChatPlacement,
+      isPlacementOnThisDevice: vi.fn(async (hostId: string) => hostId === 'origin'),
+    };
+    const { store, session } = await openLoaded(withLegacy, chatId);
+
+    expect(session.persistenceActorRef.getSnapshot().context.activeExecution).toEqual({
+      kind: 'tau',
+      model,
+      hostId: 'origin',
+    });
+    expect(placementOnDisk(deps, chatId)).toBe('origin');
+    expect(deps.patchChat).not.toHaveBeenCalled();
+
+    /* The person picks this device's local row: nothing adopts the old pin again on the next open. */
+    session.persistenceActorRef.send({ type: 'setActiveExecution', execution: { kind: 'tau', model } });
+    await vi.waitFor(() => {
+      expect(placementOnDisk(deps, chatId)).toBeUndefined();
+    });
+    store.release(chatId);
+    const reopened = await openLoaded(withLegacy, chatId);
+    expect(reopened.session.persistenceActorRef.getSnapshot().context.activeExecution).toEqual({ kind: 'tau', model });
+    reopened.store.release(chatId);
+  });
+
+  /* A device that already placed the chat never reads, or touches, the record's legacy host again. */
+  it('should leave the chat record’s legacy host alone once this device placed the chat', async () => {
+    const chatId = 'chat_legacy_already_placed';
+    const deps = createStubDeps();
+    seedPlacement(deps, chatId, 'origin');
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    const adopt = vi.fn<NonNullable<ChatSessionDeps['adoptLegacyChatPlacement']>>(async () => 'origin');
+    const { store, session } = await openLoaded({ ...deps, adoptLegacyChatPlacement: adopt }, chatId);
+
+    expect(adopt).not.toHaveBeenCalled();
+    expect(session.persistenceActorRef.getSnapshot().context.activeExecution).toEqual({
+      kind: 'tau',
+      model,
+      hostId: 'origin',
+    });
+    store.release(chatId);
+  });
+
+  /* A legacy host that is not the placement this device chose since is not this device's to drop. */
+  it('should leave a legacy placement in the chat record that differs from this device’s own placement', async () => {
+    const chatId = 'chat_legacy_other';
+    const deps = createStubDeps();
+    seedPlacement(deps, chatId, 'loopback:http://127.0.0.1:4100');
+    let legacy: string | undefined = 'origin';
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    const { store } = await openLoaded(
+      {
+        ...deps,
+        adoptLegacyChatPlacement: async (_chatId, _projectId, accept) => {
+          if (legacy === undefined || !(await accept(legacy))) {
+            return undefined;
+          }
+          legacy = undefined;
+          return 'origin';
+        },
+      },
+      chatId,
+    );
+
+    expect(legacy).toBe('origin');
+    expect(placementOnDisk(deps, chatId)).toBe('loopback:http://127.0.0.1:4100');
+    store.release(chatId);
+  });
+
+  it('should leave a legacy placement that names no host here unadopted and in the chat record', async () => {
+    const chatId = 'chat_legacy_elsewhere';
+    const deps = createStubDeps();
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    const { store, session } = await openLoaded(
+      {
+        ...deps,
+        adoptLegacyChatPlacement: async (_chatId, _projectId, accept) =>
+          (await accept('origin')) ? 'origin' : undefined,
+        isPlacementOnThisDevice: async () => false,
+      },
+      chatId,
+    );
+
+    expect(session.persistenceActorRef.getSnapshot().context.activeExecution).toEqual({ kind: 'tau', model });
+    expect(deps.patchChat).not.toHaveBeenCalled();
+    expect(placementOnDisk(deps, chatId)).toBeUndefined();
+    store.release(chatId);
+  });
+
+  /* A placement chosen in a tab that was handed a loopback daemon reaches every tab on the device; one that was not
+   * handed it runs the chat here and says so, and leaves the placement for the tab that can reach it. */
+  it('should run locally and hold this device’s placement in a tab that cannot reach it', async () => {
+    const chatId = 'chat_other_tab_pin';
+    const deps = createStubDeps();
+    seedPlacement(deps, chatId, 'loopback:http://127.0.0.1:4100');
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    const { store, session } = await openLoaded({ ...deps, isPlacementOnThisDevice: async () => false }, chatId);
+
+    const { context } = session.persistenceActorRef.getSnapshot();
+    expect(context.activeExecution).toEqual({ kind: 'tau', model });
+    expect(context.heldPlacement).toBe('loopback:http://127.0.0.1:4100');
+    await expect(store.getChatHostSettings(chatId)).resolves.toMatchObject({ activeExecution: { kind: 'tau', model } });
+
+    session.persistenceActorRef.send({
+      type: 'setActiveExecution',
+      execution: { kind: 'tau', model: 'openai-gpt-5.5' },
+    });
+    await vi.waitFor(() => {
+      expect(deps.patchChat).toHaveBeenCalledWith(
+        chatId,
+        'activeExecution',
+        expect.objectContaining({ kind: 'tau', model: 'openai-gpt-5.5' }),
+      );
+    });
+    expect(placementOnDisk(deps, chatId)).toBe('loopback:http://127.0.0.1:4100');
+    store.release(chatId);
+  });
+
+  it('should stop holding this device’s placement once the person picks an execution elsewhere', async () => {
+    const chatId = 'chat_held_then_acp';
+    const deps = createStubDeps();
+    seedPlacement(deps, chatId, 'loopback:http://127.0.0.1:4100');
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    const { store, session } = await openLoaded({ ...deps, isPlacementOnThisDevice: async () => false }, chatId);
+    expect(session.persistenceActorRef.getSnapshot().context.heldPlacement).toBe('loopback:http://127.0.0.1:4100');
+
+    session.persistenceActorRef.send({
+      type: 'setActiveExecution',
+      execution: { kind: 'acp', hostId: 'desktop', agentId: 'codex' },
+    });
+
+    expect(session.persistenceActorRef.getSnapshot().context.heldPlacement).toBeUndefined();
+    /* The choice replaces this device's placement for the chat: no tab reopens it on the held daemon. */
+    await vi.waitFor(() => {
+      expect(placementOnDisk(deps, chatId)).toBeUndefined();
+    });
+    store.release(chatId);
+  });
+
+  it('should apply a held placement once this tab can reach it', async () => {
+    const chatId = 'chat_held_then_reachable';
+    const deps = createStubDeps();
+    seedPlacement(deps, chatId, 'loopback:http://127.0.0.1:4100');
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    let reachable = false;
+    const listeners = new Set<() => void>();
+    const { store, session } = await openLoaded(
+      {
+        ...deps,
+        isPlacementOnThisDevice: async () => reachable,
+        onPlacementReachabilityChanged: (listener) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+      chatId,
+    );
+    expect(session.persistenceActorRef.getSnapshot().context.heldPlacement).toBe('loopback:http://127.0.0.1:4100');
+
+    reachable = true;
+    for (const listener of listeners) {
+      listener();
+    }
+
+    await vi.waitFor(() => {
+      expect(session.persistenceActorRef.getSnapshot().context.activeExecution).toEqual({
+        kind: 'tau',
+        model,
+        hostId: 'loopback:http://127.0.0.1:4100',
+      });
+    });
+    expect(session.persistenceActorRef.getSnapshot().context.heldPlacement).toBeUndefined();
+    store.release(chatId);
+    expect(listeners.size).toBe(0);
+  });
+
+  /*
+   * Round 19: reach changes where the chat runs as the person's own pick does. When this tab comes to reach its held
+   * daemon (`tau open --desktop` handing it over), or learns after the load that it cannot reach the placement it
+   * applied, the chat's log observer moves to the host its turns now go to and its queued commands are marked
+   * unconfirmed, so that host's run shows; nothing is persisted.
+   */
+  it.each([
+    {
+      name: 'reaches its held daemon',
+      placement: 'loopback:http://127.0.0.1:4100',
+      knownAtLoad: false,
+      reachableAfter: true,
+    },
+    {
+      name: 'cannot reach the placement it applied at load',
+      placement: 'origin',
+      knownAtLoad: undefined,
+      reachableAfter: false,
+    },
+  ] as const)(
+    'should move the chat’s observer and mark its queued commands when this tab $name',
+    async ({ placement, knownAtLoad, reachableAfter }) => {
+      const chatId = `chat_observer_follows_${String(reachableAfter)}`;
+      const deps = createStubDeps();
+      seedPlacement(deps, chatId, placement);
+      deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+      const prepared = {
+        id: 'queued_message',
+        requestId: 'queued_request',
+        message: { id: 'queued_message', role: 'user', parts: [{ type: 'text', text: 'queued' }] },
+        command: {
+          type: 'start',
+          commandId: 'queued_request',
+          payload: {
+            chatId,
+            runId: 'queued_request',
+            trigger: 'submit',
+            message: { id: 'queued_message', role: 'user', content: 'queued' },
+          },
+        },
+      };
+      await deps.client.writeFile(
+        chatMessageQueuePath(projectId, chatId),
+        new TextEncoder().encode(JSON.stringify({ version: 1, items: [prepared] })),
+      );
+      let reachable: boolean = knownAtLoad ?? false;
+      const probe = Promise.withResolvers<boolean>();
+      const listeners = new Set<() => void>();
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      store.setDependencies({
+        ...deps,
+        isPlacementOnThisDevice: async () => (knownAtLoad === undefined ? probe.promise : reachable),
+        ...(knownAtLoad === undefined ? { isPlacementOnThisDeviceNow: () => undefined } : {}),
+        onPlacementReachabilityChanged: (listener) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      });
+      const session = store.acquire(chatId, projectId);
+      await vi.waitFor(() => {
+        expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+      });
+      const connected: Array<string | undefined> = [];
+      const closed: Array<string | undefined> = [];
+      /* As the project's connector does: the host this device runs the chat on now. */
+      const unpublish = store.publishProjectHostConnector(projectId, async (id) => {
+        const settings = await store.getChatHostSettings(id);
+        const hostId = settings?.activeExecution?.hostId;
+        connected.push(hostId);
+        return {
+          placement: { hostId },
+          catchUp: writerOwnedCatchUp,
+          read: vi.fn<AgentHostClient['read']>(),
+          subscribe: vi.fn<AgentHostClient['subscribe']>(() => vi.fn()),
+          hostCommand: vi.fn<AgentHostClient['hostCommand']>(),
+          close: vi.fn(async () => {
+            closed.push(hostId);
+          }),
+        };
+      });
+      const unobserve = store.observe(chatId, projectId);
+      try {
+        await vi.waitFor(() => {
+          expect(connected.length).toBeGreaterThan(0);
+        });
+        const before = connected.at(-1);
+
+        if (knownAtLoad === undefined) {
+          probe.resolve(reachableAfter);
+        } else {
+          reachable = reachableAfter;
+          for (const listener of listeners) {
+            listener();
+          }
+        }
+
+        const after = reachableAfter ? placement : undefined;
+        await vi.waitFor(() => {
+          expect(session.persistenceActorRef.getSnapshot().context.activeExecution?.hostId).toBe(after);
+          expect(connected.at(-1)).toBe(after);
+        });
+        expect(before).not.toBe(after);
+        await vi.waitFor(() => {
+          expect(closed).toContain(before);
+          expect(deps.client.json(chatMessageQueuePath(projectId, chatId))).toHaveProperty('items', [
+            { ...prepared, commandPlacement: 'unconfirmed' },
+          ]);
+        });
+        /* Reach is this tab's, not the chat's: neither the chat record nor the device's placement changes. */
+        expect(deps.patchChat).not.toHaveBeenCalledWith(chatId, 'activeExecution', expect.anything());
+        expect(placementOnDisk(deps, chatId)).toBe(placement);
+      } finally {
+        unpublish();
+        unobserve();
+        store.release(chatId);
+      }
+    },
+  );
+
+  /* A legacy host the chat store declines (the tab knows it cannot reach it) is never written as this device's. */
+  it('should write no placement for a legacy host the chat store declines', async () => {
+    const chatId = 'chat_legacy_drop_refused';
+    const deps = createStubDeps();
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    const { store, session } = await openLoaded(
+      {
+        ...deps,
+        adoptLegacyChatPlacement: async () => undefined,
+      },
+      chatId,
+    );
+
+    expect(placementOnDisk(deps, chatId)).toBeUndefined();
+    expect(session.persistenceActorRef.getSnapshot().context.activeExecution).toEqual({ kind: 'tau', model });
+    store.release(chatId);
+  });
+
+  /* A placement write that fails costs nothing: the chat record still names the legacy host, and the next open adopts
+   * it again. */
+  it('should run this session on an adopted host even when its placement cannot be written', async () => {
+    const chatId = 'chat_legacy_unwritable';
+    const deps = createStubDeps();
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    vi.spyOn(deps.client, 'writeFile').mockRejectedValue(new Error('quota'));
+    const { store, session } = await openLoaded(
+      {
+        ...deps,
+        adoptLegacyChatPlacement: async (_chatId, _projectId, accept) =>
+          (await accept('origin')) ? 'origin' : undefined,
+      },
+      chatId,
+    );
+
+    expect(session.persistenceActorRef.getSnapshot().context.activeExecution).toEqual({
+      kind: 'tau',
+      model,
+      hostId: 'origin',
+    });
+    store.release(chatId);
+  });
+
+  it('should not rewrite an unchanged placement, and read the placements once for the project', async () => {
+    const chatId = 'chat_same_pin';
+    const deps = createStubDeps();
+    seedPlacement(deps, chatId, 'origin');
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    const { store, session } = await openLoaded(deps, chatId);
+    const writes = vi.spyOn(deps.client, 'writeFile');
+
+    session.persistenceActorRef.send({
+      type: 'setActiveExecution',
+      execution: { kind: 'tau', model: 'openai-gpt-5.5', hostId: 'origin' },
+    });
+    await vi.waitFor(() => {
+      expect(deps.patchChat).toHaveBeenCalledWith(
+        chatId,
+        'activeExecution',
+        expect.objectContaining({ kind: 'tau', model: 'openai-gpt-5.5' }),
+      );
+    });
+    expect(writes.mock.calls.filter(([path]) => path === placementsPath)).toHaveLength(0);
+
+    const reads = vi.spyOn(deps.client, 'readFile');
+    await Promise.all([store.getChatHostSettings(chatId), store.getChatHostSettings(chatId)]);
+    expect(reads.mock.calls.filter(([path]) => path === placementsPath).length).toBeLessThanOrEqual(1);
+    store.release(chatId);
+  });
+
+  /*
+   * Opening a chat never waits on the network, and never falls back to this tab while it does not know: a placement
+   * whose reach is not known yet is applied, so admission waits for that host, and it is held only once the answer
+   * says this tab cannot reach it.
+   */
+  it.each([
+    [true, { kind: 'tau', model, hostId: 'origin' }, undefined],
+    [false, { kind: 'tau', model }, 'origin'],
+  ] as const)(
+    'should apply a placement whose reach is unknown at load, and settle it when the probe answers %s',
+    async (answer, settled, held) => {
+      const chatId = `chat_probe_${String(answer)}`;
+      const deps = createStubDeps();
+      seedPlacement(deps, chatId, 'origin');
+      deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+      const probe = Promise.withResolvers<boolean>();
+      const { store, session } = await openLoaded(
+        {
+          ...deps,
+          isPlacementOnThisDevice: async () => probe.promise,
+          isPlacementOnThisDeviceNow: () => undefined,
+        },
+        chatId,
+      );
+      expect(session.persistenceActorRef.getSnapshot().context.activeExecution).toEqual({
+        kind: 'tau',
+        model,
+        hostId: 'origin',
+      });
+      expect(session.persistenceActorRef.getSnapshot().context.heldPlacement).toBeUndefined();
+
+      probe.resolve(answer);
+
+      await vi.waitFor(() => {
+        expect(session.persistenceActorRef.getSnapshot().context.activeExecution).toEqual(settled);
+      });
+      expect(session.persistenceActorRef.getSnapshot().context.heldPlacement).toBe(held);
+      store.release(chatId);
+    },
+  );
+
+  /* A pick made while discovery answers wins: the late answer adopts nothing over it. */
+  it('should not adopt a legacy placement over a choice made while its reach was being asked', async () => {
+    const chatId = 'chat_legacy_pick_during_probe';
+    const deps = createStubDeps();
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    const probe = Promise.withResolvers<boolean>();
+    const { store, session } = await openLoaded(
+      {
+        ...deps,
+        adoptLegacyChatPlacement: async (_chatId, _projectId, accept) =>
+          (await accept('origin')) ? 'origin' : undefined,
+        isPlacementOnThisDevice: async () => probe.promise,
+        isPlacementOnThisDeviceNow: () => undefined,
+      },
+      chatId,
+    );
+    const picked = { kind: 'tau', model: 'openai-gpt-5.5' } as const;
+    session.persistenceActorRef.send({ type: 'setActiveExecution', execution: picked });
+    await vi.waitFor(() => {
+      expect(deps.patchChat).toHaveBeenCalledWith(chatId, 'activeExecution', picked);
+    });
+
+    probe.resolve(true);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
+
+    expect(session.persistenceActorRef.getSnapshot().context.activeExecution).toEqual(picked);
+    expect(placementOnDisk(deps, chatId)).toBeUndefined();
+    store.release(chatId);
+  });
+
+  /* Every placements write, the project manager's for a new chat included, is seen by the next read at once. */
+  it('should read a placement another writer just kept, without waiting out the read reuse', async () => {
+    const chatId = 'chat_placement_written_elsewhere';
+    const deps = createStubDeps();
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    store.setDependencies({ isPlacementOnThisDevice: async () => true, ...deps });
+    await expect(store.getChatExecution(chatId)).resolves.toEqual({ kind: 'tau', model });
+
+    await writeChatPlacement({ client: deps.client, projectId, chatId, placement: 'origin' });
+
+    await expect(store.getChatExecution(chatId)).resolves.toEqual({ kind: 'tau', model, hostId: 'origin' });
+  });
+
+  /* One read path: a chat opened right after a listing read its project's placements reads them no second time. */
+  it('should open a chat on the placements a read moments before already holds', async () => {
+    const chatId = 'chat_open_after_listing';
+    const deps = createStubDeps();
+    seedPlacement(deps, chatId, 'origin');
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    store.setDependencies({ isPlacementOnThisDevice: async () => true, ...deps });
+    await store.getChatHostSettings(chatId);
+    const reads = vi.spyOn(deps.client, 'readFile');
+
+    const session = store.acquire(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+    });
+
+    expect(session.persistenceActorRef.getSnapshot().context.activeExecution).toEqual({
+      kind: 'tau',
+      model,
+      hostId: 'origin',
+    });
+    expect(reads.mock.calls.filter(([path]) => path === placementsPath)).toHaveLength(0);
+    store.release(chatId);
+  });
+
+  /* A reach change heard while the chat loads is not lost: the held placement is checked again once it is held. */
+  it('should apply a placement whose host became reachable while the chat was loading', async () => {
+    const chatId = 'chat_reach_during_load';
+    const deps = createStubDeps();
+    seedPlacement(deps, chatId, 'origin');
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    const listeners = new Set<() => void>();
+    let asks = 0;
+    const { store, session } = await openLoaded(
+      {
+        ...deps,
+        isPlacementOnThisDeviceNow: () => undefined,
+        onPlacementReachabilityChanged: (listener) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+        isPlacementOnThisDevice: async () => {
+          asks += 1;
+          if (asks === 1) {
+            /* The daemon comes up right after the first answer, before the load has held the placement. */
+            queueMicrotask(() => {
+              for (const listener of listeners) {
+                listener();
+              }
+            });
+            return false;
+          }
+          return true;
+        },
+      },
+      chatId,
+    );
+
+    await vi.waitFor(() => {
+      expect(session.persistenceActorRef.getSnapshot().context.activeExecution).toEqual({
+        kind: 'tau',
+        model,
+        hostId: 'origin',
+      });
+    });
+    expect(session.persistenceActorRef.getSnapshot().context.heldPlacement).toBeUndefined();
+    store.release(chatId);
+  });
+
+  /* XD2: a legacy origin placement opened past the reuse interval of a failed probe is kept and asked about again. */
+  it('should keep a legacy origin placement opened more than 30 s after a failed probe, and ask the origin again', async () => {
+    const placementModule = await import('#lib/agent-host-placement.js');
+    vi.useFakeTimers({ now: Date.parse('2026-10-23T10:00:00.000Z'), toFake: ['Date'] });
+    vi.stubGlobal('location', { origin: 'http://127.0.0.1:7777' });
+    const fetch = vi.fn<typeof globalThis.fetch>().mockRejectedValueOnce(new TypeError('network down'));
+    fetch.mockResolvedValue(
+      new Response(JSON.stringify({ v: 1, agent: true, label: 'Studio', workspaceRoot: '/work' }), {
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetch);
+    placementModule.resetOriginAgentHostAnswer();
+    try {
+      await expect(placementModule.isPlacementOnThisDevice('origin')).resolves.toBe(false);
+      vi.setSystemTime(Date.parse('2026-10-23T10:01:00.000Z'));
+      const chatId = 'chat_legacy_after_failed_probe';
+      const deps = createStubDeps();
+      deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+      let legacy: string | undefined = 'origin';
+      const { store, session } = await openLoaded(
+        {
+          ...deps,
+          isPlacementOnThisDevice: placementModule.isPlacementOnThisDevice,
+          isPlacementOnThisDeviceNow: placementModule.isPlacementOnThisDeviceNow,
+          adoptLegacyChatPlacement: async (_chatId, _projectId, accept) => {
+            if (legacy === undefined || !(await accept(legacy))) {
+              return undefined;
+            }
+            const adopted = legacy;
+            legacy = undefined;
+            return adopted;
+          },
+        },
+        chatId,
+      );
+
+      await vi.waitFor(() => {
+        expect(placementOnDisk(deps, chatId)).toBe('origin');
+      });
+      expect(session.persistenceActorRef.getSnapshot().context.activeExecution).toEqual({
+        kind: 'tau',
+        model,
+        hostId: 'origin',
+      });
+      expect(fetch).toHaveBeenCalledTimes(2);
+      store.release(chatId);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+      placementModule.resetOriginAgentHostAnswer();
+    }
+  });
+
+  it('should not hold the load on finishing a half-done legacy adoption', async () => {
+    const chatId = 'chat_adoption_slow';
+    const deps = createStubDeps();
+    seedPlacement(deps, chatId, 'origin');
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    const adopting = Promise.withResolvers<undefined>();
+    const { store, session } = await openLoaded(
+      { ...deps, adoptLegacyChatPlacement: async () => adopting.promise },
+      chatId,
+    );
+
+    expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+    adopting.resolve(undefined);
+    store.release(chatId);
+  });
+
+  it('should keep a paired device id in chat.json, where every device can reach it', async () => {
+    const chatId = 'chat_paired';
+    const deps = createStubDeps();
+    seedPlacement(deps, chatId, 'origin');
+    deps.getChat.mockResolvedValue(chatRow(chatId, projectId, { activeExecution: { kind: 'tau', model } }));
+    const { store, session } = await openLoaded(deps, chatId);
+
+    const paired = { kind: 'tau', model, hostId: 'dev_studio_mini' } as const;
+    session.persistenceActorRef.send({ type: 'setActiveExecution', execution: paired });
+
+    await vi.waitFor(() => {
+      expect(deps.patchChat).toHaveBeenCalledWith(chatId, 'activeExecution', paired);
+    });
+    await vi.waitFor(() => {
+      expect(placementOnDisk(deps, chatId)).toBeUndefined();
+    });
+    store.release(chatId);
+  });
+});
+
+/* XD3: the page names another device's run as every agent host does, by the segment's device id. */
+describe('ChatSessionStore — a run on another device (XD3)', () => {
+  /* Round 17: the page measures a run from when its segment last changed on this device, as the agent host does. */
+  it('should measure a foreign run from its segment’s modification time, as the agent host reads it', async () => {
+    const projectId = 'project_run_received';
+    const chatId = 'chat_run_received';
+    const receivedAt = Date.now() - 20 * 60 * 1000;
+    const client = Object.assign(createMemoryClient(), {
+      stat: vi.fn(async (path: string) => ({ size: 0, mtimeMs: path.endsWith('.jsonl') ? receivedAt : 0 })),
+    });
+    const row = (sequence: number, state: string) =>
+      `${JSON.stringify({ version: 1, leaderEpoch: 'desk', sequence, recordedAt: new Date(receivedAt).toISOString(), runId: 'run-received', type: 'run.lifecycle', state })}\n`;
+    await client.writeFile(
+      `/projects/${projectId}/.tau/chats/${chatId}/events/device-desktop.jsonl`,
+      new TextEncoder().encode(row(0, 'admitted') + row(1, 'running')),
+    );
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    store.setDependencies(createStubDeps(client));
+    const unobserve = store.observe(chatId, projectId);
+    store.acquire(chatId, projectId);
+
+    await store.refreshRemoteSegments(chatId, projectId);
+
+    await vi.waitFor(() => {
+      expect(store.getProjection(chatId)?.remote?.unsettled).toEqual([
+        expect.objectContaining({ runId: 'run-received', observedAt: receivedAt }),
+      ]);
+    });
+    store.release(chatId);
+    unobserve();
+  });
+
+  /*
+   * Rounds 18 and 19: quiet is evidenced by pulls, as the agent host reads it. The page reads this device's record of
+   * its pulls beside the segments, so a run quiet here for twenty minutes holds the chat until pulls found its segment
+   * as it is for more than the bound, and the page asks its project for pulls meanwhile. The store asks on its own,
+   * with no composer mounted (audit R5).
+   */
+  it('should hold a foreign run until pulls found it quiet past the bound, and ask the project for them', async () => {
+    const projectId = 'project_run_pulled';
+    const chatId = 'chat_run_pulled';
+    const receivedAt = Date.now() - 20 * 60 * 1000;
+    const client = Object.assign(createMemoryClient(), {
+      stat: vi.fn(async (path: string) => ({ size: 0, mtimeMs: path.endsWith('.jsonl') ? receivedAt : 0 })),
+    });
+    const events = `/projects/${projectId}/.tau/chats/${chatId}/events`;
+    const row = (sequence: number, state: string) =>
+      `${JSON.stringify({ version: 1, leaderEpoch: 'desk', sequence, recordedAt: new Date(receivedAt).toISOString(), runId: 'run-pulled', type: 'run.lifecycle', state })}\n`;
+    const segment = new TextEncoder().encode(row(0, 'admitted') + row(1, 'running'));
+    await client.writeFile(`${events}/device-desktop.jsonl`, segment);
+    const record = (quiet: number) =>
+      new TextEncoder().encode(
+        `${String(Date.now())}\ndevice-desktop.jsonl ${String(segment.byteLength)} ${String(quiet)}`,
+      );
+    await client.writeFile(`${events}/pulled-at`, record(60_000));
+    const pulls: string[] = [];
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    store.setDependencies({
+      ...createStubDeps(client),
+      pullRemote: async (id) => {
+        pulls.push(id);
+        return true;
+      },
+    });
+    const unobserve = store.observe(chatId, projectId);
+    store.acquire(chatId, projectId);
+
+    await store.refreshRemoteSegments(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(store.getProjection(chatId)?.remote?.unsettled).toEqual([
+        expect.objectContaining({ runId: 'run-pulled', observedAt: receivedAt, pulledQuiet: 60_000 }),
+      ]);
+    });
+    const projection = store.getProjection(chatId)!;
+    expect(selectRunElsewhere(projection, Date.now())).toMatchObject({ runId: 'run-pulled' });
+    expect(selectRunElsewhereAwaitsPull(projection, Date.now())).toBe(true);
+    await vi.waitFor(() => {
+      expect(pulls).toEqual([projectId]);
+    });
+
+    /* Pulls found nothing newer for more than the bound: the run no longer holds. */
+    await client.writeFile(`${events}/pulled-at`, record(20 * 60 * 1000));
+    await store.refreshRemoteSegments(chatId, projectId);
+    await vi.waitFor(() => {
+      expect(selectRunElsewhere(store.getProjection(chatId)!, Date.now())).toBeUndefined();
+    });
+    store.release(chatId);
+    unobserve();
+  });
+
+  /*
+   * Round 27: where this device cannot pull the chat (chat sync off, no remote, no record identity), the pull the page
+   * asks for is refused CHAT_NOT_SHARED. The pulls a quiet run awaits can then never come, so it no longer holds the
+   * chat and the composer sends, as the host's fence carries its turn; a run quiet here for less than the ask interval
+   * still holds it.
+   */
+  it.each([
+    { quietFor: 20 * 60 * 1000, holds: false },
+    { quietFor: 60 * 1000, holds: true },
+  ])(
+    'should pass a run quiet for $quietFor ms only past the ask interval where this device’s pulls are refused',
+    async ({ quietFor, holds }) => {
+      const projectId = 'project_run_unpullable';
+      const chatId = `chat_run_unpullable_${String(quietFor)}`;
+      const receivedAt = Date.now() - quietFor;
+      const client = Object.assign(createMemoryClient(), {
+        stat: vi.fn(async (path: string) => ({ size: 0, mtimeMs: path.endsWith('.jsonl') ? receivedAt : 0 })),
+      });
+      const row = (sequence: number, state: string) =>
+        `${JSON.stringify({ version: 1, leaderEpoch: 'desk', sequence, recordedAt: new Date(receivedAt).toISOString(), runId: 'run-unpullable', type: 'run.lifecycle', state })}\n`;
+      await client.writeFile(
+        `/projects/${projectId}/.tau/chats/${chatId}/events/device-desktop.jsonl`,
+        new TextEncoder().encode(row(0, 'admitted') + row(1, 'running')),
+      );
+      const asked: Array<readonly [string, string]> = [];
+      const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+      store.setDependencies({
+        ...createStubDeps(client),
+        pullRemote: async (id, chat) => {
+          asked.push([id, chat]);
+          return false;
+        },
+      });
+      const unobserve = store.observe(chatId, projectId);
+      store.acquire(chatId, projectId);
+      await store.refreshRemoteSegments(chatId, projectId);
+      await vi.waitFor(() => {
+        expect(store.getProjection(chatId)?.remote?.unsettled).toEqual([
+          expect.objectContaining({ runId: 'run-unpullable' }),
+        ]);
+      });
+
+      /* A run that awaits pulls is asked for by the store on its own (audit R5); this asks once more either way. */
+      await store.requestRemotePull(chatId);
+
+      expect(asked).toContainEqual([projectId, chatId]);
+      expect(asked.length).toBe(holds ? 1 : 2);
+      const elsewhere = selectRunElsewhere(store.getProjection(chatId)!, Date.now());
+      if (holds) {
+        expect(elsewhere).toMatchObject({ runId: 'run-unpullable' });
+      } else {
+        expect(elsewhere).toBeUndefined();
+      }
+      store.release(chatId);
+      unobserve();
+    },
+  );
+
+  it('should name the device a foreign run is on without the segment file’s extension', async () => {
+    const projectId = 'project_run_elsewhere';
+    const chatId = 'chat_run_elsewhere';
+    const client = createMemoryClient();
+    const recordedAt = new Date().toISOString();
+    const row = (sequence: number, state: string) =>
+      `${JSON.stringify({ version: 1, leaderEpoch: 'desk', sequence, recordedAt, runId: 'run-desk', type: 'run.lifecycle', state })}\n`;
+    await client.writeFile(
+      `/projects/${projectId}/.tau/chats/${chatId}/events/device-desktop.jsonl`,
+      new TextEncoder().encode(row(0, 'admitted') + row(1, 'running')),
+    );
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession });
+    store.setDependencies(createStubDeps(client));
+    const unobserve = store.observe(chatId, projectId);
+    store.acquire(chatId, projectId);
+
+    await store.refreshRemoteSegments(chatId, projectId);
+
+    await vi.waitFor(() => {
+      expect(store.getProjection(chatId)?.remote?.unsettled).toEqual([
+        expect.objectContaining({ deviceId: 'device-desktop', runId: 'run-desk', state: 'running' }),
+      ]);
+    });
+    store.release(chatId);
+    unobserve();
+  });
+});
+
+/* Audit R5: a failure that passes by itself resumes on the store's clock, not a card's, so no view has to be mounted. */
+describe('ChatSessionStore — the chat resumes on its own (audit R5)', () => {
+  const failedRows = (runId: string, detail: Record<string, unknown>): Array<Record<string, unknown>> => [
+    lifecycleRow(0, 'admitted', runId),
+    lifecycleRow(1, 'running', runId),
+    logRow(2, { runId, type: 'run.lifecycle', state: 'failed', attempt: 1, detail }),
+  ];
+  const rateLimitedRows = (runId: string): Array<Record<string, unknown>> =>
+    failedRows(runId, {
+      code: 'RATE_LIMITED',
+      message: 'The model provider asked Tau to wait.',
+      status: 429,
+      details: { retryAfterSeconds: 3 },
+    });
+
+  /* The chat's machine with the gateway's attempt route answered by the row. */
+  const lookups: string[] = [];
+  let lookupAnswers: Array<'settled' | 'waiting'> = [];
+  const chatSessionOnRoute = chatSessionMachine.provide({
+    actors: {
+      admitTurn: chatTurnAdmission,
+      lookUpModelAttempt: createAsyncLogic<'settled' | 'waiting', { readonly attemptId: string }>({
+        run: async ({ input }) => {
+          lookups.push(input.attemptId);
+          return lookupAnswers[lookups.length - 1] ?? 'waiting';
+        },
+      }),
+    },
+  });
+
+  /* What reached the chat's admission: the resume lands there, and is refused so no host is needed. */
+  const admitted: ChatTurnGesture[] = [];
+  const admitNothing = (chatId: string): void => {
+    publishAdmission(chatId, (gesture) => {
+      admitted.push(gesture);
+      throw new Error('Refused by the row.');
+    });
+  };
+
+  const openOnClock = async (chatId: string) => {
+    const clock = new StepClock();
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession: chatSessionOnRoute, clock });
+    store.setDependencies(createStubDeps());
+    admitNothing(chatId);
+    const session = store.acquire(chatId, `project_${chatId}`);
+    await vi.waitFor(() => {
+      expect(session.persistenceActorRef.getSnapshot().context.isLoadingChat).toBe(false);
+    });
+    return { clock, store, session };
+  };
+
+  const continues = (): ChatTurnGesture[] => admitted.filter((gesture) => gesture.kind === 'continue');
+
+  beforeEach(() => {
+    resetAutoResumes();
+    resetChatTurnServices();
+    admitted.length = 0;
+    lookups.length = 0;
+    lookupAnswers = [];
+  });
+
+  it('should resume a rate-limited run once its wait ends, with no failure card mounted', async () => {
+    const { clock, store, session } = await openOnClock('chat_r5_rate');
+    // The resume is still being admitted: its card stays up until the run reports.
+    const admission = Promise.withResolvers<never>();
+    publishAdmission(session.chatId, async (gesture) => {
+      admitted.push(gesture);
+      return admission.promise;
+    });
+
+    publishLogRows(store, session.chatId, rateLimitedRows('run_r5_rate'));
+
+    expect(session.stateActorRef.getSnapshot().context.autoResume).toMatchObject({
+      kind: 'rateLimit',
+      runId: 'run_r5_rate',
+      attempt: 1,
+      delayMilliseconds: 3000,
+    });
+    clock.advance(2999);
+    await Promise.resolve();
+    expect(continues()).toEqual([]);
+    clock.advance(1);
+    await vi.waitFor(() => {
+      expect(continues()).toEqual([{ kind: 'continue' }]);
+    });
+
+    clock.advance(60_000);
+    await Promise.resolve();
+    expect(continues()).toHaveLength(1);
+    expect(session.stateActorRef.getSnapshot().matches({ autoResume: 'resuming' })).toBe(true);
+    publishLogRows(store, session.chatId, [lifecycleRow(3, 'running', 'run_r5_rate')], 3);
+    expect(session.stateActorRef.getSnapshot().matches({ autoResume: 'idle' })).toBe(true);
+    admission.reject(new Error('Row over.'));
+    await vi.waitFor(() => {
+      expect(session.stateActorRef.getSnapshot().matches({ run: { queued: 'admitting' } })).toBe(false);
+    });
+    store.release(session.chatId);
+  });
+
+  it('should end a refused resume spent, so the card offers Resume again and nothing loops', async () => {
+    const { clock, store, session } = await openOnClock('chat_r5_refused');
+    publishLogRows(store, session.chatId, rateLimitedRows('run_r5_refused'));
+
+    clock.advance(3000);
+    await vi.waitFor(() => {
+      expect(continues()).toEqual([{ kind: 'continue' }]);
+      expect(session.stateActorRef.getSnapshot().matches({ autoResume: 'idle' })).toBe(true);
+    });
+    expect(session.stateActorRef.getSnapshot().context.autoResume).toBeUndefined();
+
+    clock.advance(60_000);
+    await Promise.resolve();
+    expect(continues()).toHaveLength(1);
+    store.release(session.chatId);
+  });
+
+  it('should end a resume the host never takes, so the card does not wait on it for good', async () => {
+    const { clock, store, session } = await openOnClock('chat_r5_undispatched');
+    // Admitted, but no host connector is published, so the dispatch fails.
+    publishAdmission(session.chatId, (gesture) => {
+      admitted.push(gesture);
+      const request: ChatRequest = { kind: 'continue' };
+      return request;
+    });
+    publishLogRows(store, session.chatId, rateLimitedRows('run_r5_undispatched'));
+
+    clock.advance(3000);
+    await vi.waitFor(() => {
+      expect(continues()).toEqual([{ kind: 'continue' }]);
+      expect(session.stateActorRef.getSnapshot().matches({ autoResume: 'idle' })).toBe(true);
+    });
+
+    clock.advance(600_000);
+    await Promise.resolve();
+    expect(continues()).toHaveLength(1);
+    expect(session.stateActorRef.getSnapshot().context.autoResume).toBeUndefined();
+    store.release(session.chatId);
+  });
+
+  it('should end the wait when a gesture held over the resume is refused with it', async () => {
+    const { clock, store, session } = await openOnClock('chat_r5_held');
+    const runId = 'run_r5_held';
+    const command: HostCommand = {
+      type: 'resume',
+      commandId: 'req_r5_held',
+      payload: { chatId: session.chatId, runId },
+    };
+    const hostCommand = vi.fn(async () => Promise.withResolvers<CommandAnswer>().promise);
+    const unpublish = store.publishProjectHostConnector('project_chat_r5_held', async () =>
+      mock<AgentHostClient>({ catchUp: writerOwnedCatchUp, hostCommand, close: vi.fn(async () => undefined) }),
+    );
+    // The store's resume is admitted; the person's gesture after it is refused.
+    publishAdmission(session.chatId, (gesture) => {
+      admitted.push(gesture);
+      if (admitted.length > 1) {
+        throw new Error('Refused by the row.');
+      }
+      return { kind: 'continue', command };
+    });
+    publishLogRows(store, session.chatId, rateLimitedRows(runId));
+
+    clock.advance(3000);
+    await vi.waitFor(() => {
+      expect(hostCommand).toHaveBeenCalledOnce();
+    });
+    expect(session.stateActorRef.getSnapshot().matches({ run: { queued: 'dispatched' } })).toBe(true);
+    // The person resumes by hand while the store's resume is with the host; the gesture is held over it.
+    void store.requestTurn(session.chatId, { kind: 'continue' });
+    // The store's resume ends without reaching the run, as a refused dispatch reports it.
+    session.stateActorRef.send({ type: 'runLifecycle', phase: 'failed' });
+
+    await vi.waitFor(() => {
+      expect(admitted).toHaveLength(2);
+      expect(session.stateActorRef.getSnapshot().matches({ run: 'failed' })).toBe(true);
+      expect(session.stateActorRef.getSnapshot().matches({ autoResume: 'idle' })).toBe(true);
+    });
+    unpublish();
+    store.release(session.chatId);
+  });
+
+  it('should wait anew when the resumed run fails again on its next attempt', async () => {
+    const { clock, store, session } = await openOnClock('chat_r5_again');
+    const admission = Promise.withResolvers<never>();
+    publishAdmission(session.chatId, async (gesture) => {
+      admitted.push(gesture);
+      return admission.promise;
+    });
+    publishLogRows(store, session.chatId, rateLimitedRows('run_r5_again'));
+    clock.advance(3000);
+    await vi.waitFor(() => {
+      expect(continues()).toHaveLength(1);
+    });
+    admission.reject(new Error('Settled by the row.'));
+    publishAdmission(session.chatId, (gesture) => {
+      admitted.push(gesture);
+      throw new Error('Refused by the row.');
+    });
+
+    publishLogRows(
+      store,
+      session.chatId,
+      [
+        logRow(3, { runId: 'run_r5_again', type: 'run.lifecycle', state: 'running', attempt: 2 }),
+        logRow(4, {
+          runId: 'run_r5_again',
+          type: 'run.lifecycle',
+          state: 'failed',
+          attempt: 2,
+          detail: { code: 'RATE_LIMITED', message: 'Wait again.', status: 429, details: { retryAfterSeconds: 4 } },
+        }),
+      ],
+      3,
+    );
+
+    await vi.waitFor(() => {
+      expect(session.stateActorRef.getSnapshot().context.autoResume).toMatchObject({
+        key: 'rateLimit:run_r5_again:2',
+        delayMilliseconds: 4000,
+      });
+    });
+    clock.advance(4000);
+    await vi.waitFor(() => {
+      expect(continues()).toHaveLength(2);
+    });
+    store.release(session.chatId);
+  });
+
+  it('should wait out a provider outage once', async () => {
+    const { clock, store, session } = await openOnClock('chat_r5_outage');
+
+    publishLogRows(
+      store,
+      session.chatId,
+      failedRows('run_r5_outage', {
+        code: 'PROVIDER_UNAVAILABLE',
+        message: 'The model provider is temporarily unavailable.',
+        status: 503,
+      }),
+    );
+    expect(session.stateActorRef.getSnapshot().context.autoResume).toMatchObject({ kind: 'providerUnavailable' });
+    clock.advance(2000);
+
+    await vi.waitFor(() => {
+      expect(continues()).toEqual([{ kind: 'continue' }]);
+    });
+    store.release(session.chatId);
+  });
+
+  it('should ask the gateway about a pending model attempt until it settles, then resume once', async () => {
+    lookupAnswers = ['waiting', 'settled'];
+    const { clock, store, session } = await openOnClock('chat_r5_pending');
+
+    publishLogRows(
+      store,
+      session.chatId,
+      failedRows('run_r5_pending', {
+        code: 'RUN_ABANDONED',
+        message: 'The gateway has not finished model request req_r5:1:5; resume the turn once it has.',
+        details: { attemptId: 'req_r5:1:5', code: 'MODEL_ATTEMPT_PENDING' },
+      }),
+    );
+    await clock.advanceAsync(0);
+    expect(lookups).toEqual(['req_r5:1:5']);
+    expect(continues()).toEqual([]);
+
+    await clock.advanceAsync(5000);
+
+    await vi.waitFor(() => {
+      expect(continues()).toEqual([{ kind: 'continue' }]);
+    });
+    expect(lookups).toHaveLength(2);
+    store.release(session.chatId);
+  });
+
+  it('should offer the wait of a chat whose log was read before it opened', async () => {
+    const clock = new StepClock();
+    const store = new ChatSessionStore({ projectSessions: liveSessions, chatSession: chatSessionOnRoute, clock });
+    store.setDependencies(createStubDeps());
+    admitNothing('chat_r5_read');
+    const releaseObservation = store.observe('chat_r5_read', 'project_r5_read');
+    publishLogRows(store, 'chat_r5_read', rateLimitedRows('run_r5_read'));
+
+    const session = store.acquire('chat_r5_read', 'project_r5_read');
+
+    expect(session.stateActorRef.getSnapshot().context.autoResume).toMatchObject({ kind: 'rateLimit' });
+    store.release(session.chatId);
+    releaseObservation();
+  });
+
+  it('should end the wait unspent when the chat cannot admit the resume, and wait again once it can', async () => {
+    const { clock, store, session } = await openOnClock('chat_r5_unadmitted');
+    publishLogRows(store, session.chatId, rateLimitedRows('run_r5_unadmitted'));
+
+    resetChatTurnServices();
+    clock.advance(3000);
+    await Promise.resolve();
+
+    expect(continues()).toEqual([]);
+    expect(session.stateActorRef.getSnapshot().matches({ autoResume: 'idle' })).toBe(true);
+
+    // Its route publishes the admission again: the same failed attempt is still the page's to resume.
+    admitNothing(session.chatId);
+    store.refreshMessageQueue(session.chatId);
+    expect(session.stateActorRef.getSnapshot().context.autoResume).toMatchObject({ kind: 'rateLimit', attempt: 1 });
+    clock.advance(3000);
+    await vi.waitFor(() => {
+      expect(continues()).toEqual([{ kind: 'continue' }]);
+    });
+    store.release(session.chatId);
+  });
+
+  it('should end the wait when the chat’s last view closes, and offer it again when it reopens', async () => {
+    const { clock, store, session } = await openOnClock('chat_r5_closed');
+    store.acquire(session.chatId, 'project_chat_r5_closed');
+    publishLogRows(store, session.chatId, rateLimitedRows('run_r5_closed'));
+
+    store.release(session.chatId);
+    expect(session.stateActorRef.getSnapshot().matches({ autoResume: 'counting' })).toBe(true);
+    store.release(session.chatId);
+    clock.advance(60_000);
+    await Promise.resolve();
+    expect(continues()).toEqual([]);
+
+    // The closed chat's admission went with it; its route publishes a new one when it opens again.
+    expect(store.get(session.chatId)).toBeUndefined();
+    admitNothing(session.chatId);
+    const reopened = store.acquire(session.chatId, 'project_chat_r5_closed');
+    publishLogRows(store, session.chatId, rateLimitedRows('run_r5_closed'));
+    expect(reopened.stateActorRef.getSnapshot().context.autoResume).toMatchObject({ kind: 'rateLimit', attempt: 1 });
+    clock.advance(3000);
+    await vi.waitFor(() => {
+      expect(continues()).toEqual([{ kind: 'continue' }]);
+    });
+    store.release(session.chatId);
+  });
+
+  it('should stop waiting when the person resumes by hand', async () => {
+    const { clock, store, session } = await openOnClock('chat_r5_hand');
+    publishLogRows(store, session.chatId, rateLimitedRows('run_r5_hand'));
+
+    void store.requestTurn(session.chatId, { kind: 'continue' });
+    await vi.waitFor(() => {
+      expect(continues()).toHaveLength(1);
+    });
+    clock.advance(60_000);
+    await Promise.resolve();
+
+    expect(continues()).toHaveLength(1);
+    store.release(session.chatId);
   });
 });

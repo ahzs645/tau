@@ -1,20 +1,22 @@
 import { createAuthClient } from 'better-auth/react';
 import { apiKeyClient } from '@better-auth/api-key/client';
-import { magicLinkClient } from 'better-auth/client/plugins';
-import { ENV } from '#environment.config.js';
+import { magicLinkClient, deviceAuthorizationClient } from 'better-auth/client/plugins';
+import { requireClientEnvironment } from '#environment.config.js';
 
-// Tolerate `TAU_API_URL` missing during the React Router prerender pass: that build
-// step imports the SSR bundle in Node where `process.env.TAU_API_URL` may be unset
-// (e.g. CI runners), and `createAuthClient` rejects an undefined `baseURL`. The
-// browser bundle always reads the real value from `window.ENV.TAU_API_URL` injected
-// by the root loader, and prerender never invokes any auth methods, so the
-// placeholder URL is unreachable at runtime.
-// oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive fallback for prerender/SSR where `TAU_API_URL` can be unset at type level
-const apiBaseURL = ENV.TAU_API_URL ?? 'http://localhost:4000';
+const runtimeAuthFetch: typeof globalThis.fetch = async (input, init) => {
+  const apiBaseURL = requireClientEnvironment('TAU_API_URL').replace(/\/$/u, '');
+  const requestUrl = new URL(input instanceof Request ? input.url : input);
+  const runtimeUrl = `${apiBaseURL}${requestUrl.pathname}${requestUrl.search}${requestUrl.hash}`;
+  const runtimeInput = input instanceof Request ? new Request(runtimeUrl, input) : runtimeUrl;
+  return globalThis.fetch(runtimeInput, init);
+};
 
 export const authClient = createAuthClient({
-  baseURL: `${apiBaseURL}/v1/auth`,
-  plugins: [magicLinkClient(), apiKeyClient()],
+  // Better Auth requires an absolute base URL at construction, then delegates
+  // every real request to runtimeAuthFetch where the injected host is resolved.
+  baseURL: 'https://window-env.invalid/v1/auth',
+  fetchOptions: { customFetchImpl: runtimeAuthFetch },
+  plugins: [magicLinkClient(), apiKeyClient(), deviceAuthorizationClient()],
   emailAndPassword: {
     enabled: true,
     autoSignIn: true,

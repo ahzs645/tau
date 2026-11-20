@@ -1,38 +1,69 @@
+import process from 'node:process';
 import { Module } from '@nestjs/common';
-import { AnalysisModule } from '#api/analysis/analysis.module.js';
-import { ChatModule } from '#api/chat/chat.module.js';
-import { CodeCompletionModule } from '#api/code-completion/code-completion.module.js';
-import { FileEditModule } from '#api/file-edit/file-edit.module.js';
+import type { DynamicModule } from '@nestjs/common';
+import { HostsModule } from '@taucad/api-hosts';
+import { ChatModule } from '@taucad/api-chat/chat.module';
+import { CollaborationModule } from '#api/collaboration/collaboration.module.js';
+import { DeploymentModule } from '#api/deployment/deployment.module.js';
+import { GitModule } from '#api/git/git.module.js';
 import { HealthModule } from '#api/health/health.module.js';
+import { LlmModule, ModelModule, ProviderModule } from '@taucad/api-llm-gateway';
 import { KernelsModule } from '#api/kernels/kernels.module.js';
-import { ModelModule } from '#api/models/model.module.js';
 import { PrivacyModule } from '#api/privacy/privacy.module.js';
-import { ProviderModule } from '#api/providers/provider.module.js';
+import { EmailDeliverabilityApiModule } from '#api/email-deliverability/email-deliverability.module.js';
+import { TelemetryPurposeModule } from '@taucad/api-agent-observability/telemetry-purposes/telemetry-purpose.module';
+import { AgentObservabilityModule } from '@taucad/api-agent-observability/agent-observability.module';
+import { ProjectsModule } from '#api/projects/projects.module.js';
 import { TestApiModule } from '#api/test-api/test-api.module.js';
-import { ToolModule } from '#api/tools/tool.module.js';
+import { ObservabilityDebugModule } from '#api/observability-debug/observability-debug.module.js';
 import { TelemetryIngestModule } from '#api/telemetry/telemetry.module.js';
-import { WebSocketModule } from '#api/websocket/websocket.module.js';
+import { WebSocketModule } from '@taucad/api-lifecycle';
+import { PublicationsModule } from '#api/publications/publications.module.js';
+import { DurableEventsModule } from '#api/durable-events/durable-events.module.js';
+import { JobsModule } from '#api/jobs/jobs.module.js';
+import { RepositoriesModule } from '#api/repositories/repositories.module.js';
+import { StorageAccountingModule } from '@taucad/api-object-storage/accounting';
+import { GithubModule } from '#api/github/github.module.js';
+import { ModelInvocationModule } from '#composition/model-invocation.module.js';
+import { VoiceModule } from '#api/voice/voice.module.js';
+import { CommercialEntitlementsModule } from '#api/entitlements/commercial-entitlements.module.js';
 
-@Module({
-  imports: [
-    // Shared infrastructure modules
-    WebSocketModule,
-
-    // Production modules
-    AnalysisModule,
-    ChatModule,
-    CodeCompletionModule,
-    FileEditModule,
-    HealthModule,
-    KernelsModule,
-    ModelModule,
-    PrivacyModule,
-    ProviderModule,
-    TelemetryIngestModule,
-    ToolModule,
-
-    // Testing modules
-    ...(import.meta.env.DEV ? [TestApiModule] : []),
-  ],
-})
-export class ApiModule {}
+@Module({})
+export class ApiModule {
+  public static forRoot(options: { readonly tauCloudEnabled: boolean }): DynamicModule {
+    return {
+      module: ApiModule,
+      imports: [
+        CommercialEntitlementsModule.forRoot(options),
+        ModelInvocationModule.forRoot(options),
+        WebSocketModule,
+        HostsModule,
+        ChatModule,
+        CollaborationModule,
+        DeploymentModule.forRoot(options),
+        DurableEventsModule,
+        EmailDeliverabilityApiModule,
+        GitModule,
+        GithubModule,
+        HealthModule,
+        JobsModule,
+        KernelsModule.forRoot(options),
+        LlmModule,
+        ModelModule,
+        PrivacyModule,
+        TelemetryPurposeModule.forRoot(options),
+        AgentObservabilityModule.forRoot(),
+        ProjectsModule,
+        ProviderModule,
+        PublicationsModule,
+        RepositoriesModule,
+        StorageAccountingModule,
+        TelemetryIngestModule,
+        VoiceModule,
+        ...(import.meta.env.DEV ? [TestApiModule] : []),
+        // Browser observability A12: the failure route exists only on a Sentry-reporting staging API.
+        ObservabilityDebugModule.forRoot(process.env),
+      ],
+    };
+  }
+}

@@ -1,0 +1,42 @@
+---
+title: Host Authority API
+description: Admit scoped jobs and machines sessions, advertise capabilities, and own a Node machine host.
+docType: reference
+wordBudgetOverride: 1100
+---
+
+# Host Authority API
+
+Import portable admission contracts from `@taucad/runtime/host`; Node machine hosting lives at `@taucad/runtime/host/node`. The host credential boundary establishes the actor and issues a local session. An advertised capability is discovery data, never an authorization grant.
+
+## Sessions and admission
+
+`createHostAdmissionAuthority` takes `CreateHostAdmissionAuthorityInput` with a host id and returns a `HostAdmissionAuthority`. Trusted code issues an `IssueHostSessionInput` for a `HostActor`, authority and workspace ids, and exact `HostRouteGrant` values. The opaque `HostSessionHandle` is authority-local; do not serialize or treat it as a bearer token.
+
+`HostAdmissionRoute` is `jobs` or `machines`; `HostAdmissionOperation` names an allowed operation on one route. `AdmitHostRouteInput` checks entry to a route and yields `AdmittedHostRoute`, but does not authorize every operation on it. `AdmitHostOperationInput` checks the exact operation and yields `AdmittedHostOperation`. Call its current-authority fence after awaits and before an effect. `HostAdmissionRefusal` carries a `HostAdmissionRefusalCode` for fail-closed cases such as revoked or mismatched authority.
+
+## Capability manifest
+
+`HostManifestV2` advertises versioned `HostCapabilityDescriptor` entries. `HostCapabilityRole` names known services and `HostCapabilityEndpoint` names a local route or brokered port. `parseHostManifest` bounds untrusted input and returns `AdmittedHostManifestV2` with known and inert unknown projections. `matchHostCapabilities` compares a `MatchHostCapabilitiesInput` set of `HostCapabilityRequirement` values against the manifest, returning `HostCapabilityMatch` values with a `HostCapabilityValue` for each match. Discovery does not bypass admission.
+
+`RuntimeHostDefinitionInput` and `RuntimeHostDefinition` describe the trusted host composition produced by `defineRuntime`; they are not a route grant.
+
+## Node machine owner
+
+`createNodeMachineHost` takes `CreateNodeMachineHostInput`: the `storeRoot` directory it owns, host and authority ids, admission authority, provider definitions, optional `NodeMachineRuntime`, `onOperation` (`MachineOperationTelemetry`), and error handling. It resolves to a `NodeMachineHost` that issues machines-route sessions, serves channels, completes and removes bindings, and closes its store. A second host on the same root is refused with `AUTHORITY_ALREADY_OWNED`.
+
+`NodeMachineHost.quiesce()` refuses job approvals and starts with `MACHINE_HOST_CLOSING` until resumed; reads, stops, holds, actions and started runs continue. Refused starts fail and require a new request. It waits for admitted starts to settle, bounded by `startTimeout` (`machineStartWaitMilliseconds`, 10 s). Timeout throws `MachineHostStartInFlightError` (`MACHINE_HOST_START_IN_FLIGHT`) and keeps starts refused. Await quiescence before checking streamed runs and closing; call the returned resume function, or the error's `resume`, if closing is cancelled. Serial providers without host serial access are `unavailable`, except simulators; their bindings show a remedy and never connect.
+
+`NodeMachineHost.streamingMachines()` reads ids and names of machines with streamed runs starting, running, paused or finishing, including jobs recording a streamed start as running. Runs marked `interrupted` are excluded. Hosts poll it to prevent sleep during streaming: Electron uses its power-save blocker; `tau serve --machines` uses `caffeinate` on macOS or `systemd-inhibit` on Linux and warns once elsewhere. Closing a laptop lid still sleeps it. For streamed runs, desktop quit offers machine review or explicit interruption consent.
+
+`createNodeMachineSerial` wraps a native `NodeMachineSerialDriver` as a `NodeMachineRuntime` serial service. `listSerialPorts` normalizes `NodeMachineSerialPortInfo` for discovery; `openSerial` opens a stream bounded by the requested byte limits and signal. Opening may reset the controller.
+
+`IssueNodeMachineSessionInput` carries actor and machine-route grants. `ServeNodeMachineChannelInput` pairs an authenticated session with an endpoint; `NodeMachineChannelHandle` reports closure and disposal. `CompleteNodeMachineBindingInput` supplies trusted native credentials and service trust; `RemoveNodeMachineBindingInput` identifies the binding to remove. These are not browser payloads.
+
+Host exports `exposeMachineChannel` and `MachineChannelHostOperations` serve a `MachineChannelEndpoint`. Client exports `connectMachineChannel`, `MachineChannelEndpoint` and `MachineChannelClient` from `@taucad/runtime/machine` provide readiness and close. A client rejects a hello with another `machineChannelProtocolVersion` as `MACHINE_CHANNEL_VERSION_MISMATCH`. Port and WebSocket endpoints both require session and per-operation checks.
+
+## Related
+
+- [Machines API](./machines)
+- [Jobs API](./jobs)
+- [Embedding in a host](../guides/embedding-in-a-host)

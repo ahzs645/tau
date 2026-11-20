@@ -1,0 +1,25 @@
+# Every shape the rule rejects: a project named by `nx run`, by `-p`, by
+# `--projects=`, by an `nx <target> <project>` positional, by `nx release`, and
+# negated inside a quoted `--exclude` list.
+name: Bare project
+on: [push]
+
+jobs:
+  packages:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check one package
+        run: pnpm nx run runtime:pkgcheck
+      - name: Build two
+        run: pnpm nx run-many -t build -p runtime,react
+      - name: Test the libraries
+        run: pnpm nx run-many -t test --projects=events,filesystem
+      - name: Test all affected but one
+        run: pnpm nx affected -t test --exclude '*,!filesystem'
+  services:
+    runs-on: ubuntu-latest
+    steps:
+      - name: API unit tests
+        run: pnpm nx test api --watch=false
+      - name: Publish by hand
+        run: pnpm nx release publish -p runtime,react --tag=beta

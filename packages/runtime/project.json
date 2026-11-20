@@ -3,41 +3,39 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "sourceRoot": "packages/runtime",
   "projectType": "library",
-  "tags": ["scope:shared", "type:lib"],
+  "tags": ["scope:shared", "type:package"],
+  "implicitDependencies": ["units"],
   "targets": {
-    "test": {
-      "dependsOn": ["copy-assets"]
-    },
-    "benchmark": {
-      "command": "tsx --require ./scripts/cjs-compat.cjs scripts/benchmark-kernels.mts",
+    "build": {
+      "dependsOn": ["^build"],
       "options": {
+        "command": "tsdown",
         "cwd": "{projectRoot}"
       }
     },
-    "wasm-inspect": {
-      "command": "tsx scripts/wasm-inspect.mts",
-      "options": {
-        "cwd": "{projectRoot}"
-      }
-    },
-    "build-matrix": {
-      "command": "tsx scripts/build-matrix-report.mts",
-      "options": {
-        "cwd": "{projectRoot}"
-      }
-    },
-    "compare-benchmarks": {
-      "command": "tsx scripts/compare-benchmarks.mts",
-      "options": {
-        "cwd": "{projectRoot}"
-      }
-    },
-    "size": {
-      "command": "size-limit",
+    "build-observability-bench": {
+      "command": "tsdown -c tsdown.bench.config.ts",
       "options": {
         "cwd": "{projectRoot}"
       },
-      "dependsOn": ["build"]
+      "dependsOn": ["build"],
+      "cache": false
+    },
+    "observability-bench": {
+      "command": "node node_modules/.cache/runtime-bench/observability-bench.mjs",
+      "options": {
+        "cwd": "{workspaceRoot}"
+      },
+      "configurations": {
+        "full": {
+          "args": "--mode=full"
+        },
+        "calibrate": {
+          "args": "--mode=calibrate --samples=60"
+        }
+      },
+      "dependsOn": ["build-observability-bench"],
+      "cache": false
     },
     "audit-public-surface": {
       "command": "node --import @oxc-node/core/register scripts/audit-public-surface.mts",
@@ -48,8 +46,21 @@
       "inputs": [
         "{projectRoot}/scripts/audit-public-surface.mts",
         "{projectRoot}/src/index.ts",
-        "{projectRoot}/src/client/runtime-client.ts"
+        "{projectRoot}/src/client/runtime-document-client-core.ts",
+        "{projectRoot}/tsconfig.lib.json",
+        "{projectRoot}/src/vite/index.ts"
       ]
+    },
+    "npm-local-smoke": {
+      "command": "node scripts/src/check-pack-install.ts packages/runtime packages/plugins/middleware",
+      "options": {
+        "cwd": "{workspaceRoot}"
+      },
+      "dependsOn": ["build"],
+      "cache": false
+    },
+    "test": {
+      "inputs": ["default", "^production", "serviceEnvironment", "{workspaceRoot}/packages/plugins/*/package.json"]
     }
   }
 }

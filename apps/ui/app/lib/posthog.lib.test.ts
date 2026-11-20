@@ -1,24 +1,189 @@
-import { describe, expect, it } from 'vitest';
-import { posthogConfig } from '#lib/posthog.lib.js';
+/**
+ * An invitation token is a bearer credential that lives in a URL (charter W5,
+ * D27), and analytics is in the business of recording URLs: `history_change`
+ * pageviews capture `$current_url` and `$pathname`, autocapture records the
+ * `href` of whatever was clicked, and the sign-in round trip carries the whole
+ * path back as `?redirectTo=%2Finvitations%2F…`.
+ *
+ * Anybody who can read the analytics project could then accept the invitation.
+ * These rows pin the redaction that keeps the token out of the payload.
+ */
 
-describe('posthogConfig', () => {
-  it('should enable deferred extension initialization', () => {
-    expect(posthogConfig.options.__preview_deferred_init_extensions).toBe(true);
+import { describe, expect, it, vi } from 'vitest';
+
+const consent = vi.hoisted(() => ({ status: 'accepted' }));
+
+/* eslint-disable @typescript-eslint/naming-convention -- `window.ENV`'s keys are the deployment's own environment variable names. */
+vi.mock('#environment.config.js', () => ({
+  ENV: {
+    POSTHOG_API_HOST: 'https://us.i.posthog.com',
+    POSTHOG_UI_HOST: 'https://us.posthog.com',
+    POSTHOG_CLIENT_KEY: 'phc_test',
+  },
+}));
+/* eslint-enable @typescript-eslint/naming-convention -- restore test naming rules. */
+vi.mock('#lib/cookie-consent.lib.js', () => ({ readConsentStatus: () => consent.status }));
+
+const { desktopPosthogOptions, posthogConfig, redactEventProperties } = await import('#lib/posthog.lib.js');
+const { webPosthogOptions } = await import('#lib/web-posthog.lib.js');
+
+/** One analytics event, narrowed to what these rows put in it. */
+type TestEvent = { event: string; properties?: Record<string, unknown> };
+
+describe('redactEventProperties', () => {
+  it('rewrites every string property an event carries', () => {
+    const event: TestEvent = {
+      event: '$pageview',
+      properties: {
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- PostHog's own property names.
+        $current_url: 'https://tau.new/invitations/AbC-123_xyz',
+
+        $pathname: '/invitations/AbC-123_xyz',
+
+        $referrer: 'https://tau.new/auth/sign-in?redirectTo=%2Finvitations%2FAbC-123_xyz',
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- PostHog's own property names.
+        $screen_height: 900,
+      },
+    };
+
+    const redacted = redactEventProperties(event);
+
+    expect(redacted.properties).toStrictEqual({
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- PostHog's own property names.
+      $current_url: 'https://tau.new/invitations/[redacted]',
+
+      $pathname: '/invitations/[redacted]',
+
+      $referrer: 'https://tau.new/auth/sign-in?redirectTo=%2Finvitations%2F[redacted]',
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- PostHog's own property names.
+      $screen_height: 900,
+    });
   });
 
-  it('should set cookieless_mode to on_reject', () => {
-    expect(posthogConfig.options.cookieless_mode).toBe('on_reject');
+  it('leaves an event with no properties alone', () => {
+    const bare: TestEvent = { event: '$pageview' };
+    expect(redactEventProperties(bare)).toStrictEqual({ event: '$pageview' });
   });
 
-  it('should use api proxy path as api_host', () => {
-    expect(posthogConfig.options.api_host).toBe('/api/ph');
+  it('redacts invitation URLs inside replay metadata and DOM attributes', () => {
+    const event: TestEvent = {
+      event: '$snapshot',
+      properties: {
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- PostHog replay wire property
+        $snapshot_data: [
+          { data: { node: { attributes: { href: '/invitations/AbC-123_xyz' } } } },
+          { data: { href: '/projects', textContent: 'Public heading' } },
+        ],
+      },
+    };
+    const redacted = redactEventProperties(event);
+    expect(JSON.stringify(redacted)).not.toContain('AbC-123_xyz');
+    expect(JSON.stringify(redacted)).toContain('/invitations/[redacted]');
+    expect(JSON.stringify(redacted)).toContain('Public heading');
   });
 
-  it('should use 2025-11-30 defaults', () => {
-    expect(posthogConfig.options.defaults).toBe('2025-11-30');
+  it('preserves non-plain event property values', () => {
+    const when = new Date('2026-09-29T00:00:00.000Z');
+    const event: TestEvent = { event: 'dated', properties: { when } };
+    expect(redactEventProperties(event).properties?.['when']).toBe(when);
+  });
+});
+
+describe('webPosthogOptions.before_send', () => {
+  it.each(['unknown', 'declined'])('drops events when consent is %s', (status) => {
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions, typescript/no-restricted-types -- This configuration installs one SDK hook.
+    const send = webPosthogOptions().before_send as (event: TestEvent) => TestEvent | null;
+    consent.status = status;
+    expect(send({ event: 'product_event', properties: { location: '/projects' } })).toBeNull();
+    consent.status = 'accepted';
   });
 
-  it('should disable session recording at init', () => {
-    expect(posthogConfig.options.disable_session_recording).toBe(true);
+  it('redacts the event it lets through, so nothing reaches the wire unredacted', () => {
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions, typescript/no-restricted-types -- posthog-js allows an array of hooks and this build configures exactly one, and its own signature returns `null` to drop an event.
+    const send = webPosthogOptions().before_send as (event: TestEvent) => TestEvent | null;
+
+    const sent = send({
+      event: '$pageview',
+
+      properties: { $pathname: '/invitations/AbC-123_xyz' },
+    });
+
+    expect(sent?.properties).toStrictEqual({
+      $pathname: '/invitations/[redacted]',
+    });
+  });
+});
+
+it('redacts recorder Meta and network URLs before replay compression', () => {
+  const mask = posthogConfig.options.session_recording?.maskCapturedNetworkRequestFn;
+  expect(mask).toBeDefined();
+  const redacted = mask?.({
+    name: 'https://tau.new/auth?redirectTo=%2Finvitations%2FAbC-123_xyz',
+    entryType: 'resource',
+    duration: 0,
+    startTime: 0,
+  });
+  expect(redacted?.name).toBe('https://tau.new/auth?redirectTo=%2Finvitations%2F[redacted]');
+});
+
+it('redacts sign-in tokens from event URLs', () => {
+  const sent = redactEventProperties({
+    properties: { href: 'https://tau.new/auth/reset-password?token=abc.DEF-123' },
+  });
+  expect(sent.properties).toStrictEqual({ href: 'https://tau.new/auth/reset-password?token=[redacted]' });
+});
+
+it('records replay text, masks inputs and the chat composer, and still blocks invitation links', () => {
+  const recording = posthogConfig.options.session_recording;
+  expect(recording?.maskTextSelector).toBe('.ProseMirror');
+  expect(recording?.maskAllInputs).toBe(true);
+  expect(recording?.blockSelector).toContain('a[href*="/invitations/"]');
+  /* #2290: the recorder resolves a render-blocking hint's fragment href against the address bar. */
+  expect(recording?.blockSelector).toContain('link[rel="expect"]');
+});
+
+it('leaves exception capture to Sentry on every host, overriding the project remote setting', () => {
+  // Browser observability blueprint, D4: errors go to Sentry only.
+  /* eslint-disable @typescript-eslint/naming-convention -- posthog-js option names. */
+  expect(webPosthogOptions()).toMatchObject({ capture_exceptions: false });
+  expect(desktopPosthogOptions()).toMatchObject({ capture_exceptions: false });
+  /* eslint-enable @typescript-eslint/naming-convention -- restore test naming rules. */
+});
+
+describe('webPosthogOptions', () => {
+  it('compresses captures, because the edge function forwards the body unexamined', () => {
+    /* eslint-disable @typescript-eslint/naming-convention -- posthog-js option names. */
+    expect(webPosthogOptions()).toMatchObject({ api_host: '/api/ph' });
+    /* eslint-enable @typescript-eslint/naming-convention -- restore test naming rules. */
+    expect(webPosthogOptions()).not.toHaveProperty('disable_compression');
+  });
+
+  it('leaves the desktop host compressing, since it posts straight to PostHog', () => {
+    expect(desktopPosthogOptions()).not.toHaveProperty('disable_compression');
+  });
+});
+
+describe('desktopPosthogOptions', () => {
+  it('sends without a web consent decision and still redacts invitation tokens', () => {
+    consent.status = 'unknown';
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions, typescript/no-restricted-types -- This configuration installs one SDK hook.
+    const send = desktopPosthogOptions().before_send as (event: TestEvent) => TestEvent | null;
+    const sent = send({ event: '$pageview', properties: { $pathname: '/invitations/AbC-123_xyz' } });
+    consent.status = 'accepted';
+
+    expect(sent?.properties).toStrictEqual({ $pathname: '/invitations/[redacted]' });
+  });
+
+  it('posts to the PostHog host and loads no remote extension scripts', () => {
+    const options = desktopPosthogOptions();
+    /* eslint-disable @typescript-eslint/naming-convention -- posthog-js option names. */
+    expect(options).toMatchObject({
+      api_host: 'https://us.i.posthog.com',
+      persistence: 'localStorage',
+      capture_dead_clicks: false,
+      disable_external_dependency_loading: true,
+      disable_session_recording: true,
+    });
+    /* eslint-enable @typescript-eslint/naming-convention -- restore test naming rules. */
   });
 });

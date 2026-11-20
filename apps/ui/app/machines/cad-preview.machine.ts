@@ -1,7 +1,6 @@
-import { assign, setup, enqueueActions, waitFor } from 'xstate';
+import { setup, types } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
-import type { GeometryFile } from '@taucad/types';
-import { fromSafeAsync } from '#lib/xstate.lib.js';
+import { eventSchemas, fromSafeAsync } from '@taucad/ui-core/lib/xstate.lib';
 import type { cadMachine } from '#machines/cad.machine.js';
 
 /**
@@ -17,8 +16,9 @@ type CadPreviewContext = {
   projectId: string;
   mainFile: string;
   files?: Record<string, { content: Uint8Array<ArrayBuffer> }>;
+  /** Bytes the first render stages; set only where the kernel cannot read the preview mount. */
+  stage?: Record<string, Uint8Array<ArrayBuffer>>;
   parameters: Record<string, unknown>;
-  renderOptions?: Record<string, unknown>;
   initError?: Error;
 };
 
@@ -27,8 +27,8 @@ type CadPreviewInput = {
   projectId: string;
   mainFile: string;
   files?: Record<string, { content: Uint8Array<ArrayBuffer> }>;
+  stage?: Record<string, Uint8Array<ArrayBuffer>>;
   parameters?: Record<string, unknown>;
-  renderOptions?: Record<string, unknown>;
 };
 
 type CadPreviewEvent =
@@ -36,35 +36,12 @@ type CadPreviewEvent =
   | { type: 'setParameters'; parameters: Record<string, unknown> }
   | { type: 'retry' };
 
-type EnsureParametersInput = {
-  readonly cadRef: ActorRefFrom<typeof cadMachine>;
-  readonly parameters: Record<string, unknown>;
-};
-
 /**
  * Default prepareFiles actor -- throws to enforce injection via `.provide()`.
  * Follows the same pattern as projectMachine's `loadProjectActor`.
  */
 const prepareFilesActor = fromSafeAsync<void, PrepareFilesInput>(async () => {
   throw new Error('Not implemented. Supply via cadPreviewMachine.provide({ actors: { prepareFiles } }).');
-});
-
-/**
- * Waits for cadRef's kernel client to become available, then sends parameters
- * directly to the kernel. Handles the deferred case where prepareFiles
- * completes before the kernel connects.
- */
-const ensureParametersActor = fromSafeAsync<void, EnsureParametersInput>(async ({ input, signal }) => {
-  const { cadRef, parameters } = input;
-  if (Object.keys(parameters).length === 0) {
-    return;
-  }
-
-  const snapshot = await waitFor(cadRef, (s) => s.context.kernelClient !== undefined, { signal });
-  const { kernelClient } = snapshot.context;
-  if (kernelClient) {
-    void kernelClient.updateParameters(parameters);
-  }
 });
 
 /**
@@ -79,42 +56,13 @@ const ensureParametersActor = fromSafeAsync<void, EnsureParametersInput>(async (
  * On successful preparation, sends `initializeModel` to the cadRef actor.
  */
 export const cadPreviewMachine = setup({
-  types: {
-    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
-    context: {} as CadPreviewContext,
-    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
-    input: {} as CadPreviewInput,
-    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
-    events: {} as CadPreviewEvent,
+  schemas: {
+    context: types<CadPreviewContext>(),
+    input: types<CadPreviewInput>(),
+    events: eventSchemas<CadPreviewEvent>(),
   },
   actors: {
     prepareFiles: prepareFilesActor,
-    ensureParameters: ensureParametersActor,
-  },
-  actions: {
-    initializeCadModel: enqueueActions(({ enqueue, context }) => {
-      const file: GeometryFile = {
-        path: `/projects/${context.projectId}`,
-        filename: context.mainFile,
-      };
-
-      enqueue.sendTo(context.cadRef, {
-        type: 'initializeModel',
-        file,
-        parameters: context.parameters,
-        options: context.renderOptions,
-      });
-    }),
-    forwardSetParameters: enqueueActions(({ enqueue, context, event }) => {
-      if (event.type === 'setParameters') {
-        enqueue.sendTo(context.cadRef, {
-          type: 'setParameters',
-          parameters: event.parameters,
-        });
-        const { kernelClient } = context.cadRef.getSnapshot().context;
-        void kernelClient?.updateParameters(event.parameters);
-      }
-    }),
   },
 }).createMachine({
   id: 'cadPreview',
@@ -123,15 +71,15 @@ export const cadPreviewMachine = setup({
     projectId: input.projectId,
     mainFile: input.mainFile,
     files: input.files,
+    stage: input.stage,
     parameters: input.parameters ?? {},
-    renderOptions: input.renderOptions,
     initError: undefined,
   }),
   initial: 'idle',
   states: {
     idle: {
       on: {
-        start: 'preparingFiles',
+        start: { target: 'preparingFiles' },
       },
     },
     preparingFiles: {
@@ -141,35 +89,35 @@ export const cadPreviewMachine = setup({
           files: context.files,
           projectId: context.projectId,
         }),
-        onDone: {
-          target: 'active',
-          actions: 'initializeCadModel',
+        onDone: ({ context }, enq) => {
+          enq.sendTo(context.cadRef, {
+            type: 'initializeModel',
+            entryPath: context.mainFile,
+            ...(Object.keys(context.parameters).length === 0 ? {} : { parameters: context.parameters }),
+            ...(context.stage ? { stage: context.stage } : {}),
+          });
+          return { target: 'active' };
         },
         onError: {
           target: 'error',
-          actions: assign({
-            initError: ({ event }) => (event.error instanceof Error ? event.error : new Error(String(event.error))),
+          context: ({ event }) => ({
+            initError: event.error instanceof Error ? event.error : new Error(String(event.error)),
           }),
         },
       },
     },
     active: {
-      invoke: {
-        src: 'ensureParameters',
-        input: ({ context }): EnsureParametersInput => ({
-          cadRef: context.cadRef,
-          parameters: context.parameters,
-        }),
-      },
       on: {
-        setParameters: {
-          actions: 'forwardSetParameters',
+        /* Preview values are committed on the watched document and become its export baseline. */
+        setParameters: ({ context, event }, enq) => {
+          enq.sendTo(context.cadRef, { type: 'setPreviewParameters', parameters: event.parameters });
+          return { context: { parameters: event.parameters } };
         },
       },
     },
     error: {
       on: {
-        retry: 'preparingFiles',
+        retry: { target: 'preparingFiles' },
       },
     },
   },

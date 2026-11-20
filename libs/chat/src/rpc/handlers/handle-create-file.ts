@@ -1,6 +1,8 @@
 import type { CreateFileRpcInput, CreateFileRpcResult } from '#schemas/rpc.schema.js';
 import type { RpcFileSystem } from '#rpc/rpc-dependencies.js';
 import { toRpcError } from '#rpc/rpc-error.js';
+import { assertRootedPath } from '@taucad/utils/path';
+import { sha256String } from '@taucad/utils/hash';
 
 /** @public */
 export async function handleCreateFile(
@@ -8,17 +10,20 @@ export async function handleCreateFile(
   fileSystem: RpcFileSystem,
 ): Promise<CreateFileRpcResult> {
   try {
-    await fileSystem.writeFile(input.targetFile, input.content);
+    const targetFile = assertRootedPath(input.targetFile);
+    const existed = await fileSystem.exists(targetFile);
+    const originalContent = existed ? await fileSystem.readFile(targetFile) : '';
 
-    const lineCount = input.content.split('\n').length;
-
+    await fileSystem.writeFile(targetFile, input.content);
     return {
       success: true,
-      message: `File created: ${input.targetFile}`,
+      message: `File created: ${targetFile}`,
+      // R4: the digest of the bytes just written, comparable with a later result's sourceRevision.
+      revision: { path: targetFile, digest: `sha256:${await sha256String(input.content)}` },
       diffStats: {
-        linesAdded: lineCount,
-        linesRemoved: 0,
-        originalContent: '',
+        linesAdded: input.content.split('\n').length,
+        linesRemoved: existed ? originalContent.split('\n').length : 0,
+        originalContent,
         modifiedContent: input.content,
       },
     };

@@ -1,0 +1,127 @@
+# Spike S26 (native dependency charter, I9/D8/EQ8): preparation is byte-deterministic.
+#
+# On each runner, two stores at different paths prepare the same closures with the built CLI
+# (store A from the origins, store B's build123d offline from the seed), then `diff -r` the trees
+# and compare the receipts' identity fields; build123d also against its golden darwin-arm64
+# receipt. The compare job checks two macOS 26 machines give one treeIntegrity per kernel. The
+# seed round trip (`--bundle` on A, `--seed` on an air-gapped B) is blocked on W19: tau prepare
+# has neither flag yet. Deleted when W21 lands.
+name: Spike S26 (deterministic preparation)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read # nrwl/nx-set-shas inside setup-nx
+  contents: read
+
+concurrency:
+  group: spike-s26-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  s26:
+    if: ${{ github.repository == 'taucad/tau' }}
+    name: S26 two stores (macos-26, machine ${{ matrix.machine }})
+    runs-on: macos-26
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        # Two separate macOS 26 machines: macOS 26 is Tau's only image (ruling X39), and the
+        # macOS 15 against macOS 26 comparison already passed before X39.
+        machine: [a, b]
+    outputs:
+      a: ${{ steps.tree.outputs.a }}
+      b: ${{ steps.tree.outputs.b }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+        with:
+          node-version: '24.10.0'
+          save-pnpm-store: 'false'
+
+      # The same digest-keyed seed the native-darwin job keeps (D30); restore only.
+      - name: Identify the Build123d darwin-arm64 closure
+        id: seed-key
+        run: |
+          digest=$(node --input-type=module -e '
+            import { createHash } from "node:crypto";
+            import { readFileSync } from "node:fs";
+            const manifest = JSON.parse(readFileSync("packages/plugins/build123d/tau-plugin.json", "utf8"));
+            const pins = Object.values(manifest.dependencies).flat()
+              .filter(({ target }) => target.os === "darwin" && target.arch === "arm64")
+              .flatMap(({ files }) => files.map(({ integrity }) => integrity))
+              .toSorted();
+            console.log(createHash("sha256").update(pins.join("\n")).digest("hex"));
+          ')
+          echo "key=native-seed-v2-macos$(sw_vers -productVersion | cut -d. -f1)-build123d-darwin-arm64-$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the seed
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: out/cache/build123d-seed
+          key: ${{ steps.seed-key.outputs.key }}
+
+      - name: Fill the seed from the pinned origins
+        run: pnpm nx run build123d:seed --outputStyle=static
+
+      - name: Build the CLI
+        run: pnpm nx run cli:build --outputStyle=static
+
+      - name: Run the spike
+        run: |
+          set -o pipefail
+          node --import @oxc-node/core/register scripts/spikes/native-deps/s26-determinism.mts \
+            --work "$RUNNER_TEMP/s26" --out "$RUNNER_TEMP/out" --label "macos-26-${{ matrix.machine }}" 2>&1 | tee "$RUNNER_TEMP/console.log"
+
+      - name: Record this runner's trees
+        id: tree
+        if: always()
+        env:
+          MACHINE: ${{ matrix.machine }}
+        run: |
+          trees=$(cat "$RUNNER_TEMP"/out/s26-*-tree.txt 2>/dev/null | tr '\n' ';')
+          echo "$MACHINE=$trees" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the summary
+        if: always()
+        run: |
+          { echo '```'; cat "$RUNNER_TEMP/out/s26-summary.txt" 2>/dev/null || echo 'no summary'; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          scripts/spikes/native-deps/linux/annotate.sh "S26 macos-26 ${{ matrix.machine }}" "$RUNNER_TEMP/out/s26-summary.txt"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: spike-s26-evidence-${{ matrix.machine }}
+          path: |
+            ${{ runner.temp }}/out
+            ${{ runner.temp }}/console.log
+          retention-days: 30
+
+  compare:
+    name: S26 across machines
+    needs: [s26]
+    if: ${{ github.repository == 'taucad/tau' && (always()) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Compare the trees
+        env:
+          MACHINE_A: ${{ needs.s26.outputs.a }}
+          MACHINE_B: ${{ needs.s26.outputs.b }}
+        run: |
+          line="S26 cross-machine (macos-26): a [$MACHINE_A] b [$MACHINE_B] => "
+          if [ -n "$MACHINE_A" ] && [ "$MACHINE_A" = "$MACHINE_B" ]; then line+="identical"; else line+="DIFFERENT or missing"; fi
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=S26 cross-machine::$line"

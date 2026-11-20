@@ -1,0 +1,154 @@
+// @vitest-environment jsdom
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { createMemoryRouter, RouterProvider } from 'react-router';
+
+vi.mock('#flags/use-feature.js', () => ({ useFeature: () => true }));
+vi.mock('#hooks/use-project-manager.js', () => ({ useProjectManager: () => ({ connectWorkspace: vi.fn() }) }));
+const capture = vi.hoisted(() => vi.fn());
+vi.mock('#hooks/use-analytics.js', () => ({ useAnalytics: () => ({ capture }) }));
+const webgl = vi.hoisted(() => ({ isAvailable: true }));
+vi.mock('#components/onboarding/webgl-support.js', () => ({ canCreateWebGl: () => webgl.isAvailable }));
+// The live preview is its own chunk with the real viewer; `setup-viewer-preview.test.tsx` covers its loading.
+vi.mock('#components/onboarding/setup-live-preview.js', () => ({
+  default: ({ cameraInput }: { readonly cameraInput?: { orbitStyle?: string } }) => (
+    <div data-testid='setup-live-preview' data-orbit-style={cameraInput?.orbitStyle ?? 'turntable'} />
+  ),
+}));
+/* "Take it again" reads the project listing; these suites have no project. */
+vi.mock('#hooks/use-projects.js', () => ({ useProjects: () => ({ projects: [] }) }));
+
+const { default: WelcomeRoute } = await import('#routes/welcome/route.js');
+const { personRecordStores } = await import('#preferences/person-record.store.js');
+const { SetupPreviewFallback } = await import('#components/onboarding/setup-preview-fallback.js');
+
+const renderViewerStep = (): void => {
+  const router = createMemoryRouter([{ path: '/welcome', element: <WelcomeRoute /> }], {
+    initialEntries: ['/welcome?step=viewer'],
+  });
+  render(<RouterProvider router={router} />);
+};
+
+const mouseControls = (): HTMLElement => screen.getByRole('group', { name: 'Mouse controls' });
+
+describe('setup step 3', () => {
+  beforeEach(() => {
+    globalThis.localStorage.clear();
+    capture.mockReset();
+    webgl.isAvailable = true;
+  });
+
+  it("preselects Tau's default with no tool answer", () => {
+    renderViewerStep();
+    expect(within(mouseControls()).getByRole('radio', { name: /Tau default/ })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Cube' })).toBeChecked();
+    expect(screen.getByTestId('setup-preset-reason')).toHaveTextContent('Tau’s default.');
+  });
+
+  it("preselects the tool answer's preset and gizmo", () => {
+    personRecordStores.profile.write({ tool: 'blender' });
+    renderViewerStep();
+    expect(within(mouseControls()).getByRole('radio', { name: /Middle-drag orbit, Shift pan/ })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Axis balls' })).toBeChecked();
+    expect(screen.getByTestId('setup-preset-reason')).toHaveTextContent('Suggested because you use Blender');
+  });
+
+  it('stores a chosen preset and a chosen style', async () => {
+    const user = userEvent.setup();
+    renderViewerStep();
+    await user.click(within(mouseControls()).getByRole('radio', { name: /Alt-drag navigation/ }));
+    expect(personRecordStores.viewer.read().controls.preset).toBe('alt');
+    await user.click(screen.getByRole('radio', { name: 'Classic cube' }));
+    expect(personRecordStores.viewer.read().gizmo.style).toBe('classic-cube');
+  });
+
+  it("stores None as viewDefaults['display.gizmo'] = false, and a style afterwards removes it", async () => {
+    const user = userEvent.setup();
+    renderViewerStep();
+    await user.click(screen.getByRole('radio', { name: 'None' }));
+    expect(personRecordStores.viewer.read().viewDefaults['display.gizmo']).toBe(false);
+    expect(screen.getByRole('radio', { name: 'None' })).toBeChecked();
+    expect(screen.getByTestId('setup-binding-legend')).not.toHaveTextContent('gizmo');
+    await user.click(screen.getByRole('radio', { name: 'Axes' }));
+    expect(screen.getByTestId('setup-binding-legend')).toHaveTextContent('the gizmo snaps to standard views');
+    expect(personRecordStores.viewer.read().viewDefaults).not.toHaveProperty('display.gizmo');
+    expect(personRecordStores.viewer.read().gizmo.style).toBe('axes');
+  });
+
+  it('asks for the orbit style, Turntable first, and the preview turns as the choice does', async () => {
+    const user = userEvent.setup();
+    renderViewerStep();
+    const orbit = screen.getByRole('group', { name: 'Orbit style' });
+    expect(within(orbit).getByRole('radio', { name: 'Turntable' })).toBeChecked();
+    expect(await screen.findByTestId('setup-live-preview')).toHaveAttribute('data-orbit-style', 'turntable');
+    await user.click(within(orbit).getByRole('radio', { name: 'Free orbit' }));
+    expect(personRecordStores.viewer.read().controls.orbitStyle).toBe('free');
+    expect(within(orbit).getByRole('radio', { name: 'Free orbit' })).toBeChecked();
+    expect(screen.getByTestId('setup-live-preview')).toHaveAttribute('data-orbit-style', 'free');
+  });
+
+  it('shows both orbit styles’ hints at once, each describing its own option', async () => {
+    const user = userEvent.setup();
+    renderViewerStep();
+    const orbit = screen.getByRole('group', { name: 'Orbit style' });
+    const turntable = within(orbit).getByRole('radio', { name: 'Turntable' });
+    const free = within(orbit).getByRole('radio', { name: 'Free orbit' });
+    expect(turntable).toHaveAccessibleDescription('The view stays upright and stops at the top and bottom');
+    expect(free).toHaveAccessibleDescription('The view turns freely over the top and can roll');
+    expect(within(orbit).getByText('The view stays upright and stops at the top and bottom')).toBeVisible();
+    expect(within(orbit).getByText('The view turns freely over the top and can roll')).toBeVisible();
+    await user.click(free);
+    expect(within(orbit).getByText('The view stays upright and stops at the top and bottom')).toBeVisible();
+    expect(within(orbit).getByText('The view turns freely over the top and can roll')).toBeVisible();
+  });
+
+  it('offers no trackpad switch: the mouse preset is the only mapping', () => {
+    renderViewerStep();
+    expect(screen.getByTestId('setup-legend-zoom')).toHaveTextContent('Scroll');
+    expect(screen.queryByRole('switch', { name: /trackpad/i })).not.toBeInTheDocument();
+  });
+
+  it('shows orbit, pan and zoom as key caps from the preset data', async () => {
+    const user = userEvent.setup();
+    renderViewerStep();
+    await user.click(within(mouseControls()).getByRole('radio', { name: /Middle-drag orbit, Ctrl pan/ }));
+    expect(screen.getByTestId('setup-legend-orbit')).toHaveTextContent('Middle drag');
+    const pan = screen.getByTestId('setup-legend-pan');
+    expect([...pan.querySelectorAll('kbd')].map((key) => key.textContent)).toEqual(['Ctrl', 'Middle drag']);
+  });
+});
+
+describe('setup preview fallback', () => {
+  beforeEach(() => {
+    capture.mockReset();
+  });
+
+  it('shows the diagram and reports no_webgl when WebGL is unavailable', () => {
+    webgl.isAvailable = false;
+    renderViewerStep();
+    expect(screen.getByTestId('setup-preview-fallback')).toHaveAttribute('data-reason', 'no_webgl');
+    expect(capture).toHaveBeenCalledWith('onboarding_preview_fallback_shown', { reason: 'no_webgl' });
+  });
+
+  it.each(['context_lost', 'chunk_failed'] as const)('reports %s once with the diagram for the mapping', (reason) => {
+    const { rerender } = render(<SetupPreviewFallback mapping='right-orbit' reason={reason} />);
+    rerender(<SetupPreviewFallback mapping='alt' reason={reason} />);
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(capture).toHaveBeenCalledWith('onboarding_preview_fallback_shown', { reason });
+    expect(screen.getByTestId('setup-preview-fallback')).toHaveTextContent('Orbit');
+  });
+
+  it('offers Try again when the chunk failed', async () => {
+    const onRetry = vi.fn();
+    const user = userEvent.setup();
+    render(<SetupPreviewFallback mapping='tau' reason='chunk_failed' onRetry={onRetry} />);
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it('reports nothing when there is no live preview to fall back from', () => {
+    render(<SetupPreviewFallback mapping='tau' />);
+    expect(capture).not.toHaveBeenCalled();
+  });
+});

@@ -1,0 +1,23 @@
+{
+  "title": "Networking rack",
+  "entry": "main.scad",
+  "kernel": "OpenSCAD",
+  "language": "scad",
+  "description": "Ported network equipment rack from the old gallery.",
+  "exportFormats": [
+    "glb"
+  ],
+  "initialParameters": {
+    "rack_width": 120,
+    "rack_depth": 80,
+    "rack_height": 100,
+    "wall_thickness": 2,
+    "poe_switch_width": 100,
+    "poe_switch_height": 25,
+    "patch_panel_width": 100,
+    "patch_panel_height": 20,
+    "vent_hole_size": 3,
+    "vent_spacing": 8
+  },
+  "runtimeKernel": "openscad"
+}

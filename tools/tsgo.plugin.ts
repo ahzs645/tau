@@ -10,6 +10,11 @@
  * Type resolution works through pnpm workspace symlinks and package.json exports
  * pointing to source files, so no declaration emit is needed for type-checking.
  *
+ * A project's tsconfigs each become their own command rather than one
+ * `&&`-chained string, so a failure in one never hides the diagnostics of
+ * another. Build mode (`tsgo -b`) over the solution config would aggregate them
+ * natively, but it reintroduces the project-reference problems documented below.
+ *
  * Cross-project `references` are intentionally omitted from tsconfig.lib.json and
  * tsconfig.app.json files. With `--composite false`, tsgo does not emit declarations,
  * so referenced projects' `.d.ts` outputs would never exist, causing TS6305 errors.
@@ -19,25 +24,21 @@
  * @see https://github.com/microsoft/typescript-go/issues/1182 — TS6305 with project references
  * @see https://github.com/microsoft/typescript-go/issues/506 — tsgo and composite project behavior
  */
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { existsSync } from 'node:fs';
 import { readJsonFile } from '@nx/devkit';
 import type { CreateNodesContextV2, CreateNodesResult, CreateNodesV2, ProjectConfiguration } from '@nx/devkit';
 
-type InputDefinition =
-  | { input: string; projects: string | string[] }
-  | { input: string; dependencies: true }
-  | { input: string }
-  | { fileset: string }
-  | { runtime: string }
-  | { externalDependencies: string[] }
-  | { dependentTasksOutputFiles: string; transitive?: boolean }
-  | { env: string }
-  | { workingDirectory: 'relative' | 'absolute' };
+/**
+ * The input shapes this plugin itself emits. Nx's own `InputDefinition` is a
+ * wider union it does not re-export from `@nx/devkit`, so this stays local and
+ * describes only what is constructed below — never what is read back.
+ */
+type InputDefinition = { externalDependencies: string[] };
 
 type PackageJson = {
   nx?: {
-    namedInputs?: Record<string, Array<string | InputDefinition>>;
+    namedInputs?: Record<string, unknown>;
   };
 };
 
@@ -49,18 +50,14 @@ type TsgoPluginOptions = {
   targetName?: string;
 };
 
-const tsGoFlags = '--noEmit --composite false --declaration false --declarationMap false --incremental';
-
 /**
  * Ordered list of tsconfig files to check for each project.
  * The first one found is used as the primary config for type-checking.
  */
 const tsConfigCandidates = ['tsconfig.app.json', 'tsconfig.lib.json'];
 
-function getNamedInputs(
-  directory: string,
-  context: CreateNodesContextV2,
-): Record<string, Array<string | InputDefinition>> {
+/** Only probed for key presence, so the value shape is deliberately opaque. */
+function getNamedInputs(directory: string, context: CreateNodesContextV2): Record<string, unknown> {
   const projectJsonPath = join(directory, 'project.json');
   const projectJson: ProjectConfiguration | undefined = existsSync(projectJsonPath)
     ? readJsonFile<ProjectConfiguration>(projectJsonPath)
@@ -125,8 +122,8 @@ function getAdditionalInputPatterns(workspaceRoot: string, projectRoot: string):
     patterns.push('{projectRoot}/.react-router/types/**/*');
   }
 
-  if (directoryExists(workspaceRoot, projectRoot, '.source')) {
-    patterns.push('{projectRoot}/.source/**/*');
+  if (fileExists(workspaceRoot, projectRoot, 'app/lib/fumadocs/source.config.ts')) {
+    patterns.push(`{workspaceRoot}/node_modules/.cache/fumadocs/${projectRoot}/**/*`);
   }
 
   if (fileExists(workspaceRoot, projectRoot, 'react-router.config.ts')) {
@@ -206,11 +203,18 @@ const createTsgoTarget = (
   const tsConfigInputs = getTsConfigInputs(workspaceRoot, projectRoot);
   const additionalInputPatterns = getAdditionalInputPatterns(workspaceRoot, projectRoot);
 
-  const command = tsConfigs.map((config) => `tsgo -p ${config} ${tsGoFlags}`).join(' && ');
+  // A Node runner preserves every config's diagnostics on POSIX and Windows.
+  // Nx parallel execution and shell short-circuiting both lose later failures.
+  const runner = relative(
+    join(workspaceRoot, projectRoot),
+    join(workspaceRoot, 'scripts/src/typecheck-projects.ts'),
+  ).replaceAll('\\', '/');
+  const command = `node "${runner}" ${tsConfigs.join(' ')}`;
 
   const inputs: Array<string | InputDefinition> = [
     '{projectRoot}/package.json',
-    '{workspaceRoot}/tsconfig.base.json',
+    '{workspaceRoot}/tools/typescript/base.json',
+    '{workspaceRoot}/scripts/src/typecheck-projects.ts',
     ...tsConfigInputs,
     ...sourcePatterns,
     ...additionalInputPatterns,

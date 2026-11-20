@@ -1,0 +1,122 @@
+@import 'tailwindcss' source(none);
+@import '@taucad/ui/styles/tokens.css';
+@import '@taucad/ui/styles/base.css';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@source '../../../packages/ui/src';
+@source '../../../packages/viewer/src';
+@source './';
+
+@font-face {
+  font-family: 'Geist Sans';
+  src: url('../node_modules/geist/dist/fonts/geist-sans/Geist-Variable.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('../node_modules/geist/dist/fonts/geist-mono/GeistMono-Variable.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+  }
+  :root {
+    --gallery-parameter-width: 24rem;
+    --gallery-thumbnail-width: 7rem;
+  }
+  [data-color-scheme='dark'] {
+    color-scheme: dark;
+  }
+  [data-color-scheme='light'] {
+    color-scheme: light;
+  }
+}
+
+@layer components {
+  .gallery-select {
+    @apply min-h-11 min-w-0 rounded-md border bg-background px-3 text-sm focus-visible:focus-outline;
+  }
+  .gallery-card {
+    @apply flex-col;
+  }
+  .gallery-card-media {
+    @apply aspect-video w-full border-b;
+  }
+  .gallery-workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .gallery-workspace-with-parameters {
+    grid-template-columns: minmax(0, 1fr) var(--gallery-parameter-width);
+  }
+  .gallery-parameters {
+    height: 100%;
+  }
+  .gallery-mobile-panels {
+    display: none;
+  }
+  .gallery-mobile-panels [aria-pressed='true'] {
+    @apply bg-accent text-foreground;
+  }
+}
+
+@media (max-width: 63.999rem) {
+  .gallery-workspace-with-parameters {
+    display: flex;
+    flex-direction: column;
+  }
+  .gallery-preview,
+  .gallery-parameter-host {
+    flex: 1;
+  }
+  .gallery-mobile-hidden {
+    display: none;
+  }
+  .gallery-mobile-panels {
+    display: flex;
+  }
+  .gallery-parameters {
+    border-left: 0;
+  }
+}
+
+@media (max-width: 39.999rem) {
+  .gallery-card {
+    flex-direction: row;
+  }
+  .gallery-card-media {
+    width: var(--gallery-thumbnail-width);
+    aspect-ratio: auto;
+    border-bottom: 0;
+    @apply border-r;
+  }
+  .gallery-filters > div {
+    flex-basis: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

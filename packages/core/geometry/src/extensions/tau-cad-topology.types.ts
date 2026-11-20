@@ -1,0 +1,70 @@
+import type { SpatialMatrix } from '@taucad/spatial';
+import type {
+  JointInterface,
+  JointEndpoint,
+  MechanismIntent,
+  MechanismDiagnostic,
+} from '#extensions/mechanism-intent.types.js';
+import type { Mechanism } from '@taucad/kinematics';
+import type { JSONObject } from '@taucad/runtime/types';
+
+/** A producer-defined face range. Replicad v1 counts triangle index accessor entries; verify its span-unit marker before interpreting. @public */
+export type TauCadTopologyFaceGroup = { readonly start: number; readonly count: number; readonly faceId: number };
+/** A producer-defined edge range. Replicad v1 counts flat XYZ scalars in a non-indexed LINES primitive; verify its span-unit marker before interpreting. @public */
+export type TauCadTopologyEdgeGroup = { readonly start: number; readonly count: number; readonly edgeId: number };
+
+/** One glTF primitive referenced by a topology component. @public */
+export type TauCadTopologyPrimitiveRef = {
+  readonly nodeIndex: number;
+  readonly meshIndex: number;
+  readonly primitiveIndex: number;
+};
+
+/** Export capability advertised by a topology component. @public */
+export type TauCadTopologyExport = {
+  readonly fidelity: 'mesh' | 'brep';
+  readonly formats: string[];
+  readonly available: boolean;
+  readonly reason?: string;
+};
+
+/** A semantic CAD component mapped onto glTF primitives. @public */
+export type TauCadTopologyComponent = {
+  readonly id: string;
+  readonly name: string;
+  readonly kind: string;
+  readonly selector: string;
+  /** Authored sRGB RGBA display color. */
+  readonly color?: [number, number, number, number];
+  /** As-built component-local to model frame, in the GLB vertex units and axes. */
+  readonly placement?: SpatialMatrix;
+  readonly jointInterfaces?: Readonly<Record<string, JointInterface>>;
+  /** Public aliases resolve to the actual moving descendant, never a copied frame. */
+  readonly jointInterfaceAliases?: Readonly<Record<string, JointEndpoint>>;
+  readonly nodeIndex?: number;
+  readonly meshIndex?: number;
+  readonly parentId?: string;
+  readonly childIds?: string[];
+  readonly primitiveIndices?: number[];
+  readonly primitiveRefs?: TauCadTopologyPrimitiveRef[];
+  readonly faceGroups?: TauCadTopologyFaceGroup[];
+  readonly edgeGroups?: TauCadTopologyEdgeGroup[];
+  readonly sourceRefs?: JSONObject;
+  readonly capabilities?: {
+    readonly hasPreciseTopology?: boolean;
+    readonly exports?: TauCadTopologyExport[];
+  };
+};
+
+/** Version 1 payload stored by the `TAU_cad_topology` glTF extension. @public */
+export type TauCadTopologyPayload = {
+  readonly schemaVersion: 1;
+  readonly components: TauCadTopologyComponent[];
+  /**
+   * The model's mechanism in this glTF's vertex space: lengths in the vertices' unit, origins and
+   * axes in the vertices' frame, link components as `components[].id` values.
+   */
+  readonly mechanism?: Mechanism;
+  readonly mechanismIntent?: MechanismIntent;
+  readonly mechanismDiagnostics?: readonly MechanismDiagnostic[];
+};

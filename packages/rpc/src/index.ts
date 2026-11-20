@@ -6,19 +6,20 @@
  * {@link ../../../docs/architecture/rpc-wire-spec.md}.
  */
 
-export type { Port } from '#port.js';
-export { wrapMessagePort } from '#port.js';
+export type { Codec, MessagePortLike, MessagePortMainLike, Port, WebSocketLike } from '#port.js';
+export { wrapMessagePort, wrapMessagePortMain, wrapWebSocket } from '#port.js';
 
 export type {
   Channel,
   ChannelClientOptions,
+  ChannelCallContext,
+  ChannelCallOptions,
   ChannelContext,
   ChannelServer,
   ChannelServerHandle,
   ChannelServerOptions,
-  CloseInfo,
   EmptyRpcProtocol,
-  RpcProtocol,
+  StreamFlowControlOptions,
   WithTransferables,
 } from '#channel.js';
 export {
@@ -28,6 +29,9 @@ export {
   createChannelServer,
   createChannelServerOptions,
 } from '#channel.js';
+export { ChannelClosedError } from '#channel-closed-error.js';
+export type { ChannelCloseCode, CloseInfo } from '#channel-closed-error.js';
+export type { RpcProtocol } from '#protocol.js';
 
 export type {
   WireBye,
@@ -37,10 +41,12 @@ export type {
   WireHello,
   WireHelloError,
   WireHelloOk,
+  WireKeepalive,
   WireMessage,
   WireNotify,
   WireRequest,
   WireRequestCancel,
+  WireRequestProgress,
   WireResponse,
   WireResponseError,
   WireResponseOk,
@@ -49,6 +55,8 @@ export type {
   WireStreamNext,
   WireStreamSubscribe,
   WireStreamUnsubscribe,
+  WireVersionMismatchDiagnostic,
+  WireVersionMismatchHandler,
 } from '#wire.js';
 export { isWireMessage, wireVersion } from '#wire.js';
 

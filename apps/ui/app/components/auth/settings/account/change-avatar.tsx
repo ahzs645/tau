@@ -7,22 +7,21 @@ import { useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { toast } from 'sonner';
 import { UserAvatar } from '#components/auth/user/user-avatar.js';
-import { Button } from '#components/ui/button.js';
+import { Button } from '@taucad/ui/components/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '#components/ui/dropdown-menu.js';
-import { Field } from '#components/ui/field.js';
-import { Label } from '#components/ui/label.js';
-import { Spinner } from '#components/ui/spinner.js';
+} from '@taucad/ui/components/dropdown-menu';
+import { Spinner } from '@taucad/ui-kit/components/spinner';
+import { cn } from '@taucad/ui/utils/cn';
 
 export type ChangeAvatarProps = {
   className?: string;
 };
 
-export function ChangeAvatar({ className }: ChangeAvatarProps) {
+export function ChangeAvatar({ className }: ChangeAvatarProps): React.JSX.Element {
   const { authClient, localization, avatar } = useAuth();
   const { data: session } = useSession(authClient);
 
@@ -34,18 +33,18 @@ export function ChangeAvatar({ className }: ChangeAvatarProps) {
 
   const isPending = updatePending || isUploading || isDeleting;
 
-  async function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
+  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
     if (!file) {
       return;
     }
 
-    e.target.value = '';
+    event.target.value = '';
 
     setIsUploading(true);
 
     try {
-      const resized = (await avatar.resize?.(file, avatar.size, avatar.extension)) || file;
+      const resized = await avatar.resize(file, avatar.size, avatar.extension);
 
       const image = (await avatar.upload?.(resized)) ?? (await fileToBase64(resized));
 
@@ -87,46 +86,43 @@ export function ChangeAvatar({ className }: ChangeAvatarProps) {
   }
 
   return (
-    <Field className={className}>
-      <Label>{localization.settings.avatar}</Label>
-
+    <div className={cn('flex items-center gap-3', className)}>
       <input ref={fileInputRef} type='file' accept='image/*' className='hidden' onChange={handleFileChange} />
 
-      <div className='flex items-center gap-4'>
-        <Button
-          type='button'
-          variant='ghost'
-          className='h-auto w-auto rounded-full p-0'
-          disabled={isPending}
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <UserAvatar className='size-12' isPending={isPending} />
-        </Button>
+      <Button
+        type='button'
+        variant='ghost'
+        className='h-auto w-auto rounded-full p-0'
+        aria-label={localization.settings.uploadAvatar}
+        disabled={isPending}
+        onClick={() => fileInputRef.current?.click()}
+      >
+        <UserAvatar className='size-9' isPending={isPending} />
+      </Button>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant='secondary' size='sm' disabled={!session || isPending}>
-              {isPending && <Spinner />}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant='outline' disabled={!session || isPending}>
+            {isPending && <Spinner />}
 
-              {localization.settings.changeAvatar}
-            </Button>
-          </DropdownMenuTrigger>
+            {localization.settings.changeAvatar}
+          </Button>
+        </DropdownMenuTrigger>
 
-          <DropdownMenuContent className='min-w-fit'>
-            <DropdownMenuItem onClick={() => fileInputRef.current?.click()}>
-              <Upload className='text-muted-foreground' />
+        <DropdownMenuContent align='end' className='min-w-fit'>
+          <DropdownMenuItem onClick={() => fileInputRef.current?.click()}>
+            <Upload className='text-muted-foreground' />
 
-              {localization.settings.uploadAvatar}
-            </DropdownMenuItem>
+            {localization.settings.uploadAvatar}
+          </DropdownMenuItem>
 
-            <DropdownMenuItem variant='destructive' disabled={!session?.user.image} onClick={handleDelete}>
-              <Trash2 />
+          <DropdownMenuItem variant='destructive' disabled={!session?.user.image} onClick={handleDelete}>
+            <Trash2 />
 
-              {localization.settings.deleteAvatar}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-    </Field>
+            {localization.settings.deleteAvatar}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 }

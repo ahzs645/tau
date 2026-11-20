@@ -1,9 +1,10 @@
+import { getProviderId } from '@better-auth-ui/core';
 import { useAuth } from '@better-auth-ui/react';
 import { useMemo, useState } from 'react';
 import type React from 'react';
 import type { SocialProvider } from 'better-auth/social-providers';
 
-import { cn } from '#utils/ui.utils.js';
+import { cn } from '@taucad/ui/utils/cn';
 import { ProviderButton } from '#components/auth/provider-button.js';
 
 export type ProviderButtonsProps = {
@@ -45,8 +46,8 @@ export function ProviderButtons({ socialLayout = 'auto' }: ProviderButtonsProps)
     >
       {socialProviders?.map((provider) => (
         <ProviderButton
-          key={provider}
-          provider={provider}
+          key={getProviderId(provider)}
+          provider={getProviderId(provider)}
           activeProvider={activeProvider}
           onActiveProviderChange={setActiveProvider}
           display={resolvedSocialLayout === 'vertical' ? 'full' : resolvedSocialLayout === 'grid' ? 'name' : 'icon'}

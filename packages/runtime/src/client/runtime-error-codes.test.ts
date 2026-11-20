@@ -1,65 +1,85 @@
 // @vitest-environment node
-/**
- * Locks the typed `code` discriminator on every public runtime-client error
- * class. Consumers classify failures via `error.code` (literal string union)
- * instead of `instanceof` chains or `error.name` substring matches.
- *
- * Type-level assertions (`expectTypeOf`) lock the literal return type so any
- * future widening from `'RUNTIME_RENDER_TIMEOUT'` to `string` fails CI.
- */
-import { describe, it, expect, expectTypeOf } from 'vitest';
+import { runInNewContext } from 'node:vm';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
-  NoRenderOutcomeError,
-  RenderTimeoutError,
-  RenderAbortedError,
-  RuntimeConnectionError,
-  RuntimeNotConnectedError,
+  isOperationAbortedError,
+  isOperationTimeoutError,
+  OperationAbortedError,
+  OperationTimeoutError,
   RuntimeTerminatedError,
+  isRuntimeTerminatedError,
   SharedPoolEntryNotFoundError,
 } from '#index.js';
+import { RuntimeConfigError } from '#worker/runtime-definition.js';
 
-describe('runtime error codes', () => {
-  it('NoRenderOutcomeError exposes code RUNTIME_NO_RENDER_OUTCOME', () => {
-    const error = new NoRenderOutcomeError();
-    expect(error.code).toBe('RUNTIME_NO_RENDER_OUTCOME');
-    expectTypeOf(error.code).toEqualTypeOf<'RUNTIME_NO_RENDER_OUTCOME'>();
+describe('public runtime error codes', () => {
+  it('keeps exact operation discriminators and phases', () => {
+    const aborted = new OperationAbortedError('evaluate');
+    const timedOut = new OperationTimeoutError('export', 'Export timed out.');
+    expect(aborted.code).toBe('RUNTIME_OPERATION_ABORTED');
+    expect(timedOut.code).toBe('RUNTIME_OPERATION_TIMEOUT');
+    expect(aborted.phase).toBe('evaluate');
+    expect(timedOut.phase).toBe('export');
+    expectTypeOf(aborted.code).toEqualTypeOf<'RUNTIME_OPERATION_ABORTED'>();
+    expectTypeOf(timedOut.code).toEqualTypeOf<'RUNTIME_OPERATION_TIMEOUT'>();
   });
 
-  it('RenderTimeoutError exposes code RUNTIME_RENDER_TIMEOUT', () => {
-    const error = new RenderTimeoutError(30_000);
-    expect(error.code).toBe('RUNTIME_RENDER_TIMEOUT');
-    expectTypeOf(error.code).toEqualTypeOf<'RUNTIME_RENDER_TIMEOUT'>();
+  it('recognizes genuine cross-realm errors and rejects name-only impostors', () => {
+    const foreign: unknown = runInNewContext(
+      "Object.assign(new Error('remote timeout'), { name: 'OperationTimeoutError', code: 'RUNTIME_OPERATION_TIMEOUT', phase: 'render' })",
+    );
+    expect(foreign).not.toBeInstanceOf(Error);
+    expect(isOperationTimeoutError(foreign)).toBe(true);
+    expect(isOperationAbortedError({ name: 'OperationAbortedError' })).toBe(false);
+    expect(isOperationTimeoutError({ name: 'OperationTimeoutError', code: 'RUNTIME_OPERATION_TIMEOUT' })).toBe(false);
   });
 
-  it('RenderAbortedError exposes code RUNTIME_RENDER_ABORTED', () => {
-    const error = new RenderAbortedError();
-    expect(error.code).toBe('RUNTIME_RENDER_ABORTED');
-    expectTypeOf(error.code).toEqualTypeOf<'RUNTIME_RENDER_ABORTED'>();
+  it('keeps runtime configuration, termination and pool-error codes', () => {
+    const cause = new Error('invalid endpoint');
+    const config = new RuntimeConfigError('Invalid runtime config: endpoint: Invalid URL', cause);
+    const terminated = new RuntimeTerminatedError();
+    const missing = new SharedPoolEntryNotFoundError('missing-key');
+    expect(config.code).toBe('RUNTIME_CONFIG_INVALID');
+    expect(config.cause).toBe(cause);
+    expect(terminated.code).toBe('RUNTIME_TERMINATED');
+    expect(missing.code).toBe('RUNTIME_SHARED_POOL_KEY_MISSING');
+    expect(missing.key).toBe('missing-key');
+    expectTypeOf(config.code).toEqualTypeOf<'RUNTIME_CONFIG_INVALID'>();
+    expectTypeOf(terminated.code).toEqualTypeOf<'RUNTIME_TERMINATED'>();
+    expectTypeOf(missing.code).toEqualTypeOf<'RUNTIME_SHARED_POOL_KEY_MISSING'>();
   });
 
-  it('RuntimeConnectionError exposes code RUNTIME_CONNECTION_FAILED and a typed causeKind', () => {
-    const error = new RuntimeConnectionError('boom', 'kernel-binding', undefined);
-    expect(error.code).toBe('RUNTIME_CONNECTION_FAILED');
-    expect(error.causeKind).toBe('kernel-binding');
-    expectTypeOf(error.code).toEqualTypeOf<'RUNTIME_CONNECTION_FAILED'>();
-  });
-
-  it('RuntimeNotConnectedError exposes code RUNTIME_NOT_CONNECTED', () => {
-    const error = new RuntimeNotConnectedError('openFile');
-    expect(error.code).toBe('RUNTIME_NOT_CONNECTED');
-    expectTypeOf(error.code).toEqualTypeOf<'RUNTIME_NOT_CONNECTED'>();
-  });
-
-  it('RuntimeTerminatedError exposes code RUNTIME_TERMINATED', () => {
-    const error = new RuntimeTerminatedError();
-    expect(error.code).toBe('RUNTIME_TERMINATED');
-    expectTypeOf(error.code).toEqualTypeOf<'RUNTIME_TERMINATED'>();
-  });
-
-  it('SharedPoolEntryNotFoundError exposes code RUNTIME_SHARED_POOL_KEY_MISSING', () => {
-    const error = new SharedPoolEntryNotFoundError('missing-key');
-    expect(error.code).toBe('RUNTIME_SHARED_POOL_KEY_MISSING');
-    expect(error.key).toBe('missing-key');
-    expectTypeOf(error.code).toEqualTypeOf<'RUNTIME_SHARED_POOL_KEY_MISSING'>();
+  it('recognizes serialized termination causes and rejects malformed discriminators', () => {
+    const serialized: unknown = runInNewContext(
+      "({ name: 'RuntimeTerminatedError', code: 'RUNTIME_TERMINATED', message: 'host exited', causeKind: 'transport-closed' })",
+    );
+    expect(isRuntimeTerminatedError(serialized)).toBe(true);
+    expect(
+      isRuntimeTerminatedError(
+        runInNewContext(
+          "({ name: 'RuntimeTerminatedError', code: 'RUNTIME_TERMINATED', message: 'host exited', causeKind: 'transport-closed', detail: { phase: 'session', exitCode: 9, released: false, stderrTail: 'fault' } })",
+        ),
+      ),
+    ).toBe(true);
+    expect(isRuntimeTerminatedError({ name: 'RuntimeTerminatedError', code: 'RUNTIME_TERMINATED', message: 'x' })).toBe(
+      false,
+    );
+    expect(
+      isRuntimeTerminatedError({
+        name: 'RuntimeTerminatedError',
+        code: 'RUNTIME_TERMINATED',
+        message: 'x',
+        causeKind: 'unknown',
+      }),
+    ).toBe(false);
+    expect(
+      isRuntimeTerminatedError({
+        name: 'RuntimeTerminatedError',
+        code: 'RUNTIME_TERMINATED',
+        message: 'x',
+        causeKind: 'transport-closed',
+        detail: { phase: 'startup' },
+      }),
+    ).toBe(false);
   });
 });

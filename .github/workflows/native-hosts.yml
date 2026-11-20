@@ -1,0 +1,507 @@
+# The cross-host native rows (charter W14, D15–D18, D30): `tau prepare build123d` reaches `ready`
+# from the pinned closure on each declared host and the Build123d suites pass there, and the hosts
+# no closure serves refuse with a typed reason before any download.
+#
+# - Linux x64 and arm64 (glibc): prepare, read `selection.host` from the receipt, run the Build123d
+#   suites; on x64 also glibc 2.28 target acceptance (offline cold-store miss) and
+#   Alpine refusal (`blocked`, axis `libc`), each in a container, and the runner with libGL moved aside
+#   (`blocked`, `missing-system-library`, ruling X6).
+# - Linux x64 (glibc) also runs the projects with a `test:native-linux` target, as `native-darwin.yml`
+#   runs `test:native-darwin`: PicoGK's pinned closure, prepared from the checked-in manifest's origins,
+#   must equal its golden receipt's `linux-x64-glibc` entry, and the native suites run on it.
+# - macOS Intel (darwin-x64): the same prepare and suites, PicoGK's typed refusal on the `arch` axis
+#   and a refused `TAU_DEPENDENCY_TARGET`; `macos-26-intel`, GitHub-hosted (ruling X39).
+#
+# One job per host and project (ST-3, lane budget, operator approval 2026-11-18), so the slowest job is one
+# project's checks rather than all of them in series: `build123d` runs the Build123d suites on the seed;
+# `cli` builds the CLI and runs `tau prepare build123d` to `ready`, and on linux-x64 the glibc 2.28, musl
+# and libGL selection checks; `picogk` runs each `test:native-linux` project on linux-x64 (a job per
+# project) and PicoGK's typed refusals on darwin-x64. Every check runs exactly as before, in exactly one
+# job, and the caller's required check needs every job (a failed job fails the called workflow).
+#
+# Placement (CI throughput review Q-3, 2026-11-13; INTEL-1, operator approval 2026-11-18, ping 2):
+# - Linux rows: `ci.yml` calls this workflow (`workflow_call`, `hosts: linux`) in the merge queue, and on a
+#   push to `main` the queue did not already prove, when its plan finds a `tag:ci:native-hosts` project
+#   (Build123d, PicoGK, the CLI) or a `test:native-linux` project affected, with the affected
+#   `test:native-linux` projects as `native-linux`. The plan job here is then skipped, and the required
+#   check fails when a row does. Never on a pull request: the queue proves the rows on the exact commit that
+#   lands, and a push that reuses the queue verdict runs none again.
+# - Intel rows (darwin-x64): never in the merge queue, where they were its slowest jobs (cli 33.2, build123d
+#   29.6, picogk 25.6 min p95) and the runner lost contact mid-job, as MAC-X left it (tau #2505).
+#   `release-desktop-staging.yml` job `Intel native gate` calls this workflow with `hosts: intel` and the
+#   candidate's `ref`, with no cache token, and its tag job needs it, so no desktop candidate exists without
+#   every darwin-x64 row green on its own commit.
+# The push and schedule triggers are gone: the daily drift check (`drift-check.yml`, Q-7) dispatches this workflow when a runner image or
+# registry digest changed, and that dispatch or a manual one runs the plan here, which selects every row
+# and is not a required check. The 03:17 nightly was retired once the drift check dispatched this workflow
+# green and the queue had run the Intel row green twice (resume § 5b).
+name: Native hosts
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      hosts:
+        description: '`linux`: the Linux rows (`ci.yml`, the merge queue and a push). `intel`: the darwin-x64 rows alone (the desktop candidate gate).'
+        type: string
+        required: true
+      native-linux:
+        description: "The affected `test:native-linux` projects, comma-separated, from `ci.yml`'s plan (with `hosts: linux`)."
+        type: string
+        required: false
+        default: ''
+      ref:
+        description: The commit the rows check out (the desktop candidate's); empty checks out the caller's.
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  pnpm_config_verify_deps_before_run: warn
+  NX_NO_CLOUD: 'true'
+  # `NX_NO_CLOUD` turns off Nx Cloud only; the self-hosted cache below is Nx's HTTP remote cache, which it
+  # leaves on. Nx remote cache, provisioned by tau-cloud `tau-ci-cache`, read with the read token only: no job
+  # here has an environment or `id-token: write`, so none can write (`ci.yml` writes, from `main` and its queue).
+  # The server is set only when a token is present (fork and Dependabot runs get none, and Nx fails on
+  # a tokenless 403).
+  NX_SELF_HOSTED_REMOTE_CACHE_SERVER: ${{ secrets.NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN != '' && vars.NX_SELF_HOSTED_REMOTE_CACHE_SERVER || '' }}
+  NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ secrets.NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN }}
+
+# Nothing here is cancelled. A called run (where `inputs.hosts` is set) gets a group of its own
+# (`github.run_id`): `ci.yml`'s group already holds the run, and a shared group would let a newer push
+# replace a `main` run's rows still waiting for a runner, which `ci.yml` never cancels. Each dispatch keeps
+# a group of its own. The group names this workflow literally: called from `ci.yml`,
+# `github.workflow` is `CI`, and a group equal to the caller's would cancel the call.
+concurrency:
+  group: native-hosts-${{ inputs.hosts != '' && github.run_id || format('{0}-{1}', github.event_name, github.ref) }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Select the native host rows
+    # Called (`inputs.hosts` set), the caller selected the rows; a dispatch runs this.
+    if: ${{ github.repository == 'taucad/tau' && (inputs.hosts == '') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      linux: ${{ steps.plan.outputs.linux }}
+      intel: ${{ steps.plan.outputs.intel }}
+      native-linux: ${{ steps.plan.outputs.native-linux }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+        with:
+          save-pnpm-store: 'false'
+
+      # On dispatch, every row and every `test:native-linux` project. `tail -1` drops Nx's log lines.
+      - name: Select the rows
+        id: plan
+        run: |
+          set -o pipefail
+          native=$(pnpm nx show projects --with-target test:native-linux --json | tail -1)
+          echo "Native linux-x64 rows: $native"
+          echo "native-linux=$(jq -r 'join(",")' <<< "$native")" >> "$GITHUB_OUTPUT"
+          echo "linux=true" >> "$GITHUB_OUTPUT"
+          echo "intel=true" >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: Native kernels on ${{ matrix.target }} (${{ matrix.project }})
+    needs: [plan]
+    # Called from `ci.yml` (`hosts: linux`), the plan is skipped and `ci.yml`'s plan selected these rows.
+    if: ${{ github.repository == 'taucad/tau' && (!cancelled() && (inputs.hosts == 'linux' || needs.plan.outputs.linux == 'true')) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64-glibc
+            runner: ubuntu-24.04
+            arch: x64
+            project: build123d
+          - target: linux-x64-glibc
+            runner: ubuntu-24.04
+            arch: x64
+            project: cli
+          - target: linux-arm64-glibc
+            runner: ubuntu-24.04-arm
+            arch: arm64
+            project: build123d
+          - target: linux-arm64-glibc
+            runner: ubuntu-24.04-arm
+            arch: arm64
+            project: cli
+    env:
+      TARGET: ${{ matrix.target }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+        with:
+          save-pnpm-store: ${{ github.event_name == 'push' }}
+
+      - name: Setup Linux sandbox prerequisites
+        id: sandbox
+        uses: ./.github/actions/setup-linux-sandbox
+
+      # The seed holds archive bytes only, so it is keyed by this target's pins alone.
+      - name: Identify the Build123d closure
+        id: seed-key
+        run: |
+          digest=$(node --input-type=module -e '
+            import { createHash } from "node:crypto";
+            import { readFileSync } from "node:fs";
+            const manifest = JSON.parse(readFileSync("packages/plugins/build123d/tau-plugin.json", "utf8"));
+            const key = ({ os, arch, libc }) => [os, arch, libc].filter(Boolean).join("-");
+            const pins = Object.values(manifest.dependencies).flat()
+              .filter(({ target }) => key(target) === process.env.TARGET)
+              .flatMap(({ files }) => files.map(({ integrity }) => integrity))
+              .toSorted();
+            if (pins.length === 0) throw new Error(`The manifest pins no ${process.env.TARGET} dependency file.`);
+            console.log(createHash("sha256").update(pins.join("\n")).digest("hex"));
+          ')
+          echo "key=native-seed-v2-build123d-$TARGET-$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the seed
+        id: seed
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: out/cache/build123d-seed
+          key: ${{ steps.seed-key.outputs.key }}
+
+      # On a hit this only re-verifies each blob against its pin; on a miss it downloads this host's
+      # closure from its origins, every blob checked before it is written.
+      - name: Fill the seed from the pinned origins
+        run: pnpm nx run build123d:seed --outputStyle=static
+
+      # A cache saved in the merge queue is scoped to the queue's ref and reaches no later run.
+      - name: Save the seed
+        if: steps.seed.outputs.cache-hit != 'true' && github.event_name != 'merge_group'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: out/cache/build123d-seed
+          key: ${{ steps.seed-key.outputs.key }}
+
+      - name: Build the CLI
+        if: matrix.project == 'cli'
+        run: pnpm nx build cli --outputStyle=static
+
+      # The oracle: an empty store reaches `ready` on this host, and the receipt records the host.
+      - name: Prepare Build123d with tau prepare
+        if: matrix.project == 'cli'
+        env:
+          TAU_DEPENDENCY_DIR: ${{ github.workspace }}/out/cache/build123d-seed
+          TAU_CONFIG_DIR: ${{ runner.temp }}/tau-ready
+        run: |
+          set -o pipefail
+          node packages/cli/dist/bin/tau.mjs prepare build123d --json | tee "$RUNNER_TEMP/ready.json"
+          jq -e '.kind == "prepare" and .status == "ready"' "$RUNNER_TEMP/ready.json"
+          receipt=$(find "$TAU_CONFIG_DIR/dependencies/closures/sha256" -mindepth 2 -maxdepth 2 -name receipt.json)
+          jq -e --arg arch "$ARCH" '.selection.host.os == "linux" and .selection.host.arch == $arch
+            and .selection.host.libc == "glibc" and (.selection.host.libcVersion | type) == "string"
+            and .selection.emulated == false and .target.libc == "glibc"' "$receipt"
+          {
+            echo "### tau prepare build123d on $TARGET: ready"
+            echo '```json'
+            jq '{ target, selection, closureIntegrity, treeIntegrity, files: (.files | length) }' "$receipt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # This row qualifies the suites on this host, and their task hash names no host, so a remote entry
+      # (written by `ci.yml` on linux-x64) must never stand in for running them here.
+      - name: Run the Build123d suites
+        if: matrix.project == 'build123d'
+        run: pnpm nx run build123d:test --outputStyle=static --skip-remote-cache
+
+      # These selection checks use the read-only checkout and an empty store without networking.
+      # glibc 2.28 is the supported floor: --offline must reach OFFLINE_MISS after target selection.
+      # This proves selection, not native execution on that floor. The Build123d manifest suite above
+      # independently tests rejection below the floor (2.27), where Node 24 itself cannot run.
+      # Alpine (musl) still has no closure and refuses on libc, with Alpine's own Node (D18).
+      - name: Accept glibc 2.28 selection and refuse musl
+        if: matrix.arch == 'x64' && matrix.project == 'cli'
+        run: |
+          node_root=$(dirname "$(dirname "$(command -v node)")")
+          expect_blocked() {
+            local name=$1 filter=$2 options=$3 image=$4
+            shift 4
+            local store="$RUNNER_TEMP/tau-$name" code=0
+            mkdir -p "$store"
+            # shellcheck disable=SC2086 # the options are words by design
+            docker run --rm $options -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" -v "$node_root:/opt/node:ro" \
+              -v "$store:$store" -e TAU_CONFIG_DIR="$store" -w "$GITHUB_WORKSPACE" "$image" "$@" \
+              > "$store/outcome.json" || code=$?
+            cat "$store/outcome.json"
+            test "$code" = 3
+            jq -e "$filter" "$store/outcome.json"
+            {
+              echo "### tau prepare build123d in $image: expected blocked outcome"
+              echo '```json'
+              jq '{ code, detail: .details.detail }' "$store/outcome.json"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          before_download='.code == "UNSUPPORTED_TARGET" and .details.reason == "unsupported-target"'
+          for image in debian:10 rockylinux:8; do
+            expect_blocked "${image%%:*}" '.code == "OFFLINE_MISS" and .details.reason == "offline-miss"' \
+              --network=none "$image" \
+              /opt/node/bin/node packages/cli/dist/bin/tau.mjs prepare build123d --offline --json
+            test -z "$(ls -A "$RUNNER_TEMP/tau-${image%%:*}/dependencies/blobs" 2>/dev/null)"
+          done
+          # The checkout's pnpm install holds glibc binaries only; an npm install on Alpine would add
+          # sharp's musl build, which the CLI loads at start, so the row installs it inside Alpine and
+          # mounts it at `/node_modules`, the last directory Node's resolution walks.
+          sharp=$(ls node_modules/.pnpm/sharp@*/node_modules/sharp/package.json | head -1)
+          musl="$RUNNER_TEMP/musl-modules"
+          mkdir -p "$musl"
+          node -e '
+            const { optionalDependencies } = require(require("node:path").resolve(process.argv[1]));
+            for (const [name, version] of Object.entries(optionalDependencies))
+              if (name.includes("linuxmusl-x64")) console.log(`${name}@${version}`);
+          ' "$sharp" | xargs docker run --rm -v "$musl:$musl" node:24-alpine \
+            npm install --prefix "$musl" --no-save --no-package-lock --no-audit --no-fund
+          expect_blocked alpine "$before_download and .details.detail.axis == \"libc\"" \
+            "--network=none -v $musl/node_modules:/node_modules:ro" node:24-alpine \
+            node packages/cli/dist/bin/tau.mjs prepare build123d --json
+          test -z "$(ls -A "$RUNNER_TEMP/tau-alpine/dependencies/blobs" 2>/dev/null)"
+
+      # X6: on a glibc host without libGL, the closure refuses to seal with `missing-system-library`
+      # naming `libGL.so.1`, never a crash at the first model. The kernel sandbox does not nest inside
+      # a container, so the runner itself loses libGL for this step, offline from the seed into an
+      # empty store, and gets it back afterwards.
+      - name: Refuse a host without libGL
+        if: matrix.arch == 'x64' && matrix.project == 'cli'
+        env:
+          TAU_CONFIG_DIR: ${{ runner.temp }}/tau-nogl
+          TAU_DEPENDENCY_DIR: ${{ github.workspace }}/out/cache/build123d-seed
+        run: |
+          aside="$RUNNER_TEMP/libgl-aside"
+          mkdir -p "$aside"
+          restore() { sudo mv "$aside"/* /usr/lib/x86_64-linux-gnu/ && sudo ldconfig; }
+          trap restore EXIT
+          sudo mv /usr/lib/x86_64-linux-gnu/libGL.so.1* "$aside"/
+          sudo ldconfig
+          if ldconfig -p | grep -q 'libGL\.so\.1 '; then echo "::error::libGL.so.1 is still resolvable"; exit 1; fi
+          code=0
+          node packages/cli/dist/bin/tau.mjs prepare build123d --offline --json > "$RUNNER_TEMP/nogl.json" || code=$?
+          cat "$RUNNER_TEMP/nogl.json"
+          test "$code" = 3
+          jq -e '.code == "MISSING_SYSTEM_LIBRARY" and .details.reason == "missing-system-library"
+            and .details.detail.library == "libGL.so.1"' "$RUNNER_TEMP/nogl.json"
+          {
+            echo "### tau prepare build123d without libGL: refused"
+            echo '```json'
+            jq '{ code, detail: .details.detail, message: .details.message }' "$RUNNER_TEMP/nogl.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The `test:native-linux` projects, one job each: `ci.yml`'s selection when it called this workflow, this
+  # workflow's plan otherwise.
+  native-linux-rows:
+    name: List the linux-x64 native rows
+    needs: [plan]
+    if: ${{ github.repository == 'taucad/tau' && (!cancelled() && (inputs.hosts == 'linux' || needs.plan.outputs.linux == 'true')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      projects: ${{ steps.list.outputs.projects }}
+    steps:
+      - name: List the test:native-linux projects
+        id: list
+        env:
+          NATIVE_LINUX: ${{ inputs.native-linux || needs.plan.outputs.native-linux }}
+        run: |
+          set -euo pipefail
+          projects=$(jq -cn --arg list "$NATIVE_LINUX" '$list | split(",") | map(select(. != ""))')
+          echo "Native linux-x64 rows: $projects"
+          echo "projects=$projects" >> "$GITHUB_OUTPUT"
+
+  native-linux:
+    name: Native kernels on linux-x64-glibc (${{ matrix.project }})
+    needs: [native-linux-rows]
+    if: ${{ github.repository == 'taucad/tau' && (!cancelled() && needs.native-linux-rows.result == 'success' && needs.native-linux-rows.outputs.projects != '[]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        project: ${{ fromJSON(needs.native-linux-rows.outputs.projects) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+        with:
+          save-pnpm-store: ${{ github.event_name == 'push' }}
+
+      - name: Setup Linux sandbox prerequisites
+        id: sandbox
+        uses: ./.github/actions/setup-linux-sandbox
+
+      # The linux-x64 native rows (charter D27, D30), the counterpart of `native-darwin.yml`. Each
+      # closure test appends its golden comparison to TAU_GOLDEN_SUMMARY_FILE and fails on a mismatch
+      # or a missing entry, with the observed entry (`closureIntegrity`, `treeIntegrity`, `fileCount`)
+      # in its failure message, which is what `tau-plugin.golden.json` records. Each project is a job of
+      # its own, apart from the Build123d rows, so each row reports on its own.
+      - name: Run the linux-x64 native rows
+        id: rows
+        if: ${{ !cancelled() && steps.sandbox.outcome == 'success' }}
+        env:
+          PROJECTS: ${{ matrix.project }}
+          TAU_GOLDEN_SUMMARY_FILE: ${{ runner.temp }}/golden-receipts.md
+        run: |
+          printf '%s\n' '| Closure | Target | treeIntegrity | Golden | Files | Result |' '| --- | --- | --- | --- | ---: | --- |' \
+            > "$TAU_GOLDEN_SUMMARY_FILE"
+          pnpm nx run-many -t test:native-linux --projects "$PROJECTS" --parallel=1 --outputStyle=static
+
+      - name: Publish the golden receipts
+        if: ${{ always() && steps.rows.outcome != 'skipped' }}
+        env:
+          TAU_GOLDEN_SUMMARY_FILE: ${{ runner.temp }}/golden-receipts.md
+        run: |
+          if [ -f "$TAU_GOLDEN_SUMMARY_FILE" ] && [ "$(wc -l < "$TAU_GOLDEN_SUMMARY_FILE")" -gt 2 ]; then
+            { echo '### Golden receipts'; echo; cat "$TAU_GOLDEN_SUMMARY_FILE"; echo; } >> "$GITHUB_STEP_SUMMARY"
+            grep -E '^\| @' "$TAU_GOLDEN_SUMMARY_FILE" | while IFS='|' read -r _ closure target tree _ _ result _; do
+              echo "::notice title=golden ${closure// /}::${target// /} ${tree// /} (${result// /})"
+            done
+          else
+            echo 'No closure test ran: the selected rows prepare no plugin closure.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  intel:
+    name: Native kernels on darwin-x64 (${{ matrix.project }})
+    needs: [plan]
+    # Called from the desktop candidate gate (`hosts: intel`), never from `ci.yml`; every dispatch.
+    if: ${{ github.repository == 'taucad/tau' && (!cancelled() && (inputs.hosts == 'intel' || needs.plan.outputs.intel == 'true')) }}
+    runs-on: macos-26-intel
+    timeout-minutes: 60
+    # One job per project: the Build123d suites, `tau prepare build123d` with the built CLI, and PicoGK's
+    # refusals. Run 2026-11-17 in one job: 24.9 / 28.8 min (p50 / p90 of 14 queue jobs).
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [build123d, cli, picogk]
+    env:
+      TARGET: darwin-x64
+      # At the desktop candidate gate every Nx task runs fresh, as the gate's other checks do; the caller passes
+      # no cache token either, so there is no remote cache to read.
+      NX_SKIP_NX_CACHE: ${{ inputs.hosts == 'intel' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+        with:
+          save-pnpm-store: ${{ github.event_name == 'push' }}
+
+      # The seed holds archive bytes only, so it is keyed by this target's pins alone. PicoGK's refusals use none.
+      - name: Identify the Build123d closure
+        id: seed-key
+        if: matrix.project != 'picogk'
+        run: |
+          digest=$(node --input-type=module -e '
+            import { createHash } from "node:crypto";
+            import { readFileSync } from "node:fs";
+            const manifest = JSON.parse(readFileSync("packages/plugins/build123d/tau-plugin.json", "utf8"));
+            const key = ({ os, arch, libc }) => [os, arch, libc].filter(Boolean).join("-");
+            const pins = Object.values(manifest.dependencies).flat()
+              .filter(({ target }) => key(target) === process.env.TARGET)
+              .flatMap(({ files }) => files.map(({ integrity }) => integrity))
+              .toSorted();
+            if (pins.length === 0) throw new Error(`The manifest pins no ${process.env.TARGET} dependency file.`);
+            console.log(createHash("sha256").update(pins.join("\n")).digest("hex"));
+          ')
+          echo "key=native-seed-v2-build123d-$TARGET-$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the seed
+        id: seed
+        if: matrix.project != 'picogk'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: out/cache/build123d-seed
+          key: ${{ steps.seed-key.outputs.key }}
+
+      - name: Fill the seed from the pinned origins
+        if: matrix.project != 'picogk'
+        run: pnpm nx run build123d:seed --outputStyle=static
+
+      # A cache saved in the merge queue is scoped to the queue's ref and reaches no later run.
+      - name: Save the seed
+        if: matrix.project != 'picogk' && steps.seed.outputs.cache-hit != 'true' && github.event_name != 'merge_group'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: out/cache/build123d-seed
+          key: ${{ steps.seed-key.outputs.key }}
+
+      - name: Build the CLI
+        if: matrix.project != 'build123d'
+        run: pnpm nx build cli --outputStyle=static
+
+      - name: Prepare Build123d with tau prepare
+        if: matrix.project == 'cli'
+        env:
+          TAU_DEPENDENCY_DIR: ${{ github.workspace }}/out/cache/build123d-seed
+          TAU_CONFIG_DIR: ${{ runner.temp }}/tau-ready
+        run: |
+          set -o pipefail
+          node packages/cli/dist/bin/tau.mjs prepare build123d --json | tee "$RUNNER_TEMP/ready.json"
+          jq -e '.kind == "prepare" and .status == "ready"' "$RUNNER_TEMP/ready.json"
+          receipt=$(find "$TAU_CONFIG_DIR/dependencies/closures/sha256" -mindepth 2 -maxdepth 2 -name receipt.json)
+          jq -e '.selection.host.os == "darwin" and .selection.host.arch == "x64"
+            and .selection.host.translated == false and (.selection.host.osVersion | type) == "string"
+            and .selection.emulated == false and .target.arch == "x64"' "$receipt"
+          {
+            echo "### tau prepare build123d on $TARGET: ready"
+            echo '```json'
+            jq '{ target, selection, closureIntegrity, treeIntegrity, files: (.files | length) }' "$receipt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The Intel runner needs more than Vitest's default 5 s to import OCP in the sandbox.
+      # Never from a remote entry: the hash names no host (see the Linux row).
+      - name: Run the Build123d suites
+        if: matrix.project == 'build123d'
+        run: pnpm nx run build123d:test --outputStyle=static --testTimeout=120000 --skip-remote-cache
+
+      # D13: PicoGK declares darwin-arm64 and linux-x64 on glibc, so an Intel Mac refuses on `arch`;
+      # forcing `TAU_DEPENDENCY_TARGET` to a target PicoGK does not declare is refused on `os`. Both
+      # before any download.
+      - name: Refuse PicoGK on Intel and an undeclared forced target
+        if: matrix.project == 'picogk'
+        run: |
+          refuse() {
+            local name=$1 axis=$2 code=0
+            local store="$RUNNER_TEMP/tau-$name"
+            TAU_CONFIG_DIR="$store" node packages/cli/dist/bin/tau.mjs prepare picogk --json > "$RUNNER_TEMP/$name.json" || code=$?
+            cat "$RUNNER_TEMP/$name.json"
+            test "$code" = 3
+            jq -e --arg axis "$axis" '.code == "UNSUPPORTED_TARGET" and .details.detail.axis == $axis' "$RUNNER_TEMP/$name.json"
+            test -z "$(ls -A "$store/dependencies/blobs" 2>/dev/null)"
+          }
+          refuse picogk-intel arch
+          TAU_DEPENDENCY_TARGET=win32-x64 refuse picogk-forced os

@@ -1,31 +1,55 @@
 #!/usr/bin/env node
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import process from 'node:process';
 
 /**
- * Bundle manifold-3d type declarations as raw `.d.ts` content for Monaco's
- * `addExtraLib`.
+ * Bundle manifold-3d type declarations as raw `.d.ts` content for the browser TypeScript service.
  *
  * Unlike JSCAD (which needs full TS Compiler API extraction), manifold-3d
  * already ships self-contained `.d.ts` files. This script reads them,
  * strips relative imports, and outputs raw module `.d.ts` content that
- * Monaco registers at virtual file paths via standard module resolution.
+ * the TypeScript service registers at virtual file paths via standard module resolution.
  */
 
 // =============================================================================
 // Configuration
 // =============================================================================
 
-const manifoldPackageDirectory = join(import.meta.dirname, '../../../packages/runtime/node_modules/manifold-3d');
+// Resolved, not path-joined: `manifold-3d` is a workspace dependency, so its
+// install location is the package manager's business, not this script's. The
+// package publishes each declaration file as its own export subpath.
+//
+// Nx cannot hash this source: its file map excludes `node_modules`, so a
+// `{workspaceRoot}/node_modules/...` input — glob or explicit path — matches
+// nothing and never invalidates. `pnpm-lock.yaml` is the target's real input.
+const requireFromHere = createRequire(import.meta.url);
+
+/** Declaration files this extractor reads, as `manifold-3d` export subpaths. @public */
+export const manifoldDeclarationSubpaths = [
+  'manifold-global-types.d.ts',
+  'manifold-encapsulated-types.d.ts',
+  'manifoldCAD.d.ts',
+] as const;
+
+/**
+ * Resolve a `manifold-3d` declaration subpath to its installed file path.
+ *
+ * @param subpath - Export subpath, without the package name.
+ * @returns Absolute path to the declaration file.
+ */
+export function resolveManifoldFile(subpath: string): string {
+  return requireFromHere.resolve(`manifold-3d/${subpath}`);
+}
 
 // =============================================================================
 // Helpers
 // =============================================================================
 
-function readManifoldFile(relativePath: string): string {
-  return readFileSync(join(manifoldPackageDirectory, relativePath), 'utf8');
+function readManifoldFile(subpath: (typeof manifoldDeclarationSubpaths)[number]): string {
+  return readFileSync(resolveManifoldFile(subpath), 'utf8');
 }
 
 function stripLicenseHeader(content: string): string {
@@ -84,7 +108,7 @@ export default function Module(config?: {locateFile: () => string}):
  * from dist/manifoldCAD.d.ts, which is already self-contained (all types inline).
  */
 function buildManifoldCadContent(): string {
-  let content = stripLicenseHeader(readManifoldFile('dist/manifoldCAD.d.ts'));
+  let content = stripLicenseHeader(readManifoldFile('manifoldCAD.d.ts'));
 
   // Strip the trailing `export { }` that api-extractor adds
   content = content.replace(/\nexport\s*{\s*}\s*$/, '');
@@ -101,7 +125,7 @@ function buildManifoldCadContent(): string {
 
 /**
  * Build the bundled type declarations as a map of module path to raw `.d.ts`
- * content. Each entry is registered at its own virtual file path in Monaco.
+ * content. Each entry is registered at its own virtual file path in the TypeScript service.
  * Exported for testing.
  */
 export function buildBundledTypes(): Record<string, string> {
@@ -133,6 +157,9 @@ export function buildBundledTypes(): Record<string, string> {
 function main(): void {
   try {
     console.log('Extracting manifold-3d type declarations...\n');
+    for (const subpath of manifoldDeclarationSubpaths) {
+      console.log(`Source: ${resolveManifoldFile(subpath)}`);
+    }
 
     const outputDirectory = join(import.meta.dirname, 'generated/manifold');
     mkdirSync(outputDirectory, { recursive: true });

@@ -1,7 +1,6 @@
 ---
 name: rebuild-kcl-wasm-lib
 description: Rebuild and republish @taucad/kcl-wasm-lib from the taucad/modeling-app fork. Use when bumping KCL, syncing modeling-app upstream, fixing KCL parser/sketch errors, wasm-pack rebuilds, or republishing the kcl-wasm-lib npm package.
-disable-model-invocation: true
 ---
 
 # Rebuild `@taucad/kcl-wasm-lib`
@@ -13,7 +12,7 @@ End-to-end workflow from **KittyCAD/modeling-app** (via **`taucad/modeling-app`*
 - **Node** 22+ (upstream `.nvmrc`; newer Node often works).
 - **rustup** toolchain pinned in fork `rust-toolchain.toml` (e.g. **1.93.1**) + target **`wasm32-unknown-unknown`** for that toolchain.
 - **wasm-pack** (e.g. 0.13.x).
-- **`pnpm repos`** access to `repos/zoo-modeling-app` (see `repos.yaml`).
+- **`pnpm repos`** access to `repos/zoo-modeling-app` (see `tools/repositories/catalog.yaml`).
 
 Pre-warm Rust so the wasm build does not stall mid-compile:
 
@@ -126,22 +125,17 @@ Verify listing: `package/kcl_wasm_lib.js`, `.d.ts`, `.wasm`, `package/bindings/*
 npm publish --access=public
 ```
 
-## 6. Wire tarball into Tau (pre-registry)
+## 6. Validate before registry wiring
 
-Until `npm publish` completes, pnpm **catalog** cannot use `file:` tarballs. Typical pattern:
-
-1. Copy `taucad-kcl-wasm-lib-<version>.tgz` to workspace **`tarballs/`**.
-2. Set **`pnpm-workspace.yaml`** catalog pin: `'@taucad/kcl-wasm-lib': '<version>'`.
-3. Add root **`package.json`** → **`pnpm.overrides`**: `'@taucad/kcl-wasm-lib': 'file:tarballs/taucad-kcl-wasm-lib-<version>.tgz'` so resolution wins before the registry.
-4. After the package is on npm, remove the override and rely on catalog + lockfile only.
+Do not add a tarball dependency to Tau. Install the packed artifact in an isolated operating-system temporary directory, publish it, verify the exact registry version, then update the `pnpm-workspace.yaml` catalog pin and regenerate the lockfile. This keeps fresh installation registry-resolvable and avoids recreating a top-level `tarballs/` input directory.
 
 ## 7. ESM `.js` extensions on `bindings/*.ts`
 
 ts-rs emits extensionless relative imports (`from "./Foo"`). Node ESM + tsgo expect **`from "./Foo.js"`** on those paths.
 
-- **Before `npm pack` / `npm publish`**: run the `perl` rewrite in `rust/kcl-wasm-lib/pkg/bindings` (same one-liner as below) so the **published** tarball ships correct imports. Tau then consumes the registry build with **no** `patches/@taucad__kcl-wasm-lib.patch` and **no** `pnpm.overrides` for this package — only the catalog pin in `pnpm-workspace.yaml`.
+- **Before `npm pack` / `npm publish`**: run the `perl` rewrite in `rust/kcl-wasm-lib/pkg/bindings` (same one-liner as below) so the **published** tarball ships correct imports. Tau then consumes the registry build with **no** `tools/pnpm/patches/@taucad__kcl-wasm-lib.patch` and **no** `pnpm.overrides` for this package — only the catalog pin in `pnpm-workspace.yaml`.
 
-- **Local `file:` tarball only** (pre-publish): you can temporarily add a pnpm patch if needed; remove both override and patch entry once the version is on npm.
+- **Local tarball validation** (pre-publish): install the tarball only in an isolated temporary consumer. Apply required fixes before packing; do not add a temporary Tau override.
 
 ```bash
 find rust/kcl-wasm-lib/pkg/bindings -name '*.ts' -exec perl -i -pe 's{from "\./([^"\.]+)"}{from "./\1.js"}g' {} +
@@ -159,13 +153,13 @@ Confirms `packages/runtime/src/kernels/zoo/wasm/kcl_wasm_lib_bg.wasm` matches th
 
 ## 9. Tau code updates (common upstream breaks)
 
-| Change                                                | What to do                                                                                                                                                                                                                                                                                                                                                                        |
-| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CompilationError` → **`CompilationIssue`** in ts-rs  | Import from `@taucad/kcl-wasm-lib/bindings/CompilationIssue` (alias at call site if needed).                                                                                                                                                                                                                                                                                      |
-| **`ExecOutcome`** JSON uses **`issues`** not `errors` | Normalize in `KclUtilities` (`normalizeKclExecutionResult`) so consumers keep using `errors`.                                                                                                                                                                                                                                                                                     |
-| **`Context.execute` returns `SceneGraphDelta`**       | Unwrap via `normalizeSceneGraphDelta` in `kcl-utils.ts` before `normalizeKclExecutionResult` (snake_case `exec_outcome`).                                                                                                                                                                                                                                                         |
-| Worker **`window.performance`** (KCL uses `web-time`) | **`packages/runtime/src/framework/worker-preload-polyfill.ts`**: minimal `window` stub must expose `performance` delegated from `globalThis`.                                                                                                                                                                                                                                     |
-| **`@kittycad/lib`** types + tsgo `exports`            | Types resolve via root **`pnpm.patchedDependencies`**: **`patches/@kittycad__lib@2.0.48.patch`** — adds `types` / `import` / `require` / `default` conditions on the `"."` export (upstream ships a string there, which tsgo rejects). On catalog bumps, re-diff against the new tarball and rename the patch key + file. Do **not** scatter `compilerOptions.paths` workarounds. |
+| Change                                                | What to do                                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CompilationError` → **`CompilationIssue`** in ts-rs  | Import from `@taucad/kcl-wasm-lib/bindings/CompilationIssue` (alias at call site if needed).                                                                                                                                                                                                                                                                                                 |
+| **`ExecOutcome`** JSON uses **`issues`** not `errors` | Normalize in `KclUtilities` (`normalizeKclExecutionResult`) so consumers keep using `errors`.                                                                                                                                                                                                                                                                                                |
+| **`Context.execute` returns `SceneGraphDelta`**       | Unwrap via `normalizeSceneGraphDelta` in `kcl-utils.ts` before `normalizeKclExecutionResult` (snake_case `exec_outcome`).                                                                                                                                                                                                                                                                    |
+| Worker **`window.performance`** (KCL uses `web-time`) | **`packages/runtime/src/framework/worker-preload-polyfill.ts`**: minimal `window` stub must expose `performance` delegated from `globalThis`.                                                                                                                                                                                                                                                |
+| **`@kittycad/lib`** types + tsgo `exports`            | Types resolve via workspace **`patchedDependencies`**: **`tools/pnpm/patches/@kittycad__lib@2.0.48.patch`** — adds `types` / `import` / `require` / `default` conditions on the `"."` export (upstream ships a string there, which tsgo rejects). On catalog bumps, re-diff against the new tarball and rename the patch key + file. Do **not** scatter `compilerOptions.paths` workarounds. |
 
 ## Engine bridge ABI audit (verify on every `@taucad/kcl-wasm-lib` bump)
 

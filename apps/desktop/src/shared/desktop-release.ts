@@ -1,0 +1,509 @@
+import { z } from 'zod';
+import { linuxInstallation } from '#shared/linux-installation.js';
+
+/** Distribution identity shared by packaging, publishing and the installed updater. */
+export type DesktopReleaseChannel = 'production' | 'staging';
+
+export const desktopDownloadOrigin = (channel: DesktopReleaseChannel): string =>
+  channel === 'staging' ? 'https://downloads.taucad.dev' : 'https://downloads.tau.new';
+
+/** Every page **Download Tau** may open is one of Tau's release pages on GitHub. */
+const releasePagesPrefix = 'https://github.com/taucad/tau/releases';
+
+/**
+ * Where **Download Tau** goes (desktop resilient startup blueprint, D8; R15). It needs nothing from the updater, so it
+ * also covers a damaged installation marker (B27) and a clock the updater refuses (B25).
+ *
+ * @param channel - The running build's channel.
+ * @param offered - The release the updater offers, when it has one.
+ * @returns The offered release's page when there is one; otherwise the latest production release, or the release list
+ * for staging, whose builds are pre-releases that `latest` does not show.
+ */
+export const desktopDownloadPage = (
+  channel: DesktopReleaseChannel,
+  offered?: { readonly releasePage?: string | undefined },
+): string => {
+  const page = offered?.releasePage;
+  if (page !== undefined && (page === releasePagesPrefix || page.startsWith(`${releasePagesPrefix}/`))) {
+    return page;
+  }
+  return channel === 'staging' ? releasePagesPrefix : `${releasePagesPrefix}/latest`;
+};
+
+export const stagingPackageVersion = (sequence: number): string => {
+  if (!Number.isSafeInteger(sequence) || sequence < 1 || sequence > 99_989_999) {
+    throw new TypeError('Staging sequence must be an integer from 1 to 99989999');
+  }
+  return `${1 + Math.floor(sequence / 10_000)}.${Math.floor(sequence / 100) % 100}.${sequence % 100}`;
+};
+
+export const desktopReleaseIdentity = (tag: string): { channel: DesktopReleaseChannel; version: string } => {
+  const staging = /^desktop-staging@\d+\.\d+\.\d+-staging\.([1-9]\d*)$/u.exec(tag);
+  if (staging) {
+    return { channel: 'staging', version: stagingPackageVersion(Number(staging[1])) };
+  }
+  const production = /^desktop@(\d+\.\d+\.\d+)$/u.exec(tag);
+  // Existing production 0.x versions remain valid; staging uses the independent 1.x sequence.
+  if (production && /^(?:0|[1-9]\d{0,3})\.(?:0|[1-9]\d?)\.(?:0|[1-9]\d?)$/u.test(production[1]!)) {
+    return { channel: 'production', version: production[1]! };
+  }
+  throw new TypeError(`Invalid desktop release tag: ${tag}`);
+};
+
+export const desktopArchiveName = (platform: string, arch: string): string => {
+  if (platform === 'darwin' && (arch === 'arm64' || arch === 'x64')) {
+    return `Tau-macos-${arch}.zip`;
+  }
+  if (platform === 'linux' && arch === 'x64') {
+    return 'Tau-linux-x64.tar.gz';
+  }
+  if (platform === 'win32' && arch === 'x64') {
+    return 'Tau-win32-x64.zip';
+  }
+  throw new TypeError(`Unsupported desktop distribution: ${platform}-${arch}`);
+};
+
+export const desktopReleaseBaseUrl = (tag: string): string =>
+  `${desktopDownloadOrigin(desktopReleaseIdentity(tag).channel)}/releases/${encodeURIComponent(tag)}`;
+
+/** Supported release targets; this does not widen the runtime architecture matrix. */
+export const desktopReleaseTargets = ['darwin-arm64', 'darwin-x64', 'win32-x64', 'linux-x64'] as const;
+export type DesktopReleaseTarget = (typeof desktopReleaseTargets)[number];
+
+/** Roles describe use of the same final bytes, never a second mutable download. */
+export const desktopArtifactKinds = {
+  'macos-zip': { platform: 'darwin', format: 'zip', roles: ['archive', 'update'] },
+  'macos-dmg': { platform: 'darwin', format: 'dmg', roles: ['installer'] },
+  'windows-zip': { platform: 'win32', format: 'zip', roles: ['archive'] },
+  'windows-nsis': { platform: 'win32', format: 'exe', roles: ['installer', 'update'] },
+  'linux-tar': { platform: 'linux', format: 'tar.gz', roles: ['archive'] },
+  'linux-deb-runtime': { platform: 'linux', format: 'deb', roles: ['runtime', 'repository'] },
+  'linux-deb-selector': { platform: 'linux', format: 'deb', roles: ['installer', 'repository'] },
+  'linux-appimage-deb-runtime': { platform: 'linux', format: 'deb', roles: ['runtime', 'repository'] },
+  'linux-appimage-deb-selector': { platform: 'linux', format: 'deb', roles: ['installer', 'repository'] },
+  'linux-appimage': { platform: 'linux', format: 'AppImage', roles: ['installer', 'update'] },
+} as const;
+export type DesktopArtifactKind = keyof typeof desktopArtifactKinds;
+
+/** Filenames are immutable within a release directory; old archive names stay byte-for-byte stable. */
+export const desktopArtifactName = (options: {
+  kind: DesktopArtifactKind;
+  channel: DesktopReleaseChannel;
+  version: string;
+  arch: 'arm64' | 'x64';
+}): string => {
+  const { kind, channel, version, arch } = options;
+  kindSchema.parse(kind);
+  versionSchema.parse(version);
+  z.enum(['staging', 'production']).parse(channel);
+  z.enum(['arm64', 'x64']).parse(arch);
+  if (kind.startsWith('macos-')) {
+    return `Tau-macos-${arch}.${kind === 'macos-dmg' ? 'dmg' : 'zip'}`;
+  }
+  if (arch !== 'x64') {
+    throw new TypeError('Windows and Linux artifacts require x64');
+  }
+  switch (kind) {
+    case 'windows-zip': {
+      return desktopArchiveName('win32', arch);
+    }
+    case 'windows-nsis': {
+      return 'Tau-win32-x64.exe';
+    }
+    case 'linux-tar': {
+      return desktopArchiveName('linux', arch);
+    }
+    case 'linux-appimage': {
+      return 'Tau-linux-x64.AppImage';
+    }
+    case 'linux-appimage-deb-runtime': {
+      return `tau${channel === 'staging' ? '-staging' : ''}-appimage-runtime-${version}_${version}_amd64.deb`;
+    }
+    case 'linux-appimage-deb-selector': {
+      return `tau${channel === 'staging' ? '-staging' : ''}-appimage_${version}_amd64.deb`;
+    }
+    case 'linux-deb-runtime': {
+      return `tau${channel === 'staging' ? '-staging' : ''}-runtime-${version}_${version}_amd64.deb`;
+    }
+    case 'linux-deb-selector': {
+      return `tau${channel === 'staging' ? '-staging' : ''}_${version}_amd64.deb`;
+    }
+    default: {
+      throw new TypeError('Unsupported desktop artifact kind');
+    }
+  }
+};
+
+const digestSchema = z.string().regex(/^[a-f\d]{64}$/u);
+const sourceCommitSchema = z.string().regex(/^[a-f\d]{40}$/u);
+const versionSchema = z.string().regex(/^(?:0|[1-9]\d{0,3})\.(?:0|[1-9]\d?)\.(?:0|[1-9]\d?)$/u);
+const targetSchema = z.enum(desktopReleaseTargets);
+const kindSchema = z.enum([
+  'macos-zip',
+  'macos-dmg',
+  'windows-zip',
+  'windows-nsis',
+  'linux-tar',
+  'linux-deb-runtime',
+  'linux-deb-selector',
+  'linux-appimage-deb-runtime',
+  'linux-appimage-deb-selector',
+  'linux-appimage',
+]);
+const artifactSchema = z.strictObject({
+  target: targetSchema,
+  kind: kindSchema,
+  name: z.string().min(1),
+  format: z.enum(['zip', 'dmg', 'exe', 'tar.gz', 'deb', 'AppImage']),
+  roles: z.array(z.enum(['archive', 'installer', 'update', 'runtime', 'repository'])).min(1),
+  sha256: digestSchema,
+  // Canonical base64 SHA512 consumed by electron-updater, including its padding.
+  sha512: z.string().regex(/^[A-Za-z\d+/]{85}[AQgw]==$/u),
+  size: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+});
+const manifestSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  tag: z.string(),
+  channel: z.enum(['staging', 'production']),
+  version: versionSchema,
+  sourceCommit: sourceCommitSchema,
+  artifacts: z.array(artifactSchema).min(1),
+});
+export type DesktopArtifact = z.infer<typeof artifactSchema>;
+export type DesktopArtifactManifest = z.infer<typeof manifestSchema>;
+
+/** The single-platform production candidates, as sorted target lists: Apple silicon Mac and Linux. */
+const desktopProductionPlatformTargets: ReadonlySet<string> = new Set(['darwin-arm64', 'win32-x64', 'linux-x64']);
+
+/** Parse candidate metadata without modifying the deployed legacy download.json contract. */
+export const parseDesktopArtifactManifest = (input: unknown): DesktopArtifactManifest => {
+  const manifest = manifestSchema.parse(input);
+  const identity = desktopReleaseIdentity(manifest.tag);
+  if (identity.channel !== manifest.channel || identity.version !== manifest.version) {
+    throw new TypeError('Artifact manifest channel, version and tag disagree');
+  }
+  const names = new Set<string>();
+  const artifacts = new Set<string>();
+  const targets = new Set<DesktopReleaseTarget>();
+  for (const artifact of manifest.artifacts) {
+    const spec = desktopArtifactKinds[artifact.kind];
+    const [platform, arch] = artifact.target.split('-');
+    if (
+      platform !== spec.platform ||
+      (arch !== 'arm64' && arch !== 'x64') ||
+      artifact.format !== spec.format ||
+      artifact.roles.length !== spec.roles.length ||
+      !spec.roles.every((role) => artifact.roles.includes(role)) ||
+      artifact.name !== desktopArtifactName({ ...manifest, kind: artifact.kind, arch })
+    ) {
+      throw new TypeError('Artifact target, format, roles or name disagree');
+    }
+    const key = `${artifact.target}:${artifact.kind}`;
+    if (names.has(artifact.name) || artifacts.has(key)) {
+      throw new TypeError('Duplicate desktop artifact');
+    }
+    names.add(artifact.name);
+    artifacts.add(key);
+    targets.add(artifact.target);
+  }
+  // D-H5 (operator ruling 2026-11-10, Windows added 2026-11-17): production is either the all-platform candidate or one
+  // platform's own candidate (Apple silicon Mac, Windows x64, or Linux), which publication admits only with every route
+  // of that platform.
+  const productionTargets = [...targets].sort().join(',');
+  if (
+    manifest.channel === 'production' &&
+    desktopReleaseTargets.some((target) => !targets.has(target)) &&
+    !desktopProductionPlatformTargets.has(productionTargets)
+  ) {
+    throw new TypeError('Production artifact manifests require every supported target or one complete platform');
+  }
+  for (const target of targets) {
+    if (artifacts.has(`${target}:macos-dmg`) && !artifacts.has(`${target}:macos-zip`)) {
+      throw new TypeError('Mac DMG requires the existing ZIP update artifact');
+    }
+    if (
+      artifacts.has(`${target}:linux-appimage-deb-runtime`) !==
+        artifacts.has(`${target}:linux-appimage-deb-selector`) ||
+      (artifacts.has(`${target}:linux-appimage-deb-runtime`) && !artifacts.has(`${target}:linux-appimage`))
+    ) {
+      throw new TypeError('Managed AppImage requires its image, runtime and selector artifacts');
+    }
+    if (artifacts.has(`${target}:linux-deb-runtime`) !== artifacts.has(`${target}:linux-deb-selector`)) {
+      throw new TypeError('APT requires both the runtime and selector artifacts');
+    }
+  }
+  return manifest;
+};
+
+/** A route receipt proves installed behavior, not permission to promote publicly. */
+export const desktopAcceptanceRoutes = {
+  'macos-zip': ['macos-zip'],
+  'macos-dmg': ['macos-dmg', 'macos-zip'],
+  'windows-nsis': ['windows-nsis'],
+  'linux-apt': ['linux-deb-runtime', 'linux-deb-selector'],
+  'linux-appimage': ['linux-appimage', 'linux-appimage-deb-runtime', 'linux-appimage-deb-selector'],
+} as const satisfies Record<string, readonly DesktopArtifactKind[]>;
+export type DesktopAcceptanceRoute = keyof typeof desktopAcceptanceRoutes;
+
+/** The macOS quarantine xattr: hex flags; hex time; non-empty agent; event id. */
+export const macosQuarantinePattern = /^[\da-f]{4};[\da-f]{8,16};[^;\n]+;[^;\n]*$/iu;
+/** Clean-host facts a Mac `vm` receipt carries; absent defaults (SIP, Gatekeeper, quarantine) are never admitted. */
+const macosCleanHostReceiptSchema = z.strictObject({
+  platform: z.literal('darwin'),
+  runner: z.string().min(1),
+  productVersion: z.string().regex(/^\d+(?:\.\d+){1,2}$/u),
+  nativeArch: z.enum(['arm64', 'x64']),
+  translated: z.literal(false),
+  sip: z.literal('enabled'),
+  gatekeeper: z.literal('enabled'),
+  quarantine: z.strictObject({
+    downloaded: z.string().regex(macosQuarantinePattern),
+    installed: z.string().regex(macosQuarantinePattern),
+  }),
+  assessment: z.literal('Notarized Developer ID'),
+  staple: z.literal('validated-offline'),
+  installedPath: z.literal('/Applications/Tau.app'),
+  launch: z.literal('open'),
+});
+
+/** Windows consumer facts remain separate from hosted-CI and Mac clean-host evidence. */
+const windowsConsumerReceiptSchema = z.strictObject({
+  platform: z.literal('win32'),
+  runner: z.string().min(1),
+  nativeArch: z.literal('x64'),
+  osBuild: z.number().int().min(22_000),
+  account: z.literal('standard-user'),
+  uac: z.literal('enabled'),
+  defender: z.literal('enabled'),
+  download: z.literal('browser-internet-zone'),
+  // This producer uses exact candidate bytes on its temporary mirror, not a public-origin reputation test.
+  reputationScope: z.literal('qualification-mirror'),
+  manualEvidence: z
+    .array(
+      z.strictObject({
+        stage: z.enum(['initial', 'reinstall']),
+        nonce: z.uuid(),
+        artifactSha256: digestSchema,
+        hostSha256: digestSchema,
+        observedAt: z.number().positive(),
+        smartScreen: z.enum(['not-shown', 'warning-approved']),
+        screenshots: z
+          .array(
+            z.strictObject({
+              kind: z.enum(['security-settings', 'installer-result', 'smart-screen']),
+              name: z.string().regex(/^[a-zA-Z0-9_-]+\.(?:png|jpg)$/u),
+              capturedAt: z.number().positive(),
+              sha256: digestSchema,
+              size: z.number().int().positive(),
+            }),
+          )
+          .min(2),
+      }),
+    )
+    .length(2),
+});
+
+/** Stock `kernel.apparmor_restrict_unprivileged_userns`: Ubuntu restricts, Debian ships no such restriction. */
+export const linuxStockUsernsRestriction = (id: 'ubuntu' | 'debian'): readonly string[] =>
+  id === 'ubuntu' ? ['1'] : ['absent', '0'];
+/** Software rasterizers never count as stock GPU graphics. */
+export const linuxSoftwareRendererPattern = /llvmpipe|softpipe|swiftshader|lavapipe|software rasterizer/iu;
+/**
+ * The qualified GPU: the tau-cloud hosts carry an NVIDIA Tesla T4, so a virtual (virgl), layered (zink) or other
+ * renderer is not stock hardware rendering even when it is not a software rasterizer.
+ */
+export const linuxGpuRendererPattern = /NVIDIA|Tesla T4/u;
+/** Paravirtual, layered or translated GL renderers: not the host GPU's own driver even when they name it. */
+const linuxVirtualRendererPattern = /virgl|virtio|zink|d3d12|svga|vmware|parallels|microsoft basic/iu;
+/** A renderer string from the qualified GPU's own driver: the T4, and neither software nor virtual. */
+export const isLinuxStockGpuRenderer = (value: string): boolean =>
+  linuxGpuRendererPattern.test(value) &&
+  !linuxSoftwareRendererPattern.test(value) &&
+  !linuxVirtualRendererPattern.test(value);
+/** The tau-cloud GPU host template family for each qualified distribution release. */
+const linuxCleanHostTemplates = {
+  ubuntu: { '24.04': 'ubuntu2404', '26.04': 'ubuntu2604' },
+  debian: { '13': 'debian13' },
+} as const;
+const linuxBrowserDownloadSchema = z.strictObject({
+  stage: z.enum(['initial', 'reinstall']),
+  name: z.string().min(1),
+  sha256: digestSchema,
+  size: z.number().int().positive(),
+  /** Path of the real-browser download on the run's loopback mirror. */
+  urlPath: z.string().startsWith('/releases/'),
+  browser: z.string().min(1),
+  /** The consumer made the browser-written AppImage executable; Debian packages are never executed. */
+  madeExecutable: z.boolean(),
+});
+/** Clean-host facts a Linux `vm` receipt carries: a standard consumer on a stock, GPU-rendering distribution host. */
+const linuxCleanHostReceiptSchema = z.strictObject({
+  platform: z.literal('linux'),
+  runner: z.string().min(1),
+  nativeArch: z.literal('x64'),
+  host: z.strictObject({
+    provider: z.literal('gcp'),
+    template: z.string().regex(/^ci-gpu-(?:ubuntu2404|ubuntu2604|debian13)-[a-z\d-]+$/u),
+    instance: z.string().regex(/^[a-z](?:[a-z\d-]{0,61}[a-z\d])?$/u),
+    zone: z.string().regex(/^[a-z]+-[a-z]+\d+-[a-z]$/u),
+  }),
+  distribution: z.strictObject({ id: z.enum(['ubuntu', 'debian']), versionId: z.enum(['24.04', '26.04', '13']) }),
+  kernel: z.string().min(1),
+  appArmor: z.literal('enabled'),
+  /** Identical before, during and after the run, and the distribution's stock value. */
+  usernsRestriction: z.enum(['1', '0', 'absent']),
+  graphics: z.strictObject({
+    mode: z.literal('stock'),
+    glRenderer: z.string().min(1),
+    webglRenderer: z.string().min(1),
+  }),
+  account: z.strictObject({
+    name: z.string().min(1),
+    uid: z.number().int().min(1000),
+    administrator: z.literal(false),
+  }),
+  /** The administrator only installs the consumer's downloaded packages, which enrolls the signed repository. */
+  consent: z.strictObject({ account: z.string().min(1), step: z.literal('apt-install-browser-downloads') }),
+  downloads: z.array(linuxBrowserDownloadSchema).min(4),
+  installedPath: z.string().regex(/^\/usr\/bin\/tau(?:-staging)?(?:-appimage)?$/u),
+  desktopEntry: z.string().regex(/^\/usr\/share\/applications\/tau(?:-staging)?(?:-appimage)?\.desktop$/u),
+  launch: z.literal('desktop-entry'),
+});
+
+const receiptSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  status: z.literal('passed'),
+  tag: z.string(),
+  channel: z.enum(['staging', 'production']),
+  version: versionSchema,
+  sourceCommit: sourceCommitSchema,
+  target: targetSchema,
+  route: z.enum(['macos-zip', 'macos-dmg', 'windows-nsis', 'linux-apt', 'linux-appimage']),
+  artifacts: z.array(z.strictObject({ name: z.string().min(1), sha256: digestSchema })).min(1),
+  baseline: z.strictObject({ version: versionSchema, artifactSha256: digestSchema }),
+  installed: z.strictObject({ version: versionSchema, executableSha256: digestSchema }),
+  environment: z.strictObject({
+    os: z.string().min(1),
+    arch: z.enum(['arm64', 'x64']),
+    kind: z.enum(['ci', 'vm']),
+    sandbox: z.literal('enabled'),
+    host: z
+      .discriminatedUnion('platform', [
+        macosCleanHostReceiptSchema,
+        windowsConsumerReceiptSchema,
+        linuxCleanHostReceiptSchema,
+      ])
+      .optional(),
+  }),
+  trust: z.strictObject({ kind: z.enum(['test', 'release']), identity: z.string().min(1) }),
+  checks: z.strictObject({ cleanInstall: z.literal(true), upgrade: z.literal(true), dataPreserved: z.literal(true) }),
+  suite: z.string().min(1),
+  logs: z.string().min(1),
+});
+export type DesktopAcceptanceReceipt = z.infer<typeof receiptSchema>;
+type LinuxCleanHostReceipt = z.infer<typeof linuxCleanHostReceiptSchema>;
+
+/** A Linux row is internally consistent: its route's launcher, its distribution's stock policy and both download sets. */
+const assertLinuxCleanHostReceipt = (receipt: DesktopAcceptanceReceipt, host: LinuxCleanHostReceipt): void => {
+  const linuxRoute = receipt.route === 'linux-apt' || receipt.route === 'linux-appimage';
+  const { name, launcher } = linuxInstallation(receipt.channel, receipt.route === 'linux-appimage');
+  const kinds: readonly DesktopArtifactKind[] = linuxRoute ? desktopAcceptanceRoutes[receipt.route] : [];
+  const downloads = (stage: 'initial' | 'reinstall') => host.downloads.filter((entry) => entry.stage === stage);
+  const templates: Partial<Record<string, string>> = linuxCleanHostTemplates[host.distribution.id];
+  // The receipt's OS observation (`<kernel> <os-release>`) is the same host the facts describe.
+  const { os } = receipt.environment;
+  const release = new Set(os.split(/\r?\n/u).map((line) => line.trim()));
+  const { id, versionId } = host.distribution;
+  if (
+    !linuxRoute ||
+    !os.startsWith(`${host.kernel} `) ||
+    !release.has(`ID=${id}`) ||
+    !(release.has(`VERSION_ID="${versionId}"`) || release.has(`VERSION_ID=${versionId}`)) ||
+    host.installedPath !== launcher ||
+    host.desktopEntry !== `/usr/share/applications/${name}.desktop` ||
+    !linuxStockUsernsRestriction(host.distribution.id).includes(host.usernsRestriction) ||
+    !host.host.template.startsWith(`ci-gpu-${templates[host.distribution.versionId] ?? 'unqualified'}-`) ||
+    ![host.graphics.glRenderer, host.graphics.webglRenderer].every((value) => isLinuxStockGpuRenderer(value)) ||
+    !host.graphics.webglRenderer.includes(host.graphics.glRenderer.split('/')[0]!.trim()) ||
+    host.account.name === host.consent.account ||
+    downloads('initial').length !== kinds.length ||
+    downloads('reinstall').length !== kinds.length ||
+    !downloads('initial').some((entry) => entry.sha256 === receipt.baseline.artifactSha256) ||
+    receipt.artifacts.some(
+      (proof) => !downloads('reinstall').some((entry) => entry.name === proof.name && entry.sha256 === proof.sha256),
+    ) ||
+    host.downloads.some(
+      (entry) => entry.madeExecutable !== entry.name.endsWith('.AppImage') || !entry.urlPath.endsWith(`/${entry.name}`),
+    )
+  ) {
+    throw new TypeError('Linux clean-host facts disagree with the receipt route, distribution or downloads');
+  }
+};
+
+/** Bind untrusted installed-acceptance evidence to this exact candidate, route and architecture. */
+export const parseDesktopAcceptanceReceipt = (input: unknown, candidate: unknown): DesktopAcceptanceReceipt => {
+  const manifest = parseDesktopArtifactManifest(candidate);
+  const receipt = receiptSchema.parse(input);
+  if (
+    receipt.tag !== manifest.tag ||
+    receipt.channel !== manifest.channel ||
+    receipt.version !== manifest.version ||
+    receipt.sourceCommit !== manifest.sourceCommit ||
+    receipt.installed.version !== manifest.version ||
+    !receipt.target.endsWith(`-${receipt.environment.arch}`)
+  ) {
+    throw new TypeError('Acceptance receipt identity disagrees with candidate');
+  }
+  const { host } = receipt.environment;
+  // Every consumer receipt requires its own platform's facts; CI receipts never claim them.
+  if (
+    (receipt.environment.kind === 'vm' && !host) ||
+    (host && (receipt.environment.kind !== 'vm' || `${host.platform}-${host.nativeArch}` !== receipt.target))
+  ) {
+    throw new TypeError('Clean-host receipt facts disagree with its environment');
+  }
+  if (
+    host?.platform === 'win32' &&
+    (receipt.route !== 'windows-nsis' ||
+      host.manualEvidence[0]?.stage !== 'initial' ||
+      host.manualEvidence[1]?.stage !== 'reinstall' ||
+      host.manualEvidence[0].artifactSha256 !== receipt.baseline.artifactSha256 ||
+      !receipt.artifacts.some((entry) => entry.sha256 === host.manualEvidence[1]?.artifactSha256) ||
+      host.manualEvidence[0].nonce !== host.manualEvidence[1].nonce ||
+      host.manualEvidence[0].hostSha256 !== host.manualEvidence[1].hostSha256 ||
+      host.manualEvidence.some(
+        (entry) =>
+          !['security-settings', 'installer-result'].every((kind) =>
+            entry.screenshots.some((screenshot) => screenshot.kind === kind),
+          ),
+      ))
+  ) {
+    throw new TypeError('Windows consumer manual evidence disagrees with its candidate or run');
+  }
+  if (host?.platform === 'linux') {
+    assertLinuxCleanHostReceipt(receipt, host);
+  }
+  const baseline = receipt.baseline.version.split('.').map(Number);
+  const next = receipt.version.split('.').map(Number);
+  const difference = next.findIndex((part, index) => part !== baseline[index]);
+  if (difference === -1 || next[difference]! < baseline[difference]!) {
+    throw new TypeError('Acceptance requires an upgrade from an older baseline');
+  }
+  const requiredKinds: readonly DesktopArtifactKind[] = desktopAcceptanceRoutes[receipt.route];
+  const requiredArtifacts = manifest.artifacts.filter(
+    (artifact) => artifact.target === receipt.target && requiredKinds.includes(artifact.kind),
+  );
+  if (
+    requiredArtifacts.length !== requiredKinds.length ||
+    requiredArtifacts.some((artifact) => artifact.sha256 === receipt.baseline.artifactSha256) ||
+    receipt.artifacts.length !== requiredArtifacts.length ||
+    new Set(receipt.artifacts.map((artifact) => artifact.name)).size !== receipt.artifacts.length ||
+    requiredArtifacts.some(
+      (artifact) =>
+        !receipt.artifacts.some((proof) => proof.name === artifact.name && proof.sha256 === artifact.sha256),
+    )
+  ) {
+    throw new TypeError('Acceptance receipt artifacts disagree with candidate route');
+  }
+  return receipt;
+};

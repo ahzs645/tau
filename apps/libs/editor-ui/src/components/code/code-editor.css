@@ -1,0 +1,46 @@
+/* Loaded only with the admitted CodeMirror source view. The syntax palette lives in app/styles/syntax-highlight.css. */
+@layer base {
+  :where(
+    .editor-container .cm-foldGutter .cm-gutterElement,
+    .editor-container .cm-foldPlaceholder,
+    .cm-editor .cm-tooltip-autocomplete li,
+    .editor-container .cm-panel button,
+    .cm-editor .cm-tooltip button
+  ):not(:any-link) {
+    cursor: var(--cursor-action) !important;
+  }
+
+  .editor-container .cm-json-key-depth0 {
+    color: var(--cm-function);
+  }
+  .editor-container .cm-json-key-depth1 {
+    color: var(--cm-keyword);
+  }
+  .editor-container .cm-json-key-depth2 {
+    color: var(--cm-variable);
+  }
+  .editor-container .cm-json-key-depth3 {
+    color: var(--cm-punctuation);
+  }
+  .editor-container .cm-json-key-depth4 {
+    color: var(--cm-type);
+  }
+  .editor-container .cm-json-key-depth5 {
+    color: var(--cm-string);
+  }
+  .editor-container .cm-json-key-depth6 {
+    color: var(--cm-number);
+  }
+  .editor-container .cm-json-key-quote {
+    color: var(--foreground);
+  }
+  .editor-container .cm-json-bracket-depth0 {
+    color: var(--cm-punctuation);
+  }
+  .editor-container .cm-json-bracket-depth1 {
+    color: var(--cm-keyword);
+  }
+  .editor-container .cm-json-bracket-depth2 {
+    color: var(--cm-type);
+  }
+}

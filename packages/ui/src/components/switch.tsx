@@ -1,0 +1,175 @@
+import * as React from 'react';
+import { Switch as SwitchPrimitive } from 'radix-ui';
+import { cva } from 'class-variance-authority';
+import type { VariantProps } from 'class-variance-authority';
+import { menuItemVariants, menuSwitchRowVariants } from '#components/menu.variants.js';
+import { SwitchRowLabel } from '#components/switch-row-label.js';
+import { cn } from '#utils/cn.js';
+
+const switchVariants = cva(
+  // The track is thinner than 24px at every size; the `after` strip makes the pointer target 24px tall (WCAG 2.5.8).
+  'peer relative after:absolute after:inset-x-0 after:top-1/2 after:h-6 after:-translate-y-1/2 after:content-[""] data-[state=checked]:primary-action data-[state=unchecked]:bg-input dark:data-[state=unchecked]:bg-input/80 inline-flex shrink-0 items-center rounded-full border border-muted-foreground/30 data-[state=checked]:border-transparent shadow-xs outline-none focus-visible:focus-outline disabled:cursor-not-allowed disabled:opacity-50',
+  {
+    variants: {
+      size: {
+        // Sizes are slightly larger than thumb to present an elegant, thin appearance
+        sm: 'h-3.15 w-7',
+        md: 'h-4.15 w-10',
+        lg: 'h-5.15 w-13',
+      },
+    },
+    defaultVariants: {
+      size: 'md',
+    },
+  },
+);
+
+const thumbVariants = cva(
+  'bg-background data-[state=checked]:bg-primary-action-foreground pointer-events-none block rounded-full transition-transform data-[state=checked]:translate-x-[calc(50%+2px)] data-[state=unchecked]:translate-x-0',
+  {
+    variants: {
+      size: {
+        sm: 'h-3 w-4',
+        md: 'h-4 w-6',
+        lg: 'h-5 w-8',
+      },
+    },
+    defaultVariants: {
+      size: 'md',
+    },
+  },
+);
+
+/**
+ * Render the APG switch pattern. Space toggles the checked state; a visible label
+ * or accessible name must explain the binary setting.
+ *
+ * @public
+ * @param properties - Radix switch properties and Tau sizes.
+ * @returns The switch control.
+ *
+ * @example <caption>Toggle autosave</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { Switch } from '@taucad/ui/components/switch';
+ *
+ * export const example = createElement(Switch, { 'aria-label': 'Autosave' });
+ * ```
+ */
+function Switch({
+  className,
+  size,
+  ...properties
+}: React.ComponentProps<typeof SwitchPrimitive.Root> & VariantProps<typeof switchVariants>): React.JSX.Element {
+  return (
+    <SwitchPrimitive.Root data-slot='switch' className={cn(switchVariants({ size, className }))} {...properties}>
+      <SwitchPrimitive.Thumb data-slot='switch-thumb' className={cn(thumbVariants({ size }))} />
+    </SwitchPrimitive.Root>
+  );
+}
+
+/**
+ * A full-width menu row that toggles a boolean setting: the whole row is the hit target and
+ * the switch sits at its trailing edge. It is `DropdownMenuSwitchItem` for surfaces that are
+ * not a dropdown menu — a popover, a sheet, a picker list — with the same classes, so a switch
+ * row looks and behaves the same everywhere. The title names the switch; the description, when
+ * given, describes it.
+ *
+ * @public
+ * @param properties - The checked state, its change handler, an optional icon and description, and the title.
+ * @returns A label holding the icon, title and description, with the switch at its trailing edge.
+ *
+ * @example <caption>Toggle a described setting in a popover</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { SwitchRow } from '@taucad/ui/components/switch';
+ *
+ * export const example = createElement(
+ *   SwitchRow,
+ *   { isChecked: false, description: '1.5x speed, increased usage' },
+ *   'Fast mode',
+ * );
+ * ```
+ */
+function SwitchRow({
+  className,
+  children,
+  icon,
+  description,
+  isChecked,
+  onIsCheckedChange,
+  isDisabled = false,
+  ...properties
+}: Omit<React.ComponentProps<'label'>, 'children'> & {
+  /** The title: it names the switch. */
+  readonly children?: React.ReactNode;
+  /** A leading icon, drawn before the title (and beside both lines when there is a description). */
+  readonly icon?: React.ReactNode;
+  /** A second line under the title. */
+  readonly description?: React.ReactNode;
+  readonly isChecked: boolean;
+  readonly onIsCheckedChange?: (isChecked: boolean) => void;
+  readonly isDisabled?: boolean;
+}): React.JSX.Element {
+  const id = React.useId();
+  const isDescribed = description !== undefined;
+  return (
+    <label
+      data-slot='switch-row'
+      data-disabled={isDisabled ? '' : undefined}
+      className={cn(
+        menuItemVariants(),
+        menuSwitchRowVariants({ described: isDescribed }),
+        'has-focus-visible:bg-menu-highlight has-focus-visible:text-foreground',
+        className,
+      )}
+      {...properties}
+    >
+      <SwitchRowLabel icon={icon} description={description} titleId={`${id}-title`} descriptionId={`${id}-description`}>
+        {children}
+      </SwitchRowLabel>
+      <Switch
+        checked={isChecked}
+        disabled={isDisabled}
+        aria-labelledby={`${id}-title`}
+        {...(isDescribed ? { 'aria-describedby': `${id}-description` } : {})}
+        onCheckedChange={onIsCheckedChange}
+      />
+    </label>
+  );
+}
+
+/**
+ * A switch's look without a control of its own, for a row that is itself the control (a phone menu drawer's switch
+ * row, `role=menuitemcheckbox`), where a nested switch button would be a control inside a control.
+ *
+ * @public
+ * @example <caption>Draw an on switch inside a row that toggles.</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { SwitchIndicator } from '@taucad/ui/components/switch';
+ *
+ * createElement(SwitchIndicator, { isChecked: true });
+ * ```
+ */
+function SwitchIndicator({
+  isChecked,
+  className,
+}: {
+  readonly isChecked: boolean;
+  readonly className?: string;
+}): React.JSX.Element {
+  const state = isChecked ? 'checked' : 'unchecked';
+  return (
+    <span
+      aria-hidden
+      data-slot='switch-indicator'
+      data-state={state}
+      className={cn(switchVariants(), 'pointer-events-none', className)}
+    >
+      <span data-state={state} className={thumbVariants()} />
+    </span>
+  );
+}
+
+export { Switch, SwitchIndicator, SwitchRow };

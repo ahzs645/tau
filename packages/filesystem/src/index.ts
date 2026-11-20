@@ -1,58 +1,239 @@
 export type {
+  DirectoryEntry,
+  ExternalChangeFact,
   ProviderCapabilities,
+  FileMode,
   FileStat,
   FileStatEntry,
+  DirectoryStatRow,
+  ContentFacts,
+  ContentFactsOptions,
   FileSystemProvider,
   FileReadStreamOptions,
+  PathAgentAccess,
+  PathClass,
+  PathClassification,
+  PathPolicy,
+  PathWatchPlane,
   ChangeEvent,
+  ChangeSetEvent,
+  PathChangeEvent,
+  MkdirOptions,
+  WorkspaceMutationContext,
   FileTreeNode,
   TreeEntry,
-  WatchEventFilter,
   WatchRequest,
   WatchEvent,
-  FileContentCache,
-  RuntimeFileSystem,
 } from '#types.js';
-
-export { createFileSystemService, createFileSystemServiceOptions } from '#file-system-service.js';
-export type { FileSystemService, FileSystemServiceOptions } from '#file-system-service.js';
+export type {
+  AuthorityCheckedFileWrite,
+  CheckedFileWrite,
+  CheckedFileWriteResult,
+  CheckedWritePrecondition,
+  FileDigestPrecondition,
+  FileWritePrecondition,
+} from '@taucad/types';
+export { isDigestPrecondition } from '#checked-write-precondition.js';
+export {
+  maximumChangesetBytes,
+  maximumChangesetEntries,
+  changeEventEntries,
+  changesetReceipt,
+  inHandBytes,
+  isBoundedChangeset,
+  isLargeObjectSource,
+  isRefusal,
+  splitChangeset,
+} from '#changeset.js';
+export { applyChangesetToProvider } from '#changeset-provider.js';
+export type {
+  AppendDurability,
+  AppendFence,
+  BatchEntry,
+  BatchOptions,
+  BatchReceipt,
+  Changeset,
+  ChangesetEntry,
+  ChangesetEntryOutcome,
+  ChangesetEntryReceipt,
+  ChangesetPhase,
+  ChangesetReceipt,
+  ChangesetWriteData,
+  LargeObjectWriteSource,
+} from '#changeset.js';
 
 export { WorkspaceFileService } from '#workspace-file-service.js';
-export type { MkdirOptions, WorkspaceMutationContext } from '#workspace-file-service.js';
+export { pendingProjectCommitInputSchema } from '#project-directories.js';
+export type {
+  ProjectDiscoveryEntry,
+  ProjectDiscoveryIssue,
+  ResolvedProjectManifest,
+  ProjectRouteVerification,
+  ProjectDiscoveryResult,
+  ProjectRootDiscoveryStatus,
+  ResolvedDiscoveryRoot,
+} from '#project-directories.js';
+/* `ProjectDirectories`, `MutationPipeline`, `RootedViews` and `ProjectIndexes` are the composition root's
+ * own collaborators (D14): a consumer reaches them through
+ * `WorkspaceFileService`, never by constructing one, so only the shapes they
+ * hand back are exported. */
+export type { BulkMoveEdit, BulkMoveResult } from '#mutation-pipeline.js';
+export type { PrivateStore, RootedFileSystem, RootedPorcelain } from '#rooted-views.js';
 
 export { ProviderRegistry } from '#provider-registry.js';
 export type { ProviderRegistryOptions } from '#provider-registry.js';
 
-export { BoundedFileCache } from '#bounded-file-cache.js';
-export { ResourceQueue } from '#resource-queue.js';
-export { WriteCoordinator } from '#write-coordinator.js';
-export { ResourceWriteQueue } from '#resource-write-queue.js';
-export { ChangeEventBus } from '#change-event-bus.js';
-export { InMemoryFileTree } from '#in-memory-file-tree.js';
-export type { TreeNode } from '#in-memory-file-tree.js';
-export { EventCoalescer, coalesceEvents, coalesceChangeEvents } from '#event-coalescer.js';
-export type { CoalescerOptions } from '#event-coalescer.js';
-export { tagEventOrigin, getEventOrigin, clearEventOrigin } from '#event-origin-registry.js';
-export { ThrottledWorker } from '#throttled-worker.js';
-export type { ThrottledWorkerOptions } from '#throttled-worker.js';
-export { WatchRegistry } from '#watch-registry.js';
-export type { WatchRegistryOptions } from '#watch-registry.js';
-export {
-  FileSystemObserverBridge,
-  isFileSystemObserverSupported,
-  mapObserverRecord,
-} from '#backend/filesystem-observer-bridge.js';
-export { streamChunkSize, bufferToStream } from '#backend/stream-utils.js';
-export type { FileReadStreamOptions as StreamFileReadOptions } from '#backend/stream-utils.js';
-export { CrossTabCoordinator, isNavigatorLocksSupported } from '#cross-tab-coordinator.js';
+export { resolveStorageRootKey } from '#storage-root-key.js';
+export type { StorageRootIdentity } from '#storage-root-key.js';
 
-export { MountTable } from '#mount-table.js';
-export type { MountConfig, MountConfigCommon, MountEntry, MountResolution, WorkspaceScope } from '#mount-table.js';
+export {
+  admitCapacityWrite,
+  defaultRevisionReserveBytes,
+  measureCapacityDomain,
+  revisionReserveFloorBytes,
+} from '#capacity-domain.js';
+export type { CapacityDecision, CapacityDomain, CapacityMeasurement, CapacityRequest } from '#capacity-domain.js';
+
+export { BoundedFileCache } from '#bounded-file-cache.js';
+export { indexRemovalLimit, ProjectIndex, timestampGranularityMilliseconds } from '#project-index/project-index.js';
+export {
+  ArrivingContentError,
+  PendingContentError,
+  pendingObjectOf,
+  pendingStallMilliseconds,
+} from '#pending-content.js';
+export type { PendingObject, PendingObjectRequest, PendingObjectSource } from '#pending-content.js';
+export type {
+  DeclaredPlaceholder,
+  ExpectedEntry,
+  FactsAt,
+  IndexAdmits,
+  IndexChanges,
+  IndexCompareResult,
+  IndexEntry,
+  IndexEntryKind,
+  IndexRemoval,
+  IndexSearchOptions,
+  ObservedRow,
+  ProjectIndexOptions,
+} from '#project-index/project-index.js';
+export { isReservedIndexPath, reservedIndexPaths } from '#project-index/project-indexes.js';
+export type { IndexFactsOptions } from '#project-index/project-indexes.js';
+export { projectIndexDirectory } from '#project-index/index-snapshot.js';
+export type { IndexVector } from '#project-index/index-snapshot.js';
+export type { IndexMirror, IndexMirrorChange } from '#project-index/index-mirror.js';
+export { ResourceQueue } from '#resource-queue.js';
+export type { ResourceQueueClaim } from '#resource-queue.js';
+export {
+  createWorkerTimings,
+  formatWorkerTimingSummary,
+  workerTimingCounters,
+  workerTimingGauges,
+  workerTimingSpans,
+  workerTimings,
+} from '#worker-timings.js';
+export type {
+  WorkerTimingCounter,
+  WorkerTimingCounterSummary,
+  WorkerTimingGauge,
+  WorkerTimingSpan,
+  WorkerTimingSpanSummary,
+  WorkerTimingSummary,
+  WorkerTimings,
+} from '#worker-timings.js';
+export { ChangeEventBus, toChangeSet, touchedDirectoriesOf, watchEventsOfChangeSet } from '#change-event-bus.js';
+export { watchByChangeSets } from '#change-set-watch.js';
+export type { BridgeWatchHandle, ChangeSetChannelEvent, ChangeSetWatchSource } from '#change-set-watch.js';
+export type {
+  ChangeSet,
+  ChangeSetEntry,
+  ChangeSetOp,
+  ChangeSetReset,
+  ChangeSetResetReason,
+  ChangeSetSegment,
+} from '#change-event-bus.js';
+export {
+  EventCoalescer,
+  coalesceChangeEvents,
+  overflowLossSignals,
+  pruneDirectorySummaries,
+  deliveryMessage,
+  ChangeSetCoalescer,
+  mergeChangeSets,
+  nextFrame,
+} from '#event-coalescer.js';
+export type {
+  CoalescerOptions,
+  ChangeSetCoalescerOptions,
+  FrameScheduler,
+  LossSignal,
+  SubtreeReset,
+} from '#event-coalescer.js';
+export { tagEventOrigin, getEventOrigin, isEventGloballyVisible } from '#event-origin-registry.js';
+export { scopeEventToRoot } from '#scope-event-to-root.js';
+export { WatchRegistry, watchEventsOfChangeSetFor } from '#watch-registry.js';
+export type { ChangeSetWatchRequest, WatchRegistryOptions } from '#watch-registry.js';
+export { streamChunkSize, bufferToStream } from '#backend/stream-utils.js';
+export { CrossTabCoordinator } from '#cross-tab-coordinator.js';
+export { mapConcurrent } from '#concurrency.js';
+export {
+  countLineBytes,
+  countTextLines,
+  factsConcurrency,
+  fileMetadataFields,
+  fileStatFromBytes,
+  getFileContentMetadata,
+  headSniffByteLength,
+  lineCountByteCap,
+  measureContentFacts,
+  seemsBinary,
+} from '#content-metadata.js';
+export type { ContentFactsSource, MeasuredContentFacts } from '#content-metadata.js';
+
+export { MountTable, homeRootUnavailableCode, rootDeadlineCode, rootStateForError } from '#mount-table.js';
+export type {
+  MountConfig,
+  MountConfigCommon,
+  MountEntry,
+  MountMetadata,
+  MountResolution,
+  CheckoutRootConfig,
+  ProjectRootConfig,
+  ProjectRootConfiguration,
+  ProjectRootConfigurationResult,
+  RootState,
+  RootStatus,
+  SkippedConfigurationEntry,
+  CommitPendingProjectDirectoryInput,
+  CommitPendingProjectDirectoryResult,
+  PermanentDeleteProjectDirectoryInput,
+  PermanentDeleteProjectDirectoryResult,
+  ProjectLocator,
+  StorageRootConfig,
+  WorkspaceScope,
+} from '#mount-table.js';
+/* `MountEntry.kind` is a `RouteKind`, so the type ships with it. `parseRoute`
+ * ships because a client outside L1 needs it: the rooted content client picks
+ * the root that owns an absolute path, and this stays the only grammar that
+ * answers which one that is (D10). The route *builders* remain module-private —
+ * nothing outside L1 spells a route it did not read. */
+export type { RouteKind, ParsedRoute } from '#project-routes.js';
+export { parseRoute, policyAtRoot } from '#project-routes.js';
 
 export {
   MissingWorkspaceHandleError,
   isMissingWorkspaceHandleError,
+  RootedFileSystemError,
   WorkspaceMutationError,
   isWorkspaceMutationError,
 } from '#workspace-errors.js';
+export { UnboundProjectRouteError } from '#workspace-file-service.js';
 export type { WorkspaceMutationErrorCode } from '#workspace-errors.js';
+
+/* No revision symbol is exported here, and none is imported either (D9/W8):
+ * revision trees, identity, metadata, the three-way merge and the capture walk
+ * are `@taucad/revisions/algorithms`. The frozen S6 boundary — nothing
+ * reachable from this library's export map can initialize a revision authority
+ * (RC8 work 10) — therefore holds by construction. What stays here is the
+ * filesystem's own: `FileMode` (a provider reports and sets it) and
+ * `ResourceQueue` (serializing writes per resource is not a revision concern). */

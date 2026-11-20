@@ -1,0 +1,144 @@
+import { EsbuildBundler, executeCode, initializeEsbuild } from '#vm/esbuild-core.js';
+import type { BundleResult } from '#vm/esbuild-core.js';
+import type { BundlerAcquisition } from '@taucad/bundler-core';
+import type { BuiltinModule } from '@taucad/runtime/bundler';
+import type { VmExecuteResult, VmFileSystem } from '#vm/types.js';
+
+/**
+ * Options for creating an esbuild-backed ESM module VM.
+ *
+ * @public
+ */
+export type EsbuildModuleVmOptions = {
+  /** Filesystem used for virtual project files and CDN cache writes. */
+  filesystem: VmFileSystem;
+  /** Enable inline source maps in bundled output. */
+  sourceMaps?: boolean;
+  /** Names to auto-export from CommonJS-style entry modules. */
+  autoExportNames?: string[];
+  /**
+   * Reuse module exports for identical bundled code strings.
+   * Runtime render loops opt into this; standalone test runners usually need repeatable execution.
+   */
+  cacheExecution?: boolean;
+  /** `locked` refuses imports that would be downloaded (`package-not-locked`); default `open`. */
+  acquisition?: BundlerAcquisition;
+};
+
+/**
+ * Result of detecting project and bare-specifier imports.
+ *
+ * @public
+ */
+export type DetectImportsResult = {
+  /** Bare package/module specifiers discovered transitively. */
+  detectedModules: string[];
+  /** Absolute project-file dependencies discovered during detection. */
+  dependencies: string[];
+};
+
+/**
+ * Shared ESM module VM used by Tau runtime and standalone test runners.
+ *
+ * @public
+ */
+export type ModuleVm = {
+  /** Detect imports without requiring builtins to be registered. */
+  detectImports(entryPath: string, signal?: AbortSignal): Promise<DetectImportsResult>;
+  /** Bundle an ESM entry point and its transitive dependency graph. */
+  /** Bundle an entry; `globals` limits the script globals bound to those built-in module names. */
+  bundle(entryPath: string, signal?: AbortSignal, globals?: readonly string[]): Promise<BundleResult>;
+  /** Execute bundled ESM code in the current JavaScript environment. */
+  execute<T = unknown>(code: string, signal?: AbortSignal): Promise<VmExecuteResult<T>>;
+  /** Register an in-memory builtin module. */
+  registerModule(name: string, module: BuiltinModule): void;
+  /** Invalidate one cached execution result, or all results when code is omitted. */
+  clearExecutionCache(code?: string): void;
+  /** Resolve dependencies and unresolved paths using the production graph. */
+  resolveDependencies(entryPath: string): Promise<{ resolved: string[]; unresolved: string[] }>;
+  /** Release VM-owned resources. */
+  dispose(): void;
+};
+
+/**
+ * Create an esbuild-backed ESM module VM.
+ *
+ * @param options - filesystem and bundler behavior.
+ * @returns a ready-to-use module VM.
+ *
+ * @public
+ *
+ * @example <caption>Create a VM and execute a test module.</caption>
+ * ```typescript
+ * // Published consumers import the VM contract from '@taucad/esbuild/vm'.
+ * import { createEsbuildModuleVm } from '@taucad/esbuild/vm';
+ * import type { VmFileSystem } from '@taucad/esbuild/vm';
+ *
+ * declare const filesystem: VmFileSystem;
+ * const vm = await createEsbuildModuleVm({ filesystem });
+ * vm.registerModule('geospec', { version: '0.0.0', code: 'export const describe = () => {}' });
+ * const bundled = await vm.bundle('project/model.test.ts');
+ * const module = await vm.execute(bundled.code);
+ * ```
+ */
+export async function createEsbuildModuleVm(options: EsbuildModuleVmOptions): Promise<ModuleVm> {
+  const builtinModules = new Map<string, BuiltinModule>();
+  const executeCache = new Map<string, { value: unknown; entryUrl?: string }>();
+  await initializeEsbuild();
+
+  const bundler = new EsbuildBundler({
+    filesystem: options.filesystem,
+    builtinModules,
+    sourceMaps: options.sourceMaps,
+    autoExportNames: options.autoExportNames,
+    acquisition: options.acquisition,
+  });
+  await bundler.initialize();
+
+  const execute = async <T = unknown>(code: string, signal?: AbortSignal): Promise<VmExecuteResult<T>> => {
+    const cached = options.cacheExecution === true ? executeCache.get(code) : undefined;
+    if (cached !== undefined) {
+      return { success: true, value: cached.value as T, entryUrl: cached.entryUrl };
+    }
+    const result = await executeCode<T>(code, signal);
+    if (options.cacheExecution === true && result.success && result.value !== undefined) {
+      executeCache.set(code, { value: result.value, entryUrl: result.entryUrl });
+    }
+    return result;
+  };
+
+  return {
+    async detectImports(entryPath, signal) {
+      return bundler.detectImports(entryPath, signal);
+    },
+
+    async bundle(entryPath, signal, globals) {
+      return bundler.bundle(entryPath, signal, globals);
+    },
+
+    execute,
+
+    registerModule(name, module) {
+      builtinModules.set(name, module);
+      bundler.registerModule(name, module);
+    },
+
+    clearExecutionCache(code) {
+      if (code === undefined) {
+        executeCache.clear();
+      } else {
+        executeCache.delete(code);
+      }
+    },
+
+    async resolveDependencies(entryPath) {
+      const result = await bundler.bundle(entryPath);
+      return { resolved: result.dependencies, unresolved: result.unresolvedPaths };
+    },
+
+    dispose() {
+      executeCache.clear();
+      bundler.dispose();
+    },
+  };
+}

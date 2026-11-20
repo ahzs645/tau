@@ -1,0 +1,3 @@
+BelfrySCAD/BOSL2 v2.0.744
+https://github.com/BelfrySCAD/BOSL2/tree/v2.0.744
+Recovered byte-for-byte from the fork's generated source archive at 996774cc25a147c085fbdcc47a4a89cc0dfe701f.

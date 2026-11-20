@@ -1,0 +1,157 @@
+---
+title: Test Kernels
+description: Test runtime plugins through the public client path and unit-test definitions with focused mocks.
+docType: how-to
+icon: lucide:flask-conical
+---
+
+Install `@taucad/runtime-testing` and Vitest as development dependencies. Compose the same kernel and bundler plugins your host uses.
+
+## Steps
+
+### 1. Render through a real client
+
+`createTestRuntimeClient` accepts a normal [`defineRuntime`](../api/client) result and drives the production `createRuntimeClient` and `inProcessTransport` path with an isolated `fromMemoryFs` filesystem. Use public documents and views; the caller owns shutdown:
+
+```typescript
+import { afterEach, describe, expect, it } from 'vitest';
+import { esbuild } from '@taucad/esbuild';
+import { replicad } from '@taucad/replicad';
+import { assertRenderingSuccess, createTestRuntimeClient } from '@taucad/runtime-testing';
+import { defineRuntime } from '@taucad/runtime/worker';
+
+const runtime = defineRuntime({
+  plugins: [replicad({ kernels: { default: { wasm: 'single' } } }), esbuild()],
+});
+
+describe('Replicad kernel', () => {
+  const createClient = (files: Record<string, string>) => createTestRuntimeClient({ runtime, files });
+  const clients = new Set<ReturnType<typeof createClient>>();
+
+  afterEach(async () => {
+    await Promise.all([...clients].map((client) => client.shutdown()));
+    clients.clear();
+  });
+
+  it('renders and exports a box', async () => {
+    const client = createTestRuntimeClient({
+      runtime,
+      files: {
+        'main.ts': `
+          import { makeBaseBox } from 'replicad';
+          export default () => makeBaseBox(30, 50, 10);
+        `,
+      },
+    });
+    clients.add(client);
+
+    const document = client.open({ source: { path: 'main.ts' } });
+    const outcome = await document.view('model').rendering();
+    expect(outcome.superseded).toBe(false);
+    if (outcome.superseded) return;
+    assertRenderingSuccess(outcome.rendering);
+
+    const exported = await document.export('step');
+    expect(exported.success).toBe(true);
+    if (!exported.success) throw new Error(exported.issues.map((issue) => issue.message).join('\n'));
+    expect(new TextDecoder().decode(exported.files[0].bytes)).toContain('ISO-10303-21');
+  });
+});
+```
+
+An export can evaluate its document before any view renders. Assert the output's structure, topology, or intended behavior; nonempty bytes alone do not prove a correct model. Observe document status and issues separately from client logging and telemetry.
+
+### 2. Use convenience helpers for one-shot tests
+
+`createTestGeometry` and `getTestParameters` create and close their own clients:
+
+```typescript
+import { expect, it } from 'vitest';
+import { esbuild } from '@taucad/esbuild';
+import { replicad } from '@taucad/replicad';
+import { assertRenderingSuccess, createTestGeometry, getTestParameters } from '@taucad/runtime-testing';
+import { defineRuntime } from '@taucad/runtime/worker';
+
+const runtime = defineRuntime({
+  plugins: [replicad({ kernels: { default: { wasm: 'single' } } }), esbuild()],
+});
+
+const files = {
+  'main.ts': `
+    import { makeBaseBox } from 'replicad';
+    export const defaultParams = { width: 10 };
+    export default (params = defaultParams) => makeBaseBox(params.width, 20, 30);
+  `,
+};
+
+it('exposes parameters and geometry', async () => {
+  const parameters = await getTestParameters({ runtime, files, mainFile: 'main.ts' });
+  expect(parameters.defaults).toEqual({ width: 10 });
+
+  const result = await createTestGeometry({
+    runtime,
+    files,
+    open: { source: { path: 'main.ts' }, parameters: { width: 25 } },
+    view: (document) => document.view('model'),
+  });
+  assertRenderingSuccess(result);
+});
+```
+
+### 3. Unit-test plugin definitions
+
+`resolveRuntimePluginDefinition` from `@taucad/runtime/plugin` exposes the definition behind a public factory for focused hook tests. Assert operation inputs and outputs directly: `evaluate` must offer only declared view/export IDs; `render` must return content without changing the handle; `export` must return at least one file; and `onDispose` releases context resources. Use `createMockKernelRuntime` from `@taucad/runtime-testing` for kernel services, and pass a fresh operation signal to each call. Keep caching, watch, disposal ordering, and transport invariants in runtime-owned integration tests.
+
+```typescript
+import { expect, it } from 'vitest';
+import { resolveRuntimePluginDefinition } from '@taucad/runtime/plugin';
+import { myKernel } from './examples/my-kernel.kernel';
+
+it('declares the routes evaluated models can offer', async () => {
+  const definition = await resolveRuntimePluginDefinition('kernel', myKernel());
+  expect(Object.keys(definition.views)).toEqual(['drawing']);
+  expect(Object.keys(definition.exports)).toEqual(['drawing']);
+});
+```
+
+### 4. Assert geometry
+
+Geometry helpers accept the public render result shape and import no runtime internals:
+
+```typescript
+import { it } from 'vitest';
+import { esbuild } from '@taucad/esbuild';
+import { replicad } from '@taucad/replicad';
+import { assertRenderingSuccess, createGeometryTestHelpers, createTestGeometry } from '@taucad/runtime-testing';
+import { defineRuntime } from '@taucad/runtime/worker';
+
+const runtime = defineRuntime({
+  plugins: [replicad({ kernels: { default: { wasm: 'single' } } }), esbuild()],
+});
+
+it('checks the rendered mesh', async () => {
+  const result = await createTestGeometry({
+    runtime,
+    files: {
+      'main.ts': `
+        import { makeBaseBox } from 'replicad';
+        export default () => makeBaseBox(30, 50, 10);
+      `,
+    },
+    open: { source: { path: 'main.ts' } },
+    view: (document) => document.view('model'),
+  });
+  assertRenderingSuccess(result);
+
+  const helpers = createGeometryTestHelpers();
+  await helpers.expectValidGltf(result);
+  await helpers.expectMeshCount(result, 1);
+  await helpers.expectBoundingBoxSize(result, [0.03, 0.01, 0.05], 0.001);
+});
+```
+
+## Related
+
+- [Create a Custom Kernel](./custom-kernel)
+- [Create Custom Middleware](./custom-middleware)
+- [API Reference: Testing](../api/testing)

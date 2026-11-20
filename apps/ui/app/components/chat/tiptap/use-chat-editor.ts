@@ -9,32 +9,46 @@ import { Placeholder } from '@tiptap/extension-placeholder';
 import type { Editor, JSONContent } from '@tiptap/core';
 import { Slice } from '@tiptap/pm/model';
 import type { EditorView } from '@tiptap/pm/view';
-import type { Chat } from '@taucad/chat';
+import type { ChatRecord } from '@taucad/chat/schemas';
+import {
+  cadReferenceFromGeometryComponent,
+  cadReferenceToken,
+  geometryComponentReferenceSchema,
+  maxCadReferences,
+} from '@taucad/chat/references';
+import type { CadReference } from '@taucad/chat/references';
 import type { FileEntry } from '@taucad/types';
 import type { FileTreeService } from '@taucad/fs-client/file-tree-service';
-import type { ChipType } from '#components/chat/context-chip.js';
-import { buildPastedContent, slashCommandRegex } from '#utils/at-reference.utils.js';
-import type { PastedContentSegment } from '#utils/at-reference.utils.js';
+import type { ChipType } from '@taucad/chat-ui/components/context-chip';
+import { buildPastedContent, invocationTokenRegex } from '@taucad/chat-ui/utils/at-reference.utils';
+import type { PastedContentSegment } from '@taucad/chat-ui/utils/at-reference.utils';
 import { ContextChipNode } from '#components/chat/tiptap/context-chip-node.js';
-import { SubmitOnEnter } from '#components/chat/tiptap/submit-on-enter.js';
-import { ChatInputDropHandler } from '#components/chat/tiptap/chat-input-drop-handler.js';
-import { ContextMention } from '#components/chat/tiptap/context-suggestion.js';
-import { SlashCommand, defaultSkills } from '#components/chat/tiptap/slash-command-suggestion.js';
-import { buildContextItemsFromSearch } from '#components/chat/tiptap/context-suggestion.utils.js';
+import { SubmitOnEnter } from '@taucad/chat-ui/components/tiptap/submit-on-enter';
+import { ChatInputDropHandler } from '@taucad/chat-ui/components/tiptap/chat-input-drop-handler';
+import { ContextMention } from '@taucad/chat-ui/components/tiptap/context-suggestion';
+import {
+  SlashCommand,
+  defaultCommands,
+  getEnabledSlashCommandItems,
+} from '@taucad/chat-ui/components/tiptap/slash-command-suggestion';
+import { buildContextItemsFromSearch } from '@taucad/chat-ui/components/tiptap/context-suggestion.utils';
+import { chatComposerPlaceholder } from '@taucad/chat-ui/components/chat-input-styles';
+import { pageProjectOpenPerformance } from '@taucad/ui-core/lib/project-open-performance';
+import type { ClipboardPasteEvent } from '@taucad/chat-ui/components/chat-paste-handler';
 import type {
   ContextSuggestionItem,
   SlashCommandItem,
   SuggestionPopupState,
   SuggestionRenderCallbacks,
-} from '#components/chat/tiptap/suggestion-types.js';
-
-const knownSkillIds = new Set(defaultSkills.map((s) => s.id));
+} from '@taucad/chat-ui/components/tiptap/suggestion-types';
 
 export type ContextChip = {
   id: string;
   label: string;
   chipType: ChipType;
   path?: string;
+  referenceToken?: string;
+  geometryReference?: string;
 };
 
 export type ChatInputContent = {
@@ -47,14 +61,10 @@ export type ChatInputContent = {
  * Rehydrates chip segments as `contextChip` nodes and handles
  * newline boundaries by creating separate paragraphs.
  *
- * Returns `undefined` when no chips are present (caller should use plain text).
+ * Always returns a JSON document so literal HTML-like text is never handed to
+ * Tiptap's string parser as markup.
  */
-export function buildEditorContentJson(segments: PastedContentSegment[]): JSONContent | undefined {
-  const hasChips = segments.some((s) => s.type === 'chip');
-  if (!hasChips) {
-    return undefined;
-  }
-
+export function buildEditorContentJson(segments: PastedContentSegment[]): JSONContent {
   const paragraphs: JSONContent[] = [];
   let currentContent: JSONContent[] = [];
 
@@ -87,6 +97,8 @@ export function buildEditorContentJson(segments: PastedContentSegment[]): JSONCo
           label: segment.label,
           chipType: segment.chipType,
           path: segment.path,
+          referenceToken: segment.referenceToken,
+          geometryReference: segment.geometryReference,
         },
       });
     }
@@ -105,6 +117,32 @@ function walkChildren(node: JSONContent, visitor: (child: JSONContent) => void):
   }
 }
 
+/**
+ * The structured references the composer's geometry chips hold (blueprint D6), in document order, without duplicates.
+ * A chip whose stored reference does not parse contributes nothing; its token still names it in the text.
+ */
+export function cadReferencesOfChips(chips: readonly ContextChip[]): CadReference[] {
+  const references = new Map<string, CadReference>();
+  for (const chip of chips) {
+    if (chip.geometryReference === undefined || references.size >= maxCadReferences) {
+      continue;
+    }
+    let stored: unknown;
+    try {
+      stored = JSON.parse(chip.geometryReference);
+    } catch {
+      continue;
+    }
+    const parsed = geometryComponentReferenceSchema.safeParse(stored);
+    if (!parsed.success) {
+      continue;
+    }
+    const reference = cadReferenceFromGeometryComponent(parsed.data);
+    references.set(cadReferenceToken(reference), reference);
+  }
+  return [...references.values()];
+}
+
 export function extractContent(editor: Editor): ChatInputContent {
   const editorDocument = editor.getJSON();
   const contextChips: ContextChip[] = [];
@@ -119,9 +157,12 @@ export function extractContent(editor: Editor): ChatInputContent {
         label: attributes?.['label'] ?? '',
         chipType: (attributes?.['chipType'] as ChipType | undefined) ?? 'file',
         path: attributes?.['path'],
+        referenceToken: attributes?.['referenceToken'],
+        geometryReference: attributes?.['geometryReference'],
       });
       const chipPath = attributes?.['path'];
-      textParts.push(chipPath ? `@${chipPath}` : (attributes?.['label'] ?? ''));
+      const referenceToken = attributes?.['referenceToken'];
+      textParts.push(referenceToken ?? (chipPath ? `@${chipPath}` : (attributes?.['label'] ?? '')));
       return;
     }
     if (node.type === 'text') {
@@ -143,20 +184,22 @@ export function extractContent(editor: Editor): ChatInputContent {
 
   walk(editorDocument);
 
-  return { text: textParts.join('').trim(), contextChips };
+  return { text: textParts.join(''), contextChips };
 }
 
 export type UseChatEditorOptions = {
   onSubmit: () => void;
   onEscape?: () => void;
   onUpdate?: (content: ChatInputContent) => void;
-  onImagePaste?: (dataUrl: string) => void;
+  handleImagePaste?: (event: ClipboardPasteEvent) => boolean;
   treeService: FileTreeService | undefined;
-  chats: Chat[];
+  chats: ChatRecord[];
   actionItems?: ContextSuggestionItem[];
+  slashCommandItems?: SlashCommandItem[];
   onSlashCommand?: (item: SlashCommandItem) => void;
   onContextAction?: (item: ContextSuggestionItem) => void;
   placeholder?: string;
+  initialText?: string;
 };
 
 export type UseChatEditorReturn = {
@@ -171,18 +214,23 @@ export type UseChatEditorReturn = {
   clearEditor: () => void;
 };
 
+/* oxlint-disable react/refs -- The `use no memo` boundary preserves Tiptap's long-lived editor callbacks while refs expose the latest React inputs. */
 export function useChatEditor({
   onSubmit,
   onEscape,
   onUpdate,
-  onImagePaste,
+  handleImagePaste,
   treeService,
   chats,
   actionItems,
+  slashCommandItems,
   onSlashCommand,
   onContextAction,
-  placeholder = 'Ask Tau to build anything...',
+  placeholder = chatComposerPlaceholder,
+  initialText,
 }: UseChatEditorOptions): UseChatEditorReturn {
+  'use no memo';
+
   const [contextSuggestionState, setContextSuggestionState] = useState<
     SuggestionPopupState<ContextSuggestionItem> | undefined
   >(undefined);
@@ -198,6 +246,20 @@ export function useChatEditor({
   chatsRef.current = chats;
   const actionItemsRef = useRef(actionItems);
   actionItemsRef.current = actionItems;
+  const slashCommandItemsRef = useRef(slashCommandItems);
+  slashCommandItemsRef.current = slashCommandItems;
+  const knownItemsCacheRef = useRef<{ items?: SlashCommandItem[]; byToken: ReadonlyMap<string, SlashCommandItem> }>({
+    byToken: new Map(),
+  });
+  /** Enabled agent items keyed by their exact invocation token (`/brep-design`, `$imagegen`). */
+  const getKnownItems = useCallback((): ReadonlyMap<string, SlashCommandItem> => {
+    const cache = knownItemsCacheRef.current;
+    if (cache.items !== slashCommandItemsRef.current) {
+      cache.items = slashCommandItemsRef.current;
+      cache.byToken = new Map(getEnabledSlashCommandItems(cache.items ?? []).map((item) => [item.label, item]));
+    }
+    return cache.byToken;
+  }, []);
   const onContextActionRef = useRef(onContextAction);
   onContextActionRef.current = onContextAction;
   const onSlashCommandRef = useRef(onSlashCommand);
@@ -228,7 +290,7 @@ export function useChatEditor({
         actionItems: actionItemsRef.current,
       });
     }
-    const fileEntries = await service.searchFiles(query, { maxResults: 20 });
+    const fileEntries = await service.searchFilesDebounced(query, { maxResults: 20, caller: 'chat-mention' });
     return buildContextItemsFromSearch({
       fileEntries,
       chats: chatsRef.current,
@@ -244,16 +306,28 @@ export function useChatEditor({
     onSlashCommandRef.current?.(item);
   }, []);
 
+  const getSlashCommandItems = useCallback((query: string): SlashCommandItem[] => {
+    const all = getEnabledSlashCommandItems([...(slashCommandItemsRef.current ?? []), ...defaultCommands]);
+    if (!query) {
+      return all;
+    }
+    const q = query.toLowerCase();
+    return all.filter((item) => item.label.toLowerCase().includes(q) || item.description.toLowerCase().includes(q));
+  }, []);
+
   const onSubmitRef = useRef(onSubmit);
   onSubmitRef.current = onSubmit;
   const onEscapeRef = useRef(onEscape);
   onEscapeRef.current = onEscape;
   const onUpdateRef = useRef(onUpdate);
   onUpdateRef.current = onUpdate;
-  const onImagePasteRef = useRef(onImagePaste);
-  onImagePasteRef.current = onImagePaste;
+  const handleImagePasteRef = useRef(handleImagePaste);
+  handleImagePasteRef.current = handleImagePaste;
 
+  // Local measurement only: from this composer's first render to its editor's creation, once per composer instance.
+  const [composerMountSpan] = useState(() => pageProjectOpenPerformance().begin('composer.mount'));
   const editor = useEditor({
+    content: initialText === undefined ? undefined : buildEditorContentJson([{ type: 'text', value: initialText }]),
     extensions: [
       Document,
       Paragraph,
@@ -277,6 +351,8 @@ export function useChatEditor({
         onAction: handleContextAction,
       }),
       SlashCommand.configure({
+        getItems: getSlashCommandItems,
+        getKnownItems,
         renderCallbacks: slashRenderCallbacks,
         onCommand: handleSlashCommand,
       }),
@@ -284,33 +360,20 @@ export function useChatEditor({
     editorProps: {
       attributes: {
         class: 'outline-none',
+        // An editable div only takes a name through a role; Shift+Enter adds lines.
+        role: 'textbox',
+        'aria-multiline': 'true',
         'aria-label': placeholder,
       },
       handlePaste: (_view: EditorView, event: ClipboardEvent) => {
-        const items = event.clipboardData?.items;
-        if (items) {
-          for (const item of items) {
-            if (item.type.startsWith('image/')) {
-              const file = item.getAsFile();
-              if (file) {
-                const reader = new FileReader();
-                reader.addEventListener('load', (readerEvent) => {
-                  const result = readerEvent.target?.result;
-                  if (typeof result === 'string' && result !== '') {
-                    // Hand the raw data URL to the draft machine — the
-                    // `imageProcessing` chokepoint resizes it and surfaces
-                    // any failure via the `<ActiveChatProvider>` toast
-                    // subscriber. Eliminates the prior silent-paste bug
-                    // where Tiptap paste called `resizeImageForChat`
-                    // directly and dropped failures on the floor.
-                    onImagePasteRef.current?.(result);
-                  }
-                });
-                reader.readAsDataURL(file);
-              }
-              return true;
-            }
-          }
+        const imagePasteEvent: ClipboardPasteEvent = {
+          clipboardData: event.clipboardData ?? undefined,
+          preventDefault: () => {
+            event.preventDefault();
+          },
+        };
+        if (handleImagePasteRef.current?.(imagePasteEvent)) {
+          return true;
         }
 
         const text = event.clipboardData?.getData('text/plain');
@@ -319,9 +382,8 @@ export function useChatEditor({
         }
 
         const hasAtRef = text.includes('@');
-        const slashTest = new RegExp(slashCommandRegex.source, slashCommandRegex.flags);
-        const hasSlashCmd = slashTest.test(text);
-        if (!hasAtRef && !hasSlashCmd) {
+        const hasInvocation = new RegExp(invocationTokenRegex.source).test(text);
+        if (!hasAtRef && !hasInvocation) {
           return false;
         }
 
@@ -330,12 +392,9 @@ export function useChatEditor({
         const segments = buildPastedContent(text, {
           fileTree: lazyTree,
           chats: chatsRef.current,
-          knownSkills: knownSkillIds,
+          knownTokens: new Set(getKnownItems().keys()),
         });
         const json = buildEditorContentJson(segments);
-        if (!json) {
-          return false;
-        }
 
         const { schema } = _view.state;
         if (!schema.nodes['contextChip']) {
@@ -358,6 +417,9 @@ export function useChatEditor({
         return false;
       },
     },
+    onCreate: () => {
+      composerMountSpan.finish('ok');
+    },
     onUpdate: ({ editor: updatedEditor }) => {
       onUpdateRef.current?.(extractContent(updatedEditor));
     },
@@ -367,12 +429,25 @@ export function useChatEditor({
     editor.commands.clearContent();
   }, [editor]);
 
+  // Catalog settlement is external to Tiptap transactions; derive the open menu without mirroring it in state.
+  const popupItems = slashCommandState === undefined ? [] : getSlashCommandItems(slashCommandState.query);
+  const triggerPosition = editor.state.selection.from - (slashCommandState?.query.length ?? 0) - 1;
+  const trigger = triggerPosition < 0 ? '' : editor.state.doc.textBetween(triggerPosition, triggerPosition + 1);
+  const currentSlashCommandState =
+    slashCommandState === undefined
+      ? undefined
+      : {
+          ...slashCommandState,
+          items: trigger === '$' ? popupItems.filter((item) => item.label.startsWith('$')) : popupItems,
+        };
+
   return {
     editor,
     contextSuggestionState,
-    slashCommandState,
+    slashCommandState: currentSlashCommandState,
     contextKeydownRef,
     slashKeydownRef,
     clearEditor,
   };
 }
+/* oxlint-enable react/refs */

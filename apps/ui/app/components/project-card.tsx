@@ -1,0 +1,194 @@
+import { lazy, Suspense, useEffect, useRef } from 'react';
+import { Box, Eye } from 'lucide-react';
+import type { To } from 'react-router';
+import { Link } from 'react-router';
+import type { CadPreviewGraphicsOptions } from '#components/cad-preview.js';
+import { warmProjectWorkspace } from '#lib/project-workspace-warmup.js';
+import { Button } from '@taucad/ui/components/button';
+import { Card } from '@taucad/ui/components/card';
+import { Skeleton } from '@taucad/ui/components/skeleton';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@taucad/ui/components/tooltip';
+import { cn } from '@taucad/ui/utils/cn';
+
+type ProjectCardProps = React.ComponentProps<typeof Card> & {
+  readonly linkLabel: string;
+} & (
+    | { readonly to: To; readonly onOpen?: never; readonly isOpening?: boolean }
+    | { readonly to?: never; readonly onOpen: () => void; readonly isOpening: boolean }
+  );
+
+type ProjectCardMediaProps = {
+  readonly thumbnailSource?: string;
+  /**
+   * The thumbnail read has not settled: the box is a skeleton, because the "no saved preview" icon says the read
+   * settled as absent.
+   */
+  readonly isThumbnailPending?: boolean;
+  /** The preview control keeps its look but takes no input, as on a remembered card before its listing answers. */
+  readonly isPreviewInert?: boolean;
+  readonly isPreviewVisible: boolean;
+  readonly onPreviewVisibilityChange: (isVisible: boolean) => void;
+  /**
+   * Fill a positioned parent that owns the media geometry instead of sizing itself
+   * at 4:3, so a card spanning grid rows takes its height from the rows.
+   */
+  readonly shouldFill?: boolean;
+  readonly children: React.ReactNode;
+};
+
+const projectCardGraphicsOptions = {
+  enableAxes: false,
+  enableGizmo: false,
+  enableGrid: false,
+  enableLines: true,
+  viewerClassName: 'bg-muted',
+} satisfies CadPreviewGraphicsOptions;
+
+/**
+ * A card preview hands no larger model to three.js: a 31-38 MB Planetary Gear GLB crashed the
+ * desktop renderer (SIGTRAP). Bigger models are viewed by opening the project.
+ */
+export const projectCardPreviewByteLimit = 16 * 1024 * 1024;
+
+const CadPreviewViewer = lazy(async () => {
+  const module = await import('#components/cad-preview.js');
+  return { default: module.CadPreviewViewer };
+});
+
+export function ProjectCard({
+  to,
+  linkLabel,
+  onOpen,
+  isOpening,
+  className,
+  children,
+  ...properties
+}: ProjectCardProps): React.JSX.Element {
+  const warmWorkspace = (typeof to === 'string' ? to : to?.pathname)?.startsWith('/w/')
+    ? warmProjectWorkspace
+    : undefined;
+  return (
+    <Card
+      className={cn('group/card isolate relative h-full overflow-hidden pt-0 hover:border-foreground/30', className)}
+      {...properties}
+    >
+      {to === undefined ? (
+        <button
+          type='button'
+          className='absolute inset-0 z-10 rounded-xl focus-visible:focus-outline'
+          disabled={isOpening}
+          aria-busy={isOpening}
+          onClick={onOpen}
+        >
+          <span className='sr-only'>{linkLabel}</span>
+        </button>
+      ) : (
+        <Link
+          to={to}
+          className='absolute inset-0 z-10 rounded-xl focus-visible:focus-outline'
+          onPointerEnter={warmWorkspace}
+          onPointerDown={warmWorkspace}
+          onFocus={warmWorkspace}
+          aria-busy={isOpening}
+          onClick={(event) => {
+            if (isOpening) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <span className='sr-only'>{linkLabel}</span>
+        </Link>
+      )}
+      {children}
+    </Card>
+  );
+}
+
+export function ProjectCardMedia({
+  thumbnailSource,
+  isThumbnailPending = false,
+  isPreviewInert = false,
+  isPreviewVisible,
+  onPreviewVisibilityChange,
+  shouldFill = false,
+  children,
+}: ProjectCardMediaProps): React.JSX.Element {
+  const mediaRef = useRef<HTMLDivElement>(null);
+
+  /* A live preview is torn down once its card scrolls out of view, releasing its kernel and GPU memory. */
+  useEffect(() => {
+    const media = mediaRef.current;
+    // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- absent in jsdom and old engines
+    if (!isPreviewVisible || !media || globalThis.IntersectionObserver === undefined) {
+      return undefined;
+    }
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry && !entry.isIntersecting) {
+        onPreviewVisibilityChange(false);
+      }
+    });
+    observer.observe(media);
+    return () => {
+      observer.disconnect();
+    };
+  }, [isPreviewVisible, onPreviewVisibilityChange]);
+
+  return (
+    <div
+      ref={mediaRef}
+      className={cn('overflow-hidden bg-muted', shouldFill ? 'absolute inset-0' : 'relative aspect-4/3 h-fit w-full')}
+    >
+      {/* The card link names the card, so the thumbnail is decorative. A hidden preview is
+          unmounted rather than kept, so its kernel workers and memory are released. */}
+      {isPreviewVisible ? (
+        <div className='relative z-20 size-full'>{children}</div>
+      ) : thumbnailSource ? (
+        <img src={thumbnailSource} alt='' className='size-full object-cover' loading='lazy' />
+      ) : isThumbnailPending ? (
+        <Skeleton aria-hidden className='size-full rounded-none' />
+      ) : (
+        <div className='flex size-full items-center justify-center text-muted-foreground'>
+          <Box aria-label='No saved preview' className='size-8' />
+        </div>
+      )}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type='button'
+            variant='overlay'
+            size='icon'
+            aria-label='Preview model'
+            aria-pressed={isPreviewVisible}
+            inert={isPreviewInert}
+            /* R13: a deliberate action (it starts a CAD worker), shown when the card is reached:
+               hover or focus on fine pointers, always on coarse ones, and while it is on. It stays
+               in the tab order and under the pointer, so revealing it never moves anything. */
+            className='absolute top-2 right-2 z-30 opacity-0 group-focus-within/card:opacity-100 group-hover/card:opacity-100 aria-pressed:bg-accent aria-pressed:text-foreground aria-pressed:opacity-100 pointer-coarse:opacity-100'
+            onClick={() => {
+              onPreviewVisibilityChange(!isPreviewVisible);
+            }}
+          >
+            <Eye />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Preview model</TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
+/** The field of view a project card's preview opens with; its `CadPreviewProvider` seeds it. */
+export const projectCardVerticalFieldOfView = 45;
+
+export function ProjectCardCadPreview(): React.JSX.Element {
+  return (
+    <Suspense fallback={<Skeleton role='status' aria-label='Loading preview' className='size-full rounded-none' />}>
+      <CadPreviewViewer
+        className='size-full'
+        enablePan={false}
+        graphicsOptions={projectCardGraphicsOptions}
+        maxArtifactBytes={projectCardPreviewByteLimit}
+      />
+    </Suspense>
+  );
+}

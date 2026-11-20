@@ -1,0 +1,1321 @@
+/**
+ * The page's half of the worker revision root's lifetime (A38, review R2/R3).
+ *
+ * The root is created by the retained project session and destroyed when that
+ * session ends, so its one lifecycle owner closes the port on unmount and when
+ * the file-manager replaces its worker. Hidden prepares the close revision;
+ * pagehide can only resend prepared bytes. These cases drive the real
+ * registry over a real `projectRevisionsMachine` tree and assert the root
+ * actor, not the client's own bookkeeping.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, render, waitFor } from '@testing-library/react';
+import { createActor, setup, types } from 'xstate';
+import type { ActorRefFrom } from 'xstate';
+import { useEffect } from 'react';
+import { eventSchemas } from '@taucad/ui-core/lib/xstate.lib';
+import { createIsomorphicGitRevisionPort, createRevisionHttpClient } from '@taucad/revisions';
+import { ChangeEventBus, MountTable, ProviderRegistry, ResourceQueue, WorkspaceFileService } from '@taucad/filesystem';
+import { MemoryProvider } from '@taucad/filesystem/backend';
+import { createCheckoutRoutes, createWorkerRevisionRegistry } from '#machines/file-manager.worker.revisions.js';
+import { describeRevisionFailure } from '@taucad/ui-core/lib/revision-failure-copy';
+import type { WorkerProjectRevisions } from '#machines/file-manager.worker.revisions.js';
+import type { RevisionToast, WorkerRevisionResponse } from '@taucad/revisions-ui/types/revision-worker-protocol';
+import { UnloadProvider } from '#hooks/use-flush-on-close.js';
+import { startEnvironmentHost } from '#runtime/environment.fixture.js';
+import type { EnvironmentHostFixture } from '#runtime/environment.fixture.js';
+import {
+  createHostRevisionClient,
+  getRevisionClient,
+  revisionClientTestApi,
+  useRevisionClient,
+  useRevisionCommands,
+} from '#hooks/use-revision-status.js';
+import { startSessionRevisionsStandIn } from '#runtime/session-revisions.fixture.js';
+import type { fileManagerMachine as realFileManagerMachine } from '#machines/file-manager.machine.js';
+import type { GitRemoteCredential } from '@taucad/revisions';
+import type { AgentChannelClient, JsonValue } from '@taucad/agent-host';
+
+type RevisionAnswer = Awaited<ReturnType<AgentChannelClient['revision']>>;
+
+/** A daemon channel that only speaks revisions; the agent verbs are not this hook's. */
+const revisionChannel = (
+  fields: Pick<AgentChannelClient, 'revision' | 'revisionEvents' | 'close'>,
+): AgentChannelClient & typeof fields => ({
+  execute: async () => {
+    throw new Error('The revision hook sends no agent commands.');
+  },
+  read: async () => {
+    throw new Error('The revision hook reads no chat log.');
+  },
+  async *catchUp() {
+    yield* [];
+    throw new Error('The revision hook catches up no chat log.');
+  },
+  async *liveEvents() {
+    yield* [];
+  },
+  onClose: () => () => undefined,
+  ...fields,
+});
+
+const projectId = 'alpha';
+
+/** The file-manager's own context, as far as this hook reads it. */
+const fileManagerMachine = setup({
+  schemas: {
+    context: types<{ worker: Worker | undefined }>(),
+    events: eventSchemas<{ type: 'worker'; worker: Worker | undefined }>(),
+  },
+}).createMachine({
+  context: { worker: undefined },
+  on: {
+    worker: { context: ({ event }) => ({ worker: event.worker }) },
+  },
+});
+
+const fileManagerRef = createActor(fileManagerMachine).start();
+
+vi.mock('#hooks/use-project.js', () => ({ useProject: () => ({ projectId }) }));
+vi.mock('#hooks/use-file-manager.js', () => ({
+  useFileManager: () => ({ fileManagerRef }),
+}));
+
+/* The page's resolved consent (PR-7), which the client says to the worker; a stand-in the test moves by hand. */
+const telemetryConsent = vi.hoisted(() => {
+  let current: 'granted' | 'denied' | 'unknown' = 'unknown';
+  const listeners = new Set<(consent: 'granted' | 'denied' | 'unknown') => void>();
+  return {
+    listeners,
+    set: (next: 'granted' | 'denied' | 'unknown'): void => {
+      current = next;
+      for (const listener of listeners) {
+        listener(next);
+      }
+    },
+    page: {
+      consent: () => current,
+      onConsentChange: (listener: (consent: 'granted' | 'denied' | 'unknown') => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+  };
+});
+vi.mock('#telemetry/runtime-telemetry.js', () => ({ pageTelemetry: () => telemetryConsent.page }));
+
+let visibility: DocumentVisibilityState = 'visible';
+Object.defineProperty(document, 'visibilityState', {
+  configurable: true,
+  get: () => visibility,
+});
+
+const setVisibility = (next: DocumentVisibilityState): void => {
+  visibility = next;
+  document.dispatchEvent(new Event('visibilitychange'));
+};
+
+const settle = async (turns = 12): Promise<void> => {
+  for (let index = 0; index < turns; index += 1) {
+    // oxlint-disable-next-line no-await-in-loop -- draining is sequential by definition.
+    await new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, 0);
+    });
+  }
+};
+
+class ControlledMessagePort extends EventTarget {
+  public peer: ControlledMessagePort | undefined;
+
+  public postMessage(data: unknown): void {
+    this.peer?.dispatchEvent(new MessageEvent('message', { data }));
+  }
+
+  public start(): void {
+    /* Delivery is synchronous in this lifecycle-only test port. */
+  }
+
+  public close(): void {
+    /* Keep the endpoint addressable so a retired frame can be delivered. */
+  }
+}
+
+class ControlledMessageChannel {
+  public readonly port1: MessagePort;
+  public readonly port2: MessagePort;
+
+  public constructor() {
+    const port1 = new ControlledMessagePort();
+    const port2 = new ControlledMessagePort();
+    port1.peer = port2;
+    port2.peer = port1;
+    this.port1 = port1 as unknown as MessagePort;
+    this.port2 = port2 as unknown as MessagePort;
+  }
+}
+
+const controlledWorker = (): Readonly<{
+  worker: Worker;
+  ports: ControlledMessagePort[];
+  messages: unknown[];
+}> => {
+  vi.stubGlobal('MessageChannel', ControlledMessageChannel);
+  const ports: ControlledMessagePort[] = [];
+  const messages: unknown[] = [];
+  const worker = {
+    postMessage: (message: { type: string; port: MessagePort }) => {
+      if (message.type !== 'revisionsConnect') {
+        return;
+      }
+      const port = message.port as unknown as ControlledMessagePort;
+      ports.push(port);
+      port.start();
+      port.addEventListener('message', (event) => {
+        if (!(event instanceof MessageEvent)) {
+          return;
+        }
+        const data: unknown = event.data;
+        messages.push(data);
+        if (
+          typeof data !== 'object' ||
+          data === null ||
+          !('command' in data) ||
+          data.command !== 'close' ||
+          !('id' in data) ||
+          typeof data.id !== 'number'
+        ) {
+          return;
+        }
+        port.postMessage({
+          type: 'result',
+          id: data.id,
+          result: { kind: 'closed' },
+        } satisfies WorkerRevisionResponse);
+      });
+    },
+  } as unknown as Worker;
+  return { worker, ports, messages };
+};
+
+const harness = (
+  options: Readonly<{
+    remoteUrl?: string;
+    files?: Readonly<Record<string, string>>;
+  }> = {},
+): {
+  worker: () => {
+    worker: Worker;
+    registry: ReturnType<typeof createWorkerRevisionRegistry>;
+  };
+  root: (registry: ReturnType<typeof createWorkerRevisionRegistry>) => Promise<WorkerProjectRevisions>;
+  read: (path: string) => Promise<string>;
+  /** What the worker still holds for this project's remote, read as the port reads it. */
+  credential: () => GitRemoteCredential | undefined;
+  dispose: () => void;
+} => {
+  const provider = new MemoryProvider();
+  const mountTable = new MountTable();
+  const eventBus = new ChangeEventBus();
+  mountTable.mount(`/projects/${projectId}`, provider, {
+    class: 'authored',
+    backend: 'memory',
+    storageRootKey: `memory:w3d-a2-${projectId}`,
+  });
+  const service = new WorkspaceFileService({
+    providerRegistry: new ProviderRegistry(),
+    resourceQueue: new ResourceQueue(),
+    eventBus,
+    mountTable,
+  });
+  let held: (() => GitRemoteCredential | undefined) | undefined;
+  const seeded = (async (): Promise<void> => {
+    const filesystem = service.createRootedFileSystem(`/projects/${projectId}`);
+    for (const [path, content] of Object.entries(options.files ?? {})) {
+      // oxlint-disable-next-line no-await-in-loop -- a handful of fixture files, in order.
+      await filesystem.writeFile(path, content);
+    }
+  })();
+  void seeded;
+  return {
+    /* A worker is a `postMessage` and the registry behind it; a replaced worker
+     * is a new registry, because the old one died with the thread it ran in. */
+    worker: () => {
+      const registry = createWorkerRevisionRegistry({
+        createPort: async (id, credential) => {
+          held = credential;
+          const port = createIsomorphicGitRevisionPort({
+            filesystem: service.createRootedFileSystem(`/projects/${id}`),
+            /* The same routes `file-manager.worker.ts` gives the real port, so
+             * a branch made here gets a checkout of its own (P24). */
+            checkouts: createCheckoutRoutes({ mountTable, fileService: service })(id),
+            /* A client with no transport throws on a push, which is what an
+             * unreachable remote does; the row below wants a *remote*, not a
+             * working one. */
+            ...(options.remoteUrl === undefined ? {} : { http: createRevisionHttpClient() }),
+          });
+          if (options.remoteUrl !== undefined) {
+            await port.init({
+              author: { name: 'Tau', email: 'noreply@tau.new' },
+            });
+            await port.setRemote({ name: 'tau', url: options.remoteUrl });
+          }
+          return port;
+        },
+        filesystem: (root) => service.createRootedFileSystem(root),
+        observe: () => () => undefined,
+      });
+      const worker = {
+        postMessage: (message: { type: string; projectId: string; port: MessagePort }) => {
+          if (message.type === 'revisionsConnect') {
+            registry.connect(message.port, message.projectId);
+          }
+        },
+      } as unknown as Worker;
+      return { worker, registry };
+    },
+    read: async (path: string) => service.createRootedFileSystem(`/projects/${projectId}`).readFile(path, 'utf8'),
+    credential: () => held?.(),
+    root: async (registry) => {
+      const open = registry.roots().get(projectId);
+      if (open === undefined) {
+        throw new Error('no root is open');
+      }
+      return open;
+    },
+    dispose: () => {
+      service.dispose();
+      eventBus.dispose();
+      provider.dispose();
+    },
+  };
+};
+
+const live: Array<{ dispose: () => void }> = [];
+
+/* D26: `environment` is the page's one unload listener; it drives the registrations these rows mount. */
+let environment: EnvironmentHostFixture | undefined;
+beforeEach(() => {
+  environment = startEnvironmentHost();
+});
+afterEach(() => {
+  environment?.stop();
+  environment = undefined;
+});
+
+afterEach(async () => {
+  visibility = 'visible';
+  revisionClientTestApi.reset();
+  vi.unstubAllGlobals();
+  for (const entry of live.splice(0)) {
+    entry.dispose();
+  }
+});
+
+function Consumer(): React.JSX.Element {
+  useRevisionClient();
+  return <div data-testid='consumer' />;
+}
+
+/* A7b: the session's `revisions` child owns the lifecycle; this starts it for as long as the row mounts it. */
+function Owner(): React.JSX.Element {
+  useEffect(
+    () =>
+      startSessionRevisionsStandIn({
+        projectId,
+        fileManagerRef: fileManagerRef as unknown as ActorRefFrom<typeof realFileManagerMachine>,
+        ...(environment === undefined ? {} : { sequencer: environment.sequencer }),
+      }),
+    [],
+  );
+  return <div data-testid='owner' />;
+}
+
+/* The same client, plus the verbs a panel calls, for a row that drives one. */
+let commands: ReturnType<typeof useRevisionCommands> | undefined;
+let client: ReturnType<typeof useRevisionClient>;
+
+function CommandConsumer(): React.JSX.Element {
+  client = useRevisionClient();
+  commands = useRevisionCommands();
+  return <div data-testid='commands' />;
+}
+
+const mount = (): ReturnType<typeof render> =>
+  render(
+    <UnloadProvider sequencer={environment?.sequencer}>
+      <Owner />
+      <Consumer />
+    </UnloadProvider>,
+  );
+
+describe('the page client of the worker revision root', () => {
+  it.each(['status', 'open', 'subscribe'])('should keep the candidate private until %s settles', async (held) => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const seen: JsonValue[] = [];
+    const channel = revisionChannel({
+      revision: async (request) => {
+        seen.push(request);
+        if (typeof request === 'object' && request !== null && 'command' in request && request['command'] === held) {
+          entered.resolve();
+          await release.promise;
+        }
+        return { result: null, status: { projectId, branch: 'main' } };
+      },
+      async *revisionEvents() {
+        if (held === 'subscribe') {
+          entered.resolve();
+          await release.promise;
+        }
+        yield { kind: 'status', value: { projectId, branch: 'main' } };
+      },
+      close: vi.fn(),
+    });
+    const client = createHostRevisionClient({ projectId, connect: async () => channel });
+    try {
+      client.open();
+      await entered.promise;
+      client.send({ command: 'setDeviceId', deviceId: 'device-1' });
+      const saved = client.saveRevision();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(client.status()).toBeUndefined();
+      expect(seen).toEqual(held === 'status' ? [{ command: 'status' }] : [{ command: 'status' }, { command: 'open' }]);
+      release.resolve();
+      await saved;
+      expect(seen).toEqual([
+        { command: 'status' },
+        { command: 'open' },
+        { command: 'setDeviceId', deviceId: 'device-1' },
+        { command: 'saveRevision' },
+      ]);
+    } finally {
+      release.resolve();
+      client.close();
+    }
+  });
+
+  it('should keep explicit save failures visible after healthy attachment', async () => {
+    const channel = revisionChannel({
+      revision: async (request) => {
+        if (
+          typeof request === 'object' &&
+          request !== null &&
+          'command' in request &&
+          request['command'] === 'saveRevision'
+        ) {
+          throw new Error('The history write was refused.');
+        }
+        return { result: null, status: { projectId, branch: 'main' } };
+      },
+      async *revisionEvents() {
+        yield { kind: 'status', value: { projectId, branch: 'main' } };
+      },
+      close: vi.fn(),
+    });
+    const connect = vi.fn(async () => channel);
+    const client = createHostRevisionClient({ projectId, connect });
+    const toasts: RevisionToast[] = [];
+    client.subscribeToasts((toast) => toasts.push(toast));
+    try {
+      await client.log();
+      client.send({ command: 'saveRevision' });
+      await vi.waitFor(() => {
+        expect(toasts).toEqual([{ type: 'error', subject: 'save', message: 'The history write was refused.' }]);
+      });
+      expect(connect).toHaveBeenCalledOnce();
+      expect(channel.close).not.toHaveBeenCalled();
+      expect(client.status()).toMatchObject({ branch: 'main' });
+    } finally {
+      client.close();
+    }
+  });
+
+  it.each(['status', 'open', 'subscribe'])(
+    'should dispose failed %s initialization and retry with one connection failure',
+    async (failure) => {
+      const cause = Object.assign(new Error('The selected host refused this attachment.'), {
+        code: 'HOST_CONFIGURATION_MISMATCH',
+      });
+      const gate = Promise.withResolvers<void>();
+      const entered = Promise.withResolvers<void>();
+      const failed = revisionChannel({
+        revision: async (request) => {
+          if (
+            typeof request === 'object' &&
+            request !== null &&
+            'command' in request &&
+            request['command'] === failure
+          ) {
+            entered.resolve();
+            await gate.promise;
+            throw cause;
+          }
+          return { result: null, status: { projectId, branch: 'main' } };
+        },
+        async *revisionEvents() {
+          if (failure === 'subscribe') {
+            entered.resolve();
+            await gate.promise;
+            throw cause;
+          }
+          yield { kind: 'status', value: { projectId, branch: 'main' } };
+        },
+        close: vi.fn(),
+      });
+      const recovered = revisionChannel({
+        revision: async () => ({ result: null, status: { projectId, branch: 'recovered' } }),
+        async *revisionEvents() {
+          yield { kind: 'status', value: { projectId, branch: 'recovered' } };
+        },
+        close: vi.fn(),
+      });
+      const connect = vi
+        .fn<() => Promise<AgentChannelClient>>()
+        .mockResolvedValueOnce(failed)
+        .mockResolvedValue(recovered);
+      const client = createHostRevisionClient({ projectId, connect });
+      const toasts: RevisionToast[] = [];
+      client.subscribeToasts((toast) => toasts.push(toast));
+      try {
+        client.send({ command: 'setDeviceId', deviceId: 'device-1' });
+        client.remoteCredential({ apiBaseUrl: 'http://api.test' });
+        client.open();
+        client.send({ command: 'setActor', actor: { kind: 'user', id: 'user-1' } });
+        const waiter = client.saveRevision();
+        const rejection = expect(waiter).rejects.toMatchObject({
+          name: 'RevisionConnectionError',
+          code: cause.code,
+          cause,
+          operation: failure,
+          generation: 1,
+        });
+        await entered.promise;
+        gate.resolve();
+        await rejection;
+        await vi.waitFor(() => {
+          expect(toasts).toHaveLength(1);
+        });
+        expect(toasts[0]).toMatchObject({
+          type: 'error',
+          subject: 'connection',
+          code: cause.code,
+          message: cause.message,
+          generation: 1,
+          connectionOperation: failure,
+        });
+        expect(client.status()).toBeUndefined();
+        expect(failed.close).toHaveBeenCalledOnce();
+        await client.saveRevision();
+        expect(connect).toHaveBeenCalledTimes(2);
+        expect(client.status()).toMatchObject({ branch: 'recovered' });
+        expect(recovered.close).not.toHaveBeenCalled();
+      } finally {
+        gate.resolve();
+        client.close();
+      }
+    },
+  );
+
+  it('should settle a closed initialization without letting its late result update the successor', async () => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const stale = revisionChannel({
+      revision: async () => {
+        entered.resolve();
+        await release.promise;
+        return { result: null, status: { projectId, branch: 'stale' } };
+      },
+      async *revisionEvents() {
+        yield { kind: 'status', value: { projectId, branch: 'stale' } };
+      },
+      close: vi.fn(),
+    });
+    const current = revisionChannel({
+      revision: async () => ({ result: null, status: { projectId, branch: 'current' } }),
+      async *revisionEvents() {
+        yield { kind: 'status', value: { projectId, branch: 'current' } };
+      },
+      close: vi.fn(),
+    });
+    const connect = vi.fn<() => Promise<AgentChannelClient>>().mockResolvedValueOnce(stale).mockResolvedValue(current);
+    const client = createHostRevisionClient({ projectId, connect });
+    try {
+      const waiting = client.saveRevision();
+      await entered.promise;
+      client.close();
+      await expect(waiting).rejects.toMatchObject({ code: 'STALE_REVISION_CONNECTION' });
+      await client.saveRevision();
+      release.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(client.status()).toMatchObject({ branch: 'current' });
+      expect(stale.close).toHaveBeenCalledOnce();
+      expect(current.close).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      client.close();
+    }
+  });
+  /**
+   * A host-owned client whose revision stream the case itself feeds.
+   *
+   * The toast channel is the host leg's only correlation for a branch verb, so
+   * a case about *when* one settles has to be able to withhold a toast as well
+   * as send one.
+   *
+   * @returns The client and the pump that puts one toast on its stream.
+   */
+  const hostBranchClient = (
+    createAnswer: JsonValue = null,
+  ): Readonly<{
+    client: ReturnType<typeof createHostRevisionClient>;
+    toast: (value: RevisionToast) => void;
+  }> => {
+    const pending: RevisionToast[] = [];
+    let wake: (() => void) | undefined;
+    /** Whatever the case has queued, then whatever it queues next. */
+    const nextToast = async (): Promise<RevisionToast> => {
+      const held = pending.shift();
+      if (held !== undefined) {
+        return held;
+      }
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+      });
+      return nextToast();
+    };
+    const channel = revisionChannel({
+      revision: async (request: JsonValue) => ({
+        /* The host answers `createBranch` with the checkout it made (B7). */
+        result:
+          typeof request === 'object' &&
+          request !== null &&
+          'command' in request &&
+          request['command'] === 'createBranch'
+            ? createAnswer
+            : null,
+        status: { projectId, branch: 'main', headRevisionId: 'revision-1' },
+      }),
+      async *revisionEvents() {
+        yield { kind: 'status', value: { projectId, branch: 'main' } };
+        for (;;) {
+          // oxlint-disable-next-line no-await-in-loop -- a stream is sequential by definition.
+          yield { kind: 'toast', value: (await nextToast()) as unknown as JsonValue };
+        }
+      },
+      close: () => undefined,
+    });
+    return {
+      client: createHostRevisionClient({ projectId, connect: async () => channel }),
+      toast: (value) => {
+        pending.push(value);
+        wake?.();
+      },
+    };
+  };
+
+  it('projects and drives a host-owned revision root without opening a worker store', async () => {
+    const seen: JsonValue[] = [];
+    const revision = vi.fn(async (request: JsonValue): Promise<RevisionAnswer> => {
+      seen.push(request);
+      return {
+        result:
+          typeof request === 'object' && request !== null && 'command' in request && request['command'] === 'log'
+            ? [{ id: 'revision-1', revisionNumber: 1 }]
+            : null,
+        status: { projectId, branch: 'main', headRevisionId: 'revision-1' },
+      };
+    });
+    const channel = revisionChannel({
+      revision,
+      async *revisionEvents() {
+        yield { kind: 'status', value: { projectId, branch: 'main', headRevisionId: 'revision-1' } };
+      },
+      close: vi.fn(),
+    });
+    const client = createHostRevisionClient({
+      projectId,
+      connect: async () => channel,
+    });
+
+    client.open();
+    await waitFor(() => {
+      expect(client.status()).toMatchObject({
+        projectId,
+        branch: 'main',
+        headRevisionId: 'revision-1',
+      });
+    });
+    client.send({ command: 'createBranch', name: 'isolated-run' });
+    await expect.poll(() => revision.mock.calls.length).toBe(3);
+    await expect(client.log({ limit: 8 })).resolves.toEqual([{ id: 'revision-1', revisionNumber: 1 }]);
+    await settle();
+    expect(seen).toEqual([
+      { command: 'status' },
+      { command: 'open' },
+      { command: 'createBranch', name: 'isolated-run' },
+      { command: 'log', limit: 8 },
+    ]);
+    client.close();
+    expect(channel.close).toHaveBeenCalledOnce();
+  });
+
+  it('closes a host channel that finishes opening after the project closed', async () => {
+    const connected = Promise.withResolvers<AgentChannelClient>();
+    const channel = revisionChannel({
+      revision: vi.fn(),
+      async *revisionEvents() {
+        yield { kind: 'status', value: { projectId, branch: 'main' } };
+      },
+      close: vi.fn(),
+    });
+    const client = createHostRevisionClient({
+      projectId,
+      connect: async () => connected.promise,
+    });
+
+    client.open();
+    client.close();
+    connected.resolve(channel);
+    await settle();
+
+    expect(channel.close).toHaveBeenCalledOnce();
+    expect(channel.revision).not.toHaveBeenCalled();
+    expect(client.status()).toBeUndefined();
+  });
+
+  it('does not report a closed channel as a failed save', async () => {
+    const pendingSave = Promise.withResolvers<RevisionAnswer>();
+    const revision = vi.fn(
+      async (request: JsonValue): Promise<RevisionAnswer> =>
+        typeof request === 'object' && request !== null && 'command' in request && request['command'] === 'saveRevision'
+          ? pendingSave.promise
+          : Promise.resolve({ result: null, status: { projectId, branch: 'main' } }),
+    );
+    const channel = revisionChannel({
+      revision,
+      async *revisionEvents() {
+        yield { kind: 'status', value: { projectId, branch: 'main' } };
+      },
+      close: vi.fn(),
+    });
+    const client = createHostRevisionClient({ projectId, connect: async () => channel });
+    const toasts: RevisionToast[] = [];
+    client.subscribeToasts((toast) => toasts.push(toast));
+
+    client.open();
+    await waitFor(() => {
+      expect(client.status()).toBeDefined();
+    });
+    client.send({ command: 'saveRevision' });
+    await expect.poll(() => revision.mock.calls.length).toBe(3);
+    client.close();
+    pendingSave.reject(new Error('Channel closed'));
+    await settle();
+
+    expect(toasts).toEqual([]);
+    expect(channel.close).toHaveBeenCalledOnce();
+  });
+
+  it('reports a save failure while the host channel remains open', async () => {
+    const pendingSave = Promise.withResolvers<RevisionAnswer>();
+    const revision = vi.fn(async (request: JsonValue): Promise<RevisionAnswer> => {
+      if (
+        typeof request === 'object' &&
+        request !== null &&
+        'command' in request &&
+        request['command'] === 'saveRevision'
+      ) {
+        return pendingSave.promise;
+      }
+      return { result: null, status: { projectId, branch: 'main' } };
+    });
+    const channel = revisionChannel({
+      revision,
+      async *revisionEvents() {
+        yield { kind: 'status', value: { projectId, branch: 'main' } };
+      },
+      close: vi.fn(),
+    });
+    const client = createHostRevisionClient({ projectId, connect: async () => channel });
+    const toasts: RevisionToast[] = [];
+    client.subscribeToasts((toast) => toasts.push(toast));
+
+    client.open();
+    await waitFor(() => {
+      expect(client.status()).toBeDefined();
+    });
+    client.send({ command: 'saveRevision' });
+    await expect.poll(() => revision.mock.calls.length).toBe(3);
+    pendingSave.reject(new Error('disk full'));
+    await expect.poll(() => toasts.length).toBe(1);
+
+    expect(toasts).toEqual([{ type: 'error', subject: 'save', message: 'disk full' }]);
+    client.close();
+  });
+
+  it('replays a native chat projection to a later route subscriber', async () => {
+    const channel = revisionChannel({
+      revision: vi.fn(async (): Promise<RevisionAnswer> => ({ result: null, status: { projectId, branch: 'main' } })),
+      async *revisionEvents() {
+        yield {
+          kind: 'event',
+          value: { type: 'chats.projected', projectId, chatIds: ['remote-chat'] },
+        };
+      },
+      close: vi.fn(),
+    });
+    const client = createHostRevisionClient({ projectId, connect: async () => channel });
+    client.open();
+    await settle();
+    const observed: WorkerRevisionResponse[] = [];
+
+    client.subscribeEvents((event) => observed.push({ type: 'event', event }));
+
+    expect(observed).toEqual([
+      {
+        type: 'event',
+        event: { type: 'chats.projected', projectId, chatIds: ['remote-chat'] },
+      },
+    ]);
+    client.close();
+  });
+
+  it('should hold every frame until the route opens, so the credential precedes the first fetch (D36)', () => {
+    const { worker, ports, messages } = controlledWorker();
+    const revisionClient = getRevisionClient({ projectId, worker });
+    revisionClient.send({ command: 'setDeviceId', deviceId: 'device-1' });
+    revisionClient.remoteCredential({ apiBaseUrl: 'http://api.test', origin: 'https://github.com' });
+
+    /* Connecting starts the root and its opening fetch. */
+    expect(ports).toHaveLength(0);
+
+    revisionClient.open();
+
+    expect(ports).toHaveLength(1);
+    expect(messages).toMatchObject([
+      { command: 'remoteCredential' },
+      { command: 'telemetryConsent' },
+      { command: 'setDeviceId', deviceId: 'device-1' },
+      { command: 'remoteCredential', origin: 'https://github.com' },
+    ]);
+    revisionClient.close();
+  });
+
+  it('should say which project is focused on every port it opens, so a reopened root streams again (RV-W5b2 N4)', () => {
+    const { worker, messages } = controlledWorker();
+    const revisionClient = getRevisionClient({ projectId, worker });
+    const focusFrames = (): unknown[] =>
+      messages.filter((message) => (message as { command?: string }).command === 'focus');
+    revisionClient.focus?.(true);
+    expect(focusFrames()).toEqual([]);
+
+    revisionClient.open();
+    expect(focusFrames()).toEqual([{ command: 'focus', focused: true }]);
+
+    revisionClient.close();
+    revisionClient.open();
+    expect(focusFrames()).toEqual([
+      { command: 'focus', focused: true },
+      { command: 'focus', focused: true },
+    ]);
+    revisionClient.close();
+  });
+
+  it('should hold a first view the page shows until the client opens, then say it on the port (STO-25)', () => {
+    const { worker, messages } = controlledWorker();
+    const revisionClient = getRevisionClient({ projectId, worker });
+    const shownFrames = (): unknown[] =>
+      messages.filter((message) => (message as { command?: string }).command === 'firstViewShown');
+    revisionClient.firstViewShown?.();
+    expect(shownFrames()).toEqual([]);
+
+    revisionClient.open();
+    expect(shownFrames()).toEqual([{ command: 'firstViewShown' }]);
+    revisionClient.close();
+  });
+
+  it("should say the page's resolved telemetry consent on every port and every change, and stop when closed (PR-7)", () => {
+    telemetryConsent.set('denied');
+    const { worker, messages } = controlledWorker();
+    const revisionClient = getRevisionClient({ projectId, worker });
+    const consentFrames = (): unknown[] =>
+      messages.filter((message) => (message as { command?: string }).command === 'telemetryConsent');
+
+    revisionClient.open();
+    expect(consentFrames()).toEqual([{ command: 'telemetryConsent', consent: 'denied' }]);
+
+    telemetryConsent.set('granted');
+    expect(consentFrames()).toEqual([
+      { command: 'telemetryConsent', consent: 'denied' },
+      { command: 'telemetryConsent', consent: 'granted' },
+    ]);
+
+    revisionClient.close();
+    expect(telemetryConsent.listeners.size).toBe(0);
+    telemetryConsent.set('unknown');
+    revisionClient.open();
+    expect(consentFrames().at(-1)).toEqual({ command: 'telemetryConsent', consent: 'unknown' });
+    expect(telemetryConsent.listeners.size).toBe(1);
+    revisionClient.close();
+  });
+
+  it('should replay a completed chat projection to a later route subscriber', () => {
+    const { worker, ports } = controlledWorker();
+    const revisionClient = getRevisionClient({ projectId, worker });
+    revisionClient.open();
+    ports[0]?.postMessage({
+      type: 'event',
+      event: { type: 'chats.projected', projectId, chatIds: ['remote-chat'] },
+    } satisfies WorkerRevisionResponse);
+
+    const observed: WorkerRevisionResponse[] = [];
+    const unsubscribe = revisionClient.subscribeEvents((event) => observed.push({ type: 'event', event }));
+
+    expect(observed).toEqual([
+      {
+        type: 'event',
+        event: { type: 'chats.projected', projectId, chatIds: ['remote-chat'] },
+      },
+    ]);
+    unsubscribe();
+    revisionClient.close();
+  });
+
+  it('should clear completed chat projections when the connection closes', () => {
+    const { worker, ports } = controlledWorker();
+    const revisionClient = getRevisionClient({ projectId, worker });
+    revisionClient.open();
+    ports[0]?.postMessage({
+      type: 'event',
+      event: { type: 'chats.projected', projectId, chatIds: ['closed-chat'] },
+    } satisfies WorkerRevisionResponse);
+
+    revisionClient.close();
+    revisionClient.open();
+    const observed: WorkerRevisionResponse[] = [];
+    revisionClient.subscribeEvents((event) => observed.push({ type: 'event', event }));
+
+    expect(observed).toEqual([]);
+    revisionClient.close();
+  });
+
+  it('should clear completed chat projections when the connection quiesces', async () => {
+    const { worker, ports } = controlledWorker();
+    const revisionClient = getRevisionClient({ projectId, worker });
+    revisionClient.open();
+    ports[0]?.postMessage({
+      type: 'event',
+      event: { type: 'chats.projected', projectId, chatIds: ['quiesced-chat'] },
+    } satisfies WorkerRevisionResponse);
+
+    await revisionClient.quiesce();
+    revisionClient.open();
+    const observed: WorkerRevisionResponse[] = [];
+    revisionClient.subscribeEvents((event) => observed.push({ type: 'event', event }));
+
+    expect(observed).toEqual([]);
+    revisionClient.close();
+  });
+
+  it('should cancel an in-flight request when quiescing and ignore its late result after reopening', async () => {
+    const { worker, ports } = controlledWorker();
+    const revisionClient = getRevisionClient({ projectId, worker });
+    revisionClient.open();
+    const retiredRequest = revisionClient.log();
+
+    await revisionClient.quiesce();
+    await expect(retiredRequest).rejects.toMatchObject({ name: 'AbortError' });
+    ports[0]?.postMessage({
+      type: 'result',
+      id: 1,
+      result: { kind: 'log', rows: [] },
+    } satisfies WorkerRevisionResponse);
+
+    revisionClient.open();
+    const currentRequest = revisionClient.log();
+    ports[1]?.postMessage({
+      type: 'result',
+      id: 3,
+      result: { kind: 'log', rows: [] },
+    } satisfies WorkerRevisionResponse);
+    await expect(currentRequest).resolves.toEqual([]);
+    revisionClient.close();
+  });
+
+  it('should ignore a delayed projection from the retired connection after reopening on the same worker', () => {
+    const { worker, ports } = controlledWorker();
+    const revisionClient = getRevisionClient({ projectId, worker });
+    revisionClient.open();
+    revisionClient.close();
+    revisionClient.open();
+
+    ports[0]?.postMessage({
+      type: 'event',
+      event: { type: 'chats.projected', projectId, chatIds: ['retired-chat'] },
+    } satisfies WorkerRevisionResponse);
+    ports[1]?.postMessage({
+      type: 'event',
+      event: { type: 'chats.projected', projectId, chatIds: ['current-chat'] },
+    } satisfies WorkerRevisionResponse);
+    const observed: WorkerRevisionResponse[] = [];
+    revisionClient.subscribeEvents((event) => observed.push({ type: 'event', event }));
+
+    expect(observed).toEqual([
+      {
+        type: 'event',
+        event: {
+          type: 'chats.projected',
+          projectId,
+          chatIds: ['current-chat'],
+        },
+      },
+    ]);
+    revisionClient.close();
+  });
+
+  it('should stop the root when the project route unmounts', async () => {
+    const fixture = harness();
+    live.push(fixture);
+    const { worker, registry } = fixture.worker();
+    fileManagerRef.send({ type: 'worker', worker });
+
+    const view = mount();
+    await settle();
+    const root = await fixture.root(registry);
+    expect(root.inspect().status).toBe('active');
+
+    view.unmount();
+    await settle();
+
+    // Closing waits for the operation log's last append, so the registry lets go after the root stops.
+    await vi.waitFor(
+      () => {
+        expect(root.inspect()).toMatchObject({ status: 'stopped', children: [] });
+        expect(registry.openProjectIds()).toEqual([]);
+      },
+      { timeout: 10_000 },
+    );
+  });
+
+  it('should keep one lifecycle owner when one of multiple passive consumers unmounts', async () => {
+    const fixture = harness();
+    live.push(fixture);
+    const { worker, registry } = fixture.worker();
+    fileManagerRef.send({ type: 'worker', worker });
+
+    const tree = (showSecondConsumer: boolean): React.JSX.Element => (
+      <UnloadProvider sequencer={environment?.sequencer}>
+        <Owner />
+        <Consumer />
+        {showSecondConsumer ? <Consumer /> : null}
+      </UnloadProvider>
+    );
+    const view = render(tree(true));
+    await settle();
+    const root = await fixture.root(registry);
+
+    view.rerender(tree(false));
+    await settle();
+
+    expect(root.inspect().status).toBe('active');
+    expect(registry.openProjectIds()).toEqual([projectId]);
+  });
+
+  it('should keep the root alive through hidden and pagehide preparation (W13 P32)', async () => {
+    const fixture = harness();
+    live.push(fixture);
+    const { worker, registry } = fixture.worker();
+    fileManagerRef.send({ type: 'worker', worker });
+
+    mount();
+    await settle();
+    const first = await fixture.root(registry);
+
+    setVisibility('hidden');
+    await settle();
+
+    /*
+     * `hidden` is the real close, and everything the revision it asks for is
+     * *for* happens after it: the cut, the mint, the push, the queue write. The
+     * port used to be given back on the same tick, which stopped the tree
+     * mid-cut — so the flush recorded nothing, pushed nothing and queued nothing
+     * (W13 review 2 R2). The tab coming back is the same root, not a new one.
+     */
+    expect(first.inspect().status).toBe('active');
+
+    setVisibility('visible');
+    await settle();
+    expect(await fixture.root(registry)).toBe(first);
+
+    globalThis.dispatchEvent(new Event('pagehide'));
+    await settle();
+
+    expect(first.inspect().status).toBe('active');
+    expect(registry.openProjectIds()).toEqual([projectId]);
+  });
+
+  it('should mint only at hidden and send only the prepared keepalive at pagehide', async () => {
+    const { worker, messages } = controlledWorker();
+    fileManagerRef.send({ type: 'worker', worker });
+    mount();
+    await settle();
+    messages.length = 0;
+
+    setVisibility('hidden');
+    await settle();
+    /* Correlated (C16, contract §6): the close cut is a *question*, so the
+     * registrant can hold the document open until the worker answers it. It
+     * used to be posted and abandoned in the same microtask, which left
+     * `pagehide` offering the previous push's pack — or nothing. */
+    // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- `expect.any` is typed `any` by vitest.
+    expect(messages).toEqual([{ command: 'saveRevision', trigger: 'close', id: expect.any(Number) }]);
+
+    messages.length = 0;
+    globalThis.dispatchEvent(new Event('pagehide'));
+    expect(messages).toEqual([{ command: 'flushKeepalive' }]);
+  });
+
+  it('should not resolve the close flush until the worker answers the cut (C16)', async () => {
+    const { worker, ports, messages } = controlledWorker();
+    const client = getRevisionClient({ projectId, worker });
+    client.open();
+    messages.length = 0;
+
+    let settled = false;
+    let outcome: string | undefined;
+    const flush = (async () => {
+      outcome = await client.saveRevision('close');
+      settled = true;
+    })();
+
+    await settle();
+    expect(settled).toBe(false);
+    const frame = messages.at(-1) as { command: string; trigger?: string; id: number };
+    expect(frame).toMatchObject({ command: 'saveRevision', trigger: 'close' });
+
+    ports[0]?.postMessage({
+      type: 'result',
+      id: frame.id,
+      result: { kind: 'saved', outcome: 'recorded' },
+    } satisfies WorkerRevisionResponse);
+    await flush;
+    expect(settled).toBe(true);
+    /* What the cut came to reaches the caller (A7e). */
+    expect(outcome).toBe('recorded');
+  });
+
+  /* Round 27: the page reads a foreign run by whether the host's placement can pull the chat; an older host says nothing. */
+  it.each([
+    { answer: { pulls: false }, pulls: false },
+    { answer: { pulls: true }, pulls: true },
+    { answer: null, pulls: true },
+  ])('should answer a host pullRemote $answer as pulls $pulls', async ({ answer, pulls }) => {
+    const seen: JsonValue[] = [];
+    const channel = revisionChannel({
+      revision: async (request: JsonValue) => {
+        seen.push(request);
+        return {
+          result:
+            typeof request === 'object' &&
+            request !== null &&
+            'command' in request &&
+            request['command'] === 'pullRemote'
+              ? answer
+              : null,
+          status: { projectId, branch: 'main' },
+        };
+      },
+      async *revisionEvents() {
+        yield { kind: 'status', value: { projectId, branch: 'main' } };
+      },
+      close: () => undefined,
+    });
+    const client = createHostRevisionClient({ projectId, connect: async () => channel });
+    client.open();
+
+    await expect(client.pullRemote('chat-1')).resolves.toBe(pulls);
+    expect(seen).toContainEqual({ command: 'pullRemote', chatId: 'chat-1' });
+    client.close();
+  });
+
+  /* B7: the host answers the verb itself, so the page waits on that answer and never on a bound or a toast. */
+  it('should resolve a host createBranch with the checkout the host answered', async () => {
+    const { client } = hostBranchClient({
+      branch: 'isolated-run',
+      checkoutId: 'checkout-isolated',
+      checkoutRoot: '/checkouts/checkout-isolated',
+    });
+    client.open();
+    await waitFor(() => {
+      expect(client.status()).toBeDefined();
+    });
+
+    await expect(client.createBranch('isolated-run')).resolves.toEqual({
+      branch: 'isolated-run',
+      checkoutId: 'checkout-isolated',
+      checkoutRoot: '/checkouts/checkout-isolated',
+    });
+    client.close();
+  });
+
+  it('should refuse a host createBranch the registry made no checkout for', async () => {
+    const { client } = hostBranchClient({ branch: 'isolated-run' });
+    client.open();
+    await waitFor(() => {
+      expect(client.status()).toBeDefined();
+    });
+
+    const created = client.createBranch('isolated-run');
+
+    /* `checkoutId: ''` used to reach `Chat.checkoutId`, and the chat then had
+     * no root to run on for the rest of the session (review finding 5). */
+    await expect(created).rejects.toMatchObject({
+      code: 'BRANCH_UNPLACED',
+      /* One hop from a surface, so the words are the table's rather than the
+         registry's — "the registry made x without a checkout to run on" is
+         banned vocabulary and unactionable besides (Rule 1). */
+      message: describeRevisionFailure('branch', 'BRANCH_UNPLACED', { branch: 'isolated-run' }).description,
+    });
+    client.close();
+  });
+
+  it('should resolve a createBranch with the checkout the branch was made on', async () => {
+    const fixture = harness({ files: { 'bracket.scad': 'cube([1, 1, 1]);\n' } });
+    live.push(fixture);
+    const { worker, registry } = fixture.worker();
+    fileManagerRef.send({ type: 'worker', worker });
+
+    render(
+      <UnloadProvider sequencer={environment?.sequencer}>
+        <Owner />
+        <CommandConsumer />
+      </UnloadProvider>,
+    );
+    await settle(40);
+
+    const created = await commands?.createBranch('isolated-run');
+    const root = await fixture.root(registry);
+    expect(created).toEqual({
+      branch: 'isolated-run',
+      checkoutId: root.status().branches.find((row) => row.name === 'isolated-run')?.checkoutId,
+      checkoutRoot: root.status().branches.find((row) => row.name === 'isolated-run')?.checkoutRoot,
+    });
+  }, 20_000);
+
+  it('should push what `hidden` minted, and record it when the remote cannot be reached (W13 P32/P33)', async () => {
+    const fixture = harness({
+      /* Nothing listens here: a remote that exists and cannot be reached is the
+       * offline close AC21 names. */
+      remoteUrl: 'http://127.0.0.1:1/project.git',
+      files: { 'bracket.scad': 'cube([1, 1, 1]);\n' },
+    });
+    live.push(fixture);
+    const { worker, registry } = fixture.worker();
+    fileManagerRef.send({ type: 'worker', worker });
+
+    mount();
+    await settle(40);
+
+    setVisibility('hidden');
+    await settle(40);
+
+    /*
+     * The whole of the close flush, as the page composes it: the cut is taken,
+     * the revision is minted, the scheduler pushes it, the push cannot reach
+     * anything, and what is owed is on disk for the next open (D28, AC21). Not
+     * one of those steps survived the port being given back at `hidden`.
+     */
+    await waitFor(
+      async () => {
+        const stored: unknown = JSON.parse(await fixture.read('.git/sync-pending'));
+        expect((stored as { entries: ReadonlyArray<{ ref: string }> }).entries.map((entry) => entry.ref)).toEqual([
+          'refs/heads/main',
+        ]);
+      },
+      { timeout: 10_000 },
+    );
+
+    /* And the row the person reads, live: `Not backed up · 1`. */
+    const root = await fixture.root(registry);
+    expect(root.status().sync).toMatchObject({
+      state: 'queued',
+      pendingCount: 1,
+    });
+  }, 30_000);
+
+  it('should reopen on the worker the file-manager replaced it with', async () => {
+    const fixture = harness();
+    live.push(fixture);
+    const first = fixture.worker();
+    fileManagerRef.send({ type: 'worker', worker: first.worker });
+
+    mount();
+    await settle();
+    const firstRoot = await fixture.root(first.registry);
+
+    /* A workspace reconnect terminates the worker and creates another. A client
+     * that kept the old channel would post into a dead port for the life of the
+     * document: every command dropped, the projection frozen. */
+    const second = fixture.worker();
+    await act(async () => {
+      fileManagerRef.send({ type: 'worker', worker: second.worker });
+      await settle();
+    });
+
+    await waitFor(async () => {
+      const secondRoot = await fixture.root(second.registry);
+      expect(secondRoot.inspect().status).toBe('active');
+    });
+    // The old root stops on its own teardown, which can land after the new root is active.
+    await waitFor(() => {
+      expect(firstRoot.inspect().status).toBe('stopped');
+    });
+    // Closing waits for the operation log's last append, so the registry lets go after the root stops.
+    await vi.waitFor(
+      () => {
+        expect(first.registry.openProjectIds()).toEqual([]);
+      },
+      { timeout: 10_000 },
+    );
+  });
+
+  /**
+   * *Publish* borrows the API origin; it must not revoke the project's remote.
+   *
+   * The credential frame is W12's *whole* credential, so one carrying only
+   * `apiBaseUrl` is how *Disconnect* clears what GitHub minted — and Publish
+   * sent exactly that frame before its own command, signing the project out of
+   * the remote it was connected to on every publish (review R4).
+   */
+  it('should keep the connected remote credential when the project publishes (review R4)', async () => {
+    const fixture = harness();
+    live.push(fixture);
+    const { worker } = fixture.worker();
+    fileManagerRef.send({ type: 'worker', worker });
+
+    render(
+      <UnloadProvider sequencer={environment?.sequencer}>
+        <Owner />
+        <CommandConsumer />
+      </UnloadProvider>,
+    );
+    await settle();
+
+    client?.remoteCredential({
+      apiBaseUrl: 'https://api.tau.test',
+      origin: 'https://github.com',
+      authorization: 'Bearer gho_kept',
+    });
+    await settle();
+    commands?.publishProject('v1');
+    await settle();
+
+    expect(fixture.credential()).toMatchObject({
+      origin: 'https://github.com',
+      authorization: 'Bearer gho_kept',
+    });
+  }, 30_000);
+});

@@ -1,0 +1,810 @@
+// @vitest-environment node
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  isPlacementOnThisDeviceNow,
+  resetOriginAgentHostAnswer,
+  AgentHostPlacementError,
+  discoverOriginAgentHost,
+  externalAgentDisplayName,
+  hostDirectoryOutage,
+  installLoopbackHandOff,
+  listAgentHostPlacements,
+  loopbackAdmissionRefusal,
+  onLoopbackAgentHostsChanged,
+  openAgentHostChannel,
+  placementRungOf,
+  probeCloudPlacement,
+  probeLoopbackAgentHost,
+  redeemLoopbackHandOff,
+  resetLoopbackAgentHosts,
+  shouldAutoOfferCloudPlacement,
+} from '#lib/agent-host-placement.js';
+import { RemoteHostApiError } from '#lib/remote-host-client.js';
+import { getComputeReuseMode, setComputeReuseMode } from '@taucad/ui-core/lib/compute-reuse-preference';
+import type { DesktopBridge } from '@taucad/files-ui/filesystem/desktop-bridge';
+import type { AgentHostPlacementTarget } from '#lib/agent-host-placement.js';
+
+/** The build target `@taucad/*` libraries resolve; the app's own reads still follow `TAU_TARGET`. */
+const buildTarget = vi.hoisted(() => ({ desktop: false }));
+vi.mock('@taucad/ui-core/lib/build-target', () => ({
+  get isDesktopTarget() {
+    return buildTarget.desktop;
+  },
+}));
+
+const descriptor = { v: 1, agent: true, label: 'studio-mini', workspaceRoot: '/Users/x/tau-workspace/lamp' } as const;
+
+/** Descriptors exactly as a daemon publishes them (VSC1), model probe included. */
+const claudeAgent = { id: 'claude', displayName: 'Claude Code', models: [{ id: 'sonnet', name: 'Sonnet' }] };
+const codexAgent = {
+  id: 'codex',
+  displayName: 'Codex',
+  models: [
+    { id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' },
+    { id: 'gpt-5.3-codex-spark', name: 'GPT-5.3-Codex-Spark' },
+  ],
+  defaultModel: 'gpt-5.6-sol',
+};
+
+const jsonResponse = (body: unknown, status = 200): Response =>
+  new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+
+/** A socket that never opens, never errors — the Safari-blocked shape (SP-5a). */
+const silentSocket = (): WebSocket => {
+  const listeners = new Map<string, Set<(event: Event) => void>>();
+  return {
+    readyState: 0,
+    binaryType: 'arraybuffer',
+    send: () => undefined,
+    close: () => undefined,
+    addEventListener: (type: string, listener: (event: Event) => void) => {
+      listeners.set(type, (listeners.get(type) ?? new Set()).add(listener));
+    },
+    removeEventListener: (type: string, listener: (event: Event) => void) => {
+      listeners.get(type)?.delete(listener);
+    },
+  } as unknown as WebSocket;
+};
+
+/* The origin's reach is recorded for the page's life: each test is a new page. */
+afterEach(() => {
+  resetOriginAgentHostAnswer();
+});
+
+describe('discoverOriginAgentHost', () => {
+  it('reads the same-origin descriptor without sending anything of its own', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(descriptor));
+
+    await expect(
+      discoverOriginAgentHost({ fetch: fetchMock as unknown as typeof fetch, origin: 'http://127.0.0.1:7777' }),
+    ).resolves.toEqual(descriptor);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:7777/.well-known/tau-host',
+      expect.objectContaining({ cache: 'no-store' }),
+    );
+  });
+
+  it.each([
+    ['a 404 from a page nothing hosts', async () => jsonResponse({}, 404)],
+    ['a body that is not a descriptor', async () => jsonResponse({ v: 2 })],
+    [
+      'a request the network refused',
+      async () => {
+        throw new Error('failed to fetch');
+      },
+    ],
+  ])('reports no origin host for %s', async (_name, respond) => {
+    await expect(
+      discoverOriginAgentHost({ fetch: respond as unknown as typeof fetch, origin: 'http://127.0.0.1:7777' }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('should not ask the origin when the build says no daemon serves it', async () => {
+    vi.stubEnv('TAU_ORIGIN_AGENT_HOST', 'absent');
+    const fetchMock = vi.fn(async () => jsonResponse(descriptor));
+
+    try {
+      await expect(
+        discoverOriginAgentHost({ fetch: fetchMock as unknown as typeof fetch, origin: 'https://taucad.dev' }),
+      ).resolves.toBeUndefined();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+      buildTarget.desktop = false;
+    }
+  });
+});
+
+describe('localAgentHostId', () => {
+  it.each([
+    ['desktop', 'desktop'],
+    ['web', undefined],
+  ] as const)('selects the implicit local host for the %s build', async (target, expected) => {
+    vi.stubEnv('TAU_TARGET', target);
+    buildTarget.desktop = target === 'desktop';
+    vi.resetModules();
+    const placement = await import('#lib/agent-host-placement.js');
+    expect(placement.localAgentHostId()).toBe(expected);
+    vi.unstubAllEnvs();
+    buildTarget.desktop = false;
+  });
+});
+
+/**
+ * PH8 and the transports doc are explicit that the cloud placement is for
+ * detached runs, iOS-class limits and downlevel fallback — never for Safari,
+ * which runs the browser-local host interactively like every other browser.
+ */
+describe('shouldAutoOfferCloudPlacement', () => {
+  const safariDesktop = {
+    userAgent:
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Safari/605.1.15',
+    maxTouchPoints: 0,
+  };
+  const safariPhone = {
+    userAgent:
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1',
+    maxTouchPoints: 5,
+  };
+  /* IPadOS Safari calls itself a Macintosh; touch points are the only tell. */
+  const safariTablet = { userAgent: safariDesktop.userAgent, maxTouchPoints: 5 };
+
+  it('never offers itself to Safari on a desktop', () => {
+    expect(probeCloudPlacement(safariDesktop)).toMatchObject({ iosClass: false });
+    expect(shouldAutoOfferCloudPlacement({ iosClass: false, downlevel: false })).toBe(false);
+    expect(shouldAutoOfferCloudPlacement(probeCloudPlacement(safariDesktop))).toBe(false);
+  });
+
+  it('offers itself for iOS-class limits and for a downlevel browser', () => {
+    expect(probeCloudPlacement(safariPhone).iosClass).toBe(true);
+    expect(probeCloudPlacement(safariTablet).iosClass).toBe(true);
+    expect(shouldAutoOfferCloudPlacement(probeCloudPlacement(safariPhone))).toBe(true);
+    expect(shouldAutoOfferCloudPlacement({ iosClass: false, downlevel: true })).toBe(true);
+  });
+});
+
+describe('listAgentHostPlacements', () => {
+  /* XD2: a "no daemon" answer stands for its reuse interval: listings inside it ask nothing again. */
+  it('should not ask the origin again inside the reuse interval of a no-daemon answer', async () => {
+    const discover = vi.fn(async () => undefined);
+    await listAgentHostPlacements({ discoverOrigin: discover, listHosts: async () => [] });
+    await listAgentHostPlacements({ discoverOrigin: discover, listHosts: async () => [] });
+
+    expect(discover).toHaveBeenCalledTimes(1);
+    expect(isPlacementOnThisDeviceNow('origin')).toBe(false);
+  });
+
+  /*
+   * XD2: only a fresh "no daemon" may decline a placement: past its reuse interval the answer reads as unknown, so a
+   * legacy origin placement opened then is kept and the origin asked again, not declined on an old answer.
+   */
+  it('should read a stale no-daemon answer as unknown until the origin answers again', async () => {
+    vi.useFakeTimers({ now: Date.parse('2026-10-23T10:00:00.000Z'), toFake: ['Date'] });
+    try {
+      await listAgentHostPlacements({ discoverOrigin: async () => undefined, listHosts: async () => [] });
+      expect(isPlacementOnThisDeviceNow('origin')).toBe(false);
+      vi.setSystemTime(Date.parse('2026-10-23T10:01:00.000Z'));
+
+      expect(isPlacementOnThisDeviceNow('origin')).toBeUndefined();
+      const answer = Promise.withResolvers<undefined>();
+      const listing = listAgentHostPlacements({
+        discoverOrigin: async () => answer.promise,
+        listHosts: async () => [],
+      });
+      expect(isPlacementOnThisDeviceNow('origin')).toBeUndefined();
+      answer.resolve(undefined);
+      await listing;
+      expect(isPlacementOnThisDeviceNow('origin')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /*
+   * XD2: a daemon is a daemon for the page's life: a later listing whose probe fails asks again, and keeps the daemon
+   * as it last answered (round 27).
+   */
+  it('should keep a settled origin daemon through a later listing whose probe fails', async () => {
+    resetOriginAgentHostAnswer();
+    await listAgentHostPlacements({ discoverOrigin: async () => descriptor, listHosts: async () => [] });
+    const failing = vi.fn(async () => {
+      throw new TypeError('network blip');
+    });
+
+    const listed = await listAgentHostPlacements({ discoverOrigin: failing, listHosts: async () => [] });
+
+    expect(failing).toHaveBeenCalledOnce();
+    expect(listed.find((target) => target.hostId === 'origin')).toMatchObject({ label: descriptor.label });
+    expect(isPlacementOnThisDeviceNow('origin')).toBe(true);
+    const unanswered = await listAgentHostPlacements({
+      discoverOrigin: async () => undefined,
+      listHosts: async () => [],
+    });
+    expect(unanswered.map((target) => target.hostId)).toContain('origin');
+    expect(isPlacementOnThisDeviceNow('origin')).toBe(true);
+    resetOriginAgentHostAnswer();
+  });
+
+  /*
+   * Round 27: only "found" is kept for the page's life, never the descriptor: each listing reads the daemon again, so a
+   * daemon that was renamed, moved its workspace or installed an agent since is listed as it is now.
+   */
+  it('should list the origin daemon as it answers now, not as it first answered', async () => {
+    await listAgentHostPlacements({
+      discoverOrigin: async () => ({ ...descriptor, externalAgents: [claudeAgent] }),
+      listHosts: async () => [],
+    });
+
+    const listed = await listAgentHostPlacements({
+      discoverOrigin: async () => ({ ...descriptor, label: 'studio-max', externalAgents: [claudeAgent, codexAgent] }),
+      listHosts: async () => [],
+    });
+
+    expect(listed.find((target) => target.hostId === 'origin')).toMatchObject({
+      label: 'studio-max',
+      externalAgents: [claudeAgent, codexAgent],
+    });
+  });
+
+  /* XD2: one recorder of the origin's reach: the listing's discovery answers every later reader, the notice's too. */
+  it('should record the origin it discovers, so a reader without the network knows it', async () => {
+    resetOriginAgentHostAnswer();
+    expect(isPlacementOnThisDeviceNow('origin')).toBeUndefined();
+
+    await listAgentHostPlacements({ discoverOrigin: async () => descriptor, listHosts: async () => [] });
+
+    expect(isPlacementOnThisDeviceNow('origin')).toBe(true);
+    resetOriginAgentHostAnswer();
+  });
+
+  it('lists rung 1 first and only paired devices that advertised the capability', async () => {
+    await expect(
+      listAgentHostPlacements({
+        discoverOrigin: async () => descriptor,
+        listHosts: async () => [
+          {
+            id: 'device-agent',
+            label: 'workshop',
+            createdAt: new Date(0),
+            lastSeenAt: null,
+            revokedAt: null,
+            online: true,
+            agent: { workspaceRoot: '/srv/tau' },
+          },
+          {
+            id: 'device-offline',
+            label: 'laptop',
+            createdAt: new Date(0),
+            lastSeenAt: null,
+            revokedAt: null,
+            online: false,
+            agent: { workspaceRoot: '/home/tau' },
+          },
+          // Online, but running compute only — no agent workspace to place on.
+          {
+            id: 'device-compute',
+            label: 'render-box',
+            createdAt: new Date(0),
+            lastSeenAt: null,
+            revokedAt: null,
+            online: true,
+          },
+        ],
+      }),
+    ).resolves.toEqual([
+      {
+        hostId: 'origin',
+        rung: 1,
+        label: 'studio-mini',
+        workspaceRoot: descriptor.workspaceRoot,
+        online: true,
+      },
+      { hostId: 'device-agent', rung: 2, label: 'workshop', workspaceRoot: '/srv/tau', online: true },
+      { hostId: 'device-offline', rung: 2, label: 'laptop', workspaceRoot: '/home/tau', online: false },
+    ]);
+  });
+
+  it('marks a cloud host with the project it was provisioned for', async () => {
+    await expect(
+      listAgentHostPlacements({
+        discoverOrigin: async () => undefined,
+        listHosts: async () => [
+          {
+            id: 'agent_cloud',
+            label: 'Cloud',
+            createdAt: new Date(0),
+            lastSeenAt: null,
+            revokedAt: null,
+            online: true,
+            agent: { workspaceRoot: '/workspace' },
+            cloudProjectId: 'project-a',
+          },
+          {
+            id: 'device-laptop',
+            label: 'workshop',
+            createdAt: new Date(0),
+            lastSeenAt: null,
+            revokedAt: null,
+            online: true,
+            agent: { workspaceRoot: '/srv/tau' },
+            cloudProjectId: null,
+          },
+        ],
+      }),
+    ).resolves.toEqual([
+      {
+        hostId: 'agent_cloud',
+        rung: 2,
+        label: 'Cloud',
+        workspaceRoot: '/workspace',
+        online: true,
+        cloudProjectId: 'project-a',
+      },
+      { hostId: 'device-laptop', rung: 2, label: 'workshop', workspaceRoot: '/srv/tau', online: true },
+    ]);
+  });
+
+  it('carries each host’s external agents through to the selector', async () => {
+    await expect(
+      listAgentHostPlacements({
+        discoverOrigin: async () => ({ ...descriptor, externalAgents: [claudeAgent, codexAgent] }),
+        listHosts: async () => [
+          {
+            id: 'device-agent',
+            label: 'workshop',
+            createdAt: new Date(0),
+            lastSeenAt: null,
+            revokedAt: null,
+            online: true,
+            agent: { workspaceRoot: '/srv/tau', externalAgents: [codexAgent] },
+          },
+        ],
+      }),
+    ).resolves.toEqual([
+      {
+        hostId: 'origin',
+        rung: 1,
+        label: 'studio-mini',
+        workspaceRoot: descriptor.workspaceRoot,
+        online: true,
+        externalAgents: [claudeAgent, codexAgent],
+      },
+      {
+        hostId: 'device-agent',
+        rung: 2,
+        label: 'workshop',
+        workspaceRoot: '/srv/tau',
+        online: true,
+        externalAgents: [codexAgent],
+      },
+    ]);
+  });
+
+  it('publishes each agent’s product name for the surfaces that hold no placement', async () => {
+    /* V14: `displayName` on the descriptor is the single source, so the
+     * approval banner and the transcript badge read it from here instead of
+     * each keeping their own `{claude: 'Claude Code'}` map. */
+    await listAgentHostPlacements({
+      discoverOrigin: async () => ({ ...descriptor, externalAgents: [claudeAgent, codexAgent] }),
+      listHosts: async () => [],
+    });
+
+    expect(externalAgentDisplayName('codex')).toBe('Codex');
+    expect(externalAgentDisplayName('claude')).toBe('Claude Code');
+    // An agent no host has described names itself rather than inventing a product.
+    expect(externalAgentDisplayName('gemini')).toBe('gemini');
+  });
+
+  it('keeps a refused agent’s row, carrying the code that says why', async () => {
+    /* V9: a user who installed Codex and sees no row cannot tell a missing
+     * feature from a stale CLI, so the refusal travels rather than the row
+     * disappearing. */
+    await expect(
+      listAgentHostPlacements({
+        discoverOrigin: async () => ({
+          ...descriptor,
+          externalAgents: [{ id: 'codex', displayName: 'Codex', models: [], refusal: 'CLI_TOO_OLD' }],
+        }),
+        listHosts: async () => [],
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        externalAgents: [{ id: 'codex', displayName: 'Codex', models: [], refusal: 'CLI_TOO_OLD' }],
+      }),
+    ]);
+  });
+
+  it('lists launcher 2 first on the desktop build, with no workspace of its own', async () => {
+    await expect(
+      listAgentHostPlacements({ desktop: true, discoverOrigin: async () => undefined, listHosts: async () => [] }),
+    ).resolves.toEqual([
+      // The root belongs to the *project*, not to the host, so discovery names
+      // none: `desktopWorkspaceRoot` resolves it at dial time.
+      { hostId: 'desktop', rung: 'in-process', label: 'This computer', workspaceRoot: '', online: true },
+    ]);
+  });
+
+  it('publishes every discovered placement, and no revision capability (W3d)', async () => {
+    const targets = await listAgentHostPlacements({
+      desktop: true,
+      bridge: () => ({ externalAgents: async () => [] }) as unknown as DesktopBridge,
+      discoverOrigin: async () => descriptor,
+      listHosts: async () => [
+        {
+          id: 'device-agent',
+          label: 'workshop',
+          createdAt: new Date(0),
+          lastSeenAt: null,
+          revokedAt: null,
+          online: true,
+          agent: { workspaceRoot: '/srv/tau' },
+        },
+      ],
+    });
+
+    /* W3d: a host advertises no revision *modes* any more — placement is
+     * non-branching by default, so there is nothing to choose and nothing to
+     * discover. What the pass still publishes is the placement itself. */
+    expect(targets.map((target) => target.hostId).toSorted()).toEqual(['desktop', 'device-agent', 'origin']);
+  });
+
+  it('carries the external agents main discovered onto the desktop row', async () => {
+    /* The selector draws one row per id, so launcher 2 has to advertise the
+     * same list the utility wired into its port — the desktop's answer to the
+     * daemon's `externalAgents` descriptor field. */
+    await expect(
+      listAgentHostPlacements({
+        desktop: true,
+        bridge: () => ({ externalAgents: async () => [claudeAgent, codexAgent] }) as unknown as DesktopBridge,
+        discoverOrigin: async () => undefined,
+        listHosts: async () => [],
+      }),
+    ).resolves.toEqual([
+      {
+        hostId: 'desktop',
+        rung: 'in-process',
+        label: 'This computer',
+        workspaceRoot: '',
+        online: true,
+        externalAgents: [claudeAgent, codexAgent],
+      },
+    ]);
+  });
+
+  it('still lists the origin host when the pairing API is unreachable', async () => {
+    await expect(
+      listAgentHostPlacements({
+        discoverOrigin: async () => descriptor,
+        listHosts: async () => {
+          throw new Error('offline');
+        },
+      }),
+    ).resolves.toHaveLength(1);
+  });
+
+  /* A persisted rung-2 selection has no target to publish while the directory
+   * is down, so a swallowed refusal leaves its dispatch waiting out the whole
+   * probe timeout and then refusing with a sentence naming nothing. */
+  it('records the directory’s own refusal, and clears it once the directory answers', async () => {
+    await listAgentHostPlacements({
+      discoverOrigin: async () => descriptor,
+      listHosts: async () => {
+        throw new RemoteHostApiError('DEVICE_OFFLINE', 'That computer is offline. Start `tau serve` on it.');
+      },
+    });
+    expect(hostDirectoryOutage()).toBe('That computer is offline. Start `tau serve` on it.');
+
+    await listAgentHostPlacements({ discoverOrigin: async () => undefined, listHosts: async () => [] });
+
+    expect(hostDirectoryOutage()).toBeUndefined();
+  });
+});
+
+describe('openAgentHostChannel', () => {
+  it('dials the same-origin /agent socket with no token in the URL', async () => {
+    const urls: string[] = [];
+    const client = await openAgentHostChannel('origin', {
+      origin: 'https://studio.local:7777',
+      createSocket: (url) => {
+        urls.push(url);
+        return { ...silentSocket(), readyState: 1 } as unknown as WebSocket;
+      },
+    });
+
+    expect(urls).toEqual(['wss://studio.local:7777/agent']);
+    client.close();
+  });
+
+  it.each([
+    ['an offline device', { id: 'device-1', online: false, agent: { workspaceRoot: '/srv/tau' } }, 'HOST_OFFLINE'],
+    ['a device with no agent workspace', { id: 'device-1', online: true }, 'HOST_NO_AGENT_ROUTE'],
+  ])('refuses rung 2 for %s with a typed reason', async (_name, device, code) => {
+    await expect(
+      openAgentHostChannel('device-1', {
+        listHosts: async () => [
+          { label: 'workshop', createdAt: new Date(0), lastSeenAt: null, revokedAt: null, ...device },
+        ],
+        createSession: async () => {
+          throw new Error('must not reach the API');
+        },
+      }),
+    ).rejects.toMatchObject({ code, rung: 2 });
+  });
+
+  it('refuses rung 2 when the session carries no agent route', async () => {
+    await expect(
+      openAgentHostChannel('device-1', {
+        listHosts: async () => [
+          {
+            id: 'device-1',
+            label: 'workshop',
+            createdAt: new Date(0),
+            lastSeenAt: null,
+            revokedAt: null,
+            online: true,
+            agent: { workspaceRoot: '/srv/tau' },
+          },
+        ],
+        createSession: async () => ({
+          id: 'session-1',
+          runtimeVersion: '0.0.0',
+          expiresAt: new Date().toISOString(),
+          url: 'wss://api.tau.test/relay',
+        }),
+      }),
+    ).rejects.toMatchObject({ code: 'HOST_NO_AGENT_ROUTE', rung: 2 });
+  });
+
+  it('gives up on a socket that never opens and never closes', async () => {
+    await expect(
+      openAgentHostChannel('origin', {
+        origin: 'https://studio.local:7777',
+        createSocket: () => silentSocket(),
+        openTimeout: 20,
+      }),
+    ).rejects.toMatchObject({ code: 'ORIGIN_NOT_HOSTED', rung: 1 });
+  });
+});
+
+/** Main refuses an ungranted root by never posting a port at all. */
+const neverSettles = new Promise<MessagePort>(() => {
+  /* Deliberately never settled. */
+});
+
+describe('launcher 2', () => {
+  it('should wrap the brokered desktop port without negotiating an engine choice', async () => {
+    const channel = new MessageChannel();
+    const connect = vi.fn(async () => channel.port1);
+    // Charter D3: the daemon is handed the user's reuse preference, never a
+    // literal — so this asserts a selected mode, not the default.
+    const previousMode = getComputeReuseMode();
+    setComputeReuseMode('memory');
+
+    try {
+      const client = await openAgentHostChannel('desktop', {
+        projectId: 'proj_widget',
+        workspaceRoot: '/Users/x/Library/Application Support/Tau/home/lamp',
+        bridge: () => ({ agentHost: { connect } }),
+      });
+
+      expect(connect).toHaveBeenCalledWith({
+        workspaceRoot: '/Users/x/Library/Application Support/Tau/home/lamp',
+        projectId: 'proj_widget',
+        computeMode: 'memory',
+      });
+      expect(typeof client.execute).toBe('function');
+      client.close();
+      channel.port2.close();
+    } finally {
+      setComputeReuseMode(previousMode);
+    }
+  });
+
+  it('refuses an ungranted root after a bounded wait rather than hanging', async () => {
+    await expect(
+      openAgentHostChannel('desktop', {
+        workspaceRoot: '/somewhere/never/granted',
+        openTimeout: 20,
+        // Main refuses by never posting a port; the promise simply never settles.
+        bridge: () => ({ agentHost: { connect: async () => neverSettles } }),
+      }),
+    ).rejects.toMatchObject({ code: 'DESKTOP_ROOT_NOT_GRANTED', rung: 'in-process' });
+  });
+
+  it('refuses a project that is not on disk', async () => {
+    await expect(
+      openAgentHostChannel('desktop', {
+        bridge: () => ({ agentHost: { connect: async () => new MessageChannel().port1 } }),
+      }),
+    ).rejects.toBeInstanceOf(AgentHostPlacementError);
+  });
+});
+
+describe('rung 5', () => {
+  it('reports the permission state alongside an unreachable loopback probe', async () => {
+    await expect(
+      probeLoopbackAgentHost(7777, {
+        createSocket: () => silentSocket(),
+        queryPermission: async () => 'denied',
+        probeTimeout: 20,
+      }),
+    ).resolves.toEqual({ reachable: false, permission: 'denied' });
+  });
+
+  it('refuses a daemon this page was never handed, naming the hand-off and never a token', () => {
+    const refusal = loopbackAdmissionRefusal('studio-mini');
+
+    expect(refusal).toBeInstanceOf(AgentHostPlacementError);
+    expect(refusal).toMatchObject({ code: 'RUNG5_NO_ADMISSION', rung: 5 });
+    expect(refusal.message).toMatch(/tau open --desktop/u);
+    expect(refusal.message).toMatch(/pair it/u);
+    expect(refusal.message).not.toMatch(/token/iu);
+  });
+});
+
+/**
+ * Rung 5 by URL (ruling X54): a page redeems the single-use code `tau open --desktop` (or `--ui-origin`) handed it,
+ * and the daemon joins its placements; the session rides a subprotocol, never the URL.
+ */
+describe('rung 5 admission by URL', () => {
+  const daemon = 'http://127.0.0.1:7180';
+  const hostId = `loopback:${daemon}`;
+
+  afterEach(() => {
+    resetLoopbackAgentHosts();
+  });
+
+  /** A daemon that redeems `code` once from this page, and describes itself. */
+  const loopbackDaemon = (code = 'one-time-code') => {
+    let spent = false;
+    return vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === `${daemon}/.well-known/tau-host/session`) {
+        const offered = (JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as { code?: string }).code;
+        if (init?.method !== 'POST' || offered !== code || spent) {
+          return jsonResponse({}, 401);
+        }
+        spent = true;
+        return jsonResponse({ v: 1, session: 'redeemed-session' });
+      }
+      return url === `${daemon}/.well-known/tau-host` ? jsonResponse(descriptor) : jsonResponse({}, 404);
+    });
+  };
+
+  it('should redeem a hand-off code and list the daemon on rung 5', async () => {
+    const changed = vi.fn();
+    const stop = onLoopbackAgentHostsChanged(changed);
+    const fetchMock = loopbackDaemon();
+
+    const target = await redeemLoopbackHandOff(
+      { origin: daemon, code: 'one-time-code' },
+      { fetch: fetchMock as unknown as typeof fetch },
+    );
+    stop();
+
+    expect(target).toEqual({
+      hostId,
+      rung: 5,
+      label: 'studio-mini',
+      workspaceRoot: descriptor.workspaceRoot,
+      online: true,
+    });
+    expect(changed).toHaveBeenCalledOnce();
+    await expect(
+      listAgentHostPlacements({
+        discoverOrigin: async () => undefined,
+        listHosts: async () => [],
+        desktop: false,
+        bridge: () => undefined,
+        describeLoopback: async (origin) => (origin === daemon ? descriptor : undefined),
+      }),
+    ).resolves.toEqual([target]);
+    expect(placementRungOf(hostId)).toBe(5);
+  });
+
+  it('should dial the redeemed daemon with its session as a subprotocol, never in the URL', async () => {
+    await redeemLoopbackHandOff(
+      { origin: daemon, code: 'one-time-code' },
+      { fetch: loopbackDaemon() as unknown as typeof fetch },
+    );
+    const dialled: Array<{ readonly url: string; readonly protocols: readonly string[] | undefined }> = [];
+
+    const client = await openAgentHostChannel(hostId, {
+      createSocket: (url, protocols) => {
+        dialled.push({ url, protocols });
+        return { ...silentSocket(), readyState: 1 } as unknown as WebSocket;
+      },
+    });
+
+    expect(dialled).toEqual([
+      { url: 'ws://127.0.0.1:7180/agent', protocols: ['tau-agent', 'tau-session.redeemed-session'] },
+    ]);
+    client.close();
+  });
+
+  it('should refuse a code the daemon already redeemed', async () => {
+    const fetchMock = loopbackDaemon();
+    await redeemLoopbackHandOff(
+      { origin: daemon, code: 'one-time-code' },
+      { fetch: fetchMock as unknown as typeof fetch },
+    );
+
+    const refused = redeemLoopbackHandOff(
+      { origin: daemon, code: 'one-time-code' },
+      { fetch: fetchMock as unknown as typeof fetch },
+    );
+
+    await expect(refused).rejects.toThrow(/already used or has expired/u);
+    await expect(refused).rejects.toMatchObject({ code: 'RUNG5_NO_ADMISSION', rung: 5 });
+  });
+
+  it.each(['https://evil.example', 'http://192.168.1.20:7180', 'http://127.0.0.1', 'http://127.0.0.1:7180/agent'])(
+    'should refuse %s without asking it',
+    async (origin) => {
+      const fetchMock = vi.fn();
+
+      await expect(
+        redeemLoopbackHandOff({ origin, code: 'one-time-code' }, { fetch: fetchMock as unknown as typeof fetch }),
+      ).rejects.toMatchObject({ code: 'RUNG5_NO_ADMISSION', rung: 5 });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('should still refuse a loopback daemon this page holds no session for', async () => {
+    await expect(openAgentHostChannel('loopback:http://127.0.0.1:9999')).rejects.toMatchObject({
+      code: 'RUNG5_NO_ADMISSION',
+      rung: 5,
+    });
+  });
+
+  it('should take a website hand-off from the fragment and remove it from the address', async () => {
+    const target: AgentHostPlacementTarget = {
+      hostId,
+      rung: 5,
+      label: 'studio-mini',
+      workspaceRoot: '/w',
+      online: true,
+    };
+    const redeem = vi.fn(async () => target);
+    const replaceState = vi.fn();
+    const notify = vi.fn();
+
+    const stop = installLoopbackHandOff(notify, {
+      location: { hash: `#tau-host=${encodeURIComponent(daemon)}&tau-code=one-time-code`, pathname: '/', search: '' },
+      history: { replaceState, state: null },
+      redeem,
+      onDesktopHandOff: () => () => undefined,
+    });
+    await vi.waitFor(() => {
+      expect(notify).toHaveBeenCalledOnce();
+    });
+    stop();
+
+    expect(replaceState).toHaveBeenCalledWith(null, '', '/');
+    expect(redeem).toHaveBeenCalledWith({ origin: daemon, code: 'one-time-code' });
+    expect(notify).toHaveBeenCalledWith({ target });
+  });
+
+  it('should redeem each desktop hand-off and report a refusal', async () => {
+    let deliver: ((handOff: { readonly origin: string; readonly code: string }) => void) | undefined;
+    const notify = vi.fn();
+
+    installLoopbackHandOff(notify, {
+      location: { hash: '', pathname: '/', search: '' },
+      redeem: async () => {
+        throw loopbackAdmissionRefusal();
+      },
+      onDesktopHandOff: (handler) => {
+        deliver = handler;
+        return () => undefined;
+      },
+    });
+    deliver?.({ origin: daemon, code: 'spent' });
+    await vi.waitFor(() => {
+      expect(notify).toHaveBeenCalledOnce();
+    });
+
+    const outcome = (notify.mock.calls as Array<[{ readonly error: AgentHostPlacementError }]>)[0]?.[0];
+    expect(outcome?.error).toBeInstanceOf(AgentHostPlacementError);
+    expect(outcome?.error.code).toBe('RUNG5_NO_ADMISSION');
+  });
+});

@@ -1,0 +1,257 @@
+import { once } from 'node:events';
+import { spawn, spawnSync } from 'node:child_process';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+
+/** Captured child-process result. @public */
+export type GitCommandResult = Readonly<{
+  exitCode: number;
+  stdout: Uint8Array<ArrayBuffer>;
+  stderr: Uint8Array<ArrayBuffer>;
+}>;
+
+/** Why a bounded command stopped before its process exited normally. @public */
+export type CommandAbortReason = 'deadline' | 'signal' | 'output-limit';
+
+/** A bounded command that was stopped rather than allowed to run or grow without limit. @public */
+export class CommandAbortedError extends Error {
+  public readonly reason: CommandAbortReason;
+
+  /**
+   * Record why a command was stopped.
+   *
+   * @param reason - Deadline, caller abort, or captured-output limit.
+   * @param message - Safe diagnostic without command arguments.
+   */
+  public constructor(reason: CommandAbortReason, message: string) {
+    super(message);
+    this.name = 'CommandAbortedError';
+    this.reason = reason;
+  }
+}
+
+/** Bounds every spawned engine command carries. @public */
+export type CommandBounds = Readonly<{
+  /** Milliseconds. Wall-clock budget; the process is killed when it elapses. */
+  deadline?: number;
+  /** Maximum captured bytes per stream. The process is killed when either exceeds it. */
+  maxBuffer?: number;
+  /** Caller cancellation. */
+  signal?: AbortSignal;
+}>;
+
+type RunCommandOptions = CommandBounds &
+  Readonly<{
+    executable: string;
+    cwd: string;
+    args: readonly string[];
+    /** Overrides over the inherited environment; an `undefined` value unsets that variable. */
+    env?: Readonly<Record<string, string | undefined>>;
+    input?: ReadonlyArray<Uint8Array<ArrayBuffer>>;
+  }>;
+
+type RunGitCommandOptions = CommandBounds &
+  Readonly<{
+    gitExecutable: string;
+    cwd: string;
+    args: readonly string[];
+    /** Overrides over the inherited environment; an `undefined` value unsets that variable. */
+    env?: Readonly<Record<string, string | undefined>>;
+    input?: ReadonlyArray<Uint8Array<ArrayBuffer>>;
+  }>;
+
+/** Milliseconds. Long enough for a large snapshot, short enough that a wedged engine is not forever. */
+const defaultDeadline = 30_000;
+/** 256 MiB of captured output is far past any legitimate plumbing response. */
+const defaultMaxBuffer = 256 * 1024 * 1024;
+
+const writeInput = async (
+  child: ChildProcessWithoutNullStreams,
+  chunks: ReadonlyArray<Uint8Array<ArrayBuffer>>,
+): Promise<void> => {
+  child.stdin.on('error', () => {
+    // The exit result owns the stable process failure; EPIPE is expected when the engine rejects streamed input.
+  });
+  for (const chunk of chunks) {
+    if (!child.stdin.write(chunk)) {
+      // oxlint-disable-next-line eslint/no-await-in-loop -- process stdin backpressure must preserve protocol byte ordering.
+      await once(child.stdin, 'drain');
+    }
+  }
+  child.stdin.end();
+};
+
+/**
+ * Run one argument-array command without invoking a shell, under an explicit
+ * deadline, captured-output limit and caller abort signal.
+ *
+ * An engine that hangs, floods its output or is no longer wanted is killed
+ * rather than awaited, so no caller inherits an unbounded wait.
+ *
+ * @param options - Executable, working directory, arguments, environment, streamed input and bounds.
+ * @returns Captured process bytes and exit status.
+ * @throws CommandAbortedError When the deadline, the output limit or the signal stops the process first.
+ * @public
+ */
+export const runCommand = async (options: RunCommandOptions): Promise<GitCommandResult> => {
+  const deadline = options.deadline ?? defaultDeadline;
+  const maxBuffer = options.maxBuffer ?? defaultMaxBuffer;
+  if (options.signal?.aborted === true) {
+    throw new CommandAbortedError('signal', 'The command was aborted before it started.');
+  }
+  const environment: Record<string, string | undefined> = { ...process.env, ...options.env };
+  environment['GIT_TERMINAL_PROMPT'] = '0';
+  environment['LC_ALL'] = 'C';
+  const child = spawn(options.executable, options.args, {
+    cwd: options.cwd,
+    env: environment,
+    stdio: 'pipe',
+    detached: process.platform !== 'win32',
+  });
+
+  const stdout: Array<Uint8Array<ArrayBuffer>> = [];
+  const stderr: Array<Uint8Array<ArrayBuffer>> = [];
+  let stdoutLength = 0;
+  let stderrLength = 0;
+  let aborted: CommandAbortReason | undefined;
+
+  // Kill the entire engine operation: git delegates transfers to git-lfs and its workers.
+  // Do not await pipe closure: an exited parent may leave descendants holding those pipes.
+  const stopped = Promise.withResolvers<never>();
+  const stop = (reason: CommandAbortReason): void => {
+    if (aborted !== undefined) {
+      return;
+    }
+    aborted = reason;
+    const { pid } = child;
+    let cleanupFailed = false;
+    if (pid !== undefined) {
+      if (process.platform === 'win32') {
+        // Do not target a Windows pid after exit, when it may have been reused.
+        if (child.exitCode === null && child.signalCode === null) {
+          // Leave time for durable queue persistence inside the separate two-second close margin.
+          const killed = spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', timeout: 1000 });
+          cleanupFailed = killed.status !== 0;
+          // Retain direct-child termination even if taskkill is unavailable or times out.
+          child.kill('SIGKILL');
+        } else {
+          // An exited parent cannot safely identify its remaining Windows descendants.
+          cleanupFailed = true;
+        }
+      } else {
+        try {
+          process.kill(-pid, 'SIGKILL');
+        } catch {
+          // The group may already have exited. Killing the direct child remains a safe fallback.
+          child.kill('SIGKILL');
+        }
+      }
+    }
+    stopped.reject(
+      new CommandAbortedError(
+        reason,
+        `The command was stopped by its ${reason}.${cleanupFailed ? ' Process-tree cleanup failed.' : ''}`,
+      ),
+    );
+  };
+  const collect = (chunks: Array<Uint8Array<ArrayBuffer>>, chunk: Uint8Array<ArrayBuffer>, length: number): number => {
+    if (aborted !== undefined) {
+      return length;
+    }
+    const next = length + chunk.byteLength;
+    if (next > maxBuffer) {
+      stop('output-limit');
+      return next;
+    }
+    chunks.push(new Uint8Array(chunk));
+    return next;
+  };
+  child.stdout.on('data', (chunk: Uint8Array<ArrayBuffer>) => {
+    stdoutLength = collect(stdout, chunk, stdoutLength);
+  });
+  child.stderr.on('data', (chunk: Uint8Array<ArrayBuffer>) => {
+    stderrLength = collect(stderr, chunk, stderrLength);
+  });
+
+  const timer = setTimeout(() => {
+    stop('deadline');
+  }, deadline);
+  const onAbort = (): void => {
+    stop('signal');
+  };
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+
+  try {
+    const exit = new Promise<number>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', (code) => {
+        resolve(code ?? 1);
+      });
+    });
+    const input = writeInput(child, options.input ?? []);
+    const [exitCode] = await Promise.race([Promise.all([exit, input]), stopped.promise]);
+    if (aborted !== undefined) {
+      throw new CommandAbortedError(aborted, `The command was stopped by its ${aborted}.`);
+    }
+    return {
+      exitCode,
+      stdout: new Uint8Array(Buffer.concat(stdout)),
+      stderr: new Uint8Array(Buffer.concat(stderr)),
+    };
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener('abort', onAbort);
+  }
+};
+
+type ActivityTotals = { count: number; totalMilliseconds: number; longestMilliseconds: number };
+const gitActivityWindows = new Set<ActivityTotals>();
+
+/**
+ * Every Git process this realm runs through {@link runGitCommand}, timed from spawn to exit, read over windows: a
+ * caller opens one, and closing it answers how many processes finished while it was open, their total time and the
+ * longest (a turn's admission, for one). With no window open a process costs one empty loop.
+ *
+ * @public
+ */
+export const gitCommandActivity = Object.freeze({
+  open: (): Readonly<{ close: () => Readonly<ActivityTotals> }> => {
+    const totals = { count: 0, totalMilliseconds: 0, longestMilliseconds: 0 };
+    gitActivityWindows.add(totals);
+    return {
+      close: () => {
+        gitActivityWindows.delete(totals);
+        return { ...totals };
+      },
+    };
+  },
+});
+
+/**
+ * Run one argument-array Git command without invoking a shell.
+ *
+ * @param options - Executable, repository, arguments, streamed input and bounds.
+ * @returns Captured process bytes and exit status.
+ * @public
+ */
+export const runGitCommand = async (options: RunGitCommandOptions): Promise<GitCommandResult> => {
+  const start = performance.now();
+  try {
+    return await runCommand({
+      executable: options.gitExecutable,
+      cwd: options.cwd,
+      args: ['-C', options.cwd, ...options.args],
+      ...(options.env === undefined ? {} : { env: options.env }),
+      ...(options.input === undefined ? {} : { input: options.input }),
+      ...(options.deadline === undefined ? {} : { deadline: options.deadline }),
+      ...(options.maxBuffer === undefined ? {} : { maxBuffer: options.maxBuffer }),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+  } finally {
+    const milliseconds = performance.now() - start;
+    for (const totals of gitActivityWindows) {
+      totals.count += 1;
+      totals.totalMilliseconds += milliseconds;
+      totals.longestMilliseconds = Math.max(totals.longestMilliseconds, milliseconds);
+    }
+  }
+};

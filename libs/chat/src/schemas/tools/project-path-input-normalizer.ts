@@ -1,0 +1,158 @@
+import { toolName } from '#constants/tool.constants.js';
+import { resolveRootedPath } from '@taucad/utils/path';
+import { isRecord } from '@taucad/utils/schema';
+
+type ProjectPathInputNormalization = {
+  readonly input: unknown;
+  readonly changed: boolean;
+  readonly healedKeys: readonly string[];
+};
+
+type ProjectPathOutputNormalization = ProjectPathInputNormalization;
+
+const singlePathFields = new Map<string, 'targetFile' | 'path'>([
+  [toolName.readFile, 'targetFile'],
+  [toolName.editFile, 'targetFile'],
+  [toolName.createFile, 'targetFile'],
+  [toolName.deleteFile, 'targetFile'],
+  [toolName.evaluateModel, 'targetFile'],
+  [toolName.exportModel, 'targetFile'],
+  [toolName.screenshot, 'targetFile'],
+  [toolName.listDirectory, 'path'],
+  [toolName.grep, 'path'],
+  [toolName.globSearch, 'path'],
+]);
+
+/** `Array.isArray` widens an `unknown` to `any[]`, so narrow through a guard that keeps the elements `unknown`. */
+const isUnknownArray = (value: unknown): value is readonly unknown[] => Array.isArray(value);
+
+const repairModelPath = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const candidate = value.startsWith('/') && !value.startsWith('//') ? value.slice(1) : value;
+  try {
+    const canonical = resolveRootedPath(candidate);
+    return canonical === value ? undefined : canonical;
+  } catch {
+    return undefined;
+  }
+};
+
+const repairPathField = (record: Record<string, unknown>, field: string): Record<string, unknown> | undefined => {
+  const repaired = repairModelPath(record[field]);
+  return repaired === undefined ? undefined : { ...record, [field]: repaired };
+};
+
+const repairPathRows = (value: unknown, field: string): { value: unknown; changed: boolean } => {
+  if (!isUnknownArray(value)) {
+    return { value, changed: false };
+  }
+  const rows = value.map((row) => (isRecord(row) ? (repairPathField(row, field) ?? row) : row));
+  const changed = rows.some((row, index) => row !== value[index]);
+  return { value: changed ? rows : value, changed };
+};
+
+/**
+ * Repairs project-path aliases emitted by models or retained in historical
+ * messages. Direct tool schemas remain strict and accept only rooted paths.
+ * @public
+ */
+export const normalizeProjectPathToolInputAliases = (name: string, input: unknown): ProjectPathInputNormalization => {
+  if (!isRecord(input)) {
+    return { input, changed: false, healedKeys: [] };
+  }
+
+  const { files } = input;
+  if (name === toolName.testModel && isUnknownArray(files)) {
+    const nextFiles = files.map((value) => repairModelPath(value) ?? value);
+    const changed = nextFiles.some((value, index) => value !== files[index]);
+    return changed
+      ? { input: { ...input, files: nextFiles }, changed: true, healedKeys: ['files'] }
+      : { input, changed: false, healedKeys: [] };
+  }
+
+  const field = singlePathFields.get(name);
+  if (!field || !Object.hasOwn(input, field)) {
+    return { input, changed: false, healedKeys: [] };
+  }
+
+  const repaired = repairModelPath(input[field]);
+  return repaired === undefined
+    ? { input, changed: false, healedKeys: [] }
+    : { input: { ...input, [field]: repaired }, changed: true, healedKeys: [field] };
+};
+
+/** Repairs historical project paths carried in path-bearing tool outputs. @public */
+export const normalizeProjectPathToolOutputAliases = (
+  name: string,
+  output: unknown,
+): ProjectPathOutputNormalization => {
+  if (!isRecord(output)) {
+    return { input: output, changed: false, healedKeys: [] };
+  }
+
+  if (name === toolName.listDirectory) {
+    const repaired = repairPathField(output, 'path');
+    return repaired
+      ? { input: repaired, changed: true, healedKeys: ['path'] }
+      : { input: output, changed: false, healedKeys: [] };
+  }
+
+  const rowFields =
+    name === toolName.grep
+      ? ([['matches', 'file']] as const)
+      : name === toolName.globSearch
+        ? ([
+            ['files', ''],
+            ['entries', 'path'],
+          ] as const)
+        : name === toolName.exportModel
+          ? ([['files', 'artifactPath']] as const)
+          : name === toolName.testModel
+            ? ([
+                ['failures', 'targetFile'],
+                ['passes', 'targetFile'],
+              ] as const)
+            : [];
+
+  let next = output;
+  const healedKeys: string[] = [];
+  for (const [collection, field] of rowFields) {
+    const values = next[collection];
+    if (field === '' && isUnknownArray(values)) {
+      const repaired = values.map((value) => repairModelPath(value) ?? value);
+      if (repaired.some((value, index) => value !== values[index])) {
+        next = { ...next, [collection]: repaired };
+        healedKeys.push(collection);
+      }
+      continue;
+    }
+
+    const repaired = repairPathRows(values, field);
+    if (repaired.changed) {
+      next = { ...next, [collection]: repaired.value };
+      healedKeys.push(collection);
+    }
+  }
+
+  const issues = next['kernelIssues'];
+  if (name === toolName.evaluateModel && isUnknownArray(issues)) {
+    const kernelIssues = issues.map((issue) => {
+      if (!isRecord(issue) || !isRecord(issue['location'])) {
+        return issue;
+      }
+      const location = repairPathField(issue['location'], 'fileName');
+      return location ? { ...issue, location } : issue;
+    });
+    if (kernelIssues.some((issue, index) => issue !== issues[index])) {
+      next = { ...next, kernelIssues };
+      healedKeys.push('kernelIssues');
+    }
+  }
+
+  return healedKeys.length > 0
+    ? { input: next, changed: true, healedKeys }
+    : { input: output, changed: false, healedKeys: [] };
+};

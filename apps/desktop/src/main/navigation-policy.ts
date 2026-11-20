@@ -1,0 +1,277 @@
+/**
+ * What the renderer is allowed to become, and who is allowed to talk to main.
+ *
+ * The preload runs on **every** document the window loads, so a single
+ * in-window navigation to a foreign origin would hand that origin
+ * `requestServicesPort()` — a `MessagePort` onto the node filesystem host over
+ * every granted root — plus `tauAuth` and the kernel bridge, while main's own
+ * header injection keeps attaching the bearer to API-origin requests. Pinning
+ * the renderer to one origin is therefore not hardening, it is the boundary the
+ * rest of the shell's trust model assumes.
+ *
+ * Everything here is a pure decision so it can be tested without an Electron
+ * window; `main.ts` only wires the results to Electron's events.
+ */
+
+/**
+ * The origin of a URL, computed as `scheme://host`.
+ *
+ * Not `URL.origin`: `app:` is not one of the WHATWG parser's *special* schemes,
+ * so Node answers the string `'null'` for every `app://` URL — Chromium knows
+ * better only because `registerSchemesAsPrivileged` marked it `standard`. A
+ * guard built on `.origin` would therefore refuse every in-app navigation.
+ * `protocol` + `host` is well-defined for special and non-special schemes
+ * alike, and agrees with `.origin` for `http(s)` including default ports.
+ *
+ * @param url - Absolute URL.
+ * @returns The origin, or `undefined` when the URL will not parse.
+ */
+const originOf = (url: string): string | undefined => {
+  try {
+    const parsed = new URL(url);
+    return parsed.host === '' ? undefined : `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return undefined;
+  }
+};
+
+/** Schemes that go to the user's browser instead of into the app. */
+const externalSchemes: ReadonlySet<string> = new Set(['http:', 'https:', 'mailto:']);
+
+/**
+ * Origins the renderer may occupy.
+ *
+ * Production is exactly one: `app://tau`. Development adds the
+ * `ui:dev:desktop` server, which is where `ELECTRON_RENDERER_URL` points and
+ * where `app://` is not registered at all.
+ *
+ * @param input - The `app://` origin and the dev-server URL when running one.
+ * @returns The allowed origins.
+ */
+export const rendererOrigins = (input: {
+  readonly appOrigin: string;
+  readonly devServerUrl?: string | undefined;
+}): readonly string[] => {
+  const development = input.devServerUrl === undefined ? undefined : originOf(input.devServerUrl);
+  return development === undefined ? [input.appOrigin] : [input.appOrigin, development];
+};
+
+/**
+ * Whether a URL may be loaded *into* the renderer.
+ *
+ * @param url - Candidate navigation target.
+ * @param origins - Result of {@link rendererOrigins}.
+ * @returns True when the navigation stays inside the app.
+ */
+export const isRendererUrl = (url: string, origins: readonly string[]): boolean => {
+  const origin = originOf(url);
+  return origin !== undefined && origins.includes(origin);
+};
+
+/**
+ * What the diagnostics log records of a navigation target: its origin, or its scheme when it has no host.
+ *
+ * A URL's path and query can carry a sign-in's state or code (a vendor link the person Cmd+clicked in the agent
+ * sign-in tab), and the log is a file on disk, so the rest is never written.
+ *
+ * @param url - The target as requested.
+ * @returns The origin, the scheme, or `invalid`.
+ */
+export const navigationLogTarget = (url: string): string => {
+  const origin = originOf(url);
+  if (origin !== undefined) {
+    return origin;
+  }
+  try {
+    return new URL(url).protocol;
+  } catch {
+    return 'invalid';
+  }
+};
+
+/** What to do with a navigation or window-open request. */
+export type NavigationDecision = 'allow' | 'open-externally' | 'deny';
+
+/**
+ * Decide one navigation or `window.open`.
+ *
+ * In-app URLs proceed; `http(s)`/`mailto` go to the user's browser, which is
+ * what a link in a CAD document or a docs link should do; everything else —
+ * `file:`, `javascript:`, another custom scheme — is refused outright rather
+ * than handed to the OS.
+ *
+ * @param url - Candidate target.
+ * @param origins - Result of {@link rendererOrigins}.
+ * @returns The decision.
+ */
+export const navigationDecision = (url: string, origins: readonly string[]): NavigationDecision => {
+  if (isRendererUrl(url, origins)) {
+    return 'allow';
+  }
+  try {
+    return externalSchemes.has(new URL(url).protocol) ? 'open-externally' : 'deny';
+  } catch {
+    return 'deny';
+  }
+};
+
+/**
+ * The subset of `WebFrameMain` the sender check reads.
+ *
+ * `parent` is `unknown` because only its presence matters: Electron reports a
+ * top-level frame's parent as absent and a nested one's as another frame.
+ */
+export type SenderFrame = { readonly url: string; readonly parent?: unknown };
+
+/**
+ * Whether an IPC message came from the app's own top-level document.
+ *
+ * Both halves matter: the origin test refuses a frame that navigated away, and
+ * the main-frame test refuses a nested `<iframe>` — which under
+ * `contextIsolation` still holds the preload bridge.
+ *
+ * @param frame - `event.senderFrame`, which Electron may report as absent.
+ * @param origins - Result of {@link rendererOrigins}.
+ * @returns True when the sender may be served.
+ */
+export const isTrustedSender = (frame: SenderFrame | undefined, origins: readonly string[]): boolean =>
+  frame !== undefined && !frame.parent && isRendererUrl(frame.url, origins);
+
+/**
+ * Origins the renderer's PostHog client reaches from its API host: the host itself (captures, flags) and, on PostHog
+ * Cloud, the region's assets host, where `posthog-js` fetches the project's remote config (`/array/<key>/config`).
+ * A self-hosted or proxy host serves both from itself, as `posthog-js`'s request router does.
+ *
+ * @param apiHost - `POSTHOG_API_HOST`, e.g. `https://us.i.posthog.com`.
+ * @returns The origins to grant in `connect-src`, or none for an unusable host.
+ */
+export const postHogConnectOrigins = (apiHost: string | undefined): readonly string[] => {
+  const origin = apiHost === undefined ? undefined : originOf(apiHost);
+  if (origin === undefined) {
+    return [];
+  }
+  const region = /^https:\/\/(?<region>us|eu)\.i\.posthog\.com$/u.exec(origin)?.groups?.['region'];
+  return region === undefined ? [origin] : [origin, `https://${region}-assets.i.posthog.com`];
+};
+
+/**
+ * Content-Security-Policy for every `app://` response.
+ *
+ * `'unsafe-inline'` in `script-src` is not a shortcut — it is measured. The
+ * built SPA's `index.html` carries five inline scripts that React Router owns
+ * (`window.__reactRouterContext`, the route-module import map, and the two
+ * hydration-stream calls) plus the theme and `window.ENV` bootstraps. Without
+ * it the app does not boot at all. The directive still does the job that
+ * matters here: no *remote* script origin is reachable, so a compromised
+ * renderer cannot pull code in.
+ *
+ * `'wasm-unsafe-eval'` is required by every WebAssembly kernel; `blob:` in
+ * `worker-src`/`connect-src` by the runtime and language-worker delivery.
+ * `https://registry.npmjs.org` is where the Packages panel's Install reads
+ * packuments and tarballs (every tarball is checked against the lock's integrity).
+ * The loopback origins are a `tau serve` daemon handed over by `tau open --desktop`
+ * (X54): its descriptor, its one-time code redemption and its `/agent` socket.
+ * They are loopback only, and the daemon still admits nothing without a redeemed code.
+ * `default-src 'none'` makes every directive below an explicit grant, and
+ * `base-uri`/`form-action`/`frame-ancestors 'none'` close the three
+ * redirect-style escapes a CSP is usually forgotten on.
+ *
+ * @param connectOrigins - API and WebSocket origins the renderer must reach, beside GitHub's public API.
+ * @returns The header value.
+ */
+export const contentSecurityPolicy = (connectOrigins: readonly string[]): string =>
+  [
+    "default-src 'none'",
+    "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:",
+    "style-src 'self' 'unsafe-inline'",
+    /* GitHub's avatar host: the repository owner's picture on Import and GitHub connections. */
+    "img-src 'self' data: blob: https://avatars.githubusercontent.com",
+    "font-src 'self' data:",
+    "media-src 'self' blob:",
+    /* GitHub's public API: the Import page's unauthenticated public reads (repository metadata and tree), as on the web.
+     * The npm registry: packuments and tarballs for project package installs. */
+    `connect-src 'self' data: blob: https://api.github.com https://registry.npmjs.org http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:*${connectOrigins.map((origin) => ` ${origin}`).join('')}`,
+    "worker-src 'self' blob:",
+    "child-src 'self' blob:",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+  ].join('; ');
+
+/**
+ * Permissions the app is allowed to hold.
+ *
+ * Deny-by-default, with explicit grants. `persistent-storage` covers exactly two
+ * stores, and neither is project data: the bundled-types cache the file-manager
+ * worker mounts at `/node_modules` on OPFS
+ * (`apps/ui/app/machines/file-manager.worker.ts`), and IndexedDB `tau-db`
+ * (workspace records, chat state). The FM's file pool is *not* covered — it is
+ * a RAM `SharedArrayBuffer`, not OPFS. Refusing the grant leaves those two
+ * stores *evictable*, which on a native app means a silent re-download and a
+ * forgotten picked folder rather than the browser's "this is just a tab"
+ * reasoning. The grant stays until wave S4 of
+ * `docs/research/host-agnostic-transport-substrate-blueprint.md` relocates the
+ * types cache out of OPFS.
+ *
+ * `clipboard-sanitized-write` is what Chromium asks for on every
+ * `navigator.clipboard.writeText`/`write`, and the app asks for it in nine
+ * places — the invitation link, the share links, the API-key secret, a file
+ * path, a trace expression, the viewport image. Denying it rejected all nine
+ * with `NotAllowedError: Write permission denied.` (the defect behind
+ * `docs/research/desktop-share-links-blueprint.md`). Sanitized write is text
+ * and image only and Chromium still requires a user gesture, and the renderer
+ * is pinned to `app://tau` by the navigation policy above, so the grant adds no
+ * reachable surface. Clipboard *read* is a different permission and stays
+ * refused: nothing in the app reads the clipboard.
+ *
+ * `fullscreen` lets the shared viewer toolbar use the native Fullscreen API
+ * on its existing viewer element. Both session handlers consult this grant;
+ * denying it makes `requestFullscreen()` fail in the packaged app. Chromium
+ * still requires a user gesture and owns Escape to exit. This does not grant
+ * `automatic-fullscreen`, pointer lock or keyboard lock.
+ *
+ * Microphone access is narrower and lives in
+ * {@link isMicrophonePermissionGranted}: composer dictation asks for audio only.
+ *
+ * Everything else (camera, geolocation, notifications, clipboard read,
+ * background sync, …) is refused: nothing in the app asks for one, so a
+ * request is either a dependency doing something unexpected or a document that
+ * should not have loaded.
+ */
+export const grantedPermissions: ReadonlySet<string> = new Set([
+  'persistent-storage',
+  'clipboard-sanitized-write',
+  'fullscreen',
+]);
+
+/**
+ * Whether one permission request or check may be granted.
+ *
+ * @param permission - Electron's permission name.
+ * @returns True only for {@link grantedPermissions}.
+ */
+export const isPermissionGranted = (permission: string): boolean => grantedPermissions.has(permission);
+
+/**
+ * Whether a `media` request is composer dictation: audio only, from the trusted
+ * top-level renderer. Camera and screen capture stay refused.
+ *
+ * @param request - Electron's permission details, normalized across the request and check handlers.
+ * @returns True only for an audio-only request from a renderer origin.
+ */
+export const isMicrophonePermissionGranted = (request: {
+  readonly permission: string;
+  readonly frame?: SenderFrame | undefined;
+  readonly requester?: string | undefined;
+  readonly mainFrame: boolean;
+  readonly mediaTypes: readonly string[];
+  readonly origins: readonly string[];
+}): boolean =>
+  request.permission === 'media' &&
+  request.mainFrame &&
+  request.mediaTypes.length === 1 &&
+  request.mediaTypes[0] === 'audio' &&
+  request.requester !== undefined &&
+  isRendererUrl(request.requester, request.origins) &&
+  isTrustedSender(request.frame, request.origins);

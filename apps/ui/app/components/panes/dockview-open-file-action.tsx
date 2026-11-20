@@ -1,8 +1,10 @@
 import { createContext, useCallback, useContext, useMemo } from 'react';
 import type { IDockviewHeaderActionsProps, DockviewGroupPanel, DockviewApi } from 'dockview-react';
 import { Plus } from 'lucide-react';
-import { FileSelector } from '#components/files/file-selector.js';
+import { FileSelector } from '@taucad/files-ui/components/files/file-selector';
+import type { FileSelectorDataSource } from '@taucad/workbench-panes/files/file-selector';
 import { DockviewPaneAction } from '#components/panes/dockview-pane-action.js';
+import { DockviewSplitAction } from '#components/panes/dockview-split-action.js';
 
 /**
  * Callback invoked when a file is selected from the open-file action.
@@ -34,7 +36,8 @@ export function DockviewOpenFileAction({
   containerApi,
   activePanel,
   group,
-}: IDockviewHeaderActionsProps): React.JSX.Element {
+  dataSource,
+}: IDockviewHeaderActionsProps & { readonly dataSource?: FileSelectorDataSource }): React.JSX.Element {
   const onFileSelect = useContext(DockviewFileActionContext);
 
   const initialPath = useMemo(() => {
@@ -43,7 +46,7 @@ export function DockviewOpenFileAction({
     }
 
     const parameters = activePanel.params;
-    const filePath = (parameters?.['filePath'] ?? parameters?.['entryFile']) as string | undefined;
+    const filePath = (parameters?.['filePath'] ?? parameters?.['entryPath']) as string | undefined;
     if (!filePath) {
       return undefined;
     }
@@ -63,12 +66,13 @@ export function DockviewOpenFileAction({
 
   return (
     <FileSelector
+      dataSource={dataSource}
       selectedFile={undefined}
       initialPath={initialPath}
-      placeholder='Open file...'
+      placeholder='Open file…'
       title='Open File'
       description='Choose a file to open in this pane'
-      searchPlaceholder='Search files...'
+      searchPlaceholder='Search files…'
       emptyMessage='No files found.'
       popoverProperties={{ align: 'start' }}
       onSelect={handleSelect}
@@ -77,5 +81,22 @@ export function DockviewOpenFileAction({
         <Plus className='size-3.5' />
       </DockviewPaneAction>
     </FileSelector>
+  );
+}
+
+/** Left-side Dockview actions shared by Viewer and Workbench groups. */
+export function DockviewLeftActions({
+  onDidSplit,
+  fileSelectorDataSource,
+  ...properties
+}: IDockviewHeaderActionsProps & {
+  readonly onDidSplit?: (group: DockviewGroupPanel) => void;
+  readonly fileSelectorDataSource?: FileSelectorDataSource;
+}): React.JSX.Element {
+  return (
+    <div className='flex h-full items-center gap-[0.28125rem]'>
+      <DockviewOpenFileAction {...properties} dataSource={fileSelectorDataSource} />
+      <DockviewSplitAction {...properties} onDidSplit={onDidSplit} />
+    </div>
   );
 }

@@ -1,0 +1,208 @@
+import type { ColumnDef } from '@tanstack/react-table';
+import { ArrowRight } from 'lucide-react';
+import { NavLink, useNavigation } from 'react-router';
+import type { ReactNode } from 'react';
+import type { ProjectListItem } from '@taucad/files-ui/types/project-library.types';
+import { DataTableColumnHeader } from '@taucad/ui-kit/components/data-table';
+import { Button } from '@taucad/ui/components/button';
+import { Checkbox } from '@taucad/ui/components/checkbox';
+import { formatRelativeTime } from '@taucad/ui-core/utils/date.utils';
+import type { ProjectActions } from '#components/project-library/project-library.js';
+import { ProjectActionMenu } from '#components/project-library/project-cloud-delete.js';
+import { ProjectActionDropdown } from '#components/project-library/project-action-dropdown.js';
+import { Loader } from '@taucad/ui/components/loader';
+import { InlineTextEditor } from '#components/inline-text-editor.js';
+import { useProjectThumbnail } from '#hooks/use-project-thumbnail.js';
+
+import { projectSlugOf, projectUrlOr } from '@taucad/files-ui/utils/project-url.utils';
+import type { CloudProject } from '#hooks/use-cloud-projects.js';
+import {
+  CloudProjectNameCell,
+  OnTauCloudMark,
+  OpenCloudProjectButton,
+  isCloudOnly,
+} from '#routes/projects_/cloud-projects.js';
+import type { LibraryRow } from '#routes/projects_/cloud-projects.js';
+
+// Rename component for table cells
+function ProjectNameCell({
+  project,
+  actions,
+}: {
+  readonly project: ProjectListItem & { readonly onCloud?: boolean; readonly cloud?: CloudProject };
+  readonly actions: ProjectActions;
+}) {
+  const thumbnail = useProjectThumbnail(project.id);
+  const thumbnailSource = thumbnail.url;
+  return (
+    <div className='flex w-full items-center justify-between gap-3 pr-2'>
+      <div className='flex items-center gap-3'>
+        <div className='relative h-9 w-9 shrink-0 overflow-hidden rounded-full'>
+          <img
+            src={thumbnailSource ?? '/placeholder.svg'}
+            alt={project.name}
+            className='absolute inset-0 h-full w-full object-cover'
+          />
+          {!thumbnailSource && (
+            <div className='absolute inset-0 flex items-center justify-center bg-muted text-muted-foreground'>
+              {project.name.charAt(0)}
+            </div>
+          )}
+        </div>
+        <div className='min-w-0'>
+          {thumbnail.status === 'error' || thumbnail.status === 'closed' ? (
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              title={thumbnail.error}
+              onClick={() => {
+                thumbnail.refresh();
+              }}
+            >
+              Retry thumbnail
+            </Button>
+          ) : null}
+          <InlineTextEditor
+            value={project.name}
+            className='h-7 [&_[data-slot=button]]:font-medium'
+            onSave={async (value) => actions.handleRename(project.id, value)}
+          />
+          {/* Two projects may share a display name; the directory slug is what
+              tells them apart on disk and in the URL (blueprint F5). */}
+          <div className='flex min-w-0 items-center gap-1.5 pl-2 text-xs text-muted-foreground'>
+            <span className='truncate font-mono'>{projectSlugOf(project.locator)}</span>
+            {project.cloud?.cloudState === 'deleting' ? (
+              <span role='status'>Deleting cloud copy…</span>
+            ) : project.onCloud === true ? (
+              <OnTauCloudMark />
+            ) : undefined}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProjectOpenButton({ project }: { readonly project: ProjectListItem }): ReactNode {
+  const navigation = useNavigation();
+  const projectUrl = projectUrlOr(project.slugs);
+  const isOpening = navigation.location?.pathname === projectUrl;
+  return (
+    <Button asChild variant='outline' size='sm' className='ml-auto'>
+      <NavLink
+        to={projectUrl}
+        aria-busy={isOpening}
+        onClick={(event) => {
+          if (isOpening) {
+            event.preventDefault();
+          }
+        }}
+      >
+        {isOpening ? 'Opening…' : 'Open'}
+        {isOpening ? <Loader /> : <ArrowRight />}
+      </NavLink>
+    </Button>
+  );
+}
+
+// Create a factory function for columns that accepts actions
+export const createColumns = (
+  actions: ProjectActions,
+  onOpenCloudProject: (entry: CloudProject) => Promise<void>,
+): Array<ColumnDef<LibraryRow>> => [
+  {
+    id: 'select',
+    header: ({ table }) => (
+      <div className='pl-2'>
+        <Checkbox
+          checked={table.getIsAllPageRowsSelected() || (table.getIsSomePageRowsSelected() && 'indeterminate')}
+          aria-label='Select all'
+          onCheckedChange={(value) => {
+            table.toggleAllPageRowsSelected(Boolean(value));
+          }}
+        />
+      </div>
+    ),
+    cell: ({ row }) =>
+      row.getCanSelect() ? (
+        <div className='pl-2'>
+          <Checkbox
+            checked={row.getIsSelected()}
+            aria-label='Select row'
+            onCheckedChange={(value) => {
+              row.toggleSelected(Boolean(value));
+            }}
+          />
+        </div>
+      ) : undefined,
+    enableSorting: false,
+  },
+  {
+    accessorKey: 'name',
+    header: ({ column }) => <DataTableColumnHeader column={column} title='Name' />,
+    cell({ row }): ReactNode {
+      const { original } = row;
+      return isCloudOnly(original) ? (
+        <CloudProjectNameCell entry={original} />
+      ) : (
+        <ProjectNameCell project={original} actions={actions} />
+      );
+    },
+    enableSorting: true,
+    enableHiding: false,
+  },
+  {
+    accessorKey: 'description',
+    header: ({ column }) => <DataTableColumnHeader column={column} title='Description' />,
+    cell({ row }): ReactNode {
+      return <div className='max-w-xs truncate'>{row.original.description}</div>;
+    },
+    enableHiding: true,
+  },
+  {
+    id: 'entryPath',
+    header: ({ column }) => <DataTableColumnHeader column={column} title='Entry File' />,
+    cell({ row }): ReactNode {
+      const { original } = row;
+      return isCloudOnly(original) ? undefined : (
+        <div className='font-mono text-xs'>{original.assets.main?.entryPath}</div>
+      );
+    },
+    enableSorting: false,
+    enableHiding: true,
+  },
+  {
+    accessorKey: 'lastActivityAt',
+    header: ({ column }) => <DataTableColumnHeader column={column} title='Last Updated' />,
+    cell({ row }): ReactNode {
+      return <div>{formatRelativeTime(row.original.lastActivityAt)}</div>;
+    },
+    sortingFn: 'datetime',
+    enableHiding: true,
+  },
+  {
+    id: 'actions',
+    cell({ row }): ReactNode {
+      const project = row.original;
+      if (isCloudOnly(project)) {
+        return (
+          <div className='flex items-center justify-end gap-2'>
+            <ProjectActionMenu name={project.name} cloud={project} isCloudOnly />
+            <OpenCloudProjectButton entry={project} onOpen={onOpenCloudProject} className='ml-auto' />
+          </div>
+        );
+      }
+      const isDeleted = Boolean(project.deletedAt);
+
+      return (
+        <div className='flex items-center justify-end gap-2'>
+          <ProjectActionDropdown project={project} actions={actions} />
+
+          {!isDeleted && project.cloud?.cloudState !== 'deleting' && <ProjectOpenButton project={project} />}
+        </div>
+      );
+    },
+    enableHiding: false,
+  },
+];

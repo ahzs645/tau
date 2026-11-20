@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render } from '@testing-library/react';
-import type { Model } from '@taucad/chat';
+import { render, screen } from '@testing-library/react';
+import type { Model, ResolvedModel } from '#hooks/use-models.js';
 import { resolveKernel } from '@taucad/types/constants';
-import type { ResolvedModel } from '#hooks/use-models.js';
 import type { ChatComposerContextValue } from '#hooks/active-chat-provider.js';
 
 // The chat model selector reads AND writes through the unified composer
@@ -19,6 +18,7 @@ const stubModel: ResolvedModel = {
   family: 'gpt',
   provider: { id: 'openai', name: 'OpenAI' },
   isResolved: true,
+  isNamePending: false,
 };
 
 const chatModelState: { current: ResolvedModel } = { current: stubModel };
@@ -34,7 +34,13 @@ const useChatComposerMock = vi.fn(
         model: chatModelState.current,
         setActiveModel,
       },
-      kernel: { kernelId: 'openscad', kernel: resolveKernel('openscad'), setActiveKernel: vi.fn() },
+      kernel: {
+        kernelId: 'openscad',
+        kernel: resolveKernel('openscad'),
+        setActiveKernel: vi.fn(),
+        preference: 'openscad',
+        setActivePreference: vi.fn(),
+      },
       status: 'ready',
       stop: () => undefined,
       contextUsage: undefined,
@@ -46,31 +52,70 @@ vi.mock('#hooks/active-chat-provider.js', () => ({
   useChatComposer: () => useChatComposerMock(),
 }));
 
-vi.mock('#hooks/use-keyboard.js', () => ({
-  useKeybinding: () => ({ formattedKeyCombination: '' }),
+const openSettingsDialogMock = vi.hoisted(() => vi.fn());
+vi.mock('#hooks/use-settings-dialog.js', () => ({
+  useSettingsDialog: () => ({ isOpen: false, section: 'general', open: openSettingsDialogMock, close: vi.fn() }),
 }));
+
+// `details.cost` is required by the catalog schema; the hover card renders it.
+const stubCost = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 1, cacheWriteTokens: 1 };
 
 const modelCatalogue: Model[] = [
   {
     id: 'cookie-model',
     name: 'Cookie Model',
     description: '',
+    providerKind: 'tau-hosted',
     provider: { id: 'openai', name: 'OpenAI' },
-    details: { family: 'gpt' },
+    details: { cost: stubCost, family: 'gpt' },
   } as unknown as Model,
   {
     id: 'next-model',
     name: 'Next Model',
     description: '',
+    providerKind: 'tau-hosted',
     provider: { id: 'openai', name: 'OpenAI' },
-    details: { family: 'gpt' },
+    details: { cost: stubCost, family: 'gpt' },
   } as unknown as Model,
   {
     id: 'chat-local-model',
     name: 'Chat Local Model',
     description: '',
+    providerKind: 'tau-hosted',
     provider: { id: 'openai', name: 'OpenAI' },
-    details: { family: 'gpt' },
+    details: { cost: stubCost, family: 'gpt' },
+  } as unknown as Model,
+  {
+    id: 'xai-grok-4.6',
+    name: 'Grok 4.6',
+    description: '',
+    providerKind: 'tau-hosted',
+    provider: { id: 'xai', name: 'xAI' },
+    details: { cost: stubCost, family: 'grok' },
+  } as unknown as Model,
+  {
+    id: 'openai-gpt-6-astra',
+    name: 'Astra',
+    description: '',
+    providerKind: 'tau-hosted',
+    provider: { id: 'openai', name: 'OpenAI' },
+    details: { cost: { ...stubCost, outputTokens: 50 }, family: 'gpt' },
+  } as unknown as Model,
+  {
+    id: 'anthropic-claude-sonnet-5',
+    name: 'Sonnet 5',
+    description: '',
+    providerKind: 'tau-hosted',
+    provider: { id: 'anthropic', name: 'Anthropic' },
+    details: { cost: { ...stubCost, outputTokens: 10 }, family: 'claude' },
+  } as unknown as Model,
+  {
+    id: 'together-kimi-k3',
+    name: 'Kimi K3',
+    description: '',
+    providerKind: 'tau-hosted',
+    provider: { id: 'together', name: 'Together AI' },
+    details: { cost: stubCost, family: 'kimi' },
   } as unknown as Model,
 ];
 
@@ -78,9 +123,10 @@ const modelCatalogue: Model[] = [
 // useModels anymore — only the catalogue. A getter-trap on those keys
 // makes any regression fail loudly with a clear message.
 const trappedKeys = new Set(['selectedModel', 'selectedModelId', 'setSelectedModelId']);
-const useModelsBacking: { data: Model[]; availableModels: Model[] } = {
+const useModelsBacking: { data: Model[]; availableModels: Model[]; pinnedIds: string[] } = {
   data: modelCatalogue,
   availableModels: modelCatalogue,
+  pinnedIds: ['anthropic-claude-sonnet-5'],
 };
 vi.mock('#hooks/use-models.js', () => ({
   useModels: () =>
@@ -99,28 +145,37 @@ vi.mock('#hooks/use-models.js', () => ({
 
 // Capture the props passed to ComboBoxResponsive so we can drive its
 // onSelect callback in tests without rendering a real popover.
-const capturedComboBox: { onSelect?: (id: string) => void; value?: unknown } = {};
-vi.mock('#components/ui/combobox-responsive.js', () => ({
+const capturedComboBox: {
+  groupedItems?: Array<{ name: string; items: Model[] }>;
+  onSelect?: (id: string) => void;
+  renderLabel?: (item: Model, selectedItem?: Model) => React.ReactNode;
+  value?: unknown;
+} = {};
+vi.mock('@taucad/ui/components/combobox-responsive', () => ({
   ComboBoxResponsive: (properties: {
+    readonly groupedItems?: Array<{ name: string; items: Model[] }>;
     readonly onSelect?: (id: string) => void;
+    readonly renderLabel?: (item: Model, selectedItem?: Model) => React.ReactNode;
     readonly value?: unknown;
     readonly children?: React.ReactNode;
   }): React.JSX.Element => {
+    capturedComboBox.groupedItems = properties.groupedItems;
     capturedComboBox.onSelect = properties.onSelect;
+    capturedComboBox.renderLabel = properties.renderLabel;
     capturedComboBox.value = properties.value;
     return <div data-testid='combobox'>{properties.children}</div>;
   },
 }));
 
-vi.mock('#components/icons/svg-icon.js', () => ({
+vi.mock('@taucad/ui-kit/icons/svg-icon', () => ({
   SvgIcon: ({ id }: { readonly id?: string }) => <span data-testid='svg-icon'>{id}</span>,
 }));
 
-vi.mock('#components/ui/badge.js', () => ({
+vi.mock('@taucad/ui/components/badge', () => ({
   Badge: ({ children }: { readonly children: React.ReactNode }) => <span>{children}</span>,
 }));
 
-vi.mock('#components/ui/hover-card.js', () => ({
+vi.mock('@taucad/ui/components/hover-card', () => ({
   HoverCard: ({ children }: { readonly children: React.ReactNode }) => <div>{children}</div>,
   HoverCardTrigger: ({ children }: { readonly children: React.ReactNode }) => <div>{children}</div>,
   HoverCardContent: ({ children }: { readonly children: React.ReactNode }) => <div>{children}</div>,
@@ -141,6 +196,7 @@ describe('ChatModelSelector — chat-scoped read + dual-write', () => {
     vi.clearAllMocks();
     chatModelState.current = stubModel;
     capturedComboBox.onSelect = undefined;
+    capturedComboBox.renderLabel = undefined;
     capturedComboBox.value = undefined;
   });
 
@@ -157,6 +213,7 @@ describe('ChatModelSelector — chat-scoped read + dual-write', () => {
       family: 'gpt',
       provider: { id: 'openai', name: 'OpenAI' },
       isResolved: true,
+      isNamePending: false,
     };
     chatModelState.current = chatLocal;
 
@@ -182,5 +239,82 @@ describe('ChatModelSelector — chat-scoped read + dual-write', () => {
     renderSelector();
     capturedComboBox.onSelect?.('does-not-exist');
     expect(setActiveModel).not.toHaveBeenCalled();
+  });
+
+  it('renders the Grok family icon for xAI models', () => {
+    renderSelector();
+    const grok = capturedComboBox.groupedItems
+      ?.flatMap((group) => group.items)
+      .find((model) => model.id === 'xai-grok-4.6');
+
+    if (!grok) {
+      throw new Error('Expected Grok model in selector items');
+    }
+    const label = capturedComboBox.renderLabel?.(grok, undefined);
+    if (!label) {
+      throw new Error('Expected Grok model label renderer output');
+    }
+    render(label);
+
+    expect(screen.getAllByTestId('svg-icon').map((icon) => icon.textContent)).toContain('grok');
+  });
+
+  it('renders the Kimi family icon for Together models', () => {
+    renderSelector();
+    const kimi = capturedComboBox.groupedItems
+      ?.flatMap((group) => group.items)
+      .find((model) => model.id === 'together-kimi-k3');
+
+    if (!kimi) {
+      throw new Error('Expected Kimi model in selector items');
+    }
+    const label = capturedComboBox.renderLabel?.(kimi, undefined);
+    if (!label) {
+      throw new Error('Expected Kimi model label renderer output');
+    }
+    render(label);
+
+    expect(screen.getAllByTestId('svg-icon').map((icon) => icon.textContent)).toContain('kimi');
+  });
+});
+
+describe('ChatModelSelector — groups', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    chatModelState.current = stubModel;
+  });
+
+  const renderLabelFor = (modelId: string): void => {
+    renderSelector();
+    const model = capturedComboBox.groupedItems?.flatMap((group) => group.items).find((item) => item.id === modelId);
+    if (!model) {
+      throw new Error(`Expected ${modelId} in selector items`);
+    }
+    const label = capturedComboBox.renderLabel?.(model, undefined);
+    if (!label) {
+      throw new Error(`Expected a label renderer for ${modelId}`);
+    }
+    render(label);
+  };
+
+  it('groups as the agent sheet does: pinned models first, then by maker', () => {
+    renderSelector();
+
+    expect(capturedComboBox.groupedItems?.map((group) => group.name)).toEqual([
+      'Pinned',
+      'OpenAI',
+      'xAI',
+      'Moonshot AI',
+    ]);
+    const groupOf = (modelId: string): string | undefined =>
+      capturedComboBox.groupedItems?.find((group) => group.items.some((item) => item.id === modelId))?.name;
+    expect(groupOf('anthropic-claude-sonnet-5')).toBe('Pinned');
+    expect(groupOf('openai-gpt-6-astra')).toBe('OpenAI');
+  });
+
+  it('shows no credit estimate on any row (operator ruling, 2026-09-23)', () => {
+    renderLabelFor('openai-gpt-6-astra');
+
+    expect(screen.queryByText(/credits/i)).not.toBeInTheDocument();
   });
 });

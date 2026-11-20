@@ -1,0 +1,91 @@
+{
+  "name": "@taucad/jscad",
+  "version": "0.1.0-beta.9",
+  "description": "JSCAD kernel plugin for Tau",
+  "type": "module",
+  "sideEffects": false,
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/taucad/tau.git",
+    "directory": "packages/plugins/jscad"
+  },
+  "homepage": "https://github.com/taucad/tau/tree/main/packages/plugins/jscad#readme",
+  "bugs": {
+    "url": "https://github.com/taucad/tau/issues"
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "files": [
+    "dist",
+    "agent",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "cad",
+    "plugin",
+    "jscad"
+  ],
+  "author": "Richard Fontein",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./agent": {
+      "types": "./agent/skills.d.cts",
+      "default": "./agent/skills.json"
+    },
+    "./agent/*": "./agent/*",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "import": "./dist/index.mjs",
+        "default": "./dist/index.mjs"
+      },
+      "./agent": {
+        "types": "./agent/skills.d.cts",
+        "default": "./agent/skills.json"
+      },
+      "./agent/*": "./agent/*",
+      "./package.json": "./package.json"
+    },
+    "imports": {}
+  },
+  "imports": {
+    "#*.js": "./src/*.ts",
+    "#*": "./src/*"
+  },
+  "dependencies": {
+    "@gltf-transform/core": "catalog:",
+    "@gltf-transform/extensions": "catalog:",
+    "@jscad/modeling": "catalog:",
+    "@taucad/geometry-core": "workspace:*",
+    "@taucad/parameters": "workspace:*"
+  },
+  "peerDependencies": {
+    "@taucad/runtime": "^0.1.0-beta.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@msgpack/msgpack": "catalog:",
+    "@taucad/esbuild": "workspace:*",
+    "@taucad/middleware": "workspace:*",
+    "@taucad/runtime": "workspace:*",
+    "@taucad/runtime-testing": "workspace:*",
+    "zod": "catalog:"
+  },
+  "taucad": {
+    "hostTarget": "browser"
+  },
+  "tau": {
+    "skills": "./agent/skills.json"
+  }
+}

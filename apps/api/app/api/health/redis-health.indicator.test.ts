@@ -3,7 +3,7 @@ import { Test } from '@nestjs/testing';
 import type { TestingModule } from '@nestjs/testing';
 import { HealthIndicatorService } from '@nestjs/terminus';
 import { RedisHealthIndicator } from '#api/health/redis-health.indicator.js';
-import { RedisService } from '#redis/redis.service.js';
+import { RedisService } from '@taucad/api-redis';
 
 describe('RedisHealthIndicator', () => {
   let indicator: RedisHealthIndicator;
@@ -45,5 +45,7 @@ describe('RedisHealthIndicator', () => {
     const result = await indicator.isHealthy();
     expect(result['redis']?.status).toBe('down');
     expect(result['redis']?.['message']).toBe('Connection refused');
+    // A failed probe still says how long it waited, so a timeout reads differently from a refusal.
+    expect(result['redis']?.['responseTimeMs']).toEqual(expect.any(Number));
   });
 });

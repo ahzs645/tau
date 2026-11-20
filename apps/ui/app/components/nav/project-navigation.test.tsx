@@ -1,0 +1,843 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DesktopBridge } from '@taucad/files-ui/filesystem/desktop-bridge';
+import { mock } from 'vitest-mock-extended';
+import { toast } from '@taucad/ui/components/sonner';
+import type { ReactNode } from 'react';
+import type { SyncFacet } from '@taucad/revisions';
+import type { useProjects } from '#hooks/use-projects.js';
+import type * as SidebarStatusModule from '#hooks/use-sidebar-status.js';
+
+/** Every label the sidebar's project status button can carry as its accessible name. */
+const projectStatusName =
+  /^(Needs your decision|Offline|Sign in to continue|Project unavailable|Couldn’t back up|Downloading files…|Preparing files…|Couldn’t load chats|Loading chats…|Opening project…|Checking for changes…|Backing up changes…)$/u;
+const mockUseProjects = vi.fn();
+const mockCloudIntent = vi.fn();
+vi.mock('#hooks/use-cloud-projects.js', () => ({ useTauCloudIntent: () => mockCloudIntent() as string | undefined }));
+const mockCreateChat = vi.fn();
+const mockNoteCreatedEmpty = vi.fn<(chatId: string) => void>();
+const mockIsProjectExpanded = vi.fn();
+const mockSetProjectDisclosure = vi.fn();
+const mockNavigate = vi.fn();
+const mockInvalidateQueries = vi.fn();
+let bridge: DesktopBridge | undefined;
+const mockOpenDirectory = vi.fn(async (_path: string) => undefined);
+const mockWorkspaceRoot = vi.fn(async (_projectId: string) => '/picked/Two space');
+vi.mock('@taucad/files-ui/filesystem/desktop-bridge', () => ({ desktopBridge: () => bridge }));
+vi.mock('#lib/agent-host-placement.js', () => ({ desktopWorkspaceRoot: async (id: string) => mockWorkspaceRoot(id) }));
+let pathname = '/';
+let search = '';
+let pendingLocation: { readonly pathname: string; readonly search: string } | undefined;
+
+vi.mock('#hooks/use-projects.js', () => ({ useProjects: () => mockUseProjects() as ReturnType<typeof useProjects> }));
+vi.mock('#hooks/use-project-manager.js', () => ({ useProjectManager: () => ({ createChat: mockCreateChat }) }));
+vi.mock('#hooks/use-app-ui-preferences.js', () => ({
+  useAppUiPreferences: () => ({
+    isProjectExpanded: mockIsProjectExpanded,
+    setProjectDisclosure: mockSetProjectDisclosure,
+  }),
+}));
+vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries: mockInvalidateQueries }) }));
+vi.mock('react-router', () => ({
+  Link: ({
+    children,
+    to,
+    onClick,
+    ...properties
+  }: {
+    readonly children: ReactNode;
+    readonly to: string;
+    readonly onClick?: React.MouseEventHandler<HTMLAnchorElement>;
+  }) => (
+    <a
+      href={to}
+      {...properties}
+      rel='noreferrer'
+      onClick={(event) => {
+        event.preventDefault();
+        onClick?.(event);
+      }}
+    >
+      {children}
+    </a>
+  ),
+  useLocation: () => ({ pathname, search }),
+  useNavigate: () => mockNavigate,
+  useNavigation: () => ({ location: pendingLocation, state: pendingLocation ? 'loading' : 'idle' }),
+}));
+vi.mock('#components/nav/project-chat-list.js', () => ({
+  ProjectChatList: ({
+    project,
+    isExpanded,
+  }: {
+    readonly project: { readonly name: string };
+    readonly isExpanded: boolean;
+  }) => (isExpanded ? <div data-testid={`chats-${project.name}`} /> : null),
+}));
+vi.mock('#components/ui/sidebar.js', () => ({
+  SidebarGroup: ({ children }: { readonly children: ReactNode }) => <section>{children}</section>,
+  SidebarGroupLabel: ({ children }: { readonly children: ReactNode }) => <h2>{children}</h2>,
+  SidebarMenu: ({ children, ...properties }: { readonly children: ReactNode }) => <ul {...properties}>{children}</ul>,
+  SidebarMenuItem: ({ children, ...properties }: { readonly children: ReactNode }) => (
+    <li {...properties}>{children}</li>
+  ),
+  SidebarMenuButton: ({
+    children,
+    asChild,
+    ...properties
+  }: {
+    readonly children: ReactNode;
+    readonly asChild?: boolean;
+  }): React.JSX.Element =>
+    asChild ? (
+      <span>{children}</span>
+    ) : (
+      <button type='button' {...properties}>
+        {children}
+      </button>
+    ),
+  useSidebar: () => ({ isMobile: false }),
+}));
+vi.mock('@taucad/ui/components/button', () => ({
+  Button: ({ children, ...properties }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
+    <button type='button' {...properties}>
+      {children}
+    </button>
+  ),
+}));
+vi.mock('@taucad/ui/components/tooltip', () => ({
+  TooltipProvider: ({ children }: { readonly children: ReactNode }): ReactNode => children,
+  Tooltip: ({ children }: { readonly children: ReactNode }) => <div>{children}</div>,
+  TooltipTrigger: ({ children }: { readonly children: ReactNode }) => <span>{children}</span>,
+  TooltipContent: ({ children }: { readonly children: ReactNode }) => <span>{children}</span>,
+}));
+type DropdownMenuItemMockProps = Pick<React.ButtonHTMLAttributes<HTMLButtonElement>, 'aria-label' | 'disabled'> & {
+  readonly children: ReactNode;
+  readonly onSelect?: () => void;
+};
+vi.mock('@taucad/ui/components/dropdown-menu', () => ({
+  DropdownMenu: ({ children, isResponsive }: { readonly children: ReactNode; readonly isResponsive?: boolean }) => (
+    <div data-testid='dropdown-menu' data-responsive={isResponsive ? 'true' : undefined}>
+      {children}
+    </div>
+  ),
+  DropdownMenuTrigger: ({ children }: { readonly children: ReactNode }) => <span>{children}</span>,
+  DropdownMenuContent: ({ children, drawerTitle }: { readonly children: ReactNode; readonly drawerTitle?: string }) => (
+    <div data-drawer-title={drawerTitle}>{children}</div>
+  ),
+  DropdownMenuSeparator: () => <hr />,
+  DropdownMenuItem: ({ children, disabled: isDisabled, onSelect, ...properties }: DropdownMenuItemMockProps) => (
+    <button type='button' disabled={isDisabled} onClick={onSelect} {...properties}>
+      {children}
+    </button>
+  ),
+}));
+vi.mock('#components/inline-text-editor.js', () => ({
+  InlineTextEditor: ({ value, className }: { readonly value: string; readonly className?: string }) => (
+    <div data-testid='inline-editor' className={className}>
+      <input aria-label={`Rename ${value}`} value={value} readOnly />
+    </div>
+  ),
+}));
+vi.mock('@taucad/ui/components/sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('@taucad/ui/components/alert-dialog', () => ({
+  AlertDialog: ({ children, ...properties }: { readonly children: ReactNode } & Record<string, unknown>) =>
+    properties['open'] === false ? null : <div role='dialog'>{children}</div>,
+  AlertDialogContent: ({ children }: { readonly children: ReactNode }) => <div>{children}</div>,
+  AlertDialogHeader: ({ children }: { readonly children: ReactNode }) => <div>{children}</div>,
+  AlertDialogTitle: ({ children }: { readonly children: ReactNode }) => <h3>{children}</h3>,
+  AlertDialogDescription: ({ children }: { readonly children: ReactNode }) => <div>{children}</div>,
+  AlertDialogFooter: ({ children }: { readonly children: ReactNode }) => <div>{children}</div>,
+  AlertDialogCancel: ({ children }: { readonly children: ReactNode }) => <button type='button'>{children}</button>,
+  AlertDialogAction: ({ children, ...properties }: { readonly children: ReactNode } & Record<string, unknown>) => (
+    <button type='button' onClick={properties['onClick'] as () => void}>
+      {children}
+    </button>
+  ),
+}));
+
+/* The registry and the selectors are W19's and this lane's own; these suites are
+ * about the wiring, so the rows are handed in and the pins drive them. */
+const mockRow = vi.fn();
+const mockLiveNow = vi.fn();
+const mockCloseProject = vi.fn();
+const mockGetProjectClosePlan = vi.fn();
+let liveProjectIds: readonly string[] = [];
+/** Why a project's session closed, by project: the registry's `closed` entries. */
+let closedReasons: Readonly<Record<string, string>> = {};
+vi.mock('#hooks/use-sessions.js', () => ({
+  useLiveProjectIds: () => liveProjectIds,
+  useProjectLiveness: (projectId: string) => ({
+    projectId,
+    live: liveProjectIds.includes(projectId),
+    status: undefined,
+    closedReason: closedReasons[projectId],
+    policyRefusal: undefined,
+  }),
+  useSessions: () => ({ on: () => ({ unsubscribe: () => undefined }) }),
+}));
+vi.mock('#hooks/use-sidebar-status.js', async (importOriginal) => {
+  const original = await importOriginal<typeof SidebarStatusModule>();
+  return {
+    ...original,
+    useProjectSidebarRow: (projectId: string) => mockRow(projectId) as unknown,
+    useLiveNow: () => mockLiveNow() as unknown,
+    useSidebarCommands: () => ({ closeProject: mockCloseProject, closeChat: vi.fn(), openProject: vi.fn() }),
+  };
+});
+vi.mock('#hooks/chat-session-store-provider.js', () => ({
+  useChatSessionStore: () => ({ getProjectClosePlan: mockGetProjectClosePlan, noteCreatedEmpty: mockNoteCreatedEmpty }),
+}));
+
+const closedRow = (projectId: string): SidebarStatusModule.ProjectSidebarRow => ({
+  projectId,
+  glyph: 'none',
+  closing: false,
+  attention: 0,
+  conflicted: false,
+  settings: 0,
+  settingsLabel: undefined,
+  failed: 0,
+  running: 0,
+  unread: 0,
+  detail: undefined,
+  runs: 0,
+});
+
+const firstProject = {
+  locator: { backend: 'node', path: '/picked', relativeDirectory: 'one' },
+  id: 'proj_one',
+  name: 'One',
+  description: 'First',
+  lastActivityAt: 10,
+  assets: { main: { entryPath: 'main.scad' } },
+  slugs: { workspaceSlug: 'home', projectSlug: 'one' },
+};
+const secondProject = {
+  ...firstProject,
+  id: 'proj_two',
+  name: 'Two',
+  lastActivityAt: 20,
+  slugs: { workspaceSlug: 'home', projectSlug: 'Two space' },
+};
+
+const projectsResult = {
+  projects: [firstProject, secondProject],
+  isLoading: false,
+  error: undefined,
+  deleteProject: vi.fn(async () => true),
+  duplicateProject: vi.fn(),
+  updateName: vi.fn(),
+};
+
+const { ProjectNavigation } = await import('#components/nav/project-navigation.js');
+
+/** The sentence a link names through `aria-describedby`. */
+const descriptionOf = (link: HTMLElement) =>
+  document.querySelector(`#${link.getAttribute('aria-describedby') ?? 'missing'}`);
+
+describe('ProjectNavigation', () => {
+  beforeEach(() => {
+    bridge = undefined;
+    mockOpenDirectory.mockReset();
+    mockWorkspaceRoot.mockClear();
+    vi.clearAllMocks();
+    pathname = '/';
+    search = '';
+    pendingLocation = undefined;
+    mockUseProjects.mockReturnValue(projectsResult);
+    mockCloudIntent.mockReturnValue(undefined);
+    mockIsProjectExpanded.mockImplementation((_projectId: string, active: boolean) => active);
+    mockSetProjectDisclosure.mockResolvedValue(undefined);
+    mockNavigate.mockResolvedValue(undefined);
+    liveProjectIds = [];
+    closedReasons = {};
+    mockRow.mockImplementation((projectId: string) => closedRow(projectId));
+    mockLiveNow.mockReturnValue({ projects: 0, idleProjectIds: [] });
+    mockGetProjectClosePlan.mockResolvedValue({
+      stoppableRunCount: 0,
+      stoppableChatIds: [],
+      liveChatIds: [],
+      continuingRuns: [],
+    });
+  });
+
+  it('blocks both new-chat paths until the first remote checkout is ready', async () => {
+    mockCloudIntent.mockReturnValue('open');
+    const { rerender } = render(<ProjectNavigation />);
+    const newChat = screen.getByRole('button', { name: 'New chat in One' });
+    expect(newChat).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(newChat);
+    expect(mockCreateChat).not.toHaveBeenCalled();
+    expect(
+      screen.getAllByRole('button', { name: /^New chat$/u }).every((button) => button.hasAttribute('disabled')),
+    ).toBe(true);
+    mockRow.mockImplementation((projectId: string) => ({
+      ...closedRow(projectId),
+      sync: {
+        state: 'backedUp',
+        hasAppliedRemote: true,
+        chats: 'ready',
+        online: true,
+        pendingCount: 0,
+        conflictRef: undefined,
+        error: undefined,
+        reason: undefined,
+      } satisfies SyncFacet,
+    }));
+    rerender(<ProjectNavigation />);
+    expect(newChat).toHaveAttribute('aria-disabled', 'true');
+    mockCloudIntent.mockReturnValue(undefined);
+    rerender(<ProjectNavigation />);
+    expect(newChat).toHaveAttribute('aria-disabled', 'false');
+    expect(screen.queryByRole('button', { name: projectStatusName })).not.toBeInTheDocument();
+  });
+
+  it('renders one Projects group with every project in deterministic activity order', () => {
+    render(<ProjectNavigation />);
+
+    expect(screen.getByRole('heading', { name: 'Recents' })).toBeInTheDocument();
+    expect(screen.getAllByRole('link').map((link) => link.textContent)).toEqual(['Two', 'One']);
+    expect(screen.queryByRole('button', { name: 'Show more projects' })).not.toBeInTheDocument();
+  });
+
+  it('reveals projects five at a time and removes the terminal Show more action', () => {
+    mockUseProjects.mockReturnValue({
+      ...projectsResult,
+      projects: Array.from({ length: 12 }, (_, index) => ({
+        ...firstProject,
+        id: `proj_${index + 1}`,
+        name: `Project ${index + 1}`,
+        lastActivityAt: index + 1,
+        slugs: { workspaceSlug: 'home', projectSlug: `project-${index + 1}` },
+      })),
+    });
+    render(<ProjectNavigation />);
+
+    expect(screen.getAllByRole('link')).toHaveLength(5);
+    const showMore = screen.getByRole('button', { name: 'Show more projects' });
+    expect(showMore).toHaveTextContent('Show more projects');
+    expect(showMore).not.toHaveClass('font-medium');
+    fireEvent.click(showMore);
+    expect(screen.getAllByRole('link')).toHaveLength(10);
+    fireEvent.click(screen.getByRole('button', { name: 'Show more projects' }));
+    expect(screen.getAllByRole('link')).toHaveLength(12);
+    expect(screen.queryByRole('button', { name: 'Show more projects' })).not.toBeInTheDocument();
+  });
+
+  it('defaults only the active project open and persists explicit disclosure changes', () => {
+    pathname = '/w/home/one';
+    render(<ProjectNavigation />);
+
+    expect(screen.getByTestId('chats-One')).toBeInTheDocument();
+    expect(screen.queryByTestId('chats-Two')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Two' }));
+    expect(mockSetProjectDisclosure).toHaveBeenCalledWith('proj_two', true);
+    fireEvent.click(screen.getByRole('link', { name: /Two/u }));
+    expect(mockSetProjectDisclosure).toHaveBeenCalledWith('proj_two', true);
+  });
+
+  /* The spinner takes the disclosure slot, so a loading route never moves the
+   * name, and the pointer that started it cannot hide the spinner. */
+  it('spins in the disclosure slot of the destination project only', () => {
+    pendingLocation = { pathname: '/w/home/Two%20space', search: '' };
+    render(<ProjectNavigation />);
+
+    const pendingLink = screen.getByRole('link', { name: 'Two' });
+    const idleLink = screen.getByRole('link', { name: 'One' });
+    expect(pendingLink).toHaveAttribute('aria-busy', 'true');
+    expect(pendingLink.querySelector('.spin-glyph')).toBeNull();
+    const mark = screen
+      .getByRole('button', { name: /(?:Expand|Collapse) Two/u })
+      .querySelector<HTMLElement>('[data-glyph]');
+    expect(mark?.dataset['glyph']).toBe('pending');
+    expect(mark?.querySelector('.spin-glyph')).toBeInTheDocument();
+    expect(mark?.className).not.toContain('group-hover/row:hidden');
+    expect(idleLink.closest('[data-slot=project-trigger]')?.querySelector('.spin-glyph')).toBeNull();
+  });
+
+  it('opens the rename field on a double-click, but not from the disclosure control', () => {
+    render(<ProjectNavigation />);
+
+    fireEvent.doubleClick(screen.getByRole('button', { name: /(?:Expand|Collapse) One/u }));
+    expect(screen.queryByTestId('inline-editor')).not.toBeInTheDocument();
+
+    const row = screen.getByRole('link', { name: 'One' }).closest('[data-slot=project-trigger]');
+    fireEvent.doubleClick(row!);
+    expect(screen.getByTestId('inline-editor')).toBeInTheDocument();
+  });
+
+  it('creates a chat by project id before navigating to its canonical query URL', async () => {
+    mockCreateChat.mockResolvedValue({ id: 'chat/two' });
+    render(<ProjectNavigation />);
+
+    const newChatButton = screen.getByRole('button', { name: 'New chat in Two' });
+    expect(newChatButton.querySelector('svg')).toHaveClass('lucide-square-pen');
+    fireEvent.click(newChatButton);
+    await vi.waitFor(() => {
+      expect(mockCreateChat).toHaveBeenCalledWith('proj_two', { name: 'New chat', messages: [] });
+      // Created empty, so the chat store shows it empty at once (A12, I21).
+      expect(mockNoteCreatedEmpty).toHaveBeenCalledWith('chat/two');
+      expect(mockNavigate).toHaveBeenCalledWith('/w/home/Two%20space?chat=chat%2Ftwo', {
+        state: { focusChatComposer: true },
+      });
+    });
+  });
+
+  it('should omit folder access when the host has no native directory capability', () => {
+    render(<ProjectNavigation />);
+    expect(screen.queryByRole('button', { name: /Open in/u })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open files' })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { openLabel: 'Open in Finder', openIcon: 'finder', selector: 'use[href="#finder"]' },
+    { openLabel: 'Open in File Explorer', openIcon: 'file-explorer', selector: '.lucide-panels-top-left' },
+    { openLabel: 'Open in file manager', openIcon: 'folder', selector: '.lucide-folder-open' },
+  ] as const)(
+    'should use the host label and icon for $openLabel and resolve the selected project directory',
+    async ({ openLabel, openIcon, selector }) => {
+      bridge = mock<DesktopBridge>({ directories: { openLabel, openIcon, open: mockOpenDirectory } });
+      render(<ProjectNavigation />);
+      expect(screen.queryByRole('button', { name: 'Open files' })).not.toBeInTheDocument();
+      const action = screen.getAllByRole('button', { name: openLabel })[0]!;
+      expect(action.querySelector(selector)).toBeInTheDocument();
+      expect(action.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+      fireEvent.click(action);
+      await waitFor(() => {
+        expect(mockOpenDirectory).toHaveBeenCalledWith('/picked/Two space');
+      });
+      expect(mockWorkspaceRoot).toHaveBeenCalledWith('proj_two');
+      expect(mockNavigate).not.toHaveBeenCalled();
+    },
+  );
+
+  it('should hide native access for browser storage and report native opening failures', async () => {
+    bridge = mock<DesktopBridge>({
+      directories: { openLabel: 'Open in Finder', openIcon: 'finder', open: mockOpenDirectory },
+    });
+    mockUseProjects.mockReturnValue({
+      ...projectsResult,
+      projects: [{ ...firstProject, locator: { backend: 'indexeddb', relativeDirectory: 'one' } }, secondProject],
+    });
+    mockOpenDirectory.mockRejectedValueOnce(new Error('Folder is unavailable'));
+    render(<ProjectNavigation />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Finder' }));
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Could not open Two', { description: 'Folder is unavailable' });
+    });
+  });
+
+  it('opens Share for the active project without discarding its chat', () => {
+    pathname = '/w/home/one';
+    search = '?chat=chat_1&keep=1';
+    render(<ProjectNavigation />);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Share project' })[1]!);
+
+    expect(mockNavigate).toHaveBeenCalledWith('/w/home/one?chat=chat_1&keep=1&workbench=share');
+  });
+
+  it('opens Share for another project without carrying the active project chat', () => {
+    pathname = '/w/home/one';
+    search = '?chat=chat_1';
+    render(<ProjectNavigation />);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Share project' })[0]!);
+
+    expect(mockNavigate).toHaveBeenCalledWith('/w/home/Two%20space?workbench=share');
+  });
+
+  it('disables Share while a project has no canonical slugs', () => {
+    mockUseProjects.mockReturnValue({ ...projectsResult, projects: [{ ...firstProject, slugs: undefined }] });
+    render(<ProjectNavigation />);
+
+    expect(screen.getByRole('button', { name: 'Share project' })).toBeDisabled();
+  });
+
+  /* D5, D19: the budget is two words on the label, and its way out is the
+   * label's own menu. */
+  it('counts live projects on the label and closes exactly the idle ones from its menu', () => {
+    liveProjectIds = ['proj_one', 'proj_two'];
+    mockLiveNow.mockReturnValue({ projects: 2, idleProjectIds: ['proj_two'] });
+    render(<ProjectNavigation />);
+
+    expect(screen.getByRole('heading', { name: 'Recents 2 live' })).toBeInTheDocument();
+    expect(screen.queryByText('Live now')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'More actions for recent projects' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close 1 idle project' }));
+    expect(mockCloseProject).toHaveBeenCalledExactlyOnceWith('proj_two');
+  });
+
+  /* The row gap: the label counted a live project while the list said there
+   * were none. The listing's own worker window is fixed at its owner (P67);
+   * this is the sidebar's half — it never contradicts itself, whatever the
+   * listing says. */
+  it('never says there are no projects while it is counting a live one', () => {
+    liveProjectIds = ['proj_live'];
+    mockLiveNow.mockReturnValue({ projects: 1, idleProjectIds: [] });
+    mockUseProjects.mockReturnValue({ ...projectsResult, projects: [] });
+
+    render(<ProjectNavigation />);
+
+    expect(screen.queryByText('No projects yet')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Recents 1 live' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'More actions for recent projects' })).not.toBeInTheDocument();
+    expect(screen.queryAllByRole('link')).toHaveLength(0);
+  });
+
+  it('says nothing about liveness on the label while nothing is live', () => {
+    render(<ProjectNavigation />);
+    expect(screen.getByRole('heading', { name: 'Recents' })).toBeInTheDocument();
+  });
+
+  /* D6, D18: no Retry anywhere; a failed refresh keeps the last good list. */
+  it('shows a failure row with no control when nothing loaded, and nothing over a list', () => {
+    mockUseProjects.mockReturnValue({ ...projectsResult, projects: [], error: new Error('offline') });
+    const { unmount } = render(<ProjectNavigation />);
+    const failure = document.querySelector('[data-slot=failure-row]');
+    expect(failure).toHaveTextContent("Couldn't load projects");
+    expect(failure?.querySelector('button, a')).toBeNull();
+    expect(screen.queryByRole('button', { name: /retry/iu })).not.toBeInTheDocument();
+    unmount();
+
+    mockUseProjects.mockReturnValue({ ...projectsResult, error: new Error('offline') });
+    render(<ProjectNavigation />);
+    expect(document.querySelector('[data-slot=failure-row]')).toBeNull();
+    expect(screen.queryByText(/refreshed/u)).not.toBeInTheDocument();
+    expect(screen.getAllByRole('link')).toHaveLength(2);
+  });
+
+  /* Loading draws one page of generic skeleton rows, whatever the device has listed before. */
+  it('draws five skeleton rows, busy, until the first listing answers', () => {
+    mockUseProjects.mockReturnValue({ ...projectsResult, projects: [], isLoading: true });
+    const view = render(<ProjectNavigation />);
+
+    expect(screen.getAllByTestId('project-navigation-skeleton')).toHaveLength(5);
+    expect(screen.queryAllByRole('link')).toHaveLength(0);
+    expect(screen.queryByText('No projects yet')).not.toBeInTheDocument();
+    expect(document.querySelector('section > ul')).toHaveAttribute('aria-busy', 'true');
+    expect(document.querySelector('[data-slot=wait-indicator]')).toBeNull();
+
+    mockUseProjects.mockReturnValue(projectsResult);
+    view.rerender(<ProjectNavigation />);
+
+    expect(screen.queryAllByTestId('project-navigation-skeleton')).toHaveLength(0);
+    expect(screen.getAllByRole('link').map((link) => link.textContent)).toEqual(['Two', 'One']);
+    expect(document.querySelector('section > ul')).not.toHaveAttribute('aria-busy');
+  });
+
+  it('says there are no projects only once the listing has answered empty', () => {
+    mockUseProjects.mockReturnValue({ ...projectsResult, projects: [], isLoading: true });
+    const view = render(<ProjectNavigation />);
+    expect(screen.queryByText('No projects yet')).not.toBeInTheDocument();
+
+    mockUseProjects.mockReturnValue({ ...projectsResult, projects: [] });
+    view.rerender(<ProjectNavigation />);
+    expect(screen.getByText('No projects yet')).toBeInTheDocument();
+    expect(screen.queryAllByTestId('project-navigation-skeleton')).toHaveLength(0);
+  });
+
+  /* D3, D11, D16: a collapsed project carries its chats' rollup on the
+   * disclosure control; expanded, only its session's own facts. */
+  it('puts the rollup on the disclosure control only while collapsed', () => {
+    pathname = '/w/home/one';
+    liveProjectIds = ['proj_one', 'proj_two'];
+    mockRow.mockImplementation((projectId: string) => ({
+      ...closedRow(projectId),
+      glyph: 'busy',
+      running: 1,
+      attention: 2,
+      runs: 2,
+    }));
+    render(<ProjectNavigation />);
+
+    const collapsedToggle = screen.getByRole('button', { name: 'Expand Two' });
+    const mark = collapsedToggle.querySelector<HTMLElement>('[data-glyph]');
+    expect(mark?.dataset['glyph']).toBe('attention');
+    expect(mark).toHaveClass('justify-center');
+    expect(mark?.querySelector('.absolute')).toHaveTextContent('2');
+    const collapsedLink = screen.getByRole('link', { name: 'Two' });
+    expect(descriptionOf(collapsedLink)).toHaveTextContent('Live, busy · 2 need you');
+
+    const expandedToggle = screen.getByRole('button', { name: 'Collapse One' });
+    expect(expandedToggle.querySelector('[data-glyph]')).toBeNull();
+    const expandedLink = screen.getByRole('link', { name: 'One' });
+    expect(descriptionOf(expandedLink)).toHaveTextContent(/^Live, busy$/u);
+  });
+
+  /* D13, D15: the name dissolves at the row's edge rather than clipping, and the actions sit over its tail. */
+  it('lays project actions over the name instead of beside it', () => {
+    render(<ProjectNavigation />);
+    const link = screen.getByRole('link', { name: 'Two' });
+    const row = link.closest<HTMLElement>('[data-slot=project-trigger]');
+    expect(row).toHaveClass('fade-row', 'h-7');
+    expect(link.querySelector('.fade-label')).toHaveTextContent('Two');
+    expect(row?.querySelector('.truncate')).toBeNull();
+    const more = screen.getByRole('button', { name: 'More actions for Two' });
+    const newChat = screen.getByRole('button', { name: 'New chat in Two' });
+    expect(more.compareDocumentPosition(newChat)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    /* R13: the actions rest hidden on fine pointers and show on hover, focus and coarse pointers. */
+    const actions = more.closest('[data-slot=row-actions]');
+    expect(actions).toHaveClass(
+      'fade-action',
+      'absolute',
+      'hidden',
+      'group-hover/row:flex',
+      'group-focus-within/row:flex',
+      'pointer-coarse:flex',
+    );
+    expect(actions).toContainElement(newChat);
+    expect(link).not.toContainElement(actions as HTMLElement);
+    expect(screen.queryByRole('button', { name: projectStatusName })).not.toBeInTheDocument();
+  });
+
+  /* On a phone both menus open in drawers. */
+  it('should open the Projects header and project row menus in drawers on a phone', () => {
+    liveProjectIds = ['proj_one', 'proj_two'];
+    mockLiveNow.mockReturnValue({ projects: 2, idleProjectIds: ['proj_two'] });
+    render(<ProjectNavigation />);
+
+    const header = screen
+      .getByRole('button', { name: 'More actions for recent projects' })
+      .closest('[data-testid=dropdown-menu]');
+    expect(header).toHaveAttribute('data-responsive', 'true');
+    expect(header?.querySelector('[data-drawer-title]')).toHaveAttribute('data-drawer-title', 'Recents');
+    const row = screen.getByRole('button', { name: 'More actions for Two' }).closest('[data-testid=dropdown-menu]');
+    expect(row).toHaveAttribute('data-responsive', 'true');
+    expect(row?.querySelector('[data-drawer-title]')).toHaveAttribute('data-drawer-title', 'Two');
+  });
+
+  /* D17: renaming outlines the row, and the Save button stays hidden. */
+  it('outlines the whole row while it is renamed', () => {
+    render(<ProjectNavigation />);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Rename' })[0]!);
+    const editor = screen.getByTestId('inline-editor');
+    expect(editor.closest('[data-slot=project-trigger]')).toHaveClass('focus-outline');
+    expect(editor.className).toContain('[&_[data-slot=save-button]]:hidden');
+    expect(editor.className).toContain('[&_[data-slot=input]]:focus-visible:outline-none');
+  });
+
+  /* Pin (f): the dialog is the question, and it is asked only when there is
+   * something to interrupt (I24). */
+  it('closes an idle project outright and asks before closing one with running work', async () => {
+    liveProjectIds = ['proj_one', 'proj_two'];
+    mockRow.mockImplementation((projectId: string) => ({
+      ...closedRow(projectId),
+      glyph: projectId === 'proj_one' ? 'idle' : 'busy',
+      runs: projectId === 'proj_one' ? 0 : 2,
+    }));
+    render(<ProjectNavigation />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close One' }));
+    expect(mockCloseProject).toHaveBeenCalledExactlyOnceWith('proj_one');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close Two' }));
+    expect(await screen.findByRole('heading', { name: 'Close Two?' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(mockCloseProject).toHaveBeenLastCalledWith('proj_two');
+  });
+
+  it('asks with the projected unseen-chat close plan before promising any stop', async () => {
+    liveProjectIds = ['proj_two'];
+    mockRow.mockImplementation((projectId: string) => ({
+      ...closedRow(projectId),
+      glyph: projectId === 'proj_two' ? 'busy' : 'none',
+      runs: projectId === 'proj_two' ? 3 : 0,
+    }));
+    mockGetProjectClosePlan.mockResolvedValue({
+      stoppableRunCount: 1,
+      stoppableChatIds: ['chat-unseen'],
+      liveChatIds: ['chat-unseen', 'chat-foreign', 'chat-background'],
+      continuingRuns: [
+        { id: 'run-foreign', label: 'Foreign chat', reason: 'other-build' },
+        { id: 'run-background', label: 'Background chat', reason: 'background-window' },
+      ],
+    });
+    render(<ProjectNavigation />);
+    fireEvent.click(screen.getByRole('button', { name: 'Close Two' }));
+    expect(await screen.findByRole('heading', { name: 'Stop 1 run and close Two?' })).toBeInTheDocument();
+    expect(screen.getByText(/Foreign chat.*another version of Tau/)).toBeInTheDocument();
+    expect(screen.getByText(/Background chat.*background/)).toBeInTheDocument();
+    expect(mockGetProjectClosePlan).toHaveBeenCalledWith('proj_two');
+    fireEvent.click(screen.getByRole('button', { name: 'Stop and close' }));
+    expect(mockCloseProject).toHaveBeenCalledWith('proj_two');
+  });
+
+  it('closes running work before a separate Delete gesture, without trashing it yet', async () => {
+    mockRow.mockImplementation((projectId: string) => ({
+      ...closedRow(projectId),
+      glyph: projectId === 'proj_two' ? 'busy' : 'none',
+      runs: projectId === 'proj_two' ? 2 : 0,
+    }));
+    mockGetProjectClosePlan.mockResolvedValue({
+      stoppableRunCount: 1,
+      stoppableChatIds: ['chat-unseen'],
+      liveChatIds: ['chat-unseen'],
+      continuingRuns: [],
+    });
+    render(<ProjectNavigation />);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Move to Trash' })[0]!);
+
+    expect(projectsResult.deleteProject).not.toHaveBeenCalled();
+    expect(
+      await screen.findByRole('heading', { name: 'Stop 1 run and close Two before deleting?' }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop and close' }));
+    await waitFor(() => {
+      expect(mockCloseProject).toHaveBeenLastCalledWith('proj_two');
+      expect(projectsResult.deleteProject).not.toHaveBeenCalled();
+    });
+  });
+
+  it('blocks Move to Trash when another build still owns a run', async () => {
+    mockGetProjectClosePlan.mockResolvedValue({
+      stoppableRunCount: 0,
+      stoppableChatIds: [],
+      liveChatIds: ['chat-foreign'],
+      continuingRuns: [{ id: 'run-foreign', label: 'Foreign chat', reason: 'other-build' }],
+    });
+    render(<ProjectNavigation />);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Move to Trash' })[0]!);
+    await waitFor(() => {
+      expect(mockGetProjectClosePlan).toHaveBeenCalledWith('proj_two');
+    });
+    expect(screen.queryByRole('heading', { name: /close Two before deleting/u })).not.toBeInTheDocument();
+    expect(projectsResult.deleteProject).not.toHaveBeenCalled();
+    expect(mockCloseProject).not.toHaveBeenCalled();
+  });
+
+  it('offers no Close on a project that is already closed', () => {
+    render(<ProjectNavigation />);
+    expect(screen.queryByRole('button', { name: 'Close One' })).not.toBeInTheDocument();
+  });
+
+  it('names a policy close as the sentence of the project it closed', () => {
+    mockRow.mockImplementation((projectId: string) => ({
+      ...closedRow(projectId),
+      detail: projectId === 'proj_one' ? 'Closed to save memory · 30 min idle' : undefined,
+    }));
+    render(<ProjectNavigation />);
+    const link = screen.getByRole('link', { name: 'One' });
+    expect(descriptionOf(link)).toHaveTextContent('Closed to save memory · 30 min idle');
+    expect(descriptionOf(screen.getByRole('link', { name: 'Two' }))).toHaveTextContent(/^Closed$/u);
+  });
+
+  it('folds what is no longer live under Earlier', () => {
+    liveProjectIds = ['proj_two'];
+    render(<ProjectNavigation />);
+    expect(screen.getByText('Earlier')).toBeInTheDocument();
+    expect(screen.getAllByRole('link').map((link) => link.textContent)).toEqual(['Two', 'One']);
+  });
+
+  // ── Load defects (A0.9) ──
+
+  describe('reload', () => {
+    /** The list as drawn: each row's link name, or a label row's text. */
+    const drawnRows = (): string[] =>
+      [...document.querySelectorAll('section > ul > li')].map(
+        (item) => item.querySelector('a')?.textContent ?? item.textContent,
+      );
+
+    /*
+     * U6 as the reload runs it: the listing answers before the open project's
+     * session goes live, so there is a frame with the listing and nothing live.
+     * The open project is first from that frame, so nothing moves when its
+     * session goes live, and afterwards the registry alone says what is live.
+     */
+    it('U6: no row moves when the listing answers before the open project goes live', () => {
+      pathname = '/w/home/one';
+      mockUseProjects.mockReturnValue({ ...projectsResult, projects: [], isLoading: true });
+      const view = render(<ProjectNavigation />);
+      expect(screen.getAllByTestId('project-navigation-skeleton')).toHaveLength(5);
+
+      mockUseProjects.mockReturnValue(projectsResult);
+      view.rerender(<ProjectNavigation />);
+      const listed = drawnRows();
+
+      liveProjectIds = ['proj_one'];
+      view.rerender(<ProjectNavigation />);
+      const live = drawnRows();
+
+      liveProjectIds = [];
+      view.rerender(<ProjectNavigation />);
+
+      expect([listed, live]).toEqual([
+        ['One', 'Earlier', 'Two'],
+        ['One', 'Earlier', 'Two'],
+      ]);
+      expect(drawnRows()).toEqual(['Two', 'One']);
+    });
+
+    /* Leaving the project the page was loaded on ends its wait: coming back, only the registry says what is live. */
+    it("U6: leaving the reload's open project ends its wait", () => {
+      pathname = '/w/home/one';
+      mockUseProjects.mockReturnValue({ ...projectsResult, projects: [], isLoading: true });
+      const view = render(<ProjectNavigation />);
+      mockUseProjects.mockReturnValue(projectsResult);
+      view.rerender(<ProjectNavigation />);
+      expect(drawnRows()).toEqual(['One', 'Earlier', 'Two']);
+
+      pathname = '/';
+      view.rerender(<ProjectNavigation />);
+      pathname = '/w/home/one';
+      view.rerender(<ProjectNavigation />);
+
+      expect(drawnRows()).toEqual(['Two', 'One']);
+    });
+
+    /*
+     * R1/P46: an open project whose session a policy or the person closed is
+     * not live, on its own page too. It sorts with the rest, below the live
+     * ones and the "Earlier" divider.
+     */
+    it('R1: the open project whose session closed sits below the live ones and the divider', () => {
+      pathname = '/w/home/one';
+      liveProjectIds = ['proj_two'];
+      closedReasons = { [firstProject.id]: 'Closed to save memory' };
+      mockUseProjects.mockReturnValue({
+        ...projectsResult,
+        projects: [{ ...firstProject, lastActivityAt: 30 }, secondProject],
+      });
+      render(<ProjectNavigation />);
+
+      expect(drawnRows()).toEqual(['Two', 'Earlier', 'One']);
+    });
+
+    /* R1: on a reload, an open project whose session closed is not drawn as live once the listing answers either. */
+    it('R1: on a reload, a closed open project is not drawn as live when the listing answers', () => {
+      pathname = '/w/home/one';
+      liveProjectIds = ['proj_two'];
+      closedReasons = { [firstProject.id]: 'Closed to save memory' };
+      mockUseProjects.mockReturnValue({ ...projectsResult, projects: [], isLoading: true });
+      const view = render(<ProjectNavigation />);
+      mockUseProjects.mockReturnValue({
+        ...projectsResult,
+        projects: [{ ...firstProject, lastActivityAt: 30 }, secondProject],
+      });
+      view.rerender(<ProjectNavigation />);
+
+      expect(drawnRows()).toEqual(['Two', 'Earlier', 'One']);
+    });
+
+    /*
+     * Outside a reload's wait for its open project's session, an open project
+     * whose session never opened (an open the live budget refused, then "Not
+     * now") is not drawn as live.
+     */
+    it('R1: once the listing answers, an open project whose session never opened sorts with the rest', () => {
+      pathname = '/w/home/one';
+      liveProjectIds = ['proj_two'];
+      mockUseProjects.mockReturnValue({
+        ...projectsResult,
+        projects: [{ ...firstProject, lastActivityAt: 30 }, secondProject],
+      });
+      render(<ProjectNavigation />);
+
+      expect(drawnRows()).toEqual(['Two', 'Earlier', 'One']);
+    });
+  });
+});

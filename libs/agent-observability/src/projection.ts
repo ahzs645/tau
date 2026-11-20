@@ -1,0 +1,795 @@
+import { externalToolName, refusalOf, tauToolEvidence } from '@taucad/agent-host/wire';
+import type { Evidence } from '#contract.js';
+import { evidenceLimits } from '#contract.js';
+import { contentRedactor } from '#content-redaction.js';
+import { contentScales, rootContent, sectionCoverage, toolContent } from '#host-content.js';
+import type { CheckLine, ContentScale, DesignReader } from '#host-content.js';
+import { canonicalEvidence, contractId, evidenceDigest, sha256Hex } from '#identity.js';
+
+/*
+ * Host turn projection (blueprint T09).
+ *
+ * Turns what a chat's committed rows say about a run into summary evidence the
+ * API admits: one `tool` fact per settled tool call, one `cad` fact per settled
+ * `test_model` check (T12) and one `outcome` fact per ended run. Every value it
+ * writes is derived from committed rows (and, for a run's design, from its final
+ * revision), so any device or replay that reads the same rows writes
+ * byte-identical evidence and the API counts it once.
+ *
+ * Under the summary grant it writes facts only, never message content. Under
+ * the content grant (LW6) a tool fact and an outcome fact are written as
+ * content envelopes instead: the same fact and source, with a tool's arguments
+ * and result, or the run's message, reply, design and check lines, redacted and
+ * capped at the source. A fact from before the content grant, and content that
+ * cannot fit an envelope, is written as its summary.
+ *
+ * One fact is not from rows: a `response` fact for the moment this device's
+ * UI first showed a run's model text (T10). It is an interaction of this
+ * device's, sourced as one, and is kept apart from the model-text time the
+ * API reports for the provider call: the two are different clocks.
+ *
+ * The input types are structural so the host package keeps owning them: the
+ * host's `TurnObservation` satisfies `ProjectedRun`.
+ */
+
+/** A committed row's identity. @public */
+export type ProjectedSource = Readonly<{ chatId: string; leaderEpoch: string; sequence: number }>;
+
+/** How a run or tool call ended. @public */
+export type ProjectedOutcome = 'completed' | 'cancelled' | 'failed' | 'abandoned' | 'unknown';
+
+/** What a run's committed rows say about it, as the host's turn observation reports it. @public */
+export type ProjectedRun = Readonly<{
+  chatId: string;
+  runId: string;
+  termination: ProjectedOutcome;
+  tools: ReadonlyArray<
+    Readonly<{
+      call: string;
+      toolName: string;
+      outcome: ProjectedOutcome;
+      input: ProjectedSource;
+      output: ProjectedSource | undefined;
+      startedAt: number;
+      settledAt: number | undefined;
+      /** The gateway attempt id of the generation that issued the call, as the host sent it in `x-tau-attempt-id`. */
+      modelCall?: string | undefined;
+      /** The call's arguments and first committed result, when the host read content (LW6). */
+      arguments?: unknown;
+      result?: unknown;
+      /** A settled `test_model` call's check: its decided status and the file keys of what it checked. */
+      check?:
+        | Readonly<{
+            result: 'passed' | 'failed' | 'inconclusive' | 'unsupported' | 'not-run';
+            revision: readonly string[];
+            requirements: readonly string[];
+          }>
+        | undefined;
+    }>
+  >;
+  intervals: ReadonlyArray<
+    Readonly<{ phase: 'admission' | 'tool' | 'approval'; start: number; end: number | undefined }>
+  >;
+  /**
+   * The run's ending row. A failed ending that recorded a code names it, never its message: `wrapped` is the code a
+   * `RUN_ABANDONED` ending carried in `details.code`.
+   */
+  ending:
+    | Readonly<{
+        source: ProjectedSource;
+        at: number;
+        failure?: Readonly<{ code: string; wrapped: string | undefined }> | undefined;
+      }>
+    | undefined;
+  /** Every row the observation was built from, in log order; it locates a run's tail. */
+  sources?: readonly ProjectedSource[];
+  /** When this device's UI first showed the run's model text, if it was watching while the run streamed. */
+  presentedAt?: number;
+  /** The revision the run's turn wrote, how many files it changed, and how many Tau runs came before it. */
+  finalRevision?: string | undefined;
+  filesChanged?: number | undefined;
+  priorTurns?: number | undefined;
+  /** The kernel the run targeted, from the snapshot its turn committed (LW17). */
+  kernel?: string | undefined;
+  /** The model calls the run prepared. */
+  invocations?: ReadonlyArray<Readonly<{ purpose: string; modelId: string }>> | undefined;
+  /** This turn's message, the final reply and the changed paths, when the host read content (LW6). */
+  content?: Readonly<{ prompt: unknown; reply: unknown; changedPaths: readonly string[] }> | undefined;
+  /** The account's rating of the run's reply on this device, the first one given (T12). */
+  rating?: Readonly<{ value: 'positive' | 'negative'; at: number }>;
+}>;
+
+type ToolFact = Extract<Evidence['payload'], { plane: 'summary' }>['fact'] & { kind: 'tool' };
+
+/** Who the evidence is for and under which grant, resolved from the server's current answer. @public */
+export type ProjectionContext = Readonly<{
+  principal: string;
+  project: string;
+  policyEpoch: string;
+  /** The protection the host knows for this account; the API only ever makes it stricter. */
+  protection: 'free' | 'pro' | 'unknown';
+  /** This device's uploader id. */
+  uploader: string;
+  /** Whether this device held a leader epoch. Rows another device led are its to report. */
+  ownsEpoch: (leaderEpoch: string) => boolean;
+  /** When the summary grant began; nothing that happened before it is projected. */
+  grantedAt: number;
+  /** This host's build id, when it has one. */
+  hostBuild: string | undefined;
+  /**
+   * Maps a tool name to its class; the first-party vocabulary's class when absent. Only a first-party tool's name leaves
+   * the device: any other is reported as `external-tool` (LQ5).
+   */
+  toolClass?: (toolName: string) => ToolFact['toolClass'];
+  /** The plane, and so the purpose, this projection writes for; each answers to its own grant. `summary` when absent. */
+  plane?: 'summary' | 'feedback';
+  /**
+   * The content grant, when the server's answer allows `content` for this account and project too (LW6, rule 5):
+   * from `since`, a tool or outcome fact is written with its content. `design` reads the changed model files at the
+   * run's final revision; without it a root records no design.
+   */
+  content?: Readonly<{ since: number; design?: DesignReader | undefined }> | undefined;
+  /** What kind of host this is, written on each outcome. */
+  host?: 'browser' | 'desktop' | 'cloud' | 'cli' | undefined;
+}>;
+
+/**
+ * A leader epoch this device did not hold but read rows from. Its facts are
+ * that device's to report; this device cannot see whether it did, so the host
+ * reports the gap instead of a fact. @public
+ */
+export type ForeignTail = Readonly<{
+  /** The epoch's contract id, as evidence names it. */
+  epoch: string;
+  /** Settled facts in that epoch this device left to it. */
+  facts: number;
+  /** The newest sequence this device read in that epoch. */
+  through: number;
+  /**
+   * Whether the run is still unended here and its newest row is in that epoch,
+   * so the rest of the run happened where this device cannot read it.
+   */
+  open: boolean;
+}>;
+
+/** The evidence one run yields, and what was left out and why. @public */
+export type RunProjection = Readonly<{
+  evidence: readonly Evidence[];
+  /** Facts whose rows another device led; that device reports them. */
+  foreign: number;
+  /** The foreign epochs behind `foreign`, and an unended run's foreign tail, sorted by epoch id. */
+  foreignTails: readonly ForeignTail[];
+  /** Facts that happened before the grant; they are never backfilled. */
+  beforeGrant: number;
+  /** Facts not yet settled; a later projection of the same rows writes them. */
+  pending: number;
+}>;
+
+/**
+ * The name a tool is reported as (LQ5): a first-party tool's own name, and `external-tool` for any other, whose name
+ * can be private. The API maps a reported name through the same function, so a name outside the vocabulary never
+ * reaches the vendor.
+ *
+ * @param toolName - The tool's name, as its call recorded it; absent from an older host's fact.
+ * @returns The first-party name, or `external-tool`.
+ * @public
+ */
+export const reportedToolName = (toolName: string | undefined): string =>
+  toolName !== undefined && tauToolEvidence.has(toolName) ? toolName : externalToolName;
+
+/** Bumped whenever the facts written for the same rows change. @public */
+export const hostTurnMapper = 'host-turn-v5';
+
+const retentionMilliseconds = 180 * 86_400_000;
+
+type Fact = Extract<Evidence['payload'], { plane: 'summary' }>['fact'];
+type OutcomeFact = Fact & { kind: 'outcome' };
+
+/* A refusal code is a SCREAMING_SNAKE vocabulary value; anything else is not sent, though its class still is. */
+const refusalCodeShape = /^[A-Z][A-Z\d_]{0,63}$/u;
+
+/**
+ * What a failed run's ending code says about it: the code, the wrapped one when the ending was a `RUN_ABANDONED`
+ * rewrite of a `wait`-class code (that code names the cause), with its owner and retry class from the refusal registry.
+ * A code this build does not know reads as the registry's unknown entry rather than being dropped.
+ *
+ * @param failure - The ending row's codes.
+ * @returns The outcome fact's failure fields, or none for an ending without a code.
+ */
+const failureFields = (
+  failure: NonNullable<ProjectedRun['ending']>['failure'],
+): Pick<OutcomeFact, 'failureClass' | 'code'> => {
+  if (failure === undefined) {
+    return {};
+  }
+  const code = failure.wrapped ?? failure.code;
+  const { owner, retry } = refusalOf(code);
+  return { failureClass: { owner, retry }, ...(refusalCodeShape.test(code) ? { code } : {}) };
+};
+type FeedbackFact = Extract<Evidence['payload'], { plane: 'feedback' }>['fact'];
+
+/** The rating scale a run's reply is rated on: one positive or negative answer. @public */
+export const ratingScale = 'thumbs.1';
+
+type Candidate =
+  | 'pending'
+  | Readonly<{
+      source: ProjectedSource;
+      /** An interaction on this device, rather than `source`, is what the fact is about. */
+      interaction?: string;
+      lineage: readonly ProjectedSource[];
+      semantic: string;
+      payload: Readonly<{ plane: 'summary'; fact: Fact }> | Readonly<{ plane: 'feedback'; fact: FeedbackFact }>;
+      occurredAt: number;
+      events: Evidence['coverage']['events'];
+      intervals: Evidence['clocks']['intervals'];
+      /** The fact's content at one scale, when the content grant covers it. */
+      content?: ((scale: ContentScale) => Promise<Readonly<{ input: MaybeSection; output: MaybeSection }>>) | undefined;
+    }>;
+
+type MaybeSection = Extract<Evidence['payload'], { plane: 'content' }>['input'];
+
+const rowPosition = (source: ProjectedSource): string => `${source.leaderEpoch}:${source.sequence}`;
+
+/** A committed row's digest, the same for every fact that cites it. */
+const rowDigest = async (source: ProjectedSource): Promise<string> =>
+  sha256Hex(canonicalEvidence(['host-row', source.chatId, source.leaderEpoch, source.sequence]));
+
+/** What one envelope carries: the summary or feedback fact, or the fact with its content and its coverage. */
+type Carried = Readonly<{
+  payload: Evidence['payload'];
+  redactor: string;
+  input: Evidence['coverage']['input'];
+  output: Evidence['coverage']['output'];
+}>;
+
+const envelope = async (
+  context: ProjectionContext,
+  run: ProjectedRun,
+  item: Exclude<Candidate, 'pending'> & Readonly<{ carried?: Carried | undefined }>,
+): Promise<Evidence> => {
+  const carried = item.carried ?? {
+    payload: item.payload,
+    redactor: 'summary-only',
+    input: 'omitted',
+    output: 'omitted',
+  };
+  const [chat, leaderEpoch, runId] = await Promise.all([
+    contractId('chat', run.chatId),
+    contractId('epoch', item.source.leaderEpoch),
+    contractId('run', run.runId),
+  ]);
+  const sourceDigest = await sha256Hex(
+    canonicalEvidence(
+      item.interaction === undefined
+        ? ['host-row', run.chatId, item.source.leaderEpoch, item.source.sequence, item.payload.fact]
+        : ['host-interaction', run.chatId, item.interaction, item.occurredAt, item.payload.fact],
+    ),
+  );
+  const expiresAt = item.occurredAt + retentionMilliseconds;
+  /*
+   * A lineage entry names a committed row, and the API keeps the first digest it is given for that row: several facts
+   * cite the same row (a run's ending row anchors its outcome, its presentation and its rating; a check cites its tool's
+   * rows), so the digest is the row's own, from its identity in the append-only log, and never the citing fact's.
+   */
+  const lineage = await Promise.all(
+    item.lineage.map(
+      async (row): Promise<Evidence['lineage'][number]> => ({
+        source: await contractId('row', `${row.chatId}:${rowPosition(row)}`),
+        digest: await rowDigest(row),
+        protection: context.protection,
+        rights: 'unknown',
+        expiresAt,
+        proof: null,
+      }),
+    ),
+  );
+  const evidence: Evidence = {
+    version: 1,
+    source:
+      item.interaction === undefined
+        ? { kind: 'row', chat, leaderEpoch, sequence: item.source.sequence, digest: sourceDigest }
+        : { kind: 'interaction', interaction: item.interaction, digest: sourceDigest },
+    semantic: { kind: item.payload.fact.kind, id: item.semantic },
+    projection: { version: hostTurnMapper, redactor: carried.redactor, digest: '0'.repeat(64) },
+    delivery: {
+      uploader: context.uploader,
+      attempt: 'host-1',
+      cursor:
+        item.interaction === undefined
+          ? { view: 'own', origin: context.uploader, position: await contractId('pos', rowPosition(item.source)) }
+          : { view: 'interaction', origin: context.uploader, position: item.interaction },
+    },
+    scope: {
+      principal: context.principal,
+      project: context.project,
+      policyEpoch: context.policyEpoch,
+      destination: 'langfuse',
+    },
+    run: chat,
+    execution: { attempt: runId, resumedFrom: null, branchedFrom: null },
+    versions: {
+      hostBuild: context.hostBuild ?? null,
+      apiBuild: null,
+      harness: null,
+      compaction: null,
+      prompts: [],
+      skills: [],
+      tools: [],
+      kernels: [],
+      mapper: hostTurnMapper,
+      policy: 'purposes-v1',
+    },
+    task: null,
+    clocks: { occurredAt: item.occurredAt, sourceOrder: rowPosition(item.source), intervals: item.intervals },
+    authority: 'host-reported',
+    retention: { originalAt: item.occurredAt, expiresAt, proof: 'host-retention-v1' },
+    lineage,
+    coverage: {
+      events: item.events,
+      input: carried.input,
+      output: carried.output,
+      usage: 'unsupported',
+      artifacts: 'unsupported',
+      permission: 'complete',
+    },
+    payload: carried.payload,
+  };
+  return { ...evidence, projection: { ...evidence.projection, digest: await evidenceDigest(evidence) } };
+};
+
+/**
+ * One fact's envelope: with its content when the content grant covers it and some scale of it fits the contract's
+ * envelope, else its summary. The content shares the summary's fact, and so its source (LW3).
+ */
+const projectedEnvelope = async (
+  context: ProjectionContext,
+  run: ProjectedRun,
+  item: Exclude<Candidate, 'pending'>,
+): Promise<Evidence> => {
+  const grant = context.content;
+  if (
+    item.content === undefined ||
+    grant === undefined ||
+    item.occurredAt < grant.since ||
+    item.payload.plane !== 'summary'
+  ) {
+    return envelope(context, run, item);
+  }
+  const { fact } = item.payload;
+  for (const scale of contentScales) {
+    // oxlint-disable-next-line no-await-in-loop -- at most three scales, each needed only when the last did not fit
+    const { input, output } = await item.content(scale);
+    // oxlint-disable-next-line no-await-in-loop -- the same
+    const evidence = await envelope(context, run, {
+      ...item,
+      carried: {
+        payload: { plane: 'content', fact, input, output, context: null, parameters: {} },
+        redactor: contentRedactor,
+        input: sectionCoverage(input, 'missing'),
+        output: sectionCoverage(output, 'missing'),
+      },
+    });
+    if (new TextEncoder().encode(canonicalEvidence(evidence)).byteLength <= evidenceLimits.bytes) {
+      return evidence;
+    }
+  }
+  return envelope(context, run, item);
+};
+
+const foreignTailsOf = async (
+  run: ProjectedRun,
+  context: ProjectionContext,
+  candidates: readonly Candidate[],
+): Promise<ForeignTail[]> => {
+  const tails = new Map<string, { facts: number; through: number }>();
+  const tailOf = (leaderEpoch: string): { facts: number; through: number } => {
+    let tail = tails.get(leaderEpoch);
+    if (tail === undefined) {
+      tail = { facts: 0, through: 0 };
+      tails.set(leaderEpoch, tail);
+    }
+    return tail;
+  };
+  const seen = (source: ProjectedSource): void => {
+    if (!context.ownsEpoch(source.leaderEpoch)) {
+      const tail = tailOf(source.leaderEpoch);
+      tail.through = Math.max(tail.through, source.sequence);
+    }
+  };
+  for (const candidate of candidates) {
+    if (candidate !== 'pending') {
+      for (const source of candidate.lineage) {
+        seen(source);
+      }
+      if (!context.ownsEpoch(candidate.source.leaderEpoch)) {
+        tailOf(candidate.source.leaderEpoch).facts += 1;
+      }
+    }
+  }
+  for (const source of run.sources ?? []) {
+    seen(source);
+  }
+  const newest = run.sources?.at(-1);
+  const openEpoch = run.ending === undefined && newest !== undefined ? newest.leaderEpoch : undefined;
+  const reported = await Promise.all(
+    [...tails].map(
+      async ([leaderEpoch, tail]): Promise<ForeignTail> => ({
+        epoch: await contractId('epoch', leaderEpoch),
+        facts: tail.facts,
+        through: tail.through,
+        open: leaderEpoch === openEpoch,
+      }),
+    ),
+  );
+  return reported.toSorted((left, right) => left.epoch.localeCompare(right.epoch));
+};
+
+type TurnMeasures = NonNullable<OutcomeFact['turn']>;
+type RunLabels = Pick<TurnMeasures, 'host' | 'kernel' | 'model'>;
+
+/**
+ * The host, kernel and model a run ran on (LW17): the host this projection is for, the kernel its turn's snapshot
+ * targeted, and the model its last generation used, named as the API names a requested model. Its outcome and each of
+ * its tools carry the same labels.
+ */
+const runLabelsOf = async (run: ProjectedRun, context: ProjectionContext): Promise<RunLabels> => {
+  const model = (run.invocations ?? []).findLast((invocation) => invocation.purpose === 'generation')?.modelId;
+  return {
+    host: context.host ?? null,
+    kernel: run.kernel === undefined ? null : await contractId('kernel', run.kernel),
+    model: model === undefined ? null : await contractId('model', model),
+  };
+};
+
+/**
+ * What a run did, as counts, digests and closed labels (LW6): the revision it wrote as a digest, never its id; its
+ * checks; and the model its last generation used, named as the API names a requested model. The revision it started
+ * from is not in its rows, so it is not claimed.
+ */
+const turnMeasures = async (run: ProjectedRun, labels: RunLabels): Promise<TurnMeasures> => {
+  const generations = (run.invocations ?? []).filter((invocation) => invocation.purpose === 'generation');
+  const results = run.tools.flatMap((tool) =>
+    tool.check === undefined || tool.output === undefined ? [] : [tool.check.result],
+  );
+  return {
+    startRevision: null,
+    finalRevision:
+      run.finalRevision === undefined ? null : await sha256Hex(canonicalEvidence(['host-revision', run.finalRevision])),
+    filesChanged: run.filesChanged ?? 0,
+    checksPassed: results.filter((result) => result === 'passed').length,
+    checksFailed: results.filter((result) => result === 'failed').length,
+    priorTurns: run.priorTurns ?? 0,
+    modelCalls: generations.length,
+    toolCalls: run.tools.length,
+    ...labels,
+  };
+};
+
+/** The rule that decides a run's `success` from its CAD checks (LW7): deterministic, and it calls no model. @public */
+export const checksAssessor = 'cad-checks-v1';
+
+/* Tool classes that can change a model file; a check that ran before one of them settled did not see the final design. */
+const changingClasses: ReadonlySet<ToolFact['toolClass']> = new Set(['write', 'execute']);
+/* Write-class tools that change the agent's own state, never a model file: a todo list or the workbench layout. */
+const designNeutralTools: ReadonlySet<string> = new Set(['update_todos', 'arrange_workbench']);
+
+/**
+ * Whether a completed run did its task, by rule `cad-checks-v1` (LW7): `verified` when at least one check at the final
+ * revision decided and none of them failed, `failed` when one of them failed, and `unknown` otherwise, which leaves
+ * the decision to no score at all. A check is at the final revision when no tool that can change a file was still
+ * running or started after it began; only a settled check that names a revision counts, as only it writes a `cad`
+ * fact, and only `passed` and `failed` are decided.
+ */
+const assessedSuccess = (
+  run: ProjectedRun,
+  classOf: (toolName: string) => ToolFact['toolClass'],
+): Pick<OutcomeFact, 'success' | 'assessment'> => {
+  const undecided = { success: 'unknown', assessment: null } as const;
+  if (run.termination !== 'completed') {
+    return undecided;
+  }
+  const changes = run.tools.filter(
+    (tool) => changingClasses.has(classOf(tool.toolName)) && !designNeutralTools.has(tool.toolName),
+  );
+  const results = new Set(
+    run.tools.flatMap((tool) =>
+      tool.check === undefined ||
+      tool.output === undefined ||
+      tool.check.revision.length === 0 ||
+      changes.some((change) => change.settledAt === undefined || change.settledAt > tool.startedAt)
+        ? []
+        : [tool.check.result],
+    ),
+  );
+  if (results.has('failed')) {
+    return { success: 'failed', assessment: checksAssessor };
+  }
+  return results.has('passed') ? { success: 'verified', assessment: checksAssessor } : undecided;
+};
+
+/** One line per settled check, in call order. */
+const checkLines = (run: ProjectedRun): CheckLine[] =>
+  run.tools.flatMap((tool) =>
+    tool.check === undefined || tool.output === undefined
+      ? []
+      : [{ tool: reportedToolName(tool.toolName), result: tool.check.result, requirements: tool.check.requirements }],
+  );
+
+/** The changed model files at the run's final revision; none without a reader, a revision or a change, or on a failed read. */
+const designOf = async (
+  run: ProjectedRun,
+  context: ProjectionContext,
+): Promise<ReadonlyArray<Readonly<{ path: string; text: string | undefined; bytes: number }>>> => {
+  const reader = context.content?.design;
+  const paths = run.content?.changedPaths ?? [];
+  if (reader === undefined || run.finalRevision === undefined || paths.length === 0) {
+    return [];
+  }
+  try {
+    return await reader({ revision: run.finalRevision, paths });
+  } catch {
+    return [];
+  }
+};
+
+/**
+ * Project one run's settled facts for this device.
+ *
+ * - A tool call is written once its output row landed, or once the run ended
+ *   without one (then `unknown`); before that it is pending, never `failed`.
+ * - A `test_model` check is written once its output row landed, as a `cad`
+ *   fact whose revision and requirements are digests; only `passed` and
+ *   `failed` are decided, and a check is never a run's success.
+ * - An outcome is written once the run has an ending row.
+ * - A fact whose row another device led is left to that device (`foreign`),
+ *   and one that happened before the grant is never sent (`beforeGrant`).
+ * - Each foreign epoch this device read is reported in `foreignTails`, with
+ *   `open` when an unended run's newest row is there: what that device sends
+ *   is not visible here, so the host reports a gap, never a guessed fact.
+ * - Host times are the rows' recorded times, labelled `host-recorded`: they
+ *   order and bound phases, and are not a duration clock.
+ * - A presentation is written once the run has ended, as an interaction of
+ *   this device's at the time its UI showed the run's text.
+ * - A rating is the feedback plane's alone: a `feedback` projection writes
+ *   only it, once the run has ended, and a summary projection never does.
+ *
+ * @param run - The host's observation of one run.
+ * @param context - The account, project and grant the evidence is for.
+ * @returns The evidence, in row order, and the counts of what was held back.
+ * @public
+ */
+export const projectRun = async (run: ProjectedRun, context: ProjectionContext): Promise<RunProjection> => {
+  const classOf =
+    context.toolClass ?? ((toolName: string): ToolFact['toolClass'] => tauToolEvidence.get(toolName) ?? 'other');
+  const labels = await runLabelsOf(run, context);
+  const toolCandidates = run.tools.map(async (tool): Promise<Candidate> => {
+    if (tool.output === undefined && run.ending === undefined) {
+      return 'pending';
+    }
+    /* The API names the same attempt `contractId('inv', attemptKey)`, so a tool joins the supplier attempts it came from. */
+    const [call, dispatch, modelCall] = await Promise.all([
+      contractId('call', `${run.chatId}:${tool.call}`),
+      contractId('dispatch', `${run.chatId}:${rowPosition(tool.input)}`),
+      tool.modelCall === undefined ? null : contractId('inv', tool.modelCall),
+    ]);
+    return {
+      source: tool.input,
+      lineage: tool.output === undefined ? [tool.input] : [tool.input, tool.output],
+      semantic: call,
+      payload: {
+        plane: 'summary',
+        fact: {
+          kind: 'tool',
+          call,
+          dispatch,
+          name: reportedToolName(tool.toolName),
+          toolClass: classOf(tool.toolName),
+          toolVersion: null,
+          schemaVersion: null,
+          modelCall,
+          outcome: tool.output === undefined ? 'unknown' : tool.outcome,
+          revisionBefore: null,
+          revisionAfter: null,
+          labels,
+        },
+      },
+      occurredAt: tool.startedAt,
+      events: tool.output === undefined ? 'missing' : 'complete',
+      intervals:
+        tool.settledAt === undefined
+          ? []
+          : [{ phase: 'tool', domain: 'host-recorded', start: tool.startedAt, end: tool.settledAt }],
+      ...('arguments' in tool
+        ? {
+            content: async (scale: ContentScale) =>
+              toolContent(
+                {
+                  call,
+                  name: reportedToolName(tool.toolName),
+                  failed: tool.outcome === 'failed',
+                  arguments: tool.arguments,
+                  result: tool.result,
+                  hasResult: tool.output !== undefined && 'result' in tool,
+                },
+                scale,
+              ),
+          }
+        : {}),
+    };
+  });
+  /*
+   * A check is anchored to its output row, which no other fact uses. It names what was checked only by digest: the
+   * revision's file digests, and the requirement set within that revision, so neither a path nor a requirement's text
+   * leaves the device. A check that named no revision cannot say what it decided about, and writes nothing.
+   */
+  const checkCandidates = run.tools.flatMap((tool) => {
+    const { check, output } = tool;
+    if (check === undefined || output === undefined || check.revision.length === 0) {
+      return [];
+    }
+    return [
+      (async (): Promise<Candidate> => {
+        const [semantic, sourceRevision, requirements] = await Promise.all([
+          contractId('check', `${run.chatId}:${tool.call}`),
+          sha256Hex(canonicalEvidence(['cad-revision', check.revision])),
+          sha256Hex(canonicalEvidence(['cad-requirements', check.revision, check.requirements])),
+        ]);
+        return {
+          source: output,
+          lineage: [tool.input, output],
+          semantic,
+          payload: {
+            plane: 'summary',
+            fact: {
+              kind: 'cad',
+              sourceRevision,
+              requirement: `req-${requirements.slice(0, 48)}`,
+              result: check.result,
+              exportRequested: false,
+              artifact: null,
+            },
+          },
+          occurredAt: tool.settledAt ?? tool.startedAt,
+          events: 'complete',
+          intervals: [],
+        };
+      })(),
+    ];
+  });
+  const outcomeCandidate = async (): Promise<Candidate> => {
+    if (run.ending === undefined) {
+      return 'pending';
+    }
+    const { content } = run;
+    return {
+      source: run.ending.source,
+      lineage: [run.ending.source],
+      semantic: await contractId('run', run.runId),
+      payload: {
+        plane: 'summary',
+        fact: {
+          kind: 'outcome',
+          termination: run.termination,
+          ...assessedSuccess(run, classOf),
+          ...failureFields(run.ending.failure),
+          turn: await turnMeasures(run, labels),
+        },
+      },
+      ...(content === undefined
+        ? {}
+        : {
+            content: async (scale: ContentScale) =>
+              rootContent(
+                {
+                  prompt: content.prompt,
+                  reply: content.reply,
+                  design: await designOf(run, context),
+                  checks: checkLines(run),
+                },
+                scale,
+              ),
+          }),
+      occurredAt: run.ending.at,
+      events: 'complete',
+      /* A run that began before the grant reports only the time since it: earlier phases are clipped, not sent. */
+      intervals: run.intervals
+        .filter(
+          (phaseInterval) =>
+            phaseInterval.phase !== 'tool' &&
+            (phaseInterval.end === undefined || phaseInterval.end > context.grantedAt),
+        )
+        .slice(0, 32)
+        .map((phaseInterval) => ({
+          phase: phaseInterval.phase,
+          domain: 'host-recorded',
+          start: Math.max(phaseInterval.start, context.grantedAt),
+          end: phaseInterval.end ?? null,
+        })),
+    };
+  };
+  /* Anchored to the run's ending row: the run whose text was shown, and the host that led it reports it. */
+  const presentationCandidate = async (): Promise<Candidate | undefined> => {
+    if (run.presentedAt === undefined) {
+      return undefined;
+    }
+    if (run.ending === undefined) {
+      return 'pending';
+    }
+    const [interaction, presented] = await Promise.all([
+      contractId('presented', `${run.chatId}:${run.runId}`),
+      contractId('run', run.runId),
+    ]);
+    return {
+      source: run.ending.source,
+      interaction,
+      lineage: [run.ending.source],
+      semantic: interaction,
+      payload: { plane: 'summary', fact: { kind: 'response', action: 'presented', evidence: presented } },
+      occurredAt: run.presentedAt,
+      events: 'complete',
+      intervals: [],
+    };
+  };
+  /*
+   * Like a presentation, a rating is this device's interaction, anchored to the run's ending row. Only the first is
+   * kept. Its interaction id is tagged, as `contractId` keeps an id-shaped value as it is: untagged, a rating of a shown
+   * run would claim the presentation's source, and admission would refuse it as a conflict.
+   */
+  const ratingCandidate = async (): Promise<Candidate | undefined> => {
+    if (run.rating === undefined) {
+      return undefined;
+    }
+    if (run.ending === undefined) {
+      return 'pending';
+    }
+    const [interaction, rated] = await Promise.all([
+      contractId('rated', `rated:${run.chatId}:${run.runId}`),
+      contractId('run', run.runId),
+    ]);
+    return {
+      source: run.ending.source,
+      interaction,
+      lineage: [run.ending.source],
+      semantic: interaction,
+      payload: {
+        plane: 'feedback',
+        fact: { kind: 'rating', scale: ratingScale, value: run.rating.value, evidence: rated },
+      },
+      occurredAt: run.rating.at,
+      events: 'complete',
+      intervals: [],
+    };
+  };
+  const feedback = context.plane === 'feedback';
+  const settled = await Promise.all(
+    feedback
+      ? [ratingCandidate()]
+      : [...toolCandidates, ...checkCandidates, outcomeCandidate(), presentationCandidate()],
+  );
+  const candidates = settled.filter((candidate) => candidate !== undefined);
+
+  const projected: Array<Promise<Evidence>> = [];
+  let foreign = 0;
+  let beforeGrant = 0;
+  let pending = 0;
+  for (const candidate of candidates) {
+    if (candidate === 'pending') {
+      pending += 1;
+    } else if (!context.ownsEpoch(candidate.source.leaderEpoch)) {
+      foreign += 1;
+    } else if (candidate.occurredAt < context.grantedAt) {
+      beforeGrant += 1;
+    } else {
+      projected.push(projectedEnvelope(context, run, candidate));
+    }
+  }
+  return {
+    evidence: await Promise.all(projected),
+    foreign,
+    /* Gaps are the summary plane's to report; a rating names no rows but its anchor. */
+    foreignTails: feedback ? [] : await foreignTailsOf(run, context, candidates),
+    beforeGrant,
+    pending,
+  };
+};

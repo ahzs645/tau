@@ -1,14 +1,21 @@
 ---
 title: 'Storage Policy'
-description: 'Rules for atomic read-modify-write semantics, field-scoped patches, and concurrent-writer safety in client-side persistent storage providers (IndexedDB, OPFS, etc.).'
+description: 'Store-selection boundary (what belongs in IndexedDB at all) plus rules for atomic read-modify-write semantics, field-scoped patches, and concurrent-writer safety in client-side persistent storage providers.'
 status: active
 created: '2026-04-20'
-updated: '2026-04-20'
+updated: '2026-11-16'
 related:
+  - docs/policy/project-manifest-policy.md
+  - docs/policy/filesystem-authority-policy.md
   - docs/policy/xstate-policy.md
   - docs/policy/filesystem-policy.md
   - docs/policy/testing-policy.md
   - docs/research/chat-draft-resurrection-race.md
+  - docs/research/chat-user-activity-ordering-blueprint.md
+  - docs/research/project-updated-at-activity-boundary.md
+  - docs/research/tau-json-project-library-state-boundary.md
+  - docs/research/project-chat-draft-persistence-blueprint.md
+  - docs/research/machine-store-blueprint.md
 ---
 
 # Storage Policy
@@ -19,9 +26,63 @@ Internal reference for how persistent storage providers (`IndexedDbStorageProvid
 
 Two independent XState actors (`persistDraftActor`, `persistMessagesActor`) used to share `IndexedDbStorageProvider.updateChat`, which performed `getChat → deepmerge → put` across two separate IndexedDB transactions with no per-`chatId` lock. When the user sent a message, the two writers raced and the message-pipeline writer's `getChat` could land inside the gap between the draft-pipeline writer's read and write, snapshotting a stale `draft` and re-saving the just-sent text. On reload, the previously sent message reappeared in the composer. See `docs/research/chat-draft-resurrection-race.md` for the full timeline.
 
-This policy locks the fix in and prevents the same shape of bug recurring in future storage primitives or new fields on `Chat`/`Project`.
+This policy locks the fix in and prevents the same shape of bug recurring in future storage primitives or new fields on `Chat`/`ProjectLibraryState`. It also separates generic chat-row mutation time from the user-activity timestamp that owns recent-chat ordering.
 
 ## Rules
+
+### 0. Store-selection boundary: does this data belong in IndexedDB at all?
+
+Before applying any rule below, put the data in the right store. Portable project content stays in the project filesystem. IndexedDB is permitted only for state whose meaning is explicitly local to the browser/profile or whose authoritative data has not yet moved to the filesystem.
+
+| Data                                                                                  | Store                                                                                                                                           | Governed by                                            |
+| ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Portable project declaration                                                          | Project filesystem (`tau.json`)                                                                                                                 | `docs/policy/project-manifest-policy.md`               |
+| Entry paths, thumbnails, parameter sidecars, caches                                   | Project filesystem                                                                                                                              | `docs/policy/project-manifest-policy.md`               |
+| Host-local project library lifecycle (`lastActivityAt`, `deletedAt`, `revisionState`) | Dedicated `projectLibraryStates` object store                                                                                                   | This policy + manifest policy Rules 6–9                |
+| Project chat records and session logs                                                 | Project filesystem (`.tau/chats/**`)                                                                                                            | This policy's RMW rules + filesystem policy            |
+| Home pre-project composer draft and execution                                         | Home workspace (`/.tau/composers/new-project.json`)                                                                                             | This policy's RMW rules + filesystem policy            |
+| Project chat composer (draft, edits, tool choice, mode, placement), per device        | Home workspace (`/.tau/composers/chats/<projectId>/<chatId>.json`)                                                                              | This policy's RMW rules + composer record rules below  |
+| Per-project unread chat set, per device                                               | Home workspace (`/.tau/composers/chats/<projectId>/unread.json`)                                                                                | This policy's RMW rules + composer record rules below  |
+| Draft-stage attachment bytes (images, PDFs)                                           | Home workspace (`attachments/` beside the owning composer record; `/.tau/composers/<surface>/attachments` for pre-project surfaces without one) | Composer record rules below                            |
+| Sent chat attachment bytes                                                            | Project filesystem (`.tau/chats/<chatId>/attachments/<sha256>.<ext>`)                                                                           | Composer record rules below + revisions policy Rule 12 |
+| Project print intent (printer model, presets, setting overrides)                      | Project filesystem (`.tau/machines/printer.json`)                                                                                               | Machine store rules below                              |
+| Portable workbench layout, viewer views and entry display                             | Project filesystem (`.tau/workbench/**`), authored records that are unversioned, agent read-write and UI-watched                                | Revisions policy Rule 4 + filesystem authority Rule 16 |
+| Printer bindings, preparations, print requests and effect logs, per user              | Per-user config folder (`<config>/machines/<machineId>/`; `TAU_CONFIG_DIR` overrides `<config>`)                                                | Machine store rules below                              |
+| Browser-local application state (editor layout, resource links)                       | Object store via `IndexedDbStorageProvider`                                                                                                     | This policy's RMW rules                                |
+| Browser-local app chrome preferences (project disclosure)                             | Dedicated `appUiPreferences` object store                                                                                                       | This policy's RMW rules                                |
+| Per-device filesystem configuration (`ProjectFileSystemConfig`, workspace handles)    | Dedicated `tau-fs-handles` database                                                                                                             | This policy + filesystem-authority policy Rules 9/11   |
+| Person record sections (`person-profile`, `viewer-preferences`, `onboarding`)         | Local storage, one key per section, each a `StoredSection` (`@taucad/preferences`)                                                              | Person record rules below                              |
+| Device record and view exceptions (`device`, `view-exceptions`)                       | Local storage, one key each, each a `StoredSection`                                                                                             | Person record rules below                              |
+| Device first-seen telemetry marker (onboarding baseline)                              | `localStorage` key `tau-first-seen` (`cookieName.firstSeen`) through the preference store; never mirrored into a cookie                         | First-seen marker rules below                          |
+| "Use my setup answers" switch (Settings → Agents), per device                         | `localStorage` key `tau-chat-ctx-person` (`cookieName.chatCtxPerson`) through the preference store; never mirrored into a cookie                | Setup answers switch rule below                        |
+
+The legacy `projects` object store remains frozen and is cleared only after each row has been converted to a verified strict-v1 filesystem project and its `updatedAt`, `deletedAt`, and `revisionState` have been mapped to verified `ProjectLibraryState`. This is legacy storage conversion, not manifest-version migration. The store must not be repurposed: its `id` key path, full-project API, and legacy cleanup race with the correct local overlay. `projectLibraryStates` is a separate store keyed by `projectId`; it may contain only the fields permitted by the manifest policy and cannot establish project existence.
+
+Adding any other object store requires a documented parity exemption in the PR description: state why no agent, CLI, or on-disk consumer needs the data and why an existing local store cannot own it. A cache of manifest-derived fields is not exempt merely because listing is slow; measure first and keep any justified projection rebuildable and non-authoritative.
+
+Composer state is workspace-private, per-device host state, never a partial `Chat`. Every composer record — the Home new-project record, one record per project chat, one unread record per project, and one placements record per project — is the same versioned envelope under `/.tau/composers/`, outside `/projects/**` and `.tau/chats/**`, served by `createComposerRecordStore` (`apps/libs/chat-ui/src/db/composer-record-store.ts`; paths only through `composerRecordPaths`) and driven by `composer-record.machine`, except the per-project unread and placements records, which are written through the store's field-scoped read-modify-write. Writers use one keyed, field-scoped read-modify-write path so each field is preserved while another changes; empty drafts, empty edits and `false` unread entries are omitted, and stored empties read as absent. `Chat`, `chat.json` and `ChatStorage` carry no draft, edit or unread field, and no device-relative placement: a Tau `activeExecution` is stored without an `origin`, `desktop` or `loopback:` host, which reads as local placement on every device, and a device's non-default choice for a chat is its entry in the project's placements record (`composerRecordPaths.placements`), written, like the unread record, through the store's keyed, field-scoped read-modify-write. It is its own record so that a build that reads chat records strictly never meets the field. The one migration is that placement: a `chat.json` written before this rule that names an `origin` or `loopback:` host keeps it, because such a host is relative to a device and no tab can prove it is the device that wrote it. A session that opens the chat where this device has no placement for it yet, and a host of that name is not known to be out of reach, adopts it into this device's placements record; the synced record keeps it for every other device. It is answered from the record the open already read, without the network: a host whose reach is not known yet is applied and settled when the answer comes. The record drops it only when a write sets the chat's `activeExecution` (any writer, the same value chosen again included), which supersedes it. A chat's load never waits on the network: a placement whose reach is not known yet is applied, so admission waits for that host, and it is held, with the chat running locally, only once the answer says this tab cannot reach it. Otherwise no fake project, fake chat, object-store mirror, migration reader, revision, export, or agent view may own composer state. A chat with no project has no record: it reads as absent and drops record writes.
+
+Attachments are bytes named by their SHA-256 and written once per directory through `createAttachmentStore` (`apps/libs/chat-ui/src/db/attachment-store.ts`). Records and log rows hold only `attachments/<sha256>.<ext>` references relative to their own directory; never store a `data:` URL in a composer record. Draft-stage bytes live beside the composer record (or in their surface's own directory); sending copies them into the chat's `attachments/` through `createChatAttachmentStore` before the message is sent, and a failed copy sends nothing. Each owner reclaims its own directory: `retainOnly` after a send or create, record removal on chat deletion, and one recursive removal of `/.tau/composers/chats/<projectId>` on permanent project deletion. A soft-deleted chat keeps its own `attachments/`, because its tombstone and durable log still reference them.
+
+Printers are per-user host state, never project content. One node machine host writes the machine store under `<config>/machines/` (`defaultConfigDirectory()`), holding its single-writer lock at `authority/authority.writer.lock`, so desktop and `tau serve` share one set of printers without a project and never write it concurrently. Each printer's folder holds a strict, versioned `machine.json`, an append-only `operations.jsonl` that records every effect before it is sent, and one file per preparation and request. Replace records atomically (temporary file, fsync, rename, directory fsync; files 0600, directories 0700), and preserve bytes the reader refuses instead of rewriting them. Records hold only `vault:` references; access codes stay in the platform vault. A print request names its artifact by project id, rooted path and SHA-256 digest, and the host resolves and checks those bytes at send time; the store never copies artifact bytes. Removing a printer renames its folder to `<machineId>.removed-<epochMs>/`. Tests and scripts open a temporary store or set `TAU_CONFIG_DIR`, never the person's real folder.
+
+Project print intent is portable project content: `.tau/machines/printer.json`, read and written only through `readPrintIntent` and `serializePrintIntent` from `@taucad/slicer`. It holds the printer `model` plus only the keys the person changed, so a present key means modified and resetting deletes the key. Write it with checked writes under this policy's RMW rules; never write observed, resolved or machine-specific values into it.
+
+The setup answers switch is a device preference beside the Agents context switches, read and written with `useCookie`. It is a boolean, absent means on, and it governs only whether the next admitted turn's `person` field is assembled (`useCadAgentConfig`); it holds no answer itself. Like every preference it never rides a request, and it is not synced to an account. Turning it off does not rewrite a chat already saved: a turn's system prompt is kept in its log, so a resumed or retried turn sends what it was admitted with.
+
+The first-seen marker is a telemetry marker, not a person record, so the person-record rules (no client clock in a record) do not apply to it. It holds `{ at, reported }`: the epoch milliseconds of this device's first start and the baseline events (`first_seen`, `first_model_built`, `first_export`) already captured from it. `apps/ui/app/telemetry/onboarding-telemetry.ts` is its only reader and writer. It is stamped when the page's telemetry starts, whatever the analytics decision, so `ms_since_first_seen` counts from the first start; an event is added to `reported` only once the analytics boundary has captured it, so nothing is recorded while analytics are declined or off. It never leaves the device except as that duration, never rides a request, is not synced to an account, and a malformed value is replaced.
+
+`appUiPreferences` has that parity exemption for project disclosure. Expanded/collapsed project rows are browser chrome with no meaning to agents, the CLI, project collaborators, or an on-disk project. The state cannot belong to `projectLibraryStates` because it is not lifecycle or revision data, cannot belong to `editor` because it spans project routes rather than describing one project's workbench, and cannot belong to `chats` because it is not conversation data. The store therefore contains one sparse browser-profile-local row keyed by `singleton`; clearing a permanently deleted project's field is the only lifecycle coupling.
+
+The person record and the device record are browser-profile-local preferences in local storage, never IndexedDB, so they need no parity exemption. Each section is one key named in `cookieName` (`apps/libs/ui-core/src/constants/cookie.constants.ts`): `person-profile`, `viewer-preferences`, `onboarding`, `device` and `view-exceptions`. Each holds a `StoredSection` (`{ value }`; the `synced` half is written only once account sync exists) whose value carries its own `version`. Read and write them only through the section store (`apps/ui/app/preferences/section-store.ts`) and its hooks, `usePersonRecord` and `useDeviceRecord`, never through `useCookie` or a direct `localStorage` call: a write reads the raw stored text immediately before merging with the section's pure merge from `@taucad/preferences` (`mergeOnboarding`, which only adds progress, or the leaf-wise `mergeLeaves`) and writes in the same synchronous step, so a tab holding a stale copy merges into another tab's value instead of overwriting it. A write returns whether it was stored; a refused write keeps its value in memory until the tab closes and never replaces the stored value. A section whose stored `version` is higher than the build knows is neither parsed nor overwritten. None of these keys rides a request, and none is keyed by account: signing in or out moves, copies and clears nothing. No client clock is written into a section.
+
+No preference or view fact rides a document request, and the server never renders one: the document is the same for every visitor. A fact that changes the first paint (theme, sidebar open, pointer cursors, layout flags) is a client fact: its owner writes it through `writeClientFacts` (`apps/ui/app/lib/client-facts.ts`) into the one versioned `tau-client-facts` record, and the inline head script applies it to `<html>` before first paint. Never add a cookie the server reads for presentation, and never keep a second store of a client fact.
+
+Project recency is owned by the project-domain activity boundary and persisted as `ProjectLibraryState.lastActivityAt`. Mutating chat or editor rows must never cascade a timestamp through generic storage behavior. The project domain touches local activity only after a material project/chat operation commits; navigation repair, generated labels, startup-request consumption, thumbnail writes, caches, and other derived/system activity do not affect recency.
+
+**Why**: Nothing else in this policy answers "should this be in IndexedDB?" — that gap is exactly how project metadata became unreachable by the agent.
+
+**Enforced by**: `tau-lint/no-direct-indexeddb` (error) — direct `indexedDB` access outside the allowlisted provider modules fails lint, so a new store cannot appear without deliberately extending the allowlist and answering this rule.
 
 ### 1. Read-modify-write must be a single transaction
 
@@ -71,7 +132,7 @@ return new Promise((resolve, reject) => {
 
 ### 2. Per-row in-process serialisation
 
-Every mutating method must funnel through a per-row keyed mutex (`apps/ui/app/db/keyed-mutex.ts`) before opening its transaction. Two concurrent callers for the same `chatId`/`projectId` must execute in submission order; concurrent callers for different keys must run in parallel.
+Every mutating method must funnel through a per-row keyed mutex (`libs/utils/src/keyed-mutex.utils.ts`) before opening its transaction. Two concurrent callers for the same `chatId`/`projectId` must execute in submission order; concurrent callers for different keys must run in parallel.
 
 **Why**: Defence in depth on top of rule 1. Some backends (in-memory mocks, future remote sync workers, cross-tab proxies) cannot rely on transactional isolation alone. The mutex also gives `CrossTabCoordinator` and any future invalidation channel a single chokepoint.
 
@@ -93,23 +154,22 @@ public async updateChat(chatId: string, update: PartialDeep<Chat>): Promise<Chat
 
 ### 3. Prefer field-scoped helpers over partial merges
 
-For every named slot on `Chat`/`Project` that is updated by more than one writer, expose a field-scoped helper (`patchChat`, `setMessageEdit`, `clearMessageEdit`, `softDeleteChat`, …) and call that from production code. Reserve `updateChat`/`updateProject` for the full-row replacement path.
+For every named slot on `Chat` or `ProjectLibraryState` that is updated by more than one writer, expose a field-scoped helper (`patchChat`, `touchChatRecency`, `softDeleteChat`, `touchProjectActivity`, …) and call that from production code. Reserve full-row replacement for explicit import/bootstrap paths.
 
 **Why**: A partial-merge writer reads the entire row and re-`put`s the entire row. Even with rule 1, the call site is still expressing "I read everything, I write everything", which makes future fields silently vulnerable as soon as a second writer appears. Field-scoped helpers make the blast radius equal to the named slot.
 
 CORRECT:
 
 ```typescript
-await patchChat(input.chatId, 'draft', input.draft);
-await setMessageEdit(input.chatId, input.messageId, input.draft);
-await clearMessageEdit(input.chatId, input.messageId);
+await patchChat(input.chatId, 'checkoutId', input.checkoutId);
+await composerRecordStore.patch({ messageEdits: { [input.messageId]: input.draft } });
 ```
 
 INCORRECT:
 
 ```typescript
-await updateChat(input.chatId, { draft: input.draft }, { ignoreKeys: ['draft'] });
-await updateChat(input.chatId, { messageEdits: { [input.messageId]: input.draft } });
+await updateChat(input.chatId, { checkoutId: input.checkoutId }, { ignoreKeys: ['checkoutId'] });
+await patchChat(input.chatId, 'draft', input.draft); // composer state is never a `Chat` field
 ```
 
 ### 4. No `ignoreKeys` / `customMerge` escape hatches
@@ -124,29 +184,41 @@ INCORRECT:
 updateChat(
   chatId: string,
   update: PartialDeep<Chat>,
-  options?: { ignoreKeys?: string[]; noUpdatedAt?: boolean },
+  options?: { ignoreKeys?: string[]; preserveUpdatedAt?: boolean },
 ): Promise<Chat | undefined>;
 ```
 
 ### 5. Bump `updatedAt` only on real mutations
 
-Field-scoped helpers must skip the `updatedAt` bump when the mutation is a no-op (e.g. clearing an entry that does not exist). The `atomicChatMutation` helper expresses this with a `(chat) => boolean` mutator: returning `false` means "nothing changed".
+Storage mutators must compute the candidate row before stamping. If the candidate is equal to the persisted row, return `undefined`, skip `put`, skip row `updatedAt`, and skip parent-project cascades. Field-scoped helpers express this with a `(chat) => boolean` mutator: returning `false` means "nothing changed".
 
-**Why**: `updatedAt` drives sort order in the chat list and React Query invalidation. A no-op clear should not reorder the list.
+**Why**: `updatedAt` reports generic row mutation and can drive row-level invalidation, but it never owns chat recency. A no-op clear, patch, generated-name retry, or load repair should not claim that the row materially changed.
 
 CORRECT:
 
 ```typescript
 this.atomicChatMutation(chatId, (chat) => {
-  if (!chat.messageEdits || !(messageId in chat.messageEdits)) return false;
-  delete chat.messageEdits[messageId];
+  if (chat.checkoutId === checkoutId) return false;
+  chat.checkoutId = checkoutId;
   return true;
 });
 ```
 
-### 6. Concurrent regression coverage is mandatory for new fields
+### 6. Project recency belongs to the project domain boundary
 
-When a new field is added to `Chat`/`Project` and is written by more than one actor or hook, add a concurrency regression test in `apps/ui/app/db/indexeddb-storage.test.ts` that fires both writers `Promise.all`-style for at least 100 iterations against a fresh row and asserts every writer's last-written value is preserved.
+Do not add low-level timestamp flags to storage, filesystem, worker, or hook APIs. Project naming resolves before project creation; generated chat metadata and navigation repair use semantic operations (`applyGeneratedChatName`, `createNavigationRepairChat`). User/content activity enters through project-domain operations such as project rename, accepted user chat actions, parameter changes, or `projectFileActivity`, then calls the field-scoped `touchProjectActivity` writer.
+
+`Chat.recencyAt` is the sole chat-recency authority. Advance it strictly through `touchChatRecency` only after Tau accepts an explicit user send, edit/resubmit, retry, regenerate, or manual-continue action. Generic message/error/draft/config persistence, assistant streaming, startup hydration, automatic retry, navigation, unread/read transitions, and generated labels must never advance it or touch parent-project activity. Legacy rows resolve chat recency from the raw legacy activity field, then the newest stamped user message, then `createdAt`; never fall back to `updatedAt` or an assistant timestamp.
+
+Unread is per-device composer state, not a chat field. `ChatSessionStore` is the single writer of each project's unread record; `chat-session.machine`'s `read` region restores from it (`unreadRestored`) and raises its own `approvalPending` trigger. Background terminal success/failure turns and newly pending approvals set it; aborts and disconnects do not. An active, visible, focused chat clears it. Unread writes never touch `chat.json`, chat `updatedAt`/`recencyAt`, or project recency.
+
+`lastActivityAt` is not a generic row `updatedAt` and is never computed from filesystem mtimes. A no-op activity call must skip its write and invalidation. The one-off audited pre-release workspace snapshot seeds known projects from their old semantic `updatedAt` while discovery is quiesced; first discovery of any other valid project may seed it to discovery time.
+
+**Why**: Callers should describe intent, not negotiate whether a project list should reorder. Generic recency-preservation flags leak project-domain semantics into substrates and recreate the navigation-jump bug class.
+
+### 7. Concurrent regression coverage is mandatory for new fields
+
+When a new field is added to `Chat`, `ProjectLibraryState` or a composer record and is written by more than one actor or hook, add a concurrency regression test beside its store (`apps/ui/app/db/indexeddb-storage.test.ts`, `apps/libs/chat-ui/src/db/composer-record-store.test.ts`) that fires both writers `Promise.all`-style for at least 100 iterations against a fresh row and asserts every writer's last-written value is preserved.
 
 **Why**: The original draft-resurrection bug was timing-dependent and a single-shot test passed by luck. The 100+-iteration loop is the only reliable way to expose the race in a deterministic test runner.
 
@@ -155,21 +227,17 @@ Reference template:
 ```typescript
 for (let i = 0; i < iterations; i++) {
   const text = `iter-${i}`;
-  await Promise.all([
-    provider.patchChat(chat.id, 'draft', draftMessage(text)),
-    provider.patchChat(chat.id, 'messages', [userMessage(text)]),
-  ]);
-  const final = await provider.getChat(chat.id);
-  expect(final?.draft).toMatchObject({ parts: [{ type: 'text', text }] });
-  expect(final?.messages[0]?.parts[0]).toEqual({ type: 'text', text });
+  await Promise.all([store.patch({ draft: draftMessage(text) }), store.patch({ toolChoice: `tool-${i}` })]);
+  const final = await store.read();
+  expect(final).toMatchObject({ status: 'valid', record: { draft: { parts: [{ type: 'text', text }] } } });
 }
 ```
 
-### 7. Hooks invalidate React Query after every mutation
+### 8. Hooks invalidate React Query after material mutations
 
-Every hook wrapper around a storage mutation (`useChats`, `useProjects`, `useProjectManager`) must call `queryClient.invalidateQueries` for both the collection key (`['chats', resourceId]` / `['projects']`) and the row key (`['chat', chatId]` / `['project', projectId]`) inside the same `useCallback` body. Field-scoped helpers must not skip invalidation just because the touched field is "small".
+Every hook wrapper around a storage mutation (`useChats`, `useProjects`, `useProjectManager`) must invalidate collection and row queries only when the storage operation returns an updated row, except create/delete operations whose observable membership changes. Field-scoped helpers must not skip invalidation just because the touched field is "small", but they must skip invalidation when storage returns `undefined` for a no-op.
 
-**Why**: Storage atomicity is necessary but not sufficient — the UI cache must converge to the new value or the user sees a stale row in the list.
+**Why**: Storage atomicity is necessary but not sufficient: the UI cache must converge to new values, while no-op writes must not trigger refetches that can resurrect stale order or hide the absence of a real mutation.
 
 CORRECT:
 
@@ -177,6 +245,7 @@ CORRECT:
 const patchChat = useCallback(
   async <K extends keyof Chat>(chatId: string, key: K, value: Chat[K]) => {
     const updated = await patchChatInManager(chatId, key, value);
+    if (!updated) return undefined;
     void queryClient.invalidateQueries({ queryKey: ['chats', resourceId] });
     void queryClient.invalidateQueries({ queryKey: ['chat', chatId] });
     return updated;
@@ -187,39 +256,56 @@ const patchChat = useCallback(
 
 ## Anti-Patterns
 
+- Creating a new object store (or new fields on the frozen `projects` store) for portable project content. Per Rule 0 that data lives in the project filesystem.
+- Adding manifest-derived name, description, author, tags, assets, entry paths, thumbnails, or locators to `projectLibraryStates`.
+- Using a `projectLibraryStates` row to make a project exist, or deleting the row because a workspace was temporarily inaccessible.
 - Calling `await getChat(id)` followed by `await updateChat(id, mutated)` from a hook or actor. Use a field-scoped helper instead — the manual `read → mutate → write` re-introduces the original race even though the storage layer is now atomic.
 - Adding a new option flag to `updateChat`/`updateProject` to "preserve" or "skip" a field. Add a field-scoped helper instead.
+- Adding project-recency preservation flags to storage or filesystem APIs. Add a semantic domain operation instead.
 - Wrapping `provider.updateChat` in `Promise.all([...])` in production code without confirming each writer touches a disjoint slot. Concurrent writers to the same slot must agree on a last-writer-wins serialisation point upstream.
 - Mocking `IndexedDbStorageProvider` in unit tests instead of using the real provider with `fake-indexeddb/auto`. The race shows up in the real provider, not in mocks.
 
 ## Decision Table: which API to use
 
-| Scenario                                       | API to call                                                  |
-| ---------------------------------------------- | ------------------------------------------------------------ |
-| Single top-level field on a chat               | `patchChat(chatId, key, value)`                              |
-| Single entry in `chat.messageEdits`            | `setMessageEdit(chatId, messageId, draft)`                   |
-| Remove a single entry in `chat.messageEdits`   | `clearMessageEdit(chatId, messageId)`                        |
-| Soft-delete a chat                             | `softDeleteChat(chatId)` (`deleteChat` forwards to this)     |
-| Full chat replacement (e.g. import, duplicate) | `updateChat(chatId, fullChat)` with `fullChat.id === chatId` |
-| Single project field                           | `updateProject(projectId, { field: value })`                 |
-| Full project replacement                       | `updateProject(projectId, fullProject)` with matching id     |
+| Scenario                                       | API to call                                                                     |
+| ---------------------------------------------- | ------------------------------------------------------------------------------- |
+| Single top-level field on a chat               | `patchChat(chatId, key, value)`                                                 |
+| Draft, message edit, tool choice or mode       | Chat's composer record actor (`patch`), via `draftPersistenceFor`               |
+| Store an attachment                            | `AttachmentStore.put(bytes, mediaType, filename)`                               |
+| Soft-delete a chat                             | `softDeleteChat(chatId)` (`deleteChat` forwards to this)                        |
+| Full chat replacement (e.g. import, duplicate) | `updateChat(chatId, fullChat)` with `fullChat.id === chatId`                    |
+| Generated chat label                           | `applyGeneratedChatName(chatId, name)`                                          |
+| Navigation repair empty chat                   | `createNavigationRepairChat(projectId)`                                         |
+| Accepted user chat action                      | `touchChatRecency(chatId, timestamp)`                                           |
+| Unread/read transition                         | `ChatSessionStore` (`markViewed` / its unread decision) → project unread record |
+| Material project activity                      | `touchProjectActivity(projectId, timestamp)`                                    |
+| Soft-delete / restore project                  | `trashProject(projectId)` / `restoreProject(projectId)`                         |
+| Revision pointer                               | `setProjectRevisionState(projectId, revisionState)`                             |
+| Permanent project deletion                     | Journaled filesystem delete, then `deleteProjectLibraryState`                   |
+| Portable project metadata                      | Project manifest writer, never an object-store patch                            |
+| Project name before creation                   | Semantic naming request, then strict manifest creation                          |
 
 ## Summary Checklist
 
 Before merging a storage-layer change:
 
-- [ ] Read and write happen inside one transaction; outer promise resolves on `transaction.oncomplete`.
-- [ ] All public mutators go through `KeyedMutex.run(rowId, …)`.
+- [ ] The data belongs in this store per Rule 0 — portable project content goes to the filesystem; only explicit host-local lifecycle state uses `projectLibraryStates`.
+- [ ] A person or device record section is written through the section store's read-merge-write and never rides a request.
+- [ ] IndexedDB read-modify-write: read and write happen inside one transaction; outer promise resolves on `transaction.oncomplete`.
+- [ ] IndexedDB stores: all public mutators go through `KeyedMutex.run(rowId, …)`.
 - [ ] New multi-writer fields have field-scoped helpers, not extra `updateChat` options.
 - [ ] No `ignoreKeys`/`customMerge` knob is reintroduced.
-- [ ] `updatedAt` bumps only when the mutator returns `true`.
-- [ ] A concurrency regression test in `apps/ui/app/db/indexeddb-storage.test.ts` covers the new field with ≥100 iterations.
-- [ ] React Query invalidation hits both collection and row keys.
+- [ ] Row `updatedAt` values and project `lastActivityAt` change only for their separately defined material mutations.
+- [ ] Chat ordering reads `recencyAt` through the canonical legacy fallback and never reads `updatedAt`.
+- [ ] Unread/read transitions preserve row/recency timestamps and never touch project recency.
+- [ ] Derived metadata and navigation repair use semantic operations, not timestamp flags.
+- [ ] A concurrency regression test beside the store covers the new field with ≥100 iterations.
+- [ ] React Query invalidation hits both collection and row keys only when a material row change occurred, except create/delete membership changes.
 
 ## References
 
 - Research: `docs/research/chat-draft-resurrection-race.md`
-- Implementation: `apps/ui/app/db/indexeddb-storage.ts`, `apps/ui/app/db/keyed-mutex.ts`
+- Implementation: `apps/ui/app/db/indexeddb-storage.ts`, `apps/ui/app/preferences/section-store.ts`, `apps/libs/preferences/src/stored-section.ts`, `libs/utils/src/keyed-mutex.utils.ts`, `apps/libs/chat-ui/src/db/composer-record-store.ts`, `apps/libs/chat-ui/src/db/attachment-store.ts`, `apps/ui/app/machines/composer-record.machine.ts`
 - Contract: `apps/ui/app/types/storage.types.ts`
 - Hook surfaces: `apps/ui/app/hooks/use-chats.ts`, `apps/ui/app/hooks/use-project-manager.tsx`, `apps/ui/app/hooks/use-chat.tsx`
 - Related: `docs/policy/xstate-policy.md`, `docs/policy/filesystem-policy.md`, `docs/policy/testing-policy.md`

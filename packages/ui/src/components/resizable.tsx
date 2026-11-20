@@ -1,0 +1,117 @@
+import { GripVertical } from 'lucide-react';
+import * as ResizablePrimitive from 'react-resizable-panels';
+import { cva } from 'class-variance-authority';
+import { cn } from '#utils/cn.js';
+
+/**
+ * Lay out resizable panels along one axis. Each handle supplies the APG separator
+ * keyboard contract through `react-resizable-panels`.
+ *
+ * @public
+ * @param properties - Panel-group properties.
+ * @returns The panel group.
+ *
+ * @example <caption>Create a horizontal panel group</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { ResizablePanelGroup } from '@taucad/ui/components/resizable';
+ *
+ * export const example = createElement(ResizablePanelGroup, { direction: 'horizontal' });
+ * ```
+ */
+function ResizablePanelGroup({
+  className,
+  ...properties
+}: React.ComponentProps<typeof ResizablePrimitive.PanelGroup>): React.JSX.Element {
+  return (
+    <ResizablePrimitive.PanelGroup
+      data-slot='resizable-panel-group'
+      className={cn('flex size-full data-[panel-group-direction=vertical]:flex-col', className)}
+      {...properties}
+    />
+  );
+}
+
+/**
+ * Render one size-constrained panel within a {@link ResizablePanelGroup}.
+ *
+ * @public
+ *
+ * @example <caption>Add a resizable panel</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { ResizablePanel } from '@taucad/ui/components/resizable';
+ *
+ * export const example = createElement(ResizablePanel, { defaultSize: 50 });
+ * ```
+ */
+const ResizablePanel = ResizablePrimitive.Panel;
+
+const resizableHandleVariants = cva(
+  cn(
+    'relative flex w-0 items-center justify-center bg-border',
+    'after:absolute after:inset-y-0 after:left-1/2 after:z-10 after:w-px after:-translate-x-1/2 after:bg-border after:transition-[width,height] after:duration-200 after:ease-in-out data-[resize-handle-state=drag]:after:transition-all data-[resize-handle-state=hover]:after:transition-all',
+    'data-[resize-handle-state=drag]:after:w-0.75 data-[resize-handle-state=hover]:after:w-0.75',
+    'data-[resize-handle-state=drag]:after:bg-neutral/50',
+    // The handle is 0px wide, so an inset outline would have nothing to paint on.
+    'focus-visible:focus-outline-outside',
+    // Vertical specific styles
+    'data-[panel-group-direction=vertical]:h-0 data-[panel-group-direction=vertical]:w-full',
+    'data-[panel-group-direction=vertical]:after:left-0 data-[panel-group-direction=vertical]:after:h-px data-[panel-group-direction=vertical]:after:w-full data-[panel-group-direction=vertical]:after:-translate-y-1/2 data-[panel-group-direction=vertical]:after:translate-x-0',
+    'data-[panel-group-direction=vertical]:data-[resize-handle-state=drag]:after:h-0.75 data-[panel-group-direction=vertical]:data-[resize-handle-state=drag]:after:w-full data-[panel-group-direction=vertical]:data-[resize-handle-state=hover]:after:h-0.75 data-[panel-group-direction=vertical]:data-[resize-handle-state=hover]:after:w-full',
+    '[&[data-panel-group-direction=vertical]>div]:rotate-90',
+  ),
+  {
+    variants: {
+      variant: {
+        default: '',
+        floating: 'my-4 -mx-1.5 w-3 bg-transparent after:opacity-0 after:rounded-full pointer-events-auto',
+      },
+      defaultVariants: {
+        variant: 'default',
+      },
+    },
+  },
+);
+
+/**
+ * Render the focusable separator between panels. Arrow keys resize adjacent
+ * panels; Home and End move the handle to its allowed extremes.
+ *
+ * @public
+ * @param properties - Resize-handle properties and visual options.
+ * @returns The resize handle.
+ *
+ * @example <caption>Add a visible resize handle</caption>
+ * ```typescript
+ * import { createElement } from 'react';
+ * import { ResizableHandle } from '@taucad/ui/components/resizable';
+ *
+ * export const example = createElement(ResizableHandle, { hasHandle: true });
+ * ```
+ */
+function ResizableHandle({
+  hasHandle,
+  className,
+  variant,
+  ...properties
+}: React.ComponentProps<typeof ResizablePrimitive.PanelResizeHandle> & {
+  readonly hasHandle?: boolean;
+  readonly variant?: 'default' | 'floating';
+}): React.JSX.Element {
+  return (
+    <ResizablePrimitive.PanelResizeHandle
+      data-slot='resizable-handle'
+      className={cn(resizableHandleVariants({ variant, className }))}
+      {...properties}
+    >
+      {hasHandle ? (
+        <div className='z-10 flex h-4 w-3 items-center justify-center rounded-sm border bg-border'>
+          <GripVertical className='h-2.5 w-2.5' />
+        </div>
+      ) : null}
+    </ResizablePrimitive.PanelResizeHandle>
+  );
+}
+
+export { ResizablePanelGroup, ResizablePanel, ResizableHandle };

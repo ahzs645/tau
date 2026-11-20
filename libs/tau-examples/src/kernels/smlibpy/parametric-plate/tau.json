@@ -1,0 +1,11 @@
+{
+  "$schema": "https://tau.new/schemas/tau-v1.json",
+  "name": "Parametric Plate — SMLibPy",
+  "description": "A mounting plate with rounded corners, a grid of through holes and softened top edges, built on the SMLib NURBS kernel from Python.",
+  "tags": ["smlibpy", "python", "parametric", "reference"],
+  "assets": {
+    "main": {
+      "entryPath": "main.py"
+    }
+  }
+}

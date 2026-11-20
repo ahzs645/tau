@@ -1,10 +1,11 @@
 ---
 title: 'Accessibility Policy'
-description: 'Guidelines for accessible UI and ARIA-driven E2E testing across the Tau codebase. Covers semantic HTML, ARIA conventions, Playwright selector strategy, and snapshot tests.'
+description: 'Guidelines for accessible UI and ARIA-driven E2E testing across the Tau codebase. Covers semantic HTML, ARIA conventions, Vitest Browser selectors, and screenshot tests.'
 status: active
 created: '2026-03-09'
-updated: '2026-03-09'
-related: []
+updated: '2026-11-15'
+related:
+  - docs/research/billing-redesign-blueprint.md
 ---
 
 # Accessibility Policy
@@ -31,6 +32,19 @@ Accessible UI ensures all users, including those using assistive technology, can
 | Error                        | `role="alert"` `aria-label="<description>"`                     | `<div role="alert" aria-label="Preview error">`                     |
 | Informational image / canvas | `role="img"` `aria-label="<description>"`                       | `<div role="img" aria-label="3D model preview">`                    |
 
+A skeleton placeholder is one status region: the wrapper carries `role="status"`, `aria-busy="true"` and the name of the wait (an `aria-label`, or a visually hidden sentence referenced by `aria-labelledby` when the region has other content), and every `Skeleton` bar inside it is `aria-hidden="true"`. Announce the wait once per region, not once per bar.
+
+```tsx
+<div role='status' aria-busy='true' aria-labelledby='repositories-loading'>
+  <span id='repositories-loading' className='sr-only'>
+    Loading repositories…
+  </span>
+  <Skeleton aria-hidden='true' className='h-3.5 w-32' />
+</div>
+```
+
+An icon that carries meaning beside text (the coming-soon icon in a feature list) is `aria-hidden`, and the meaning is given in words: a visually hidden prefix on the item ("Coming soon: ") and a visible legend.
+
 ### Interactive controls
 
 - Buttons must have an accessible name via visible text content or `aria-label`.
@@ -41,10 +55,11 @@ Accessible UI ensures all users, including those using assistive technology, can
 
 - Use native landmark elements (`<nav>`, `<main>`, `<aside>`) instead of generic `<div>` with `role`.
 - Dialog-like surfaces (drawers, modals) must have `aria-labelledby` pointing to their title element.
+- Heading levels follow the document outline, never the look: one `h1` per route, and each nested heading one level below the heading that owns its region. The look comes from the `Heading` variant ([UI Policy](ui-policy.md) §3).
 
 ## E2E Test Selector Strategy
 
-All Playwright selectors must use Playwright's built-in accessibility locators:
+All Vitest Browser selectors must use the shared browser facade's accessibility locators:
 
 ```typescript
 // Preferred -- accessible and resilient
@@ -62,18 +77,18 @@ page.locator('div > span:nth-child(2)');
 
 Rationale: accessible locators mirror how real users (and assistive technology) find elements. They remain stable across refactors and enforce accessibility compliance as a side effect of testing.
 
-### Visual snapshot tests
+### Visual screenshot tests
 
-Use `toHaveScreenshot` for validating rendered output that cannot be asserted via DOM (e.g. WebGL canvases):
+Capture and inspect screenshots when rendered output cannot be asserted via the DOM (for example, WebGL canvases):
 
 ```typescript
 const canvas = page.getByRole('img', { name: /3D model preview/i });
-await expect(canvas).toHaveScreenshot('model-name.png', {
-  maxDiffPixelRatio: 0.02,
-});
+const screenshot = await canvas.screenshot({ animations: 'disabled' });
+const pixels = await analyseScreenshot(screenshot);
+expect(pixels.foregroundRatio).toBeGreaterThan(0.02);
 ```
 
-Snapshot baselines are stored alongside tests and updated via `npx playwright test --update-snapshots`.
+Use a deterministic pixel assertion or a Vitest file snapshot appropriate to the visual contract. Keep any baseline alongside the test and update Vitest snapshots with `pnpm exec vitest run --update`.
 
 ## Adding Accessibility to New Components
 
@@ -87,5 +102,5 @@ When creating a new UI component:
 ## References
 
 - [WAI-ARIA 1.2 Specification](https://www.w3.org/TR/wai-aria-1.2/)
-- [Playwright Accessibility Locators](https://playwright.dev/docs/locators#locate-by-role)
+- [Vitest Browser locators](https://vitest.dev/api/browser/locators)
 - [ARIA Authoring Practices Guide](https://www.w3.org/WAI/ARIA/apg/)

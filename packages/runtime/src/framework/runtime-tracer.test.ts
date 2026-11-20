@@ -1,9 +1,10 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockInstance } from 'vitest';
 import { RuntimeTracer } from '#framework/runtime-tracer.js';
+import type { TelemetryEntry } from '#types/runtime-wire.types.js';
 
 describe('RuntimeTracer', () => {
-  let measureSpy: MockInstance;
+  let measureSpy: MockInstance<typeof performance.measure>;
 
   beforeEach(() => {
     performance.clearMarks();
@@ -15,179 +16,182 @@ describe('RuntimeTracer', () => {
     measureSpy.mockRestore();
   });
 
-  describe('normal span lifecycle', () => {
-    it('should create a performance mark and measure on start/end', () => {
-      const tracer = new RuntimeTracer();
-      const span = tracer.startSpan('test.operation');
-
-      const marks = performance.getEntriesByType('mark');
-      expect(marks.some((m) => m.name === 'tau:span:0:0')).toBe(true);
-
-      span.end();
-
-      expect(measureSpy).toHaveBeenCalledOnce();
-      expect(measureSpy).toHaveBeenCalledWith('test.operation', expect.objectContaining({ start: 'tau:span:0:0' }));
+  it('emits completed spans directly without touching the Performance Timeline by default', () => {
+    const entries: TelemetryEntry[] = [];
+    const tracer = new RuntimeTracer();
+    tracer.setEntrySink((entry) => {
+      entries.push(entry);
     });
 
-    it('should support nested spans with parent-child detail', () => {
-      const tracer = new RuntimeTracer();
-      const outer = tracer.startSpan('outer');
-      const inner = tracer.startSpan('inner');
+    tracer.startSpan('test.operation').end();
 
-      inner.end();
-      outer.end();
-
-      expect(measureSpy).toHaveBeenCalledTimes(2);
-      expect(measureSpy).toHaveBeenCalledWith(
-        'inner',
-        expect.objectContaining({
-          // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
-          detail: expect.objectContaining({ spanId: '1', parentSpanId: '0' }),
-        }),
-      );
-      expect(measureSpy).toHaveBeenCalledWith(
-        'outer',
-        expect.objectContaining({
-          // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
-          detail: expect.objectContaining({
-            spanId: '0',
-            parentSpanId: undefined,
-          }),
-        }),
-      );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      name: 'test.operation',
+      detail: { spanId: '0', parentSpanId: undefined },
+      workerTimeOrigin: performance.timeOrigin,
     });
+    expect(entries[0]!.duration).toBeGreaterThanOrEqual(0);
+    expect(performance.getEntriesByType('mark')).toHaveLength(0);
+    expect(measureSpy).not.toHaveBeenCalled();
+  });
 
-    it('should include attributes and devtools metadata in measure detail', () => {
-      const tracer = new RuntimeTracer();
-      const span = tracer.startSpan('op', { file: 'main.ts', count: 42 });
-      span.end();
-
-      expect(measureSpy).toHaveBeenCalledWith(
-        'op',
-        expect.objectContaining({
-          // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
-          detail: expect.objectContaining({
-            file: 'main.ts',
-            count: 42,
-            devtools: {
-              dataType: 'track-entry',
-              track: 'Kernel Pipeline',
-              trackGroup: 'Tau',
-              properties: [
-                ['file', 'main.ts'],
-                ['count', '42'],
-              ],
-            },
-          }),
-        }),
-      );
+  it('preserves parent-child IDs and merged attributes', () => {
+    const entries: TelemetryEntry[] = [];
+    const tracer = new RuntimeTracer();
+    tracer.setEntrySink((entry) => {
+      entries.push(entry);
     });
+    const outer = tracer.startSpan('outer', { file: 'main.ts', count: 42 });
+    const inner = tracer.startSpan('inner');
 
-    it('should work across multiple reset cycles', () => {
-      const tracer = new RuntimeTracer();
+    inner.end();
+    outer.end({ count: 43, result: 'ok' });
 
-      const span1 = tracer.startSpan('cycle-1');
-      span1.end();
-      tracer.reset();
+    expect(entries[0]).toMatchObject({ name: 'inner', detail: { spanId: '1', parentSpanId: '0' } });
+    expect(entries[1]).toMatchObject({
+      name: 'outer',
+      detail: {
+        spanId: '0',
+        parentSpanId: undefined,
+        file: 'main.ts',
+        count: 43,
+        result: 'ok',
+      },
+    });
+    // The DevTools track payload is meaningful only as `performance.measure` detail
+    // and every entry consumer strips it; building it per span cost 57 % of span CPU
+    // and 45 % of the wire bytes, so it must not reach the entry sink.
+    expect(entries[1]!.detail).not.toHaveProperty('devtools');
+    expect(entries[0]!.detail).not.toHaveProperty('devtools');
+  });
 
-      const span2 = tracer.startSpan('cycle-2');
-      span2.end();
+  it('mirrors uniquely named measures only when DevTools telemetry is enabled', () => {
+    const tracer = new RuntimeTracer();
+    tracer.setDevtoolsTimelineEnabled(true);
 
-      expect(measureSpy).toHaveBeenLastCalledWith('cycle-2', expect.anything());
+    tracer.startSpan('kernel.render').end();
+
+    expect(measureSpy).toHaveBeenCalledOnce();
+    const [name, options] = measureSpy.mock.calls[0]!;
+    expect(name).toBe('tau:kernel.render:0:0');
+    if (options === undefined || typeof options === 'string') {
+      throw new TypeError('Expected PerformanceMeasureOptions');
+    }
+    expect(typeof options.start).toBe('number');
+    expect(typeof options.duration).toBe('number');
+    expect(options.detail).toMatchObject({
+      spanId: '0',
+      devtools: { dataType: 'track-entry', track: 'Kernel Pipeline', trackGroup: 'Tau' },
     });
   });
 
-  describe('epoch scoping', () => {
-    it('should not throw when span.end() is called after reset()', () => {
-      const tracer = new RuntimeTracer();
-      const span = tracer.startSpan('stale.operation');
+  it('drops stale spans after reset without clearing unrelated timeline entries', () => {
+    const entries: TelemetryEntry[] = [];
+    const tracer = new RuntimeTracer();
+    tracer.setEntrySink((entry) => entries.push(entry));
+    const stale = tracer.startSpan('stale');
+    const clearMarksSpy = vi.spyOn(performance, 'clearMarks');
+    const clearMeasuresSpy = vi.spyOn(performance, 'clearMeasures');
 
-      tracer.reset();
+    tracer.reset();
+    stale.end();
+    tracer.startSpan('fresh').end();
 
-      expect(() => {
-        span.end();
-      }).not.toThrow();
+    expect(entries.map((entry) => entry.name)).toEqual(['fresh']);
+    expect(clearMarksSpy).not.toHaveBeenCalled();
+    expect(clearMeasuresSpy).not.toHaveBeenCalled();
+    clearMarksSpy.mockRestore();
+    clearMeasuresSpy.mockRestore();
+  });
+
+  it('ends each span at most once', () => {
+    const entries: TelemetryEntry[] = [];
+    const tracer = new RuntimeTracer();
+    tracer.setEntrySink((entry) => entries.push(entry));
+    const span = tracer.startSpan('single-end');
+
+    span.end({ success: true });
+    span.end({ success: false });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.detail).toMatchObject({ success: true });
+  });
+
+  it('keeps telemetry sink failures out of operation outcomes and span ancestry', () => {
+    const entries: TelemetryEntry[] = [];
+    const tracer = new RuntimeTracer();
+    tracer.setEntrySink(() => {
+      throw new Error('telemetry unavailable');
     });
 
-    it('should not emit a performance.measure() for a stale span', () => {
-      const tracer = new RuntimeTracer();
-      const span = tracer.startSpan('stale.operation');
-
-      tracer.reset();
-      measureSpy.mockClear();
-      span.end();
-
-      expect(measureSpy).not.toHaveBeenCalled();
+    expect(() => {
+      tracer.startSpan('failed-telemetry').end();
+    }).not.toThrow();
+    tracer.setEntrySink((entry) => {
+      entries.push(entry);
     });
+    tracer.startSpan('next-operation').end();
 
-    it('should not corrupt activeSpanId when a stale span ends', () => {
-      const tracer = new RuntimeTracer();
-      const staleSpan = tracer.startSpan('stale');
-
-      tracer.reset();
-
-      const freshOuter = tracer.startSpan('fresh.outer');
-      const freshInner = tracer.startSpan('fresh.inner');
-
-      staleSpan.end();
-
-      freshInner.end();
-      freshOuter.end();
-
-      expect(measureSpy).toHaveBeenCalledWith(
-        'fresh.inner',
-        expect.objectContaining({
-          // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.objectContaining returns any
-          detail: expect.objectContaining({ parentSpanId: expect.any(String) }),
-        }),
-      );
+    expect(entries[0]).toMatchObject({
+      name: 'next-operation',
+      detail: { parentSpanId: undefined },
     });
+  });
 
-    it('should use different mark names across epochs (no collision)', () => {
-      const tracer = new RuntimeTracer();
+  it('should parent a span started after an earlier sibling ended to the still-open root', () => {
+    const entries: TelemetryEntry[] = [];
+    const tracer = new RuntimeTracer();
+    tracer.setEntrySink((entry) => entries.push(entry));
+    const root = tracer.startSpan('kernel.render', { 'operation.id': 'render:v1:e1:r1' });
 
-      const span1 = tracer.startSpan('epoch-0-span');
-      span1.end();
+    tracer.startSpan('kernel.select').end();
+    tracer.startSpan('kernel.compute').end();
+    root.end();
 
-      tracer.reset();
+    expect(entries.map((entry) => [entry.name, entry.detail?.['parentSpanId']])).toEqual([
+      ['kernel.select', '0'],
+      ['kernel.compute', '0'],
+      ['kernel.render', undefined],
+    ]);
+  });
 
-      const span2 = tracer.startSpan('epoch-1-span');
-      span2.end();
+  it('should not parent a later span to a parent that ended before its child', () => {
+    const entries: TelemetryEntry[] = [];
+    const tracer = new RuntimeTracer();
+    tracer.setEntrySink((entry) => entries.push(entry));
+    const root = tracer.startSpan('kernel.evaluate');
+    const parent = tracer.startSpan('kernel.compute');
+    const deferred = tracer.startSpan('kernel.bundle');
 
-      expect(measureSpy).toHaveBeenCalledWith(
-        'epoch-0-span',
-        expect.objectContaining({
-          // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.stringMatching returns any
-          start: expect.stringMatching(/^tau:span:0:/),
-        }),
-      );
-      expect(measureSpy).toHaveBeenCalledWith(
-        'epoch-1-span',
-        expect.objectContaining({
-          // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.stringMatching returns any
-          start: expect.stringMatching(/^tau:span:1:/),
-        }),
-      );
+    parent.end();
+    const next = tracer.startSpan('kernel.extract-params');
+    next.end();
+    deferred.end();
+    root.end();
+
+    const byName = Object.fromEntries(entries.map((entry) => [entry.name, entry.detail?.['parentSpanId']]));
+    expect(byName).toEqual({
+      'kernel.compute': '0',
+      'kernel.extract-params': '0',
+      'kernel.bundle': '1',
+      'kernel.evaluate': undefined,
     });
+  });
 
-    it('should handle multiple resets with stale spans from different epochs', () => {
-      const tracer = new RuntimeTracer();
+  it('should count a span that ends after reset as dropped and start the next epoch without a parent', () => {
+    const entries: TelemetryEntry[] = [];
+    const onDropped = vi.fn();
+    const tracer = new RuntimeTracer();
+    tracer.setEntrySink((entry) => entries.push(entry), onDropped);
+    const stale = tracer.startSpan('kernel.render');
 
-      const spanEpoch0 = tracer.startSpan('epoch-0');
-      tracer.reset();
-      const spanEpoch1 = tracer.startSpan('epoch-1');
-      tracer.reset();
+    tracer.reset();
+    tracer.startSpan('kernel.bootstrap').end();
+    stale.end();
 
-      const spanEpoch2 = tracer.startSpan('epoch-2');
-      spanEpoch2.end();
-
-      expect(() => {
-        spanEpoch0.end();
-        spanEpoch1.end();
-      }).not.toThrow();
-
-      expect(measureSpy).toHaveBeenCalledOnce();
-      expect(measureSpy).toHaveBeenCalledWith('epoch-2', expect.anything());
-    });
+    expect(onDropped).toHaveBeenCalledOnce();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ name: 'kernel.bootstrap', detail: { parentSpanId: undefined } });
   });
 });

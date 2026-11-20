@@ -21,30 +21,55 @@ export type Fixture = {
   mainFile: string;
 };
 
-const defaultMainFile = 'main.ts';
+const candidateMainFiles = ['main.ts', 'main.tsx', 'main.py', 'main.scad', 'main.cpp'] as const;
+const excludedDirectories = new Set(['.tau', '__pycache__']);
+const excludedFiles = new Set(['thumbnail.webp']);
 
-/**
- * Loads a single example fixture from the filesystem.
- * Reads every file in `<kernel>/<name>/` and returns them as a filename → content map.
- *
- * @param kernel - Kernel directory name (e.g. `'replicad'`, `'jscad'`).
- * @param name   - Example subdirectory name (e.g. `'tray'`, `'bottle'`).
- * @returns A {@link Fixture} with all files and the entry-point filename.
- */
-export function loadFixture<K extends KernelName>(kernel: K, name: ExampleName<K>): Fixture {
-  const fixtureUrl = new URL(`${kernel}/${name}/`, baseUrl);
+function readFixtureFiles(directoryUrl: URL, prefix = ''): Record<string, string> {
   const files: Record<string, string> = {};
 
-  for (const entry of readdirSync(fixtureUrl, { withFileTypes: true })) {
-    if (!entry.isFile()) {
+  for (const entry of readdirSync(directoryUrl, { withFileTypes: true })) {
+    if (entry.name.startsWith('.') || excludedDirectories.has(entry.name)) {
       continue;
     }
 
-    const fileUrl = new URL(entry.name, fixtureUrl);
-    files[entry.name] = readFileSync(fileUrl, 'utf8');
+    const relativePath = `${prefix}${entry.name}`;
+    const entryUrl = new URL(entry.name, directoryUrl);
+
+    if (entry.isDirectory()) {
+      Object.assign(files, readFixtureFiles(new URL(`${entry.name}/`, directoryUrl), `${relativePath}/`));
+      continue;
+    }
+
+    if (entry.isFile() && !excludedFiles.has(entry.name)) {
+      files[relativePath] = readFileSync(entryUrl, 'utf8');
+    }
   }
 
-  return { files, mainFile: defaultMainFile };
+  return files;
+}
+
+/**
+ * Loads a single example fixture from the filesystem.
+ * Reads every file in `<kernel>/<name>/` recursively and returns them as a filename → content map.
+ *
+ * @param kernel - Kernel directory name (e.g. `'replicad'`, `'jscad'`).
+ * @param name   - Example subdirectory name (e.g. `'tray'`, `'bottle'`).
+ * @param entryFile - Optional explicit entry path within the fixture.
+ * @returns A {@link Fixture} with all files and the entry-point filename.
+ */
+export function loadFixture<K extends KernelName>(kernel: K, name: ExampleName<K>, entryFile?: string): Fixture {
+  const fixtureUrl = new URL(`${kernel}/${name}/`, baseUrl);
+  const files = readFixtureFiles(fixtureUrl);
+  const mainFile = entryFile ?? candidateMainFiles.find((candidate) => Object.hasOwn(files, candidate));
+  if (!mainFile) {
+    throw new Error(`Fixture ${kernel}/${name} has no supported main entrypoint`);
+  }
+  if (!Object.hasOwn(files, mainFile)) {
+    throw new Error(`Fixture ${kernel}/${name} has no entrypoint ${mainFile}`);
+  }
+
+  return { files, mainFile };
 }
 
 /**

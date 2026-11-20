@@ -5,10 +5,10 @@ import { Test } from '@nestjs/testing';
 import type { TestingModule } from '@nestjs/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '#app.module.js';
-import { DatabaseService } from '#database/database.service.js';
-import { RedisService } from '#redis/redis.service.js';
-import { CheckpointerService } from '#api/chat/checkpointer.service.js';
-import { StoreService } from '#api/chat/store.service.js';
+import { DatabaseService } from '@taucad/api-database';
+import { BillingPolicyReadiness } from '@taucad/api-billing';
+import { RedisService } from '@taucad/api-redis';
+import { getEnvironment } from '@taucad/api-core';
 
 // Mock DatabaseService for tests that don't need database access
 const mockDatabaseService = {
@@ -20,9 +20,17 @@ const mockDatabaseService = {
 // Mock RedisService for tests that don't need Redis access
 const mockRedisService = {
   client: {
+    defineCommand: () => undefined,
     get: async () => null,
     set: async () => 'OK',
     del: async () => 1,
+    // DurableEventsService subscribes a duplicate client on module init.
+    on: () => undefined,
+    subscribe: async () => 1,
+    unsubscribe: async () => 1,
+    quit: async () => 'OK',
+    // Never connected, so the service tears it down with `disconnect()` rather than `quit()`.
+    disconnect: () => undefined,
   },
   async onModuleInit() {
     // No-op
@@ -33,44 +41,21 @@ const mockRedisService = {
   createDuplicateClient: () => mockRedisService.client,
 };
 
-// Mock CheckpointerService for tests that don't need LangGraph checkpointing
-const mockCheckpointerService = {
-  async onModuleInit() {
-    // No-op
-  },
-  async onModuleDestroy() {
-    // No-op
-  },
-  getCheckpointer: () => ({}),
-};
-
-// Mock StoreService for tests that don't need the read-dedup BaseStore
-const mockStoreService = {
-  async onModuleInit() {
-    // No-op
-  },
-  async onModuleDestroy() {
-    // No-op
-  },
-  getStore: () => ({}),
-};
-
 describe('TestApiController (e2e)', () => {
   let app: NestFastifyApplication;
   let moduleRef: TestingModule;
 
   beforeAll(async () => {
     moduleRef = await Test.createTestingModule({
-      imports: [AppModule],
+      imports: [AppModule.forRoot(getEnvironment())],
     })
       .overrideProvider(DatabaseService)
       .useValue(mockDatabaseService)
       .overrideProvider(RedisService)
       .useValue(mockRedisService)
-      .overrideProvider(CheckpointerService)
-      .useValue(mockCheckpointerService)
-      .overrideProvider(StoreService)
-      .useValue(mockStoreService)
+      // No database means no tariff to observe; the readiness check would otherwise fail this module.
+      .overrideProvider(BillingPolicyReadiness)
+      .useValue({})
       .compile();
 
     app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());

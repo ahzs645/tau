@@ -1,0 +1,246 @@
+import { describe, expect, it } from 'vitest';
+import { createActor, createAsyncLogic, waitFor } from 'xstate';
+import type { EventFromLogic } from 'xstate';
+import { unansweredEvents } from '@taucad/xstate-testing/paths';
+import type { Chat } from '@taucad/chat';
+import type { ChatError } from '@taucad/types';
+import { chatPersistenceIgnoredEvents, chatPersistenceMachine } from '#hooks/chat-persistence.machine.js';
+import type { ChatLoadOutput } from '#hooks/chat-persistence.machine.js';
+
+const refusal: ChatError = {
+  category: 'generic',
+  title: 'Could not start',
+  message: 'The command was refused',
+  code: 'HOST_CLOSED',
+};
+
+const chat = (id: string): Chat => ({
+  id,
+  resourceId: 'project_1',
+  name: 'Chat',
+  messages: [],
+  createdAt: 0,
+  updatedAt: 0,
+  activeExecution: { kind: 'tau', model: 'model-a' },
+  activeKernel: 'manifold',
+  error: refusal,
+});
+
+describe('chatPersistenceMachine', () => {
+  it('hydrates the selected chat, including its execution, kernel and refusal', async () => {
+    const actor = createActor(
+      chatPersistenceMachine.provide({
+        actors: {
+          loadChatActor: createAsyncLogic<ChatLoadOutput, { chatId: string }>({
+            run: async () => ({ chat: chat('chat_a') }),
+          }),
+        },
+      }),
+      { input: {} },
+    ).start();
+
+    actor.send({ type: 'setActiveChatId', chatId: 'chat_a' });
+    await waitFor(actor, (snapshot) => snapshot.matches({ chatLoading: 'idle' }));
+    expect(actor.getSnapshot().context).toMatchObject({
+      activeChatId: 'chat_a',
+      activeExecution: { kind: 'tau', model: 'model-a' },
+      activeKernel: 'manifold',
+      persistedError: refusal,
+    });
+    actor.stop();
+  });
+
+  it('drops a stale load result after the active chat changes', async () => {
+    let resolveFirst: ((value: { chat: Chat }) => void) | undefined;
+    const actor = createActor(
+      chatPersistenceMachine.provide({
+        actors: {
+          loadChatActor: createAsyncLogic<ChatLoadOutput, { chatId: string }>({
+            run: async ({ input }) =>
+              input.chatId === 'chat_a'
+                ? new Promise<{ chat: Chat }>((resolve) => {
+                    resolveFirst = resolve;
+                  })
+                : { chat: chat('chat_b') },
+          }),
+        },
+      }),
+      { input: {} },
+    ).start();
+
+    actor.send({ type: 'setActiveChatId', chatId: 'chat_a' });
+    actor.send({ type: 'setActiveChatId', chatId: 'chat_b' });
+    await waitFor(actor, (snapshot) => snapshot.matches({ chatLoading: 'idle' }));
+    resolveFirst?.({ chat: chat('chat_a') });
+    await Promise.resolve();
+    expect(actor.getSnapshot().context.activeChatId).toBe('chat_b');
+    expect(actor.getSnapshot().context.activeExecution).toEqual(chat('chat_b').activeExecution);
+    actor.stop();
+  });
+
+  it('persists only chat metadata and refused commands', async () => {
+    const writes: string[] = [];
+    const actor = createActor(
+      chatPersistenceMachine.provide({
+        actors: {
+          persistActiveExecutionActor: createAsyncLogic<
+            void,
+            { chatId: string; activeExecution: Chat['activeExecution'] }
+          >({
+            run: async ({ input }) => {
+              writes.push(`execution:${input.chatId}:${input.activeExecution?.kind}`);
+            },
+          }),
+          persistActiveKernelActor: createAsyncLogic<void, { chatId: string; activeKernel: Chat['activeKernel'] }>({
+            run: async ({ input }) => {
+              writes.push(`kernel:${input.chatId}:${input.activeKernel}`);
+            },
+          }),
+          persistKernelPreferenceActor: createAsyncLogic<
+            void,
+            { chatId: string; kernelPreference: Chat['kernelPreference'] }
+          >({
+            run: async ({ input }) => {
+              writes.push(`preference:${input.chatId}:${input.kernelPreference}`);
+            },
+          }),
+          persistErrorActor: createAsyncLogic<void, { chatId: string; error: ChatError }>({
+            run: async ({ input }) => {
+              writes.push(`refusal:${input.chatId}:${input.error.code}`);
+            },
+          }),
+          clearErrorActor: createAsyncLogic<void, { chatId: string }>({
+            run: async ({ input }) => {
+              writes.push(`clear:${input.chatId}`);
+            },
+          }),
+        },
+      }),
+      { input: { activeChatId: 'chat_a' } },
+    ).start();
+
+    actor.send({ type: 'setActiveExecution', execution: { kind: 'tau', model: 'model-b' } });
+    actor.send({ type: 'setActiveKernel', kernel: 'manifold' });
+    actor.send({ type: 'setKernelPreference', preference: 'auto' });
+    actor.send({ type: 'setPersistedError', error: refusal });
+    await waitFor(actor, (snapshot) =>
+      snapshot.matches({
+        activeExecutionPersistence: 'idle',
+        activeKernelPersistence: 'idle',
+        kernelPreferencePersistence: 'idle',
+        errorPersistence: 'idle',
+      }),
+    );
+    expect(writes).toEqual(
+      expect.arrayContaining([
+        'execution:chat_a:tau',
+        'kernel:chat_a:manifold',
+        'preference:chat_a:auto',
+        'refusal:chat_a:HOST_CLOSED',
+      ]),
+    );
+    expect(actor.getSnapshot().context.kernelPreference).toBe('auto');
+
+    actor.send({ type: 'clearPersistedError' });
+    expect(actor.getSnapshot().context.persistedError).toBeUndefined();
+    await waitFor(actor, (snapshot) => snapshot.matches({ errorPersistence: 'idle' }));
+    expect(writes).toContain('clear:chat_a');
+    actor.stop();
+  });
+
+  /*
+   * Round 19: every change of where the chat runs takes the one step that follows it (moving the log observer, marking
+   * queued commands); only the person's pick is written, and a pick still being written when reach changes stays
+   * written by the step that follows.
+   */
+  it('follows a change of reach through the persistence step, writing only a pick', async () => {
+    const steps: string[] = [];
+    const gate = Promise.withResolvers<void>();
+    const actor = createActor(
+      chatPersistenceMachine.provide({
+        actors: {
+          persistActiveExecutionActor: createAsyncLogic<
+            void,
+            { chatId: string; activeExecution: Chat['activeExecution']; persist: boolean }
+          >({
+            run: async ({ input }) => {
+              steps.push(`${input.persist ? 'write' : 'follow'}:${input.activeExecution?.hostId ?? 'local'}`);
+              if (input.activeExecution?.model === 'held') {
+                await gate.promise;
+              }
+            },
+          }),
+        },
+      }),
+      { input: { activeChatId: 'chat_a' } },
+    ).start();
+    const idle = async () => waitFor(actor, (snapshot) => snapshot.matches({ activeExecutionPersistence: 'idle' }));
+
+    actor.send({ type: 'placementReachable', execution: { kind: 'tau', model: 'model-a', hostId: 'loopback:x' } });
+    await idle();
+    actor.send({
+      type: 'placementUnreachable',
+      execution: { kind: 'tau', model: 'model-a' },
+      heldPlacement: 'loopback:x',
+    });
+    await idle();
+    actor.send({ type: 'setActiveExecution', execution: { kind: 'tau', model: 'held' } });
+    actor.send({ type: 'placementReachable', execution: { kind: 'tau', model: 'held', hostId: 'loopback:x' } });
+    gate.resolve();
+    await idle();
+
+    expect(steps).toEqual(['follow:loopback:x', 'follow:local', 'write:local', 'write:loopback:x']);
+    expect(actor.getSnapshot().context.executionUnwritten).toBe(false);
+    actor.stop();
+  });
+
+  it('clears a stored refusal when a new turn is requested, including after reload', async () => {
+    let storedError: ChatError | undefined = refusal;
+    const machine = chatPersistenceMachine.provide({
+      actors: {
+        loadChatActor: createAsyncLogic<ChatLoadOutput, { chatId: string }>({
+          run: async () => ({ chat: { ...chat('chat_a'), error: storedError } }),
+        }),
+        clearErrorActor: createAsyncLogic<void, { chatId: string }>({
+          run: async () => {
+            storedError = undefined;
+          },
+        }),
+      },
+    });
+    const actor = createActor(machine, { input: {} }).start();
+    actor.send({ type: 'setActiveChatId', chatId: 'chat_a' });
+    await waitFor(actor, (snapshot) => snapshot.context.persistedError === refusal);
+
+    actor.send({ type: 'turnRequested' });
+    await waitFor(actor, () => storedError === undefined, { timeout: 1000 });
+    actor.stop();
+
+    const reloaded = createActor(machine, { input: {} }).start();
+    reloaded.send({ type: 'setActiveChatId', chatId: 'chat_a' });
+    await waitFor(reloaded, (snapshot) => !snapshot.context.isLoadingChat);
+    expect(reloaded.getSnapshot().context.persistedError).toBeUndefined();
+    reloaded.stop();
+  });
+
+  it('answers its current events or declares them ignored', () => {
+    const events = [
+      { type: 'setActiveChatId', chatId: 'chat_a' },
+      { type: 'handleError', error: new Error('x') },
+      { type: 'setPersistedError', error: refusal },
+      { type: 'clearPersistedError' },
+      { type: 'turnRequested' },
+      { type: 'setActiveExecution', execution: undefined },
+      { type: 'setActiveKernel', kernel: undefined },
+    ] satisfies Array<EventFromLogic<typeof chatPersistenceMachine>>;
+    expect(
+      unansweredEvents(chatPersistenceMachine, {
+        input: {},
+        events,
+        limit: 20_000,
+        ignore: chatPersistenceIgnoredEvents,
+        serializeState: (snapshot) => JSON.stringify([snapshot.value, snapshot.context.isLoadingChat]),
+      }),
+    ).toEqual([]);
+  });
+});

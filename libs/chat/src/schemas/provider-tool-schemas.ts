@@ -1,0 +1,228 @@
+import { z } from 'zod';
+import type { ToolName, ToolSelection } from '#types/tool.types.js';
+import { toolName } from '#constants/tool.constants.js';
+import type { ToolPartType } from '#schemas/tool-input.registry.js';
+import { toolInputSchemas } from '#schemas/tool-input.registry.js';
+import type { ModelInputModality, ModelSupport } from '#types/model.types.js';
+import { modelSupportsInput, modelSupportsTools } from '#types/model.types.js';
+
+/**
+ * CAD agent tools that are exposed to model providers as function declarations.
+ *
+ * Internal browser RPC schemas are intentionally
+ * excluded: they are not serialized into provider function declarations.
+ * The machine tools and `shell` are admitted unconditionally: a host lists the
+ * machine tools only when a machine is negotiated and granted, and `shell` only
+ * when its contained shell probed ready (desktop), and a turn is offered only
+ * what its host lists.
+ *
+ * @public
+ */
+export const cadProviderFacingToolNames = [
+  toolName.testModel,
+  toolName.evaluateModel,
+  toolName.exportModel,
+  toolName.getParameters,
+  toolName.applyParameterOperation,
+  toolName.screenshot,
+  toolName.editFile,
+  toolName.arrangeWorkbench,
+  toolName.useSkill,
+  toolName.readFile,
+  toolName.listDirectory,
+  toolName.createFile,
+  toolName.deleteFile,
+  toolName.grep,
+  toolName.globSearch,
+  toolName.webSearch,
+  toolName.webBrowser,
+  toolName.history,
+  toolName.updateTodos,
+  toolName.askQuestions,
+  toolName.installPackages,
+  toolName.listMachines,
+  toolName.getMachine,
+  toolName.machineAction,
+  toolName.stopMachine,
+  toolName.getPrintProfiles,
+  toolName.requestJob,
+  toolName.checkJob,
+  toolName.shell,
+] as const satisfies readonly ToolName[];
+
+const requiredModelInputModalities: Partial<Record<ToolName, readonly ModelInputModality[]>> = {
+  [toolName.screenshot]: ['image'],
+};
+
+/** @public */
+export const filterProviderFacingToolNamesByModelSupport = ({
+  toolNames,
+  modelSupport,
+}: {
+  toolNames: readonly ToolName[];
+  modelSupport?: ModelSupport;
+}): ToolName[] => {
+  if (modelSupport === undefined) {
+    return [...toolNames];
+  }
+
+  if (!modelSupportsTools(modelSupport)) {
+    return [];
+  }
+
+  return toolNames.filter((name) =>
+    (requiredModelInputModalities[name] ?? []).every((modality) => modelSupportsInput(modelSupport, modality)),
+  );
+};
+
+const normalizeTupleItems = (value: unknown): void => {
+  if (value === null || typeof value !== 'object') {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      normalizeTupleItems(item);
+    }
+    return;
+  }
+  const object = value as Record<string, unknown>;
+  const { items } = object;
+  if (Array.isArray(items)) {
+    const tupleItems: unknown[] = items;
+    const [first] = tupleItems;
+    // Zod 4.5 and later close a tuple with `additionalItems: false` (4.4 leaves it out); either way it has a fixed length.
+    if (
+      first === undefined ||
+      (object['additionalItems'] !== undefined && object['additionalItems'] !== false) ||
+      tupleItems.some((item) => JSON.stringify(item) !== JSON.stringify(first))
+    ) {
+      throw new Error('Provider tool schema has a tuple that cannot use one items schema');
+    }
+    delete object['additionalItems'];
+    object['items'] = first;
+    object['minItems'] = tupleItems.length;
+    object['maxItems'] = tupleItems.length;
+  }
+  for (const child of Object.values(object)) {
+    normalizeTupleItems(child);
+  }
+};
+
+/**
+ * Serialize one tool input schema exactly as the host puts it on the wire.
+ *
+ * Every provider-facing tool declaration goes through here, so the schema contract test observes
+ * the same bytes Vertex, Anthropic and OpenAI receive. `io: 'input'` is what makes the wire shape
+ * the flat, typeless side of a schema that narrows to a strict union on the way in.
+ *
+ * @param schema - A provider-facing tool input schema.
+ * @returns Its draft-7 JSON Schema without the `$schema` dialect key providers reject.
+ * @public
+ *
+ * @example <caption>Serializing the active toolbelt</caption>
+ * ```typescript
+ * import { getProviderFacingToolInputSchemas, toProviderToolJsonSchema } from '@taucad/chat/schemas';
+ * import { toolMode } from '@taucad/chat/constants';
+ *
+ * const declarations = getProviderFacingToolInputSchemas({
+ *   toolChoice: toolMode.auto,
+ *   testingEnabled: false,
+ * }).map((entry) => ({ name: entry.toolName, inputSchema: toProviderToolJsonSchema(entry.schema) }));
+ * ```
+ */
+export const toProviderToolJsonSchema = (schema: z.ZodType): Record<string, unknown> => {
+  const jsonSchema = z.toJSONSchema(schema, { target: 'draft-7', io: 'input' }) as Record<string, unknown>;
+  delete jsonSchema['$schema'];
+  // Draft 7 tuple arrays are invalid in Draft 2020-12; homogeneous fixed arrays work on both provider dialects.
+  normalizeTupleItems(jsonSchema);
+  return jsonSchema;
+};
+
+/** @public */
+export type ProviderFacingToolSchemaOptions = {
+  toolChoice: ToolSelection;
+  testingEnabled: boolean;
+  modelSupport?: ModelSupport;
+};
+
+/** @public */
+export type ProviderFacingToolSchemaEntry = {
+  toolName: ToolName;
+  toolPartType: ToolPartType;
+  schema: (typeof toolInputSchemas)[ToolPartType];
+};
+
+/**
+ * Resolve the provider-visible CAD tool input schemas for a request.
+ *
+ * This mirrors the `ChatService` tool assembly order while keeping the shared
+ * chat package focused on names and schemas, not runtime tool instances.
+ *
+ * @public
+ */
+export const getProviderFacingToolInputSchemas = ({
+  toolChoice,
+  testingEnabled,
+  modelSupport,
+}: ProviderFacingToolSchemaOptions): ProviderFacingToolSchemaEntry[] => {
+  const selectedTools = Array.isArray(toolChoice) ? new Set<ToolName>(toolChoice) : undefined;
+  const allowedTools = new Set(
+    filterProviderFacingToolNamesByModelSupport({
+      toolNames: cadProviderFacingToolNames,
+      modelSupport,
+    }),
+  );
+
+  return cadProviderFacingToolNames.flatMap((name) => {
+    if (name === toolName.testModel && !testingEnabled) {
+      return [];
+    }
+
+    if (!allowedTools.has(name)) {
+      return [];
+    }
+
+    if (selectedTools && !selectedTools.has(name)) {
+      return [];
+    }
+
+    const toolPartType = `tool-${name}` as const;
+    return [{ toolName: name, toolPartType, schema: toolInputSchemas[toolPartType] }];
+  });
+};
+
+/**
+ * The tool grant one turn carries: what is declared to the model, and what the chat's settings mask.
+ *
+ * Every tool the model supports is declared on every turn, with testing on, so the declared list is the same bytes
+ * whatever the settings are: it is part of the provider's cached prefix and of what replayed reasoning is bound to.
+ * What the tool choice or the testing switch turns off is masked where a call is made: the host refuses a call to a
+ * declared tool the returned `toolChoice` does not name.
+ *
+ * @param options - The chat's tool choice and testing switch, and the model's support.
+ * @returns `allowedTools`, the declared tools, and `toolChoice`, the mode itself when it masks nothing a list could
+ * say, else the tools left on.
+ * @public
+ *
+ * @example <caption>Testing turned off</caption>
+ * ```typescript
+ * import { getProviderFacingToolGrant } from '@taucad/chat/schemas';
+ *
+ * const grant = getProviderFacingToolGrant({ toolChoice: 'auto', testingEnabled: false });
+ * // grant.allowedTools includes 'test_model'; grant.toolChoice lists every tool but it
+ * ```
+ */
+export const getProviderFacingToolGrant = (
+  options: ProviderFacingToolSchemaOptions,
+): { toolChoice: ToolSelection; allowedTools: ToolName[] } => {
+  const names = (toolChoice: ToolSelection, testingEnabled: boolean): ToolName[] =>
+    getProviderFacingToolInputSchemas({ toolChoice, testingEnabled, modelSupport: options.modelSupport }).map(
+      ({ toolName: name }) => name,
+    );
+  const allowedTools = names('auto', true);
+  const usable = names(options.toolChoice, options.testingEnabled);
+  return {
+    allowedTools,
+    toolChoice: options.toolChoice === 'none' || usable.length === allowedTools.length ? options.toolChoice : usable,
+  };
+};

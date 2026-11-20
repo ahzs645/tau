@@ -19,19 +19,23 @@
  * browser, `inProcessTransport(...)` here for the node test
  * environment).
  *
- * The original L1 (raw bridge round-trip) and L3 (event-driven setFile
- * legacy event) coverage was specific to v5 plumbing and is no longer
+ * The original L1 (raw bridge round-trip) and L3 (event-driven entry
+ * selection) coverage was specific to v5 plumbing and is no longer
  * reachable in v6 — those layers are deleted here per the plan.
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
 
-import { createRuntimeClient } from '@taucad/runtime';
-import type { RuntimeClient } from '@taucad/runtime';
+import { asKnownArtifact, createRuntimeClient } from '@taucad/runtime';
+import type { ViewUpdateOutcome } from '@taucad/runtime';
+import { defineRuntime } from '@taucad/runtime/worker';
 import { fromMemoryFs } from '@taucad/runtime/filesystem';
-import { replicad, tau } from '@taucad/runtime/kernels';
-import { esbuild } from '@taucad/runtime/bundler';
+import { replicad } from '@taucad/replicad';
+import { esbuild } from '@taucad/esbuild';
 import { inProcessTransport } from '@taucad/runtime/transport/in-process';
+import { gltfEdgeDetection } from '@taucad/middleware';
+import { assimp } from '@taucad/assimp';
+import { runtime as uiRuntime } from '#runtime/ui-runtime.definition.js';
 
 const hollowBoxSource = `
 import { drawRoundedRectangle } from 'replicad';
@@ -54,94 +58,237 @@ export default function main(p = defaultParams): Shape3D {
 }
 `;
 
+const integrationRuntime = defineRuntime({
+  plugins: [assimp(), replicad(), esbuild()],
+  middleware: [gltfEdgeDetection()],
+});
+
+const createIntegrationClient = (fileSystem = fromMemoryFs()) =>
+  createRuntimeClient({
+    transport: inProcessTransport({ runtime: integrationRuntime, fileSystem }),
+  });
+
+const expectNonEmptyGlb = (outcome: ViewUpdateOutcome): Uint8Array<ArrayBuffer> => {
+  expect(outcome.superseded).toBe(false);
+  if (outcome.superseded) {
+    throw new Error('Expected a current view rendering');
+  }
+  if (!outcome.rendering.success) {
+    throw new Error(`Expected a successful view rendering, got issues: ${JSON.stringify(outcome.rendering.issues)}`);
+  }
+  const artifact = asKnownArtifact(outcome.rendering.artifact);
+  expect(artifact?.mimeType).toBe('model/gltf-binary');
+  if (artifact?.mimeType !== 'model/gltf-binary') {
+    throw new Error('Expected GLB output');
+  }
+  expect(artifact.content.byteLength).toBeGreaterThan(0);
+  return artifact.content;
+};
+
+const uiRuntimeConfig = {
+  tauApiUrl: 'http://localhost:4000',
+  tauWebSocketUrl: 'ws://localhost:4001',
+};
+
+const uiCylinderSource = `
+import { makeCylinder } from 'replicad';
+
+export const defaultParams = {
+  radius: 10,
+  height: 24,
+};
+
+export default function main(params = defaultParams) {
+  return makeCylinder(params.radius, params.height);
+}
+`;
+
+const createUiRuntimeClient = (fileSystem = fromMemoryFs()) =>
+  createRuntimeClient({
+    transport: inProcessTransport({ runtime: uiRuntime, fileSystem }),
+    config: uiRuntimeConfig,
+  });
+
+const glbPrimitiveModes = (bytes: Uint8Array<ArrayBuffer>): number[][] => {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const jsonLength = view.getUint32(12, true);
+  const json = JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + jsonLength))) as {
+    meshes: Array<{ primitives: Array<{ mode?: number }> }>;
+  };
+  return json.meshes.map((mesh) => mesh.primitives.map((primitive) => primitive.mode ?? 4));
+};
+
+type IntegrationClient = ReturnType<typeof createIntegrationClient> | ReturnType<typeof createUiRuntimeClient>;
+
 describe('Kernel Integration — v6 zero-arg connect + transport-owned FS', { timeout: 120_000 }, () => {
-  let client: RuntimeClient | undefined;
+  let client: IntegrationClient | undefined;
 
   afterEach(async () => {
     client?.terminate();
     client = undefined;
   });
 
-  it('renders non-empty geometry from a transport-owned filesystem (FileInput)', async () => {
+  it('renders non-empty geometry from a transport-owned filesystem source', async () => {
     const fileSystem = fromMemoryFs({
-      '/projects/proj_hollow_box/main.ts': hollowBoxSource,
+      'main.ts': hollowBoxSource,
     });
 
-    client = createRuntimeClient({
-      kernels: [replicad({ withBrepEdges: true }), tau()],
-      bundlers: [esbuild()],
-      transport: inProcessTransport({ fileSystem }),
-    });
+    client = createIntegrationClient(fileSystem);
 
     await client.connect();
 
-    const outcome = await client.openFile({
-      file: { path: '/projects/proj_hollow_box', filename: 'main.ts' },
-    });
-
-    expect(outcome.superseded).toBe(false);
-    if (!outcome.superseded) {
-      expect(outcome.geometry.success).toBe(true);
-      if (outcome.geometry.success) {
-        expect(outcome.geometry.data.length).toBeGreaterThan(0);
-      }
+    const document = client.open({ source: { path: 'main.ts' } });
+    const view = document.view('model', { content: { includeEdges: true } });
+    try {
+      expectNonEmptyGlb(await view.rendering());
+    } finally {
+      view.close();
+      document.close();
     }
   });
 
-  it('renders non-empty geometry from inline code (CodeInput control path)', async () => {
-    client = createRuntimeClient({
-      kernels: [replicad({ withBrepEdges: true }), tau()],
-      bundlers: [esbuild()],
-      transport: inProcessTransport({ fileSystem: fromMemoryFs() }),
-    });
+  it('renders non-empty geometry from inline source files', async () => {
+    client = createIntegrationClient();
 
     await client.connect();
 
-    const outcome = await client.openFile({
-      code: { 'main.ts': hollowBoxSource },
-    });
-
-    expect(outcome.superseded).toBe(false);
-    if (!outcome.superseded) {
-      expect(outcome.geometry.success).toBe(true);
-      if (outcome.geometry.success) {
-        expect(outcome.geometry.data.length).toBeGreaterThan(0);
-      }
+    const document = client.open({ source: { files: { 'main.ts': hollowBoxSource } } });
+    const view = document.view();
+    try {
+      expectNonEmptyGlb(await view.rendering());
+    } finally {
+      view.close();
+      document.close();
     }
   });
 
-  it('updateParameters re-renders against the previously opened file', async () => {
+  it('renders concurrent root and nested entry paths in independent clients', async () => {
     const fileSystem = fromMemoryFs({
-      '/projects/proj_hollow_box/main.ts': hollowBoxSource,
+      'main.ts': hollowBoxSource,
+      'lib/cube.ts': uiCylinderSource,
+    });
+    const rootClient = createIntegrationClient(fileSystem);
+    const nestedClient = createIntegrationClient(fileSystem);
+
+    try {
+      await Promise.all([rootClient.connect(), nestedClient.connect()]);
+
+      const rootDocument = rootClient.open({ source: { path: 'main.ts' } });
+      const nestedDocument = nestedClient.open({ source: { path: 'lib/cube.ts' } });
+      const rootView = rootDocument.view();
+      const nestedView = nestedDocument.view();
+      try {
+        const outcomes = await Promise.all([rootView.rendering(), nestedView.rendering()]);
+        for (const outcome of outcomes) {
+          expectNonEmptyGlb(outcome);
+        }
+
+        // Each client re-opens its model after the other rendered: a fresh evaluation must
+        // still export through its own client's OpenCASCADE instance. Both clients are
+        // checked because either may initialise last.
+        const exportReopenedStep = async (client: IntegrationClient, path: string): Promise<void> => {
+          const reopened = client.open({ source: { path }, watch: false });
+          try {
+            const step = await reopened.export('step');
+            if (!step.success) {
+              throw new Error(`Expected a STEP export of ${path}, got issues: ${JSON.stringify(step.issues)}`);
+            }
+            expect(step.files[0].bytes.byteLength).toBeGreaterThan(0);
+          } finally {
+            reopened.close();
+          }
+        };
+        await exportReopenedStep(rootClient, 'main.ts');
+        await exportReopenedStep(nestedClient, 'lib/cube.ts');
+      } finally {
+        rootView.close();
+        nestedView.close();
+        rootDocument.close();
+        nestedDocument.close();
+      }
+    } finally {
+      rootClient.terminate();
+      nestedClient.terminate();
+    }
+  });
+
+  it('document parameters update the previously opened file', async () => {
+    const fileSystem = fromMemoryFs({
+      'main.ts': hollowBoxSource,
     });
 
-    client = createRuntimeClient({
-      kernels: [replicad({ withBrepEdges: true }), tau()],
-      bundlers: [esbuild()],
-      transport: inProcessTransport({ fileSystem }),
-    });
+    client = createIntegrationClient(fileSystem);
 
     await client.connect();
 
-    const initial = await client.openFile({
-      file: { path: '/projects/proj_hollow_box', filename: 'main.ts' },
+    const document = client.open({ source: { path: 'main.ts' } });
+    const view = document.view('model', { content: { includeEdges: true } });
+    expectNonEmptyGlb(await view.rendering());
+    const updated = await document.update({
+      parameters: {
+        width: 200,
+        length: 300,
+        height: 100,
+        thickness: 4,
+        cornerRadius: 10,
+      },
     });
-    expect(initial.superseded).toBe(false);
-
-    const updated = await client.updateParameters({
-      width: 200,
-      length: 300,
-      height: 100,
-      thickness: 4,
-      cornerRadius: 10,
-    });
-
     expect(updated.superseded).toBe(false);
-    if (!updated.superseded) {
-      expect(updated.geometry.success).toBe(true);
-      if (updated.geometry.success) {
-        expect(updated.geometry.data.length).toBeGreaterThan(0);
+    expectNonEmptyGlb(await view.rendering());
+    view.close();
+    document.close();
+  });
+
+  it('renders Replicad geometry through the production UI runtime under SAB/COI auto selection', async () => {
+    const previousCrossOriginIsolated = Object.getOwnPropertyDescriptor(globalThis, 'crossOriginIsolated');
+    Object.defineProperty(globalThis, 'crossOriginIsolated', {
+      configurable: true,
+      value: true,
+    });
+
+    const fileSystem = fromMemoryFs({
+      'main.ts': uiCylinderSource,
+    });
+
+    client = createUiRuntimeClient(fileSystem);
+
+    try {
+      await client.connect();
+
+      const document = client.open({ source: { path: 'main.ts' } });
+      const view = document.view();
+      try {
+        expectNonEmptyGlb(await view.rendering());
+      } finally {
+        view.close();
+        document.close();
       }
+    } finally {
+      if (previousCrossOriginIsolated) {
+        Object.defineProperty(globalThis, 'crossOriginIsolated', previousCrossOriginIsolated);
+      } else {
+        Reflect.deleteProperty(globalThis, 'crossOriginIsolated');
+      }
+    }
+  });
+
+  it('uses OpenRSCAD native edges without selecting the JavaScript edge fallback', async () => {
+    client = createUiRuntimeClient(
+      fromMemoryFs({
+        'main.scad': 'color("red") cube(2);',
+      }),
+    );
+    await client.connect();
+
+    const document = client.open({ source: { path: 'main.scad' } });
+    const view = document.view('model', { content: { includeEdges: true } });
+    try {
+      // Engine 0.11 keeps the solid's EXT_mesh_manifold mesh triangles-only and writes its feature lines as a
+      // separate LINES-only mesh: one native line primitive and no JavaScript fallback edges.
+      expect(glbPrimitiveModes(expectNonEmptyGlb(await view.rendering()))).toEqual([[4], [1]]);
+    } finally {
+      view.close();
+      document.close();
     }
   });
 });

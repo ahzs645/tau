@@ -1,0 +1,1180 @@
+/* oxlint-disable no-await-in-loop -- Teardown steps are intentionally sequential. */
+/* eslint-disable @typescript-eslint/naming-convention -- Environment variables retain their wire names. */
+import { execFile } from 'node:child_process';
+import { mkdtemp, mkdir, readdir, readFile, realpath, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
+import process from 'node:process';
+import { setTimeout as wait } from 'node:timers/promises';
+import { promisify } from 'node:util';
+import type { BrowserWindow, DownloadItem, Event } from 'electron';
+import { _electron as electron } from 'playwright';
+import type { ElectronApplication, Page } from 'playwright';
+import { expect, vi } from 'vitest';
+import { captureChatLogs, chatLogDestination } from '@taucad/formal/capture';
+import {
+  desktopE2EApiUrl,
+  desktopE2ECompletedArtifact,
+  desktopE2EFrontendUrl,
+  desktopE2EPackagedExecutable,
+} from '#support/config.js';
+import { restorePreparedKernels, savePreparedKernels } from '#support/prepared-kernels.js';
+/* eslint-disable @nx/enforce-module-boundaries -- Both e2e harnesses share one definition of the FL4 flag states; no production dependency is introduced. */
+/* oxlint-disable no-restricted-imports -- The flag states and their name type are harness-only data both hosts must agree on. */
+import {
+  flagStateFlags,
+  flagStateInitScript,
+  flagStateVariable,
+  resolveFlagState,
+} from '../../../ui-e2e/src/support/flag-state.ts';
+import type { FlagStateName } from '../../../ui-e2e/src/support/flag-state.ts';
+/* oxlint-enable no-restricted-imports -- Restore the import rule after the harness-only imports. */
+/* eslint-enable @nx/enforce-module-boundaries -- Restore normal boundaries after the harness-only imports. */
+
+/**
+ * Electron launch + diagnostics for the desktop smoke suite (work item Z1).
+ *
+ * Packaged-directory mode, exactly as the shell blueprint's L5 status section
+ * describes: `electron.launch({ args: [apps/desktop] })` against the built
+ * `dist/main/index.js`, with the three required environment names, the A7
+ * `TAU_DESKTOP_TOKEN` seed and the `TAU_E2E_PICK_DIRECTORY` dialog override.
+ * Every run gets a throwaway `--user-data-dir`, which is what makes a second
+ * run idempotent: Home, the granted-root store and IndexedDB all start empty.
+ */
+
+const workspaceRoot = resolve(import.meta.dirname, '../../../..');
+/* Overridable because `nx run ui:dev:desktop` empties `apps/ui/desktop/build`
+ * on start (it re-copies `public/` there): a developer's live desktop session
+ * and this suite would otherwise fight over one directory. Point the suite at
+ * a snapshot of a built bundle instead. */
+const clientRoot = process.env['TAU_DESKTOP_CLIENT_ROOT'] ?? join(workspaceRoot, 'apps/ui/desktop/build/client');
+const workspaceDesktopRoot = join(workspaceRoot, 'apps/desktop');
+const defaultPackagedExecutable = join(workspaceDesktopRoot, 'package-out/Tau-darwin-arm64/Tau.app/Contents/MacOS/Tau');
+const diagnosticsRoot = join(workspaceRoot, 'out/test-results/desktop-e2e');
+const execFileAsync = promisify(execFile);
+
+/**
+ * How long a process naming a fixture root may take to exit on its own: longer than the 10 s the Build123d and PicoGK
+ * rows give their workers to exit and remove their temporary roots after the app quits.
+ */
+const childExitGraceMilliseconds = 15_000;
+
+/** How long main may take to answer `app.exit`, and then to exit, before the fixture kills it. */
+const shutdownGraceMilliseconds = 5000;
+
+const isAnyProcessNaming = async (pattern: string): Promise<boolean> => {
+  try {
+    await execFileAsync('pgrep', ['-f', pattern]);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Remove a throwaway root the app wrote into, once nothing is still writing there.
+ *
+ * Main's children outlive it: a kernel's first-use preparation unpacks into the dependency store under the profile and
+ * runs the package's seal step there (`apps/libs/desktop-services-host/src/native-preparation.ts`), and when the fixture stops main
+ * with `app.exit` or `SIGKILL` a seal step can keep adding files, so a recursive remove meets a directory it has just
+ * emptied filled again (`ENOTEMPTY`). Every such process names the root in its arguments. Native workers do too, since
+ * a worker runs from the store under the profile, and they clean their own temporary roots once their parent is gone;
+ * so each process gets {@link childExitGraceMilliseconds} to exit on its own, and only what remains is killed by that
+ * name. The remove then retries the transient errors Node lists for `rm`.
+ * @param root - The profile or picked-directory parent this fixture created.
+ * @returns Nothing.
+ */
+export const removeDesktopRoot = async (root: string): Promise<void> => {
+  if (process.platform !== 'win32') {
+    const pattern = root.replaceAll(/[$()*+.?[\\\]^{|}]/gu, String.raw`\$&`);
+    const deadline = Date.now() + childExitGraceMilliseconds;
+    // `pgrep` exits 1 when nothing matched: every process naming the root has exited.
+    while (Date.now() < deadline && (await isAnyProcessNaming(pattern))) {
+      await wait(250);
+    }
+    // `pkill` exits 1 when nothing matched, the usual case.
+    await execFileAsync('pkill', ['-KILL', '-f', pattern]).catch(() => undefined);
+  }
+  await rm(root, { force: true, recursive: true, maxRetries: 10, retryDelay: 200 });
+};
+
+/** Select the complete descendant command records from one successful ps snapshot. */
+export const desktopDescendants = (
+  electronPid: number | undefined,
+  snapshot: string,
+): ReadonlyArray<{ pid: number; command: string }> => {
+  const records = snapshot
+    .trim()
+    .split('\n')
+    .flatMap((line) => {
+      const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/u.exec(line);
+      return match ? [{ pid: Number(match[1]), parent: Number(match[2]), command: match[3] ?? '' }] : [];
+    });
+  const parents = new Map(records.map(({ pid, parent }) => [pid, parent]));
+  if (
+    electronPid === undefined ||
+    !Number.isSafeInteger(electronPid) ||
+    electronPid <= 0 ||
+    !parents.has(electronPid)
+  ) {
+    throw new Error('Electron owner is absent or invalid');
+  }
+  return records
+    .filter(({ pid }) => {
+      if (pid === electronPid) {
+        return false;
+      }
+      const visited = new Set<number>();
+      let current: number | undefined = pid;
+      while (current && !visited.has(current)) {
+        if (current === electronPid) {
+          return true;
+        }
+        visited.add(current);
+        current = parents.get(current);
+      }
+      return false;
+    })
+    .map(({ pid, command }) => ({ pid, command }));
+};
+/** Observe only the launched window's main-process navigation; serialized into Electron by Playwright. */
+export const observeDesktopNavigation = (
+  window: BrowserWindow,
+  action: 'install' | 'snapshot' | 'dispose',
+): string | undefined => {
+  const owner = window as BrowserWindow & {
+    __tauNavigationObservation?: { snapshot: () => string | undefined; dispose: () => void };
+  };
+  if (action !== 'install') {
+    if (action === 'snapshot') {
+      return owner.__tauNavigationObservation?.snapshot();
+    }
+    owner.__tauNavigationObservation?.dispose();
+    return undefined;
+  }
+  owner.__tauNavigationObservation?.dispose();
+  const contents = window.webContents;
+  const emitter: NodeJS.EventEmitter = contents;
+  const started = performance.now();
+  let recorded = 0;
+  let dropped = 0;
+  let disposed = false;
+  const location = (value: unknown): Record<string, string> => {
+    if (typeof value !== 'string') {
+      return {};
+    }
+    try {
+      const url = new URL(value);
+      return { protocol: url.protocol, host: url.host, pathname: url.pathname };
+    } catch {
+      return {};
+    }
+  };
+  const scalar = (value: unknown): Record<string, number | boolean> => {
+    if (typeof value !== 'object' || value === null) {
+      return {};
+    }
+    const selected: Record<string, number | boolean> = {};
+    for (const key of ['isMainFrame', 'processId', 'routingId', 'frameProcessId', 'frameRoutingId', 'exitCode']) {
+      const entry: unknown = Reflect.get(value, key);
+      if (typeof entry === 'boolean' || (typeof entry === 'number' && Number.isFinite(entry))) {
+        selected[key] = entry;
+      }
+    }
+    return selected;
+  };
+  const write = (event: string, detail: Record<string, unknown> = {}): string | undefined => {
+    if (disposed) {
+      return;
+    }
+    if (event !== 'snapshot' && recorded >= 128) {
+      dropped += 1;
+      return;
+    }
+    recorded += 1;
+    const destroyed = contents.isDestroyed();
+    const receipt = JSON.stringify({
+      event,
+      elapsedMilliseconds: Math.round(performance.now() - started),
+      webContentsId: contents.id,
+      destroyed,
+      ...(destroyed
+        ? {}
+        : {
+            rendererPid: contents.getOSProcessId(),
+            loading: contents.isLoading(),
+            loadingMainFrame: contents.isLoadingMainFrame(),
+            ...location(contents.getURL()),
+          }),
+      ...detail,
+      recorded,
+      dropped,
+    });
+    console.info('DESKTOP MAIN NAVIGATION', receipt);
+    return receipt;
+  };
+  const listeners: Array<{ event: string; handler: (...args: unknown[]) => void }> = [];
+  const listen = (event: string, select: (args: unknown[]) => Record<string, unknown> = () => ({})): void => {
+    const handler = (...args: unknown[]): void => {
+      write(event, select(args));
+    };
+    emitter.on(event, handler);
+    listeners.push({ event, handler });
+  };
+  for (const event of [
+    'did-start-loading',
+    'did-stop-loading',
+    'dom-ready',
+    'did-finish-load',
+    'unresponsive',
+    'responsive',
+    'will-prevent-unload',
+  ]) {
+    listen(event);
+  }
+  for (const event of ['will-navigate', 'will-frame-navigate', 'did-start-navigation']) {
+    listen(event, ([details, url, , isMainFrame, frameProcessId, frameRoutingId]) => ({
+      ...scalar({ isMainFrame, frameProcessId, frameRoutingId }),
+      ...scalar(details),
+      ...scalar(typeof details === 'object' && details !== null ? Reflect.get(details, 'frame') : undefined),
+      ...location(typeof details === 'object' && details !== null ? (Reflect.get(details, 'url') ?? url) : url),
+    }));
+  }
+  listen('did-frame-navigate', ([, url, status, , isMainFrame, frameProcessId, frameRoutingId]) => ({
+    ...location(url),
+    ...scalar({ isMainFrame, frameProcessId, frameRoutingId }),
+    ...(typeof status === 'number' ? { status } : {}),
+  }));
+  listen('did-frame-finish-load', ([, isMainFrame, frameProcessId, frameRoutingId]) =>
+    scalar({ isMainFrame, frameProcessId, frameRoutingId }),
+  );
+  for (const event of ['did-fail-provisional-load', 'did-fail-load']) {
+    listen(event, ([, errorCode, , url, isMainFrame, frameProcessId, frameRoutingId]) => ({
+      ...location(url),
+      ...scalar({ isMainFrame, frameProcessId, frameRoutingId }),
+      ...(typeof errorCode === 'number' ? { errorCode } : {}),
+    }));
+  }
+  listen('render-process-gone', ([, details]) => scalar(details));
+  const dispose = (): void => {
+    if (disposed) {
+      return;
+    }
+    for (const { event, handler } of listeners) {
+      emitter.removeListener(event, handler);
+    }
+    window.removeListener('closed', dispose);
+    disposed = true;
+    delete owner.__tauNavigationObservation;
+  };
+  owner.__tauNavigationObservation = { snapshot: () => write('snapshot'), dispose };
+  window.once('closed', dispose);
+  return write('installed');
+};
+
+const completedArtifactForbiddenEnvironment = ['NODE_OPTIONS', 'NODE_PATH', 'TAU_DESKTOP_CLIENT_ROOT'] as const;
+
+/**
+ * WebGPU launch profile. The default is the hardware adapter this Mac has;
+ * headless runners without one set `TAU_E2E_WEBGPU_PROFILE=software`. Copied
+ * from `apps/ui-e2e/src/support/webgpu-profile.ts` rather than imported —
+ * cross-e2e-project source imports are not a dependency this suite should own.
+ *
+ * The software profile also lets WebGL fall back to SwiftShader. Chromium no
+ * longer does that by itself, so on a runner with no GPU every WebGL context
+ * fails. Playwright's own Chromium always passes `--enable-unsafe-swiftshader`,
+ * which is why the browser suites have WebGL on the same runners. Electron
+ * launched through Playwright gets no such default.
+ */
+const webGpuArguments = (): readonly string[] => {
+  const profile = process.env['TAU_E2E_WEBGPU_PROFILE'] ?? 'hardware';
+  if (profile === 'software') {
+    return ['--enable-unsafe-webgpu', '--use-webgpu-adapter=swiftshader', '--enable-unsafe-swiftshader'];
+  }
+  if (profile === 'hardware') {
+    return ['--enable-unsafe-webgpu'];
+  }
+  throw new Error(`TAU_E2E_WEBGPU_PROFILE must be 'software' or 'hardware'; received '${profile}'.`);
+};
+
+/** One launched desktop app plus everything a spec needs to assert about it. */
+export type DesktopSession = {
+  readonly application: ElectronApplication;
+  /** The app's node-backed Home, `<userData>/home`. */
+  readonly homeRoot: string;
+  /** The launch's `TAU_CONFIG_DIR`, whose `dependencies` is main's native dependency store. */
+  readonly configRoot: string;
+  readonly page: Page;
+  /**
+   * The shell's rotating diagnostics log. Main names this directory to the
+   * kernel utility through `TAU_DESKTOP_LOG_DIR`, so the `kernel.engine` line
+   * that carries the resolved engine version lands here (N6).
+   */
+  readonly logPath: string;
+  /** The launch's `--user-data-dir`, checked against the app's effective `userData` before any interaction (D7). */
+  readonly profileRoot: string;
+  /** The absolute path `window.tau.dialog.selectDirectory()` resolves to first. */
+  readonly pickedDirectory: string;
+  /** Every folder the dialog stub answers, in order; the last is repeated once the others are used. */
+  readonly pickedDirectories: readonly string[];
+  /** Every PostHog-shaped request any renderer made since launch (D13: zero on desktop). */
+  readonly analyticsRequests: readonly string[];
+  /** Chromium net log begun before the first renderer navigation. */
+  readonly startupNetworkLogPath: string | undefined;
+  /** Write trace, screenshot, process output and `desktop.log` under `out/`. */
+  readonly capture: (label: string) => Promise<string>;
+  readonly close: () => Promise<void>;
+};
+
+/** Save and await the next download emitted by the packaged Electron session. */
+export const captureNextDesktopDownload = async (
+  desktopSession: DesktopSession,
+  savePath: string,
+  trigger: () => Promise<void>,
+): Promise<{ readonly filename: string; readonly path: string }> => {
+  await desktopSession.application.evaluate(({ session }, path) => {
+    const state = globalThis as typeof globalThis & {
+      __TAU_E2E_DOWNLOAD_CLEANUP__?: () => void;
+      __TAU_E2E_DOWNLOAD__?: { readonly filename: string; readonly state: string };
+    };
+    state.__TAU_E2E_DOWNLOAD_CLEANUP__?.();
+    delete state.__TAU_E2E_DOWNLOAD__;
+    const listener = (_event: Event, item: DownloadItem): void => {
+      item.setSavePath(path);
+      item.once('done', (_doneEvent, doneState) => {
+        state.__TAU_E2E_DOWNLOAD__ = { filename: item.getFilename(), state: doneState };
+      });
+      session.defaultSession.off('will-download', listener);
+    };
+    state.__TAU_E2E_DOWNLOAD_CLEANUP__ = () => {
+      session.defaultSession.off('will-download', listener);
+      delete state.__TAU_E2E_DOWNLOAD_CLEANUP__;
+    };
+    session.defaultSession.on('will-download', listener);
+  }, savePath);
+  let download: { readonly filename: string; readonly state: string } | undefined;
+  try {
+    await trigger();
+    await expect
+      .poll(
+        async () => {
+          download = await desktopSession.application.evaluate(() => {
+            const state = globalThis as typeof globalThis & {
+              __TAU_E2E_DOWNLOAD__?: { readonly filename: string; readonly state: string };
+            };
+            return state.__TAU_E2E_DOWNLOAD__;
+          });
+          return download;
+        },
+        { timeout: 180_000 },
+      )
+      .toBeDefined();
+  } finally {
+    await desktopSession.application.evaluate(() => {
+      const state = globalThis as typeof globalThis & { __TAU_E2E_DOWNLOAD_CLEANUP__?: () => void };
+      state.__TAU_E2E_DOWNLOAD_CLEANUP__?.();
+    });
+  }
+  if (!download) {
+    throw new Error('Electron reported no completed download after its session event settled.');
+  }
+  expect(download.state).toBe('completed');
+  return { filename: download.filename, path: savePath };
+};
+
+/**
+ * Launch the built desktop shell against the suite's dedicated API.
+ *
+ * @param options - The seeded bearer handed to main through A7, plus any extra
+ *   environment the shell needs (`env`) — credential persistence and the
+ *   like, all read at launch.
+ * @returns The live session.
+ */
+/**
+ * Make `count` folders the dialog stub can answer, each named as the incident log names them:
+ * `tau-desktop-workspace` inside a `tau-desktop-e2e-pick-` temporary parent. The caller owns them across launches and removes them with `remove`.
+ *
+ * @param count - How many folders to make.
+ * @returns The folders in pick order, and their removal.
+ */
+export const createPickedDirectories = async (
+  count: number,
+): Promise<{ readonly directories: readonly string[]; readonly remove: () => Promise<void> }> => {
+  if (!Number.isSafeInteger(count) || count < 1) {
+    throw new TypeError('createPickedDirectories needs a positive whole count.');
+  }
+  const directories: string[] = [];
+  for (let index = 0; index < count; index++) {
+    /* A fixed, already-lowercase leaf inside the random parent, as the default pick uses. */
+    const directory = join(await mkdtemp(join(tmpdir(), 'tau-desktop-e2e-pick-')), 'tau-desktop-workspace');
+    await mkdir(directory, { recursive: true });
+    directories.push(directory);
+  }
+  return {
+    directories,
+    remove: async () => {
+      for (const directory of directories) {
+        await removeDesktopRoot(dirname(directory));
+      }
+    },
+  };
+};
+
+/**
+ * Whether the app's effective `userData` is the profile this run created, compared after resolving links (macOS
+ * reaches `/var/folders` through `/private`).
+ */
+const isSameProfile = async (effective: unknown, expected: string): Promise<boolean> => {
+  if (typeof effective !== 'string' || effective === '') {
+    return false;
+  }
+  if (resolve(effective) === resolve(expected)) {
+    return true;
+  }
+  const [left, right] = await Promise.all([realpath(effective).catch(() => effective), realpath(expected)]);
+  return left === right;
+};
+
+/**
+ * Playwright's rejection when the main-process handle behind an `evaluate` is collected before it settles. It can hit
+ * the first evaluate straight after launch, while the main process is still starting, and says nothing about the
+ * profile, so only this rejection is retried (shell-conformance runs 44017533915 on LNX-D, LNX-U and LNX-U26).
+ */
+const collectedEvaluation = /Resulting promise was garbage collected/u;
+
+/** Attempts and pause for {@link collectedEvaluation}: a bounded wait of about two seconds, never an open loop. */
+const profileReadAttempts = 10;
+const profileReadPauseMilliseconds = 200;
+
+/**
+ * The app's effective `userData`, or the error that kept it from being read. Only a collected evaluation is retried;
+ * any other failure is returned at once, so the profile check still fails closed.
+ */
+const readEffectiveProfile = async (application: ElectronApplication): Promise<string | Error> => {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await application.evaluate(({ app }) => app.getPath('userData'));
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (attempt >= profileReadAttempts || !collectedEvaluation.test(failure.message)) {
+        return failure;
+      }
+      await wait(profileReadPauseMilliseconds);
+    }
+  }
+};
+
+/** PostHog through Tau's web proxy or directly. */
+export const analyticsRequestPattern = /\/api\/ph(?:\/|$)|posthog\.com/iu;
+
+export const launchDesktopApp = async (options: {
+  readonly token: string;
+  readonly env?: Readonly<Record<string, string>> | undefined;
+  readonly packaged?: boolean | undefined;
+  readonly useProductionEndpointDefaults?: boolean | undefined;
+  /** Reuse a prior throwaway profile for returning-user smoke checks. */
+  readonly profileRoot?: string | undefined;
+  /** The caller will relaunch this profile and dispose it after the final run. */
+  readonly preserveProfile?: boolean | undefined;
+  /** Show the isolated fixture window for a manual operator session. */
+  readonly visible?: boolean | undefined;
+  /** Give the isolated operator window a persistent, unambiguous title. */
+  readonly windowTitle?: string | undefined;
+  /** Capture startup traffic before Playwright can attach its request listener. */
+  readonly captureStartupNetwork?: boolean | undefined;
+  /** WAV input for Chromium's fake capture driver; leaves the OS microphone unchanged. */
+  readonly fakeMicrophonePath?: string | undefined;
+  /** Launch this copy of the packaged app instead of the built one, e.g. a clone a spec altered. */
+  readonly packagedExecutable?: string | undefined;
+  /**
+   * Copy the suite's prepared native kernels into the store before launch and keep what the launch prepares
+   * (`prepared-kernels.ts`). `false` launches with the store as the profile left it: empty, for a first use.
+   */
+  readonly preparedKernels?: boolean | undefined;
+  /**
+   * FL4: open the renderer in this flag state (`apps/ui-e2e/src/support/flag-state.ts`). Defaults to the run's
+   * `TAU_E2E_FLAG_STATE`; with neither, the renderer is left exactly as it launched. A launch that takes a state
+   * which opens setup by itself from the run, into a profile of its own, opens as an install that has been used
+   * before, so only a spec that names the state meets the first run.
+   */
+  readonly flagState?: FlagStateName | undefined;
+  /**
+   * Folders the native directory dialog answers, one per pick, in order; once used up the last is answered again.
+   * The caller owns them (see {@link createPickedDirectories}) and they outlive the session. Without it the run makes
+   * one folder of its own and answers it every time.
+   */
+  readonly pickedDirectories?: readonly string[] | undefined;
+  /**
+   * Launch the unpackaged app in this directory instead of the workspace's `apps/desktop`, with the UI bundle built
+   * beside it, e.g. a second worktree built at a release's base commit (blueprint T-REH.2).
+   */
+  readonly desktopRoot?: string | undefined;
+}): Promise<DesktopSession> => {
+  if (options.desktopRoot !== undefined && (desktopE2ECompletedArtifact || options.packaged === true)) {
+    throw new Error('desktopRoot launches an unpackaged build; it cannot be combined with a packaged launch.');
+  }
+  if (options.pickedDirectories?.length === 0) {
+    throw new Error('pickedDirectories needs at least one folder.');
+  }
+  if (desktopE2ECompletedArtifact && options.packaged === false) {
+    throw new Error('A completed-artifact run cannot launch the workspace desktop app.');
+  }
+  if (
+    desktopE2ECompletedArtifact &&
+    completedArtifactForbiddenEnvironment.some((name) => options.env?.[name] !== undefined)
+  ) {
+    throw new Error('A completed-artifact run cannot override Node or packaged runtime resource paths.');
+  }
+  const configuredSnapshots = process.env['TAU_E2E_TRACE_SNAPSHOTS'];
+  if (configuredSnapshots !== undefined && configuredSnapshots !== 'true' && configuredSnapshots !== 'false') {
+    throw new Error('TAU_E2E_TRACE_SNAPSHOTS must be true or false.');
+  }
+  const manual =
+    options.visible === true ||
+    Object.entries(process.env).some(
+      ([key, value]) =>
+        key.startsWith('TAU_E2E_') && key.endsWith('_MANUAL') && value !== undefined && value !== 'false',
+    );
+  const snapshots = manual || configuredSnapshots !== 'false';
+  const userData = options.profileRoot ?? (await mkdtemp(join(tmpdir(), 'tau-desktop-e2e-user-')));
+  const runFlagState = process.env[flagStateVariable] ? resolveFlagState(process.env[flagStateVariable]) : undefined;
+  const flagState = options.flagState ?? runFlagState;
+  /* A spec that names no flag state of its own, run with onboarding on, is not about onboarding: it starts as an install
+   * that has run before and a device whose setup was already offered and whose tour was declined. Auto-open alone is
+   * not the test: with onboarding on, a newcomer's first project asks for the tour whether or not setup opens by itself
+   * (`first-project-tour.ts`), and its popover covers the composer. */
+  const settledOnboarding =
+    options.flagState === undefined &&
+    options.profileRoot === undefined &&
+    flagState !== undefined &&
+    flagStateFlags[flagState].onboarding;
+  if (settledOnboarding) {
+    /* Main counts a launch as the first run only while no window-state file exists, whatever the file holds
+     * (`apps/desktop/src/main/first-run.ts`); an empty object restores no frame, so the window opens at its default
+     * size as before. */
+    await writeFile(join(userData, 'window-state.json'), '{}\n');
+  }
+  const configRoot = options.env?.['TAU_CONFIG_DIR'] ?? join(userData, 'config');
+  const dependencyStore = join(configRoot, 'dependencies');
+  const preparedKernels = options.preparedKernels !== false;
+  if (preparedKernels) {
+    await restorePreparedKernels(dependencyStore);
+  }
+  const startupNetworkLogPath = options.captureStartupNetwork ? join(userData, 'startup-network.json') : undefined;
+  /* A fixed, already-lowercase leaf inside the random parent: the workspace
+   * slug the UI mints is the folder name slugified, so a `mkdtemp` name with
+   * capitals would make the routed URL differ from the directory on disk for
+   * no reason. */
+  const ownedPickedParent =
+    options.pickedDirectories === undefined ? await mkdtemp(join(tmpdir(), 'tau-desktop-e2e-pick-')) : undefined;
+  const pickedDirectories = options.pickedDirectories ?? [join(ownedPickedParent ?? '', 'tau-desktop-workspace')];
+  const pickedDirectory = pickedDirectories[0] ?? '';
+  if (ownedPickedParent !== undefined) {
+    await mkdir(pickedDirectory, { recursive: true });
+  }
+  /* Where the run's picked folders live, for chat-log capture: one parent of its own, or each caller-owned one. */
+  const pickedParents = [...new Set(pickedDirectories.map((directory) => dirname(directory)))];
+  const desktopRoot = options.desktopRoot ?? workspaceDesktopRoot;
+  const unpackagedClientRoot =
+    options.desktopRoot === undefined ? clientRoot : join(options.desktopRoot, '../ui/desktop/build/client');
+  const output: string[] = [];
+  const startupStarted = performance.now();
+  const startupPhases: Array<{ phase: string; elapsedMilliseconds: number }> = [];
+  const recordStartupPhase = (phase: string, url?: string): void => {
+    const receipt = { phase, elapsedMilliseconds: Math.round(performance.now() - startupStarted) };
+    startupPhases.push(receipt);
+    const location = url === undefined ? undefined : new URL(url);
+    console.info(
+      'DESKTOP STARTUP',
+      JSON.stringify({
+        ...receipt,
+        userData,
+        ...(location === undefined
+          ? {}
+          : { protocol: location.protocol, host: location.host, pathname: location.pathname }),
+      }),
+    );
+  };
+  const preserveStartupFailure = async (error: unknown): Promise<void> => {
+    const directory = join(diagnosticsRoot, `launch-${basename(userData)}`);
+    const desktopLog = await readFile(join(userData, 'logs/desktop.log'), 'utf8').catch(() => '(no desktop.log)');
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      join(directory, 'diagnostics.log'),
+      [
+        `userData: ${userData}`,
+        `pickedDirectory: ${pickedDirectory}`,
+        `failure: ${error instanceof Error ? error.stack : String(error)}`,
+        '--- startup phases ---',
+        JSON.stringify(startupPhases),
+        '--- process output ---',
+        output.join(''),
+        '--- desktop.log ---',
+        desktopLog,
+      ].join('\n'),
+      'utf8',
+    );
+    console.info('DESKTOP STARTUP FAILURE', directory);
+  };
+  const inheritedEnvironment = { ...(process.env as Record<string, string>) };
+  const packaged = desktopE2ECompletedArtifact || options.packaged === true;
+  const packagedExecutable =
+    options.packagedExecutable ??
+    /* An explicit package is chosen the same way a completed-artifact run chooses one. Point device runs at a
+     * staging development package (`TAU_DESKTOP_CHANNEL=staging pnpm nx run desktop:package-macos-unsigned`):
+     * it keeps `--inspect`, honours the `--user-data-dir` below and carries its own bundle id. A copy of a release
+     * keeps the installed app's profile and single-instance lock whatever `--user-data-dir` says, so the two can
+     * take each other down. */
+    (desktopE2ECompletedArtifact || process.env['TAU_E2E_DESKTOP_EXECUTABLE'] !== undefined
+      ? desktopE2EPackagedExecutable()
+      : defaultPackagedExecutable);
+  if (desktopE2ECompletedArtifact) {
+    delete inheritedEnvironment['NODE_OPTIONS'];
+    delete inheritedEnvironment['NODE_PATH'];
+    delete inheritedEnvironment['TAU_DESKTOP_CLIENT_ROOT'];
+  }
+  if (options.useProductionEndpointDefaults) {
+    delete inheritedEnvironment['TAU_API_URL'];
+    delete inheritedEnvironment['TAU_WEBSOCKET_URL'];
+    delete inheritedEnvironment['TAU_FRONTEND_URL'];
+  }
+
+  let application: ElectronApplication;
+  recordStartupPhase('launch.before');
+  try {
+    application = await electron.launch({
+      ...(packaged ? { executablePath: packagedExecutable } : {}),
+      args: [
+        ...(packaged ? [] : [desktopRoot]),
+        `--user-data-dir=${userData}`,
+        // Chromium cookies otherwise prompt for the user's Keychain when this test build is ad-hoc signed.
+        ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
+        ...(startupNetworkLogPath ? [`--log-net-log=${startupNetworkLogPath}`] : []),
+        ...webGpuArguments(),
+        ...(options.fakeMicrophonePath
+          ? [
+              '--use-fake-device-for-media-stream',
+              '--use-fake-ui-for-media-stream',
+              // Chromium's sandboxed audio service cannot read the test-owned WAV on macOS.
+              '--no-sandbox',
+              `--use-file-for-fake-audio-capture=${options.fakeMicrophonePath}`,
+            ]
+          : []),
+      ],
+      cwd: packaged ? userData : desktopRoot,
+      env: {
+        ...inheritedEnvironment,
+        NODE_ENV: 'production',
+        /* Forwarded into `window.ENV` by the shell's client allowlist, where it
+         * turns on the `tauDebug` feature flag that mounts
+         * `SectionViewTestBridge` — the viewport-framing observable. `ui-e2e`
+         * sets the same variable on its UI server for the same reason. */
+        TAU_DEBUG: process.env['TAU_DEBUG'] ?? 'true',
+        TAU_S3_ENDPOINT: process.env['TAU_S3_ENDPOINT'] ?? 'http://localhost:9000',
+        ...(options.useProductionEndpointDefaults
+          ? {}
+          : {
+              TAU_API_URL: desktopE2EApiUrl,
+              TAU_WEBSOCKET_URL: desktopE2EApiUrl.replace(/^http/u, 'ws'),
+              TAU_FRONTEND_URL: desktopE2EFrontendUrl,
+            }),
+        ...(packaged ? {} : { TAU_DESKTOP_CLIENT_ROOT: unpackagedClientRoot }),
+        TAU_DESKTOP_TOKEN: options.token,
+        /* A development build answers every pick with this seed before the dialog stub is reached, so a run with
+         * several folders leaves it unset and lets the stub answer them in turn. */
+        ...(pickedDirectories.length === 1 ? { TAU_E2E_PICK_DIRECTORY: pickedDirectory } : {}),
+        /* Printer access codes go to the throwaway profile's file vault, never the
+         * person's login keychain, whatever the shell running the suite sets. */
+        TAU_SECRET_VAULT: 'file',
+        /* The per-user machine store and every other Tau config live in the
+         * throwaway profile too, never the person's own. */
+        TAU_CONFIG_DIR: configRoot,
+        ...options.env,
+        TAU_E2E_HIDE_WINDOW: options.visible === true ? '0' : '1',
+        ...(packaged ? { TAU_E2E_WAIT_FOR_PLAYWRIGHT: '1' } : {}),
+      },
+    });
+  } catch (error) {
+    await preserveStartupFailure(error).catch(() => undefined);
+    throw error;
+  }
+  recordStartupPhase('launch.after');
+  const child = application.process();
+  /* Installed before the first window loads, and kept for the whole session, so
+   * startup and late traffic are both observed. */
+  const analyticsRequests: string[] = [];
+  application.context().on('request', (request) => {
+    if (analyticsRequestPattern.test(request.url())) {
+      analyticsRequests.push(request.url());
+    }
+  });
+
+  child.stdout?.on('data', (chunk: unknown) => output.push(String(chunk)));
+  child.stderr?.on('data', (chunk: unknown) => output.push(String(chunk)));
+
+  /* R11 (D7): whatever the build does with `--user-data-dir`, a run that landed in another profile, such as a
+   * person's installed app, stops here: before the page is touched, a folder is picked or a grant is written. */
+  recordStartupPhase('profile-check.before');
+  const effectiveProfile = await readEffectiveProfile(application);
+  if (!(await isSameProfile(effectiveProfile, userData))) {
+    child.kill('SIGKILL');
+    if (ownedPickedParent !== undefined) {
+      await removeDesktopRoot(ownedPickedParent).catch(() => undefined);
+    }
+    const reported =
+      effectiveProfile instanceof Error ? `unreadable (${effectiveProfile.message})` : String(effectiveProfile);
+    throw new Error(
+      `The desktop app's userData is ${reported}, which is not the temporary profile this run created (${userData}). The app was closed before any interaction.`,
+    );
+  }
+  recordStartupPhase('profile-check.after');
+
+  /* Anything that throws between `launch` and the returned session would
+   * otherwise strand a live Electron — and a stranded shell keeps polling the
+   * API, which blows better-auth's 100-per-10 s bucket and 429s the *next*
+   * run's sign-up. Kill it here rather than leaving it to a caller that never
+   * received a session to close. */
+  const consoleErrors: string[] = [];
+  let page: Page;
+  let navigationWindow: Awaited<ReturnType<ElectronApplication['browserWindow']>> | undefined;
+  let navigationInstallation: 'pending' | 'installed' | 'unavailable' = 'pending';
+  let navigationDisposed = false;
+  let navigationObservation = Promise.resolve();
+  const isNavigationDisposed = (): boolean => navigationDisposed;
+  const disposeNavigation = async (): Promise<void> => {
+    navigationDisposed = true;
+    try {
+      await navigationWindow?.evaluate<string | undefined, 'dispose'>(observeDesktopNavigation, 'dispose');
+    } catch {
+      // Process/window teardown may already have closed the diagnostic inspector.
+    }
+  };
+  try {
+    /* A packaged launch releases main bootstrap before its first window exists.
+     * Configure the main-process test overrides only after that startup boundary. */
+    recordStartupPhase('firstWindow.before');
+    page = await application.firstWindow();
+    recordStartupPhase('firstWindow.after', page.url());
+    navigationObservation = (async () => {
+      try {
+        const ownedWindow = await application.browserWindow(page);
+        navigationWindow = ownedWindow;
+        if (isNavigationDisposed()) {
+          navigationInstallation = 'unavailable';
+          return;
+        }
+        await ownedWindow.evaluate<string | undefined, 'install'>(observeDesktopNavigation, 'install');
+        navigationInstallation = 'installed';
+        if (isNavigationDisposed()) {
+          await ownedWindow.evaluate<string | undefined, 'dispose'>(observeDesktopNavigation, 'dispose');
+        }
+      } catch {
+        navigationInstallation = 'unavailable';
+      }
+    })();
+    recordStartupPhase('domcontentloaded.before');
+    await page.waitForLoadState('domcontentloaded');
+    recordStartupPhase('domcontentloaded.after', page.url());
+    // Main bootstrap still awaits its initial loadURL after DOM readiness.
+    recordStartupPhase('initial-app-load.before', page.url());
+    const devRenderer = packaged
+      ? undefined
+      : (options.env?.['ELECTRON_RENDERER_URL'] ?? process.env['ELECTRON_RENDERER_URL']);
+    await page.waitForURL(
+      (url) =>
+        devRenderer ? url.origin === new URL(devRenderer).origin : url.protocol === 'app:' && url.host === 'tau',
+      { waitUntil: 'load' },
+    );
+    recordStartupPhase('initial-app-load.after', page.url());
+    if (flagState !== undefined) {
+      /* The renderer reads its flag state once, when it loads, and the first window starts loading before Playwright
+       * can add an init script; so seed it and reload, as the specs that stub navigator APIs do. The build honours
+       * the seed only while `TAU_DEBUG` is on, which this launch sets. */
+      recordStartupPhase('flag-state.before', page.url());
+      await page.addInitScript({ content: flagStateInitScript(flagState) });
+      if (settledOnboarding) {
+        /* A signed-in account the spec just created is new, so home would offer setup to it as well as to a first
+         * run (`shouldOfferSetup`). Record setup as offered and the tour as declined, as an earlier visit leaves them,
+         * unless something already wrote the record. */
+        await page.addInitScript({
+          content: `if (globalThis.localStorage.getItem('tau-onboarding') === null) {
+  globalThis.localStorage.setItem('tau-onboarding', JSON.stringify({ value: { version: 1, setup: { status: 'offered' }, tour: { wanted: false, seen: [] } } }));
+}`,
+        });
+      }
+      await page.reload({ waitUntil: 'load' });
+      recordStartupPhase('flag-state.after', page.url());
+    }
+    if (options.windowTitle !== undefined) {
+      const ownedWindow = await application.browserWindow(page);
+      await ownedWindow.evaluate((window: BrowserWindow, title) => {
+        window.setTitle(title);
+        window.on('page-title-updated', (event: { preventDefault: () => void }) => {
+          event.preventDefault();
+          window.setTitle(title);
+        });
+      }, options.windowTitle);
+    }
+    if (options.fakeMicrophonePath) {
+      // Chromium recommends disabling DSP for calibrated file microphone input.
+      // Keep the real capture driver; change only its audio-processing constraints.
+      await page.addInitScript(() => {
+        const capture = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+        navigator.mediaDevices.getUserMedia = async (constraints) => {
+          if (!constraints?.audio) {
+            return capture(constraints);
+          }
+          return capture({
+            ...constraints,
+            audio: {
+              ...(typeof constraints.audio === 'object' ? constraints.audio : {}),
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false,
+            },
+          });
+        };
+      });
+    }
+    recordStartupPhase('main-overrides.before');
+    await application.evaluate(({ dialog, shell }, selectedDirectories) => {
+      const testState = globalThis as typeof globalThis & { __TAU_E2E_EXTERNAL_URL__?: string };
+      shell.openExternal = async (url): Promise<void> => {
+        testState.__TAU_E2E_EXTERNAL_URL__ = url;
+      };
+      let picks = 0;
+      dialog.showOpenDialog = async () => {
+        const selected = selectedDirectories[Math.min(picks, selectedDirectories.length - 1)] ?? '';
+        picks += 1;
+        return { canceled: false, filePaths: [selected] };
+      };
+      dialog.showMessageBox = async () => ({ checkboxChecked: false, response: 1 });
+    }, pickedDirectories);
+    recordStartupPhase('main-overrides.after');
+    page.setDefaultTimeout(60_000);
+    page.on('console', (message) => {
+      if (message.type() === 'error') {
+        consoleErrors.push(message.text());
+      }
+    });
+    page.on('pageerror', (error) => consoleErrors.push(`pageerror: ${error.message}`));
+    console.info('DESKTOP TRACE OPTIONS', JSON.stringify({ screenshots: true, snapshots, manual }));
+    recordStartupPhase('tracing.before');
+    await page.context().tracing.start({ screenshots: true, snapshots });
+    recordStartupPhase('tracing.after', page.url());
+  } catch (error) {
+    void disposeNavigation();
+    child.kill('SIGKILL');
+    await preserveStartupFailure(error).catch(() => undefined);
+    /* The shell's own output is the only account of why it went away, and the
+     * caller has no session to read it from. */
+    throw new Error(`The desktop shell did not survive launch.\n${output.join('')}`, { cause: error });
+  }
+
+  let tracing = true;
+  let captured = false;
+
+  /** Shallow-ish listing of a directory tree, for the failure report. */
+  const tree = async (directory: string, depth = 3): Promise<string[]> => {
+    const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+    const lines: string[] = [];
+    for (const entry of entries) {
+      lines.push(join(directory, entry.name));
+      if (entry.isDirectory() && depth > 0) {
+        lines.push(...(await tree(join(directory, entry.name), depth - 1)));
+      }
+    }
+    return lines;
+  };
+
+  const capture = async (label: string): Promise<string> => {
+    captured = true;
+    const directory = join(diagnosticsRoot, label);
+    await mkdir(directory, { recursive: true });
+    const location = new URL(page.url());
+    const url = { protocol: location.protocol, host: location.host, pathname: location.pathname };
+    const desktopLog = await readFile(join(userData, 'logs/desktop.log'), 'utf8').catch(() => '(no desktop.log)');
+    const pickedTrees = await Promise.all(pickedDirectories.map(async (directory) => tree(directory)));
+    const pickedTree = pickedTrees.flat();
+    const homeTree = await tree(join(userData, 'home'));
+    const grants = await readFile(join(userData, 'granted-roots.json'), 'utf8').catch(() => '(none)');
+    // Persist available evidence before any renderer or trace operation can stall.
+    await writeFile(
+      join(directory, 'diagnostics.log'),
+      [
+        `url: ${JSON.stringify(url)}`,
+        `userData: ${userData}`,
+        `pickedDirectory: ${pickedDirectory}`,
+        '--- console errors ---',
+        consoleErrors.join('\n'),
+        '--- process output ---',
+        output.join(''),
+        '--- desktop.log ---',
+        desktopLog,
+        '--- picked directory ---',
+        pickedTree.join('\n'),
+        '--- home root ---',
+        homeTree.join('\n'),
+        '--- granted roots ---',
+        grants,
+        '--- renderer/trace collection pending ---',
+      ].join('\n'),
+      'utf8',
+    );
+    /* The durable chat logs at the moment of failure: what the agent host wrote is
+     * the only account of a turn the renderer did not show. */
+    const failureChatLogs = join(directory, 'chat-logs');
+    await captureChatLogs(userData, failureChatLogs).catch(() => []);
+    for (const parent of pickedParents) {
+      await captureChatLogs(parent, failureChatLogs).catch(() => []);
+    }
+    // Main observation is best-effort and never delays the original renderer failure or trace collection.
+    const navigationPath = join(directory, 'main-navigation.json');
+    await writeFile(
+      navigationPath,
+      JSON.stringify({ status: 'pending', installation: navigationInstallation }),
+      'utf8',
+    );
+    const captureNavigation = async (): Promise<void> => {
+      try {
+        await navigationObservation;
+        if (navigationInstallation !== 'installed' || navigationWindow === undefined) {
+          await writeFile(
+            navigationPath,
+            JSON.stringify({ status: 'unavailable', installation: navigationInstallation }),
+            'utf8',
+          );
+          return;
+        }
+        const receipt = await navigationWindow.evaluate<string | undefined, 'snapshot'>(
+          observeDesktopNavigation,
+          'snapshot',
+        );
+        await writeFile(
+          navigationPath,
+          JSON.stringify({ status: receipt === undefined ? 'unavailable' : 'complete', receipt }),
+          'utf8',
+        );
+      } catch {
+        try {
+          await writeFile(
+            navigationPath,
+            JSON.stringify({ status: 'unavailable', installation: navigationInstallation }),
+            'utf8',
+          );
+        } catch {
+          // The initial pending receipt survives an unavailable process or artifact destination.
+        }
+      }
+    };
+    void captureNavigation();
+    if (tracing) {
+      tracing = false;
+      /* A quit-path failure can close the renderer before diagnostics run;
+       * retain Home/process/event logs even when its trace can no longer stop. */
+      await Promise.race([
+        page
+          .context()
+          .tracing.stop({ path: join(directory, 'trace.zip') })
+          .catch(() => undefined),
+        wait(5000),
+      ]);
+    }
+    await page
+      .screenshot({ path: join(directory, 'screenshot.png'), fullPage: true, timeout: 10_000 })
+      .catch(() => undefined);
+    const bodyText = await Promise.race([
+      page
+        // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- `innerText` preserves rendered line breaks in diagnostics.
+        .evaluate(() => document.body.innerText.slice(0, 2000))
+        .catch(() => '(unavailable)'),
+      wait(5000, '(unavailable: renderer collection deadline)'),
+    ]);
+    await writeFile(
+      join(directory, 'diagnostics.log'),
+      [
+        `url: ${JSON.stringify(url)}`,
+        `body: ${bodyText}`,
+        `userData: ${userData}`,
+        `pickedDirectory: ${pickedDirectory}`,
+        '--- console errors ---',
+        consoleErrors.join('\n'),
+        '--- process output ---',
+        output.join(''),
+        '--- picked directory ---',
+        pickedTree.join('\n'),
+        '--- home root ---',
+        homeTree.join('\n'),
+        '--- granted roots ---',
+        grants,
+        '--- desktop.log ---',
+        desktopLog,
+      ].join('\n'),
+      'utf8',
+    );
+    return directory;
+  };
+
+  const close = async (): Promise<void> => {
+    void disposeNavigation();
+    if (tracing) {
+      tracing = false;
+      await Promise.race([
+        page
+          .context()
+          .tracing.stop()
+          .catch(() => undefined),
+        wait(5000),
+      ]);
+    }
+    const exited =
+      child.exitCode === null && child.signalCode === null
+        ? new Promise<void>((resolve) => {
+            child.once('exit', () => {
+              resolve();
+            });
+          })
+        : Promise.resolve();
+    /* Routine fixture disposal bypasses quit holds exercised by their own specs. */
+    await Promise.race([
+      application
+        .evaluate(({ app }) => {
+          app.exit(0);
+        })
+        .catch(() => undefined),
+      wait(shutdownGraceMilliseconds),
+    ]);
+    /* The evaluation settles once main has called `app.exit`, when its shutdown starts rather than ends. A kill there
+     * cuts what Chromium writes on the way out, such as the end of a `--log-net-log` file, so main gets the same bound
+     * to finish exiting before the kill. */
+    await Promise.race([exited, wait(shutdownGraceMilliseconds)]);
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill('SIGKILL');
+    }
+    await exited;
+    if (preparedKernels) {
+      /* Before the roots go, and before a failure keeps them: a closure this launch sealed spares the next spec its
+       * download. The cache is only an optimisation, so a failed copy never fails the spec. */
+      await savePreparedKernels(dependencyStore).catch((error: unknown) => {
+        console.warn('DESKTOP PREPARED KERNELS', 'could not keep the prepared kernels', error);
+      });
+    }
+    /* Field trace validation (formal-verification policy): copy every chat log the
+     * app wrote under Home or the picked project before the roots go. */
+    const chatLogs = chatLogDestination('desktop-e2e', expect.getState().testPath);
+    await captureChatLogs(userData, chatLogs);
+    for (const parent of pickedParents) {
+      await captureChatLogs(parent, chatLogs);
+    }
+    if (captured) {
+      /* Keep the evidence a failing run just produced. */
+      return;
+    }
+    if (!options.preserveProfile) {
+      await removeDesktopRoot(userData);
+    }
+    if (ownedPickedParent !== undefined) {
+      await removeDesktopRoot(ownedPickedParent);
+    }
+  };
+
+  return {
+    analyticsRequests,
+    startupNetworkLogPath,
+    application,
+    capture,
+    close,
+    configRoot,
+    homeRoot: join(userData, 'home'),
+    logPath: join(userData, 'logs/desktop.log'),
+    page,
+    pickedDirectory,
+    pickedDirectories,
+    profileRoot: userData,
+  };
+};
+
+/**
+ * Hand the shell one `tau://` link the way the OS does.
+ *
+ * macOS raises `open-url` on `app`; Windows and Linux pass the link in argv and
+ * main re-raises it through the same slot. Main's listener is a module-scope
+ * `app.on('open-url', …)`, so emitting the event in the main process is the
+ * whole delivery — no packaged bundle and no protocol registration required.
+ *
+ * @param session - The launched shell.
+ * @param link - The `tau://` URL, admitted or not.
+ * @returns Nothing.
+ */
+export const deliverDesktopDeepLink = async (session: DesktopSession, link: string): Promise<void> => {
+  await session.application.evaluate(({ app }, url) => {
+    app.emit('open-url', { preventDefault: () => undefined }, url);
+  }, link);
+};
+
+/**
+ * Complete the production sign-in handoff for a packaged app.
+ *
+ * The shell opens `${TAU_FRONTEND_URL}/auth/sign-in?redirectTo=/auth/desktop?state=…`
+ * in the system browser (captured here by the `shell.openExternal` override) and
+ * waits for a `tau://auth/callback` deep link. R4 deleted the loopback listener,
+ * so there is no port to fetch: this mints the one-time token the web route would
+ * have minted and delivers the callback through `open-url`, the same event macOS
+ * raises. Main's listener is installed at module scope, so emitting on `app`
+ * reaches it exactly as the OS would.
+ */
+export const authenticatePackagedDesktop = async (session: DesktopSession, bearerToken: string): Promise<void> => {
+  let signInError: unknown;
+  // async-iife: the deep-link callback must arrive while renderer sign-in is pending.
+  const signIn = (async (): Promise<void> => {
+    try {
+      await session.page.evaluate(async () => {
+        const { tauAuth } = globalThis as typeof globalThis & { tauAuth: { signIn(): Promise<void> } };
+        await tauAuth.signIn();
+      });
+    } catch (error) {
+      signInError = error;
+    }
+  })();
+  let externalUrl = '';
+  // Authentication also runs in beforeAll; expect.poll requires an active test body.
+  await vi.waitFor(
+    async () => {
+      externalUrl = await session.application.evaluate(() => {
+        const testState = globalThis as typeof globalThis & { __TAU_E2E_EXTERNAL_URL__?: string };
+        return testState.__TAU_E2E_EXTERNAL_URL__ ?? '';
+      });
+      expect(externalUrl, 'Packaged sign-in must open its browser handoff').not.toBe('');
+    },
+    { timeout: 30_000 },
+  );
+  const redirect = new URL(externalUrl).searchParams.get('redirectTo');
+  if (!redirect) {
+    throw new Error(`Packaged desktop sign-in emitted no redirect target: ${externalUrl}`);
+  }
+  const handoff = new URL(redirect, desktopE2EFrontendUrl);
+  const state = handoff.searchParams.get('state');
+  if (!state) {
+    throw new Error(`Packaged desktop sign-in emitted an invalid handoff target: ${handoff.toString()}`);
+  }
+  const generated = await fetch(`${desktopE2EApiUrl}/v1/auth/one-time-token/generate`, {
+    headers: { authorization: `Bearer ${bearerToken}` },
+  });
+  if (!generated.ok) {
+    throw new Error(`Packaged desktop token generation failed with HTTP ${String(generated.status)}.`);
+  }
+  const oneTimeToken = ((await generated.json()) as { readonly token?: string }).token;
+  if (!oneTimeToken) {
+    throw new Error('Packaged desktop token generation returned no token.');
+  }
+  const callback = new URL('tau://auth/callback');
+  callback.searchParams.set('ott', oneTimeToken);
+  callback.searchParams.set('state', state);
+  await deliverDesktopDeepLink(session, callback.toString());
+  await signIn;
+  if (signInError !== undefined) {
+    throw signInError instanceof Error
+      ? signInError
+      : new Error('Packaged desktop sign-in failed.', { cause: signInError });
+  }
+};

@@ -1,25 +1,65 @@
-import { renderHook, waitFor } from '@testing-library/react';
+import { contextMemoryMaxBytes, contextMemoryMaxLines } from '@taucad/chat/schemas';
+import { truncateMemoryHead } from '#hooks/use-context-payload.js';
+import { renderHook, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ObservationService } from '@taucad/fs-client/observation-service';
+import type { FileContentResult } from '@taucad/fs-client/file-content-service';
 import type { FileEntry } from '@taucad/types';
+import type { ListedDirectoryEntry } from '@taucad/fs-client/directory-listing';
+import { systemSkillsCatalog } from '#lib/system-skills-catalog.js';
 
 const mockReadFile = vi.fn<(path: string) => Promise<Uint8Array<ArrayBuffer>>>();
-const mockListDirectory =
-  vi.fn<
-    (path: string) => Promise<Array<{ name: string; path: string; isFolder: boolean; size: number; mtimeMs: number }>>
-  >();
+const mockListDirectory = vi.fn<(path: string) => Promise<ListedDirectoryEntry[]>>();
 const mockGetEntry = vi.fn<(path: string) => Promise<FileEntry | undefined>>();
+const mockSubscribeTree = vi.fn<(callback: () => void) => () => void>();
+
+const mockTreeService = {
+  getTreeSnapshot: () => new Map<string, FileEntry>(),
+  listDirectory: mockListDirectory,
+  getEntry: mockGetEntry,
+  subscribeTree: mockSubscribeTree,
+  subscribePath: (_path: string, callback: () => void) => mockSubscribeTree(callback),
+};
+
+/** A ready recursive watch that never changes: each hook mount reads the catalog afresh. */
+let catalogClosed = Promise.withResolvers<void>();
+const contentObservations = new Map<string, ObservationService<FileContentResult>>();
+const mockContentService = {
+  observeContent: (path: string) => {
+    let service = contentObservations.get(path);
+    if (!service) {
+      service = new ObservationService<FileContentResult>({
+        resource: path,
+        watch: () => ({ ready: Promise.resolve(), closed: catalogClosed.promise, dispose: () => undefined }),
+        read: async () => {
+          try {
+            return { kind: 'text', content: await mockReadFile(path) };
+          } catch {
+            return { kind: 'orphaned' };
+          }
+        },
+      });
+      contentObservations.set(path, service);
+    }
+    return service;
+  },
+  watchReady: () => ({
+    ready: Promise.resolve(),
+    closed: catalogClosed.promise,
+    dispose: () => undefined,
+  }),
+};
 
 vi.mock('#hooks/use-file-manager.js', () => ({
   useFileManager: () => ({
     readFile: mockReadFile,
-    treeService: {
-      listDirectory: mockListDirectory,
-      getEntry: mockGetEntry,
-    },
+    treeService: mockTreeService,
+    contentService: mockContentService,
   }),
 }));
 
-const { useContextPayload } = await import('#hooks/use-context-payload.js');
+const { useContextPayload, awaitContextPayload, resetContextPayloadPublication } =
+  await import('#hooks/use-context-payload.js');
 
 const encoder = new TextEncoder();
 
@@ -27,55 +67,84 @@ function makeSkillMd(name: string, description: string): Uint8Array<ArrayBuffer>
   return encoder.encode(`---\nname: ${name}\ndescription: '${description}'\n---\n\n# ${name}\n\nSkill content.`);
 }
 
-function skillDirectoryRow(name: string): {
-  name: string;
-  path: string;
-  isFolder: boolean;
-  size: number;
-  mtimeMs: number;
-} {
-  return { name, path: `.tau/skills/${name}`, isFolder: true, size: 0, mtimeMs: 0 };
+function skillDirectoryRow(name: string): ListedDirectoryEntry {
+  return { name, path: `.agents/skills/${name}`, isFolder: true, size: 0, mtimeMs: 0 };
 }
 
-function skillFileRow(name: string): { name: string; path: string; isFolder: boolean; size: number; mtimeMs: number } {
-  return { name, path: `.tau/skills/${name}`, isFolder: false, size: 0, mtimeMs: 0 };
+function skillFileRow(name: string): ListedDirectoryEntry {
+  return {
+    name,
+    path: `.agents/skills/${name}`,
+    isFolder: false,
+    size: 0,
+    mtimeMs: 0,
+    contentKind: 'text',
+    lineCount: 1,
+  };
 }
 
 function makeFileEntry(path: string, type: 'file' | 'dir' = 'file'): FileEntry {
-  return { path, name: path.split('/').pop()!, type, size: 100, isLoaded: true, mtimeMs: 0 };
+  const name = path.split('/').pop()!;
+  if (type === 'dir') {
+    return { path, name, type: 'dir', size: 100, isLoaded: true, mtimeMs: 0 };
+  }
+
+  return { path, name, type: 'file', size: 100, isLoaded: true, mtimeMs: 0, contentKind: 'text', lineCount: 1 };
 }
 
 describe('useContextPayload', () => {
   beforeEach(() => {
+    contentObservations.clear();
+    resetContextPayloadPublication();
     vi.clearAllMocks();
+    catalogClosed = Promise.withResolvers<void>();
     mockListDirectory.mockResolvedValue([]);
     mockGetEntry.mockResolvedValue(undefined);
     mockReadFile.mockRejectedValue(new Error('not found'));
+    mockSubscribeTree.mockReturnValue(() => undefined);
   });
 
-  it('should return undefined when .tau/skills is empty and no AGENTS.md', async () => {
+  it('should include virtual system skills when .agents/skills is empty and no AGENTS.md', async () => {
     const { result } = renderHook(() => useContextPayload());
 
     await waitFor(() => {
-      expect(mockListDirectory).toHaveBeenCalledWith('.tau/skills');
+      expect(result.current?.skills).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: 'create-skill',
+            source: 'system',
+            resourceUri: 'system:skills/create-skill/SKILL.md',
+          }),
+        ]),
+      );
     });
-
-    expect(result.current).toBeUndefined();
   });
 
-  it('should return undefined when no skill directories exist', async () => {
+  it('should exclude unavailable skill authority from a new prompt after isolated watch closure', async () => {
+    const hook = renderHook(() => useContextPayload());
+    await waitFor(() => {
+      expect(hook.result.current?.skills?.length).toBeGreaterThan(0);
+    });
+    await act(async () => {
+      catalogClosed.resolve();
+    });
+    expect(hook.result.current?.skills).toBeUndefined();
+    hook.unmount();
+  });
+
+  it('should keep virtual system skills when no user skill directories exist', async () => {
     mockListDirectory.mockResolvedValue([skillFileRow('readme.md')]);
 
     const { result } = renderHook(() => useContextPayload());
 
     await waitFor(() => {
-      expect(mockListDirectory).toHaveBeenCalled();
+      expect(result.current?.skills).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: 'create-skill', source: 'system' })]),
+      );
     });
-
-    expect(result.current).toBeUndefined();
   });
 
-  it('should discover skills from .tau/skills/ subdirectories', async () => {
+  it('should discover skills from .agents/skills/ subdirectories', async () => {
     mockListDirectory.mockResolvedValue([skillDirectoryRow('cad-expert'), skillDirectoryRow('testing')]);
     mockReadFile.mockImplementation(async (path: string) => {
       if (path.includes('cad-expert')) {
@@ -90,13 +159,29 @@ describe('useContextPayload', () => {
     const { result } = renderHook(() => useContextPayload());
 
     await waitFor(() => {
-      expect(result.current?.skills).toHaveLength(2);
+      expect(result.current?.skills).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: 'cad-expert' }),
+          expect.objectContaining({ name: 'testing' }),
+          expect.objectContaining({ name: 'create-skill', source: 'system' }),
+        ]),
+      );
     });
 
     expect(result.current!.skills).toEqual(
       expect.arrayContaining([
-        { name: 'cad-expert', description: 'CAD modeling expertise', path: '.tau/skills/cad-expert' },
-        { name: 'testing', description: 'Test writing support', path: '.tau/skills/testing' },
+        expect.objectContaining({
+          name: 'cad-expert',
+          description: 'CAD modeling expertise',
+          path: '.agents/skills/cad-expert',
+          source: 'user',
+        }),
+        expect.objectContaining({
+          name: 'testing',
+          description: 'Test writing support',
+          path: '.agents/skills/testing',
+          source: 'user',
+        }),
       ]),
     );
   });
@@ -121,16 +206,16 @@ describe('useContextPayload', () => {
     expect(result.current!.memory).toEqual({ '.tau/AGENTS.md': agentsContent });
   });
 
-  it('should handle empty .tau/skills/ directory', async () => {
+  it('should handle empty .agents/skills/ directory while retaining system skills', async () => {
     mockListDirectory.mockResolvedValue([]);
 
     const { result } = renderHook(() => useContextPayload());
 
     await waitFor(() => {
-      expect(mockListDirectory).toHaveBeenCalled();
+      expect(result.current?.skills).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: 'create-skill', source: 'system' })]),
+      );
     });
-
-    expect(result.current).toBeUndefined();
   });
 
   it('should skip SKILL.md files with malformed frontmatter', async () => {
@@ -148,14 +233,23 @@ describe('useContextPayload', () => {
     const { result } = renderHook(() => useContextPayload());
 
     await waitFor(() => {
-      expect(result.current?.skills).toHaveLength(1);
+      expect(result.current?.skills).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: 'good-skill' }),
+          expect.objectContaining({ name: 'create-skill', source: 'system' }),
+        ]),
+      );
     });
 
-    expect(result.current!.skills![0]).toEqual({
-      name: 'good-skill',
-      description: 'Works correctly',
-      path: '.tau/skills/good',
-    });
+    expect(result.current!.skills).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'good-skill',
+          description: 'Works correctly',
+          path: '.agents/skills/good',
+        }),
+      ]),
+    );
   });
 
   it('should return both skills and memory when both present', async () => {
@@ -174,11 +268,16 @@ describe('useContextPayload', () => {
     const { result } = renderHook(() => useContextPayload());
 
     await waitFor(() => {
-      expect(result.current?.skills).toHaveLength(1);
+      expect(result.current?.skills).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: 'my-skill' }),
+          expect.objectContaining({ name: 'create-skill', source: 'system' }),
+        ]),
+      );
       expect(result.current?.memory).toBeDefined();
     });
 
-    expect(result.current!.skills![0]!.name).toBe('my-skill');
+    expect(result.current!.skills).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'my-skill' })]));
     expect(result.current!.memory!['.tau/AGENTS.md']).toBe('Memory content');
   });
 
@@ -194,9 +293,137 @@ describe('useContextPayload', () => {
     const { result } = renderHook(() => useContextPayload());
 
     await waitFor(() => {
-      expect(result.current?.skills).toHaveLength(1);
+      expect(result.current?.skills).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: 'good-skill' }),
+          expect.objectContaining({ name: 'create-skill', source: 'system' }),
+        ]),
+      );
     });
 
-    expect(result.current!.skills![0]!.name).toBe('good-skill');
+    expect(result.current!.skills).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'good-skill' })]));
+  });
+
+  // `.agents/skills` is the only filesystem skills root (blueprint L7).
+  it('ignores the legacy .tau/skills directory entirely', async () => {
+    mockListDirectory.mockImplementation(async (path: string) => {
+      if (path === '.tau/skills') {
+        return [{ name: 'legacy-skill', path: '.tau/skills/legacy-skill', isFolder: true, size: 0, mtimeMs: 0 }];
+      }
+      return [];
+    });
+    mockReadFile.mockImplementation(async (path: string) => {
+      if (path === '.tau/skills/legacy-skill/SKILL.md') {
+        return makeSkillMd('legacy-skill', 'Legacy help');
+      }
+      throw new Error('not found');
+    });
+
+    const { result } = renderHook(() => useContextPayload());
+
+    await waitFor(() => {
+      expect(result.current?.skills).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: 'create-skill', source: 'system' })]),
+      );
+    });
+
+    expect(result.current!.skills).not.toContainEqual(expect.objectContaining({ name: 'legacy-skill' }));
+    expect(mockListDirectory).not.toHaveBeenCalledWith('.tau/skills');
+  });
+
+  it('should discover system skills as virtual resources without filesystem reads', async () => {
+    const createSkill = systemSkillsCatalog.find((skill) => skill.slug === 'create-skill');
+    if (!createSkill) {
+      throw new Error('Expected system create-skill to be registered');
+    }
+
+    const { result } = renderHook(() => useContextPayload());
+
+    await waitFor(() => {
+      expect(result.current?.skills).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: 'create-skill', source: 'system' })]),
+      );
+    });
+
+    expect(result.current!.skills).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'create-skill',
+          resourceUri: 'system:skills/create-skill/SKILL.md',
+          source: 'system',
+          version: '1.0.0',
+        }),
+      ]),
+    );
+  });
+});
+
+describe('awaitContextPayload', () => {
+  beforeEach(() => {
+    contentObservations.clear();
+    resetContextPayloadPublication();
+    vi.clearAllMocks();
+    catalogClosed = Promise.withResolvers<void>();
+    mockGetEntry.mockResolvedValue(undefined);
+    mockReadFile.mockRejectedValue(new Error('not found'));
+    mockSubscribeTree.mockReturnValue(() => undefined);
+  });
+
+  it('should resolve at once when no chat surface publishes a payload', async () => {
+    await expect(awaitContextPayload()).resolves.toBeUndefined();
+  });
+
+  it('should hand the dispatch the catalog once it has been read, not the payload before it', async () => {
+    const listing = Promise.withResolvers<ListedDirectoryEntry[]>();
+    mockListDirectory.mockReturnValue(listing.promise);
+    const hook = renderHook(() => useContextPayload());
+    let settled = false;
+    const awaited = (async () => {
+      const payload = await awaitContextPayload();
+      settled = true;
+      return payload;
+    })();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(settled, 'the wait outlasts a pending catalog').toBe(false);
+    await act(async () => {
+      listing.resolve([]);
+    });
+    const payload = await awaited;
+    expect(payload?.skills).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'create-skill', source: 'system' })]),
+    );
+    hook.unmount();
+  });
+
+  it('should send the payload it has when the catalog outlasts the wait', async () => {
+    const never = Promise.withResolvers<ListedDirectoryEntry[]>();
+    mockListDirectory.mockReturnValue(never.promise);
+    const hook = renderHook(() => useContextPayload());
+    await expect(awaitContextPayload(10)).resolves.toBeUndefined();
+    hook.unmount();
+  });
+});
+
+describe('CH-10 memory head truncation', () => {
+  it('keeps the head and appends a notice past the line cap', () => {
+    const text = Array.from({ length: contextMemoryMaxLines + 50 }, (_, index) => `line ${String(index)}`).join('\n');
+    const out = truncateMemoryHead(text);
+    expect(out.startsWith('line 0\n')).toBe(true);
+    expect(out).toContain(`line ${String(contextMemoryMaxLines - 1)}`);
+    expect(out).not.toContain(`line ${String(contextMemoryMaxLines)}\n`);
+    expect(out).toContain('[AGENTS.md truncated');
+  });
+
+  it('enforces the byte ceiling', () => {
+    const text = 'y'.repeat(contextMemoryMaxBytes + 4096);
+    const out = truncateMemoryHead(text);
+    expect(out.length).toBeLessThanOrEqual(contextMemoryMaxBytes + 256);
+    expect(out).toContain('[AGENTS.md truncated');
+  });
+
+  it('returns short content unchanged', () => {
+    expect(truncateMemoryHead('short')).toBe('short');
   });
 });

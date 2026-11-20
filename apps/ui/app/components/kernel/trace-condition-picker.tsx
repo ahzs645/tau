@@ -1,13 +1,15 @@
 import { useCallback } from 'react';
-import { ChevronDown, Clock, Copy, Tag, Circle, Plus, X, Trash2 } from 'lucide-react';
+import { ChevronDown, Clock, Tag, Circle, Plus, X, Trash2 } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '#components/ui/dropdown-menu.js';
-import { Button } from '#components/ui/button.js';
-import { cn } from '#utils/ui.utils.js';
+} from '@taucad/ui/components/dropdown-menu';
+import { Button } from '@taucad/ui/components/button';
+import { CopyButton } from '@taucad/ui/components/copy-button';
+import { Input } from '@taucad/ui/components/input';
+import { cn } from '@taucad/ui/utils/cn';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -99,17 +101,11 @@ function ConditionRow({
     <div className='flex items-center gap-1'>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button
-            type='button'
-            className={cn(
-              'flex h-7 items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs',
-              'transition-colors hover:bg-muted',
-            )}
-          >
+          <Button type='button' variant='outline' size='xs' className='h-7 gap-1.5 px-2 font-normal'>
             <config.icon className='size-3 text-muted-foreground' />
             <span>{config.label}</span>
             <ChevronDown className='size-3 text-muted-foreground' />
-          </button>
+          </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align='start' className='min-w-36'>
           {(Object.entries(fieldConfigs) as Array<[FilterField, FieldConfig]>).map(([key, fc]) => (
@@ -128,16 +124,10 @@ function ConditionRow({
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button
-            type='button'
-            className={cn(
-              'flex h-7 items-center gap-1 rounded-md border border-border bg-background px-2 text-xs',
-              'transition-colors hover:bg-muted',
-            )}
-          >
+          <Button type='button' variant='outline' size='xs' className='h-7 gap-1 px-2 font-normal'>
             <span>{condition.operator}</span>
             <ChevronDown className='size-3 text-muted-foreground' />
-          </button>
+          </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align='start' className='min-w-16'>
           {config.operators.map((op) => (
@@ -156,16 +146,10 @@ function ConditionRow({
       {config.enumValues ? (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button
-              type='button'
-              className={cn(
-                'flex h-7 min-w-20 items-center gap-1 rounded-md border border-border bg-background px-2 text-xs',
-                'transition-colors hover:bg-muted',
-              )}
-            >
-              <span className='flex-1 text-left'>{condition.value || 'Select...'}</span>
+            <Button type='button' variant='outline' size='xs' className='h-7 min-w-20 gap-1 px-2 font-normal'>
+              <span className='flex-1 text-left'>{condition.value || 'Select…'}</span>
               <ChevronDown className='size-3 text-muted-foreground' />
-            </button>
+            </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align='start' className='min-w-28'>
             {config.enumValues.map((v) => (
@@ -182,13 +166,9 @@ function ConditionRow({
         </DropdownMenu>
       ) : (
         <div className='flex items-center gap-0'>
-          <input
+          <Input
             type={config.unit ? 'number' : 'text'}
-            className={cn(
-              'h-7 rounded-md border border-border bg-background px-2 text-xs outline-none',
-              'focus:ring-1 focus:ring-ring',
-              config.unit ? 'w-16' : 'w-24',
-            )}
+            className={cn('h-7 border-border px-2 text-xs', config.unit ? 'w-16' : 'w-24')}
             placeholder={config.unit ? '0' : 'value'}
             value={condition.value}
             onChange={(event) => {
@@ -199,13 +179,9 @@ function ConditionRow({
         </div>
       )}
 
-      <button
-        type='button'
-        className='flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground'
-        onClick={onRemove}
-      >
+      <Button type='button' variant='ghost' size='icon-sm' aria-label='Remove filter' onClick={onRemove}>
         <X className='size-3' />
-      </button>
+      </Button>
     </div>
   );
 }
@@ -241,15 +217,16 @@ export function TraceConditionPicker({
     onChange([]);
   }, [onChange]);
 
-  const handleCopy = useCallback(() => {
-    const text = conditions
-      .map((c) => {
-        const config = fieldConfigs[c.field];
-        return `${config.label} ${c.operator} ${c.value}${config.unit ?? ''}`;
-      })
-      .join(' AND ');
-    void navigator.clipboard.writeText(text);
-  }, [conditions]);
+  const getConditionsText = useCallback(
+    () =>
+      conditions
+        .map((c) => {
+          const config = fieldConfigs[c.field];
+          return `${config.label} ${c.operator} ${c.value}${config.unit ?? ''}`;
+        })
+        .join(' AND '),
+    [conditions],
+  );
 
   return (
     <div className='flex flex-col gap-2'>
@@ -258,10 +235,8 @@ export function TraceConditionPicker({
         <div className='flex items-center gap-1'>
           {conditions.length > 0 && (
             <>
-              <Button variant='ghost' size='xs' onClick={handleCopy}>
-                <Copy className='size-3' />
-              </Button>
-              <Button variant='ghost' size='xs' onClick={handleClear}>
+              <CopyButton size='icon-xs' tooltip='Copy filters' aria-label='Copy filters' getText={getConditionsText} />
+              <Button variant='ghost' size='xs' aria-label='Clear filters' onClick={handleClear}>
                 <Trash2 className='size-3' />
               </Button>
             </>

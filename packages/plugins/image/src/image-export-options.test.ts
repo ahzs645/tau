@@ -1,0 +1,576 @@
+import { describe, it, expect } from 'vitest';
+import { toJSONSchema } from 'zod';
+import type { JSONSchema7, JSONSchema7Definition } from '@taucad/json-schema';
+import { renderImageMaxSections } from 'nanoraster';
+import { imageEdgeSchemas } from '#image-export-options.js';
+
+const requireSchema = (value: JSONSchema7Definition | undefined, message: string): JSONSchema7 => {
+  if (value === undefined || typeof value === 'boolean') {
+    throw new TypeError(message);
+  }
+  return value;
+};
+
+describe('imageEdgeSchemas', () => {
+  it('should expose every route option as JSON Schema', () => {
+    for (const edgeSchema of Object.values(imageEdgeSchemas)) {
+      const schema = toJSONSchema(edgeSchema, { target: 'draft-7' });
+      for (const branch of schema.anyOf ?? []) {
+        expect(branch).not.toBe(false);
+        expect(branch).not.toBe(true);
+        if (typeof branch === 'object') {
+          expect(branch.properties).toHaveProperty('width');
+          expect(branch.properties).toHaveProperty('sections');
+        }
+      }
+    }
+  });
+
+  describe('defaults', () => {
+    it('should apply the thumbnail preset defaults for png with an empty input', () => {
+      expect(imageEdgeSchemas.png.parse({})).toEqual({
+        width: 768,
+        height: 432,
+        lineWidth: 3,
+        surfaces: true,
+        lines: true,
+        axes: false,
+        scaleBar: false,
+        lighting: {
+          lights: [
+            { direction: [1, 1, 1], color: [2.5, 2.5, 2.5] },
+            { direction: [2.3, 0, 3], color: [1, 1, 1] },
+          ],
+          ambient: 0.13,
+          environment: 'studio',
+          space: 'view',
+          exposure: 0.5,
+        },
+        world: { up: '+z', forward: '-y', unit: 'meter' },
+        mode: 'single',
+        camera: {
+          framing: 'fit',
+          direction: [0.6123724357, -0.6123724357, 0.5],
+          up: [0, 0, 1],
+          margin: 0.1,
+          projection: { kind: 'perspective', verticalFieldOfView: 45 },
+        },
+      });
+    });
+
+    it('should leave the png/webp background transparent by default', () => {
+      expect(imageEdgeSchemas.png.parse({}).background).toBeUndefined();
+      expect(imageEdgeSchemas.webp.parse({}).background).toBeUndefined();
+    });
+
+    it('should default webp to lossless quality', () => {
+      expect(imageEdgeSchemas.webp.parse({}).quality).toBe(1);
+    });
+
+    it('should default the jpeg background to opaque white', () => {
+      expect(imageEdgeSchemas.jpeg.parse({})).toMatchObject({ background: '#FFFFFF', quality: 0.92 });
+    });
+
+    it('should create valid batch, fixed-camera, and section-plane states', () => {
+      expect(imageEdgeSchemas.png.parse({ mode: 'batch' })).toMatchObject({
+        mode: 'batch',
+        views: [{ id: 'view-1', camera: { framing: 'fit' } }],
+      });
+      expect(imageEdgeSchemas.png.parse({ camera: { framing: 'fixed' } })).toMatchObject({
+        camera: {
+          framing: 'fixed',
+          position: [3, -3, 2],
+          target: [0, 0, 0],
+          up: [0, 0, 1],
+        },
+      });
+      expect(imageEdgeSchemas.png.parse({ camera: { framing: 'bounds' } })).toMatchObject({
+        camera: {
+          framing: 'bounds',
+          direction: [0.6123724357, -0.6123724357, 0.5],
+          up: [0, 0, 1],
+          margin: 0.1,
+          projection: { kind: 'perspective', verticalFieldOfView: 45 },
+        },
+      });
+      expect(imageEdgeSchemas.png.parse({ sections: { planes: [{}] } })).toMatchObject({
+        sections: {
+          planes: [{ point: [0, 0, 0], normal: [0, 0, 1] }],
+        },
+      });
+    });
+
+    it('should emit editable camera and section vectors in JSON Schema', () => {
+      const schema = toJSONSchema(imageEdgeSchemas.png, { target: 'draft-7', io: 'input' });
+      expect(JSON.stringify(schema)).not.toContain('"readOnly":true');
+    });
+
+    it('should create a complete visible-primitive reference and publish its defaults', () => {
+      expect(imageEdgeSchemas.png.parse({ visiblePrimitives: [{}] })).toMatchObject({
+        visiblePrimitives: [{ nodeIndex: 0, meshIndex: 0, primitiveIndex: 0 }],
+      });
+
+      const schema = toJSONSchema(imageEdgeSchemas.png, { target: 'draft-7', io: 'input' }) as JSONSchema7;
+      const single = (schema.anyOf ?? [])
+        .map((branch) => requireSchema(branch, 'Expected an object branch'))
+        .find((branch) => branch.title === 'Single');
+      const visiblePrimitives = requireSchema(
+        single?.properties?.['visiblePrimitives'],
+        'Expected the visible-primitives schema',
+      );
+      if (Array.isArray(visiblePrimitives.items)) {
+        throw new TypeError('Expected one visible-primitives item schema');
+      }
+      const item = requireSchema(visiblePrimitives.items, 'Expected the visible-primitives item schema');
+
+      expect(item.properties).toMatchObject({
+        nodeIndex: { default: 0 },
+        meshIndex: { default: 0 },
+        primitiveIndex: { default: 0 },
+      });
+      expect(item.default).toEqual({ nodeIndex: 0, meshIndex: 0, primitiveIndex: 0 });
+      expect(item.required).toEqual(['nodeIndex', 'meshIndex', 'primitiveIndex']);
+    });
+
+    it('should publish semantic camera and projection branch titles', () => {
+      const schema = toJSONSchema(imageEdgeSchemas.png, { target: 'draft-7', io: 'input' }) as JSONSchema7;
+      const single = (schema.anyOf ?? [])
+        .map((branch) => requireSchema(branch, 'Expected an object branch'))
+        .find((branch) => branch.title === 'Single');
+      const camera = requireSchema(single?.properties?.['camera'], 'Expected the camera JSON Schema');
+      const lighting = requireSchema(single?.properties?.['lighting'], 'Expected the lighting JSON Schema');
+
+      expect((lighting.anyOf ?? []).map((branch) => requireSchema(branch, 'Expected a lighting branch').title)).toEqual(
+        ['Studio', 'Directional lights'],
+      );
+
+      const cameraBranches = (camera.oneOf ?? []).map((branch) => requireSchema(branch, 'Expected a camera branch'));
+      expect(cameraBranches.map((branch) => branch.title)).toEqual(['Fit', 'Bounds', 'Fixed']);
+      for (const branch of cameraBranches) {
+        const projection = requireSchema(branch.properties?.['projection'], 'Expected a projection JSON Schema');
+        expect(
+          (projection.oneOf ?? []).map((option) => requireSchema(option, 'Expected a projection branch').title),
+        ).toEqual(['Perspective', 'Orthographic']);
+      }
+    });
+  });
+
+  describe('validation', () => {
+    it('should reject a dimension outside 16–8192', () => {
+      expect(() => imageEdgeSchemas.png.parse({ width: 8 })).toThrow();
+      expect(() => imageEdgeSchemas.png.parse({ height: 8193 })).toThrow();
+    });
+
+    it('should reject a margin outside 0–0.5', () => {
+      expect(() => imageEdgeSchemas.png.parse({ camera: { framing: 'fit', margin: 0.75 } })).toThrow();
+    });
+
+    it('should accept only right-handed caller worlds', () => {
+      expect(imageEdgeSchemas.png.parse({}).world).toEqual({ up: '+z', forward: '-y', unit: 'meter' });
+      expect(imageEdgeSchemas.png.safeParse({ world: { up: '+z', forward: '+y', unit: 'meter' } }).success).toBe(false);
+    });
+
+    it('should validate fixed placement, roll, projection, zoom, and clipping as one camera', () => {
+      const camera = {
+        framing: 'fixed',
+        position: [8, -6, 4],
+        target: [1, 2, 3],
+        up: [0.1, 0.2, 0.97],
+        projection: { kind: 'perspective', verticalFieldOfView: 52, zoom: 1.4 },
+        clipping: { near: 0.2, far: 900 },
+      } as const;
+      const parsed = imageEdgeSchemas.png.parse({ camera });
+      if (parsed.mode !== 'single') {
+        throw new Error('Expected single-image options');
+      }
+      expect(parsed.camera).toEqual(camera);
+      expect(imageEdgeSchemas.png.safeParse({ camera: { ...camera, position: camera.target } }).success).toBe(false);
+      expect(imageEdgeSchemas.png.safeParse({ camera: { ...camera, up: [7, -8, 1] } }).success).toBe(false);
+      expect(imageEdgeSchemas.png.safeParse({ camera: { ...camera, clipping: { near: 1, far: 0.5 } } }).success).toBe(
+        false,
+      );
+    });
+
+    it('should compare camera direction and up after normalizing their magnitudes', () => {
+      expect(
+        imageEdgeSchemas.png.safeParse({
+          camera: { framing: 'fit', direction: [2e-6, 0, 0], up: [0, 2e-6, 0] },
+        }).success,
+      ).toBe(true);
+      expect(
+        imageEdgeSchemas.png.safeParse({
+          camera: { framing: 'fit', direction: [1e9, 0, 0], up: [1e9, 1, 0] },
+        }).success,
+      ).toBe(false);
+    });
+
+    it('should validate presentation state at the renderer boundary', () => {
+      const presentation = {
+        surfaces: false,
+        lines: true,
+        visiblePrimitives: [
+          { nodeIndex: 0, meshIndex: 1, primitiveIndex: 2 },
+          { nodeIndex: 3, meshIndex: 1, primitiveIndex: 2 },
+        ],
+        sections: {
+          planes: [
+            { point: [0, 0, 0], normal: [0, 0, 1] },
+            { point: [1, 2, 3], normal: [1, 0, 0] },
+          ],
+          clipSurfaces: true,
+          clipLines: false,
+        },
+      } as const;
+
+      expect(imageEdgeSchemas.png.parse(presentation)).toMatchObject(presentation);
+      expect(
+        imageEdgeSchemas.png.safeParse({
+          visiblePrimitives: [
+            { nodeIndex: 0, meshIndex: 1, primitiveIndex: 2 },
+            { nodeIndex: 0, meshIndex: 1, primitiveIndex: 2 },
+          ],
+        }).success,
+      ).toBe(false);
+      expect(imageEdgeSchemas.png.safeParse({ sections: { planes: [] } }).success).toBe(false);
+      expect(
+        imageEdgeSchemas.png.safeParse({
+          sections: { planes: Array.from({ length: renderImageMaxSections }, () => ({})) },
+        }).success,
+      ).toBe(true);
+      expect(
+        imageEdgeSchemas.png.safeParse({
+          sections: { planes: Array.from({ length: renderImageMaxSections + 1 }, () => ({})) },
+        }).success,
+      ).toBe(false);
+      expect(
+        imageEdgeSchemas.png.safeParse({ sections: { planes: [{ point: [0, 0, 0], normal: [0, 0, 0] }] } }).success,
+      ).toBe(false);
+      expect(
+        imageEdgeSchemas.png.safeParse({
+          visiblePrimitives: [{ nodeIndex: 0, meshIndex: 1, primitiveIndex: 2, componentId: 'private' }],
+        }).success,
+      ).toBe(false);
+    });
+
+    it('should accept webp quality and reject quality outside 0–1', () => {
+      expect(imageEdgeSchemas.webp.parse({ quality: 0 }).quality).toBe(0);
+      expect(imageEdgeSchemas.webp.parse({ quality: 0.9 }).quality).toBe(0.9);
+      expect(imageEdgeSchemas.webp.parse({ quality: 1 }).quality).toBe(1);
+      expect(() => imageEdgeSchemas.webp.parse({ quality: -0.1 })).toThrow();
+      expect(() => imageEdgeSchemas.webp.parse({ quality: 1.1 })).toThrow();
+      expect(() => imageEdgeSchemas.jpeg.parse({ quality: 1.5 })).toThrow();
+      expect(() => imageEdgeSchemas.png.parse({ quality: 0.5 })).toThrow();
+    });
+
+    it('should reject an invalid background string', () => {
+      expect(() => imageEdgeSchemas.jpeg.parse({ background: '#fff' })).toThrow();
+      expect(() => imageEdgeSchemas.jpeg.parse({ background: '#FFFFFF00' })).toThrow('JPEG background must be opaque');
+    });
+
+    it('should accept a caller-supplied opaque background for png', () => {
+      expect(imageEdgeSchemas.png.parse({ background: '#FFFFFFFF' }).background).toBe('#FFFFFFFF');
+    });
+
+    it('should pass through a strict nanoraster lighting preset or rig', () => {
+      expect(imageEdgeSchemas.png.parse({ lighting: 'studio' }).lighting).toBe('studio');
+      const lighting = {
+        lights: [{ direction: [0, 1, 0], color: [2.09, 2.09, 2.09] }],
+        ambient: 0,
+        environment: 'none',
+        space: 'world',
+        exposure: 0.01,
+      } as const;
+      expect(imageEdgeSchemas.webp.parse({ lighting }).lighting).toEqual(lighting);
+      expect(imageEdgeSchemas.png.safeParse({ lighting: { ...lighting, glow: 1 } }).success).toBe(false);
+      expect(
+        imageEdgeSchemas.png.safeParse({
+          lighting: { lights: Array.from({ length: 9 }, () => lighting.lights[0]) },
+        }).success,
+      ).toBe(false);
+      expect(
+        imageEdgeSchemas.png.safeParse({ lighting: { lights: [{ direction: [0, 0, 0], color: [1, 1, 1] }] } }).success,
+      ).toBe(false);
+      expect(imageEdgeSchemas.png.safeParse({ lighting: { lights: [], exposure: 17 } }).success).toBe(false);
+    });
+
+    it("should accept nanoraster's headlamp and environment object with every value stated", () => {
+      const lighting = {
+        headlamp: { intensity: 1.5, rightOffset: 2, upOffset: 2 },
+        lights: [],
+        ambient: 0.036,
+        environment: { intensity: 1 },
+        space: 'view',
+        exposure: 1,
+      } as const;
+      expect(imageEdgeSchemas.png.parse({ lighting }).lighting).toStrictEqual(lighting);
+      const cards = {
+        intensity: 0.5,
+        cards: [
+          { position: [1, 1, 1], size: [1.2, 1.2], intensity: 64 },
+          { position: [-3, 1, 0.5], size: [4, 4], intensity: 1.2, rotation: [Math.PI / 8, Math.PI / 3, 0] },
+        ],
+      } as const;
+      expect(imageEdgeSchemas.webp.parse({ lighting: { lights: [], environment: cards } }).lighting).toStrictEqual({
+        lights: [],
+        environment: cards,
+      });
+      expect(
+        imageEdgeSchemas.png.parse({ lighting: { lights: [], environment: { intensity: 0, cards: [] } } }).lighting,
+      ).toStrictEqual({ lights: [], environment: { intensity: 0, cards: [] } });
+    });
+
+    it('should reject a headlamp or environment that leaves a value to nanoraster or exceeds its bounds', () => {
+      const card = { position: [0, 0, 2], size: [1, 1], intensity: 1 } as const;
+      for (const invalid of [
+        { lights: [], headlamp: {} },
+        { lights: [], headlamp: { intensity: 1.5, rightOffset: 2 } },
+        { lights: [], headlamp: { intensity: 33, rightOffset: 2, upOffset: 2 } },
+        { lights: [], headlamp: { intensity: 1.5, rightOffset: 65, upOffset: 2 } },
+        { lights: [], headlamp: { intensity: 1.5, rightOffset: 2, upOffset: 2, color: [1, 1, 1] } },
+        { lights: [], environment: {} },
+        { lights: [], environment: { cards: [card] } },
+        { lights: [], environment: { intensity: 17 } },
+        { lights: [], environment: { intensity: 1, cards: Array.from({ length: 17 }, () => card) } },
+        { lights: [], environment: { intensity: 1, cards: [{ ...card, position: [0, 0, 0] }] } },
+        { lights: [], environment: { intensity: 1, cards: [{ ...card, position: [0, 0, 65] }] } },
+        { lights: [], environment: { intensity: 1, cards: [{ ...card, size: [0, 1] }] } },
+        { lights: [], environment: { intensity: 1, cards: [{ ...card, intensity: 4097 }] } },
+        { lights: [], environment: { intensity: 1, cards: [{ ...card, form: 'circle' }] } },
+        { lights: [], environment: 'room' },
+      ]) {
+        expect(imageEdgeSchemas.png.safeParse({ lighting: invalid }).success, JSON.stringify(invalid)).toBe(false);
+      }
+    });
+
+    it('should count a lit headlamp against the light limit as nanoraster does', () => {
+      const light = { direction: [0, 0, 1], color: [1, 1, 1] } as const;
+      const headlamp = { intensity: 1.5, rightOffset: 2, upOffset: 2 } as const;
+      const lights = (count: number) => Array.from({ length: count }, () => light);
+      expect(imageEdgeSchemas.png.safeParse({ lighting: { lights: lights(7), headlamp } }).success).toBe(true);
+      expect(imageEdgeSchemas.png.safeParse({ lighting: { lights: lights(8), headlamp } }).success).toBe(false);
+      expect(
+        imageEdgeSchemas.png.safeParse({ lighting: { lights: lights(8), headlamp: { ...headlamp, intensity: 0 } } })
+          .success,
+      ).toBe(true);
+    });
+
+    it('should accept and bound ambient occlusion without changing the default', () => {
+      expect(imageEdgeSchemas.webp.parse({}).ao).toBeUndefined();
+      expect(imageEdgeSchemas.webp.parse({ ao: {} }).ao).toEqual({});
+      const ao = { radiusPixels: 12, intensity: 2, distanceFalloff: 0.25 };
+      expect(imageEdgeSchemas.webp.parse({ ao }).ao).toEqual(ao);
+      expect(imageEdgeSchemas.webp.safeParse({ ao: { radiusPixels: 0 } }).success).toBe(false);
+      expect(imageEdgeSchemas.webp.safeParse({ ao: { intensity: 9 } }).success).toBe(false);
+      expect(imageEdgeSchemas.webp.safeParse({ ao: { distanceFalloff: 0 } }).success).toBe(false);
+      expect(imageEdgeSchemas.webp.safeParse({ ao: { other: 1 } }).success).toBe(false);
+    });
+
+    it('should accept and bound the viewer GTAO controls', () => {
+      const ao = {
+        radiusPixels: 9.6,
+        intensity: 0.75,
+        distanceFalloff: 0.5,
+        falloffEndRatio: 22,
+        falloffRange: 0.8,
+        denoiseDepthTolerance: 0.1,
+        samples: 16,
+        resolutionScale: 0.5,
+      };
+      expect(imageEdgeSchemas.png.parse({ ao }).ao).toEqual(ao);
+      for (const invalid of [
+        { falloffEndRatio: 0.09 },
+        { falloffEndRatio: 101 },
+        { falloffRange: 0 },
+        { falloffRange: 1.5 },
+        { denoiseDepthTolerance: 0.009 },
+        { denoiseDepthTolerance: 10.5 },
+        { samples: 0 },
+        { samples: 8.5 },
+        { samples: 65 },
+        { resolutionScale: 0.2 },
+        { resolutionScale: 1.5 },
+      ]) {
+        expect(imageEdgeSchemas.png.safeParse({ ao: invalid }).success).toBe(false);
+      }
+    });
+
+    it('should accept a line colour and a tone-mapping operator without defaulting either', () => {
+      expect(imageEdgeSchemas.webp.parse({})).not.toHaveProperty('lineColor');
+      expect(imageEdgeSchemas.webp.parse({})).not.toHaveProperty('toneMapping');
+      expect(imageEdgeSchemas.webp.parse({ lineColor: '#868686', toneMapping: 'neutral' })).toMatchObject({
+        lineColor: '#868686',
+        toneMapping: 'neutral',
+      });
+      for (const toneMapping of ['aces', 'linear', 'none'] as const) {
+        expect(imageEdgeSchemas.jpeg.parse({ toneMapping }).toneMapping).toBe(toneMapping);
+      }
+      expect(imageEdgeSchemas.png.safeParse({ lineColor: 'grey' }).success).toBe(false);
+      expect(imageEdgeSchemas.png.safeParse({ toneMapping: 'filmic' }).success).toBe(false);
+    });
+
+    it('should treat a supported label as its own switch and reject unsupported characters', () => {
+      expect(imageEdgeSchemas.webp.parse({ label: 'Front — View From +Z' })).toMatchObject({
+        label: 'Front — View From +Z',
+      });
+      expect(imageEdgeSchemas.webp.safeParse({ label: 'snowman ☃' }).success).toBe(false);
+      expect(imageEdgeSchemas.webp.safeParse({ includeLabel: true, label: 'Front' }).success).toBe(false);
+    });
+
+    it('should accept independently labeled batch views', () => {
+      expect(
+        imageEdgeSchemas.webp.safeParse({
+          mode: 'batch',
+          views: [{ id: 'front', label: 'Front' }, { id: 'top' }],
+        }).success,
+      ).toBe(true);
+    });
+
+    it('should select exact primitive instances independently in batch views', () => {
+      const options = imageEdgeSchemas.webp.parse({
+        mode: 'batch',
+        views: [
+          { id: 'first', visiblePrimitives: [{ nodeIndex: 2, meshIndex: 1, primitiveIndex: 0 }] },
+          { id: 'second', visiblePrimitives: [{ nodeIndex: 3, meshIndex: 1, primitiveIndex: 0 }] },
+          { id: 'whole' },
+        ],
+      });
+      expect(options.mode).toBe('batch');
+      if (options.mode !== 'batch') {
+        throw new Error('Expected batch image options');
+      }
+      expect(options.views.map((view) => view.visiblePrimitives)).toEqual([
+        [{ nodeIndex: 2, meshIndex: 1, primitiveIndex: 0 }],
+        [{ nodeIndex: 3, meshIndex: 1, primitiveIndex: 0 }],
+        undefined,
+      ]);
+      const schema = toJSONSchema(imageEdgeSchemas.webp, { target: 'draft-7', io: 'input' }) as JSONSchema7;
+      const batch = (schema.anyOf ?? [])
+        .map((branch) => requireSchema(branch, 'Expected an object branch'))
+        .find((branch) => branch.title === 'Batch');
+      const views = requireSchema(batch?.properties?.['views'], 'Expected the batch views schema');
+      if (Array.isArray(views.items)) {
+        throw new TypeError('Expected one view item schema');
+      }
+      expect(requireSchema(views.items, 'Expected a view item schema').properties).toHaveProperty('visiblePrimitives');
+      expect(
+        imageEdgeSchemas.webp.safeParse({
+          mode: 'batch',
+          views: [{ id: 'duplicate', visiblePrimitives: [{ nodeIndex: 2 }, { nodeIndex: 2 }] }],
+        }).success,
+      ).toBe(false);
+    });
+
+    it('should reject selected sections and an empty fitted selection', () => {
+      const selected = [{ nodeIndex: 2, meshIndex: 1, primitiveIndex: 0 }];
+      const sectioned = imageEdgeSchemas.png.safeParse({
+        mode: 'batch',
+        sections: { planes: [{}] },
+        views: [{ id: 'part', visiblePrimitives: selected }],
+      });
+      expect(sectioned.success).toBe(false);
+      if (!sectioned.success) {
+        expect(sectioned.error.issues[0]).toMatchObject({ path: ['views', 0, 'visiblePrimitives'] });
+      }
+      const emptyFit = imageEdgeSchemas.png.safeParse({
+        mode: 'batch',
+        views: [{ id: 'empty', visiblePrimitives: [] }],
+      });
+      expect(emptyFit.success).toBe(false);
+      if (!emptyFit.success) {
+        expect(emptyFit.error.issues[0]).toMatchObject({ path: ['views', 0, 'visiblePrimitives'] });
+      }
+      expect(
+        imageEdgeSchemas.png.safeParse({
+          mode: 'batch',
+          views: [{ id: 'empty', visiblePrimitives: [], camera: { framing: 'fixed' } }],
+        }).success,
+      ).toBe(true);
+    });
+
+    it('should validate format-aware per-view output overrides', () => {
+      const webp = imageEdgeSchemas.webp.parse({
+        mode: 'batch',
+        views: [{ id: 'small', width: 256, height: 192, quality: 0.9 }],
+      });
+      if (webp.mode !== 'batch') {
+        throw new Error('Expected batch WebP options');
+      }
+      expect(webp.views[0]).toMatchObject({ width: 256, height: 192, quality: 0.9 });
+      expect(
+        imageEdgeSchemas.jpeg.safeParse({
+          mode: 'batch',
+          views: [{ id: 'small', quality: 0.8 }],
+        }).success,
+      ).toBe(true);
+      expect(
+        imageEdgeSchemas.png.safeParse({
+          mode: 'batch',
+          views: [{ id: 'small', quality: 0.8 }],
+        }).success,
+      ).toBe(false);
+      expect(
+        imageEdgeSchemas.webp.safeParse({
+          mode: 'batch',
+          views: [{ id: 'small', format: 'png' }],
+        }).success,
+      ).toBe(false);
+      expect(
+        imageEdgeSchemas.webp.safeParse({
+          mode: 'batch',
+          views: [{ id: 'small', width: 8 }],
+        }).success,
+      ).toBe(false);
+    });
+
+    it('should require annotated dimensions whenever any annotation is drawn', () => {
+      for (const annotated of [{ axes: true }, { scaleBar: true }, { label: 'Front' }]) {
+        const tooSmall = imageEdgeSchemas.webp.safeParse({ ...annotated, width: 191 });
+        expect(tooSmall.success).toBe(false);
+        if (!tooSmall.success) {
+          expect(tooSmall.error.issues[0]).toMatchObject({ path: ['width'] });
+        }
+      }
+
+      const batch = imageEdgeSchemas.webp.safeParse({
+        mode: 'batch',
+        height: 191,
+        views: [{ id: 'front', label: 'Front' }],
+      });
+      expect(batch.success).toBe(false);
+      if (!batch.success) {
+        expect(batch.error.issues[0]).toMatchObject({ path: ['views', 0, 'height'] });
+      }
+
+      expect(imageEdgeSchemas.webp.safeParse({ width: 191, height: 191 }).success).toBe(true);
+      expect(imageEdgeSchemas.webp.safeParse({ mode: 'batch', height: 191, views: [{ id: 'front' }] }).success).toBe(
+        true,
+      );
+
+      const labeledOverride = imageEdgeSchemas.webp.safeParse({
+        mode: 'batch',
+        views: [{ id: 'front', label: 'Front', width: 191 }],
+      });
+      expect(labeledOverride.success).toBe(false);
+      if (!labeledOverride.success) {
+        expect(labeledOverride.error.issues[0]).toMatchObject({ path: ['views', 0, 'width'] });
+      }
+
+      expect(
+        imageEdgeSchemas.webp.safeParse({
+          mode: 'batch',
+          width: 191,
+          height: 191,
+          axes: true,
+          views: [{ id: 'front', width: 192, height: 192 }],
+        }).success,
+      ).toBe(true);
+      expect(
+        imageEdgeSchemas.webp.safeParse({
+          mode: 'batch',
+          axes: true,
+          views: [{ id: 'front', width: 191 }],
+        }).success,
+      ).toBe(false);
+    });
+  });
+});

@@ -1,20 +1,39 @@
 import { z } from 'zod';
+import { binaryFileContentMetadataSchema, listedTextFileContentMetadataSchema } from '#schemas/file-metadata.schema.js';
+import { rootedPathSchema } from '#schemas/rooted-path.schema.js';
 
 /** @public */
 export const listDirectoryInputSchema = z.object({
-  path: z.string().describe('The path of the directory to list, relative to the project root.'),
+  path: rootedPathSchema.optional().describe('The directory to list. Defaults to the project root.'),
 });
 
-const directoryEntrySchema = z.object({
+const baseDirectoryEntrySchema = z.object({
   name: z.string().describe('The name of the file or directory.'),
-  type: z.enum(['file', 'dir']).describe('Whether this entry is a file or directory.'),
-  size: z.number().describe('The size in bytes (for files) or number of entries (for directories).'),
+  size: z.number().int().nonnegative().describe('Byte size when available; directories may report 0 when unknown.'),
 });
+
+/** Canonical directory-entry schema shared with the RPC transport. @public */
+export const directoryEntrySchema = z.union([
+  baseDirectoryEntrySchema.extend({
+    type: z.literal('dir').describe('This entry is a directory.'),
+  }),
+  baseDirectoryEntrySchema.extend({
+    type: z.literal('file').describe('This entry is a file.'),
+    ...listedTextFileContentMetadataSchema.shape,
+  }),
+  baseDirectoryEntrySchema.extend({
+    type: z.literal('file').describe('This entry is a file.'),
+    ...binaryFileContentMetadataSchema.shape,
+  }),
+  baseDirectoryEntrySchema.extend({
+    type: z.literal('file').describe('This entry is a file whose kind was not measured while listing.'),
+  }),
+]);
 
 /** @public */
 export const listDirectoryOutputSchema = z.object({
   entries: z.array(directoryEntrySchema).describe('The list of files and directories in the specified path.'),
-  path: z.string().describe('The resolved path that was listed.'),
+  path: rootedPathSchema.describe('The resolved path that was listed.'),
 });
 
 /** @public */

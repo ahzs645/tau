@@ -1,256 +1,101 @@
 ---
 title: 'Chat Request Config Policy'
-description: 'Single source of truth for chat request configuration: schema-as-registry, top-level `agent` block, and the profile-scoped chat-client indirection that keeps configuration centralized.'
+description: 'Shared chat-turn envelope, profile configuration, admission, and execution placement across browser, daemon, and API clients'
 status: active
 created: '2026-05-18'
-updated: '2026-05-18'
+updated: '2026-10-25'
 related:
   - docs/research/chat-metadata-first-class-architecture.md
   - docs/research/chat-edit-message-metadata-stripping.md
+  - docs/policy/cross-provider-content-contract.md
+  - docs/policy/interrupted-tool-call-contract.md
   - docs/policy/library-api-policy.md
   - docs/policy/testing-policy.md
 ---
 
 # Chat Request Config Policy
 
-Internal reference for how per-request chat configuration (model, kernel, mode, tool choice, testing toggle, snapshot, context payload) flows from the UI to the API. Rules here lock in the architecture defined by the [chat metadata first-class architecture blueprint](../research/chat-metadata-first-class-architecture.md).
-
-## Rationale
-
-Before this policy, per-turn configuration leaked across the codebase in three incompatible shapes — the last user message's `metadata.*` (read by `extractRequestConfig` on the server, repeatedly stripped on edits), inline `body: { kernel, model, ... }` literals stamped by each UI submission site, and module-scope helpers like `useChatConstants` that owned a second transport. Adding a new flag required touching every site, and the regularity of "edit-resubmit loses kernel" and "missing testingEnabled" 400s confirmed the design was structurally broken (see [chat-edit-message-metadata-stripping](../research/chat-edit-message-metadata-stripping.md)).
-
-The new shape is a single Zod-defined `agent` block on the request body, composed inside profile-scoped chat-client hooks, and dispatched into the persistence machine through one indirection layer — so adding a flag is one schema edit plus one assembler-hook line, and every UI site automatically picks it up.
+`libs/chat` owns the shared chat-turn envelope. Profile configuration describes the requested agent, admission records the accepted model and limits, and execution selects where a CAD turn runs. These are durable request facts, not component-local options.
 
 ## Rules
 
-### 1. The Schema Is the Registry
+### 1. Use the shared schema as the wire registry
 
-All per-request chat configuration is defined in `libs/chat/src/schemas/agent-config.schema.ts`. The exported `agentConfigSchema` discriminated union (`profile: 'cad' | 'project_name' | 'commit_name'`) and the `chatTurnRequestSchema` wrapper in `libs/chat/src/schemas/chat-turn-request.schema.ts` are the only sources of truth. The API mounts these schemas verbatim (`apps/api/app/api/chat/chat.dto.ts`); UI clients import them through `@taucad/chat/schemas`. The wrapper schema is named after the domain concept (a single chat turn), not after HTTP body vocabulary — the API DTO class (`CreateChatDto`) keeps the HTTP-layer name because that is where the transport binding lives.
+Define agent profiles in `libs/chat/src/schemas/agent-config.schema.ts` and the complete request in `libs/chat/src/schemas/chat-turn-request.schema.ts`. Import them through `@taucad/chat/schemas`; do not duplicate their types in UI, API, daemon, or host code.
 
-**Why**: One schema → one set of types → one JSON Schema → one validator on both sides. Drift is impossible because there is nothing to drift from.
+The profile discriminator remains `cad`, `project_name`, or `commit_name`. Add a profile field in the schema and its one owning assembler before using it at call sites.
 
-CORRECT:
+### 2. Preserve the whole turn envelope
 
-```typescript
-import { agentConfigSchema, chatTurnRequestSchema } from '@taucad/chat/schemas';
-```
+A chat turn contains:
 
-INCORRECT:
+- validated UI `messages`;
+- the profile-specific `agent` configuration;
+- optional durable `admission` selected by the control plane;
+- optional `execution` placement for CAD.
 
-```typescript
-// Duplicating the shape in apps/api/.../some.dto.ts or in apps/ui/.../some.types.ts
-type AgentConfig = { profile: 'cad'; model: string; kernel: string };
-```
+Keep model input, kernel, mode, testing, snapshot, and context in their owning schema fields. Do not recover request configuration from message metadata or mutable module globals.
 
-### 2. Use the Top-Level `agent` Block — Never per-Message Metadata
+### 3. Keep structural and relational validation distinct
 
-Per-request configuration travels as a single `agent` object on the wire body. Never read or write `lastUserMessage.metadata.<config>` on the API side; never stamp configuration into `messages[i].metadata.<config>` on the UI side beyond purely historical display fields (`createdAt`, `status`).
+`agentConfigSchema` must remain structurally representable as JSON Schema because the API exposes that slice in OpenAPI. Cross-field CAD relationships belong in the top-level `chatTurnRequestSchema.superRefine`, where the full envelope is available.
 
-**Why**: Edit/regen flows rewrite trailing messages and strip foreign metadata fields. Anchoring configuration to a transient message is the exact bug that drove this refactor.
+Use `parseChatTurnRequestAsync` or the API's async validation pipe at untrusted boundaries so message normalization and relational checks execute. A sync parse is not an equivalent boundary.
 
-CORRECT:
+### 4. Assemble CAD configuration once
 
-```typescript
-// UI
-chat.sendMessage(message, { body: { agent: { profile: 'cad', model, kernel /* … */ } } });
+`useCadAgentConfig` is the UI assembler for the CAD profile. It combines the selected model, kernel, mode, tool policy, testing flag, snapshot and context from their authoritative stores.
 
-// API
-const { agent } = body;
-switch (agent.profile) {
-  case 'cad':
-    return handleCad(body, agent, response);
-}
-```
+Submission sites send through the profile chat client. They must not construct parallel body literals or stamp request configuration onto the last message.
 
-INCORRECT:
+### 5. Keep admission durable
 
-```typescript
-// UI
-const message = createMessage({ metadata: { kernel, model, testingEnabled } });
-chat.sendMessage(message); // wire body is `messages` only — server has nothing to discriminate on.
+Admission records the control-plane decision needed to execute the turn, including the accepted model identity and applicable limits. Once admitted, preserve that record with the turn and use it on resume or reattach.
 
-// API
-const lastUser = messages.findLast((m) => m.role === 'user');
-const modelId = lastUser?.metadata?.model ?? 'openai-gpt-5.5-fallback'; // metadata.model no longer exists; read body.agent.model.
-```
+Do not silently recompute admission from current UI state after the request has started.
 
-### 3. Pure Zod — Never `.refine()` / `.superRefine()` on Request Schemas
+### 6. Select CAD execution explicitly
 
-`agentConfigSchema`, `chatTurnRequestSchema`, and every nested fragment must be pure structural Zod (`z.object`, `z.discriminatedUnion`, `z.string`, `z.literal`, `.optional()`, `.default(...)`). No `.refine()` / `.superRefine()` / `.check()` / `.transform()` callbacks may live on request schemas.
+The CAD `execution` field is a discriminated union for `tau`, `acp`, or `paseo`. It selects the execution host and its required placement data. It is independent of model provider selection.
 
-**Why**: Pure Zod converts cleanly to JSON Schema (`z.toJSONSchema`) with `oneOf` keyed on the discriminator. Refines collapse to brittle `not` / `if` / `then` keywords that confuse downstream tooling (OpenAPI generators, client codegen, schema diff). The `chat.controller.json-schema.test.ts` snapshot test fails the moment a refine slips in.
+Validate the relationship between `agent.profile`, `admission`, and `execution` at the request-envelope boundary. Do not infer placement from a model name, URL, feature flag, or legacy server graph.
 
-CORRECT:
+A chat owns its intent; each device owns its placement. A turn's execution names the host the sending device placed it on, but a chat's persisted `activeExecution` keeps only a portable host (a paired device id): `origin`, `desktop` and `loopback:` ids are dropped on write and read as local placement on every device, and a device's non-default choice lives in its per-project placements record. That choice is applied only in a tab that can reach its host (`isPlacementOnThisDevice`); a tab that cannot runs the chat locally, says so in the composer, and leaves the choice in place for the tab that can. The held choice is applied as soon as the tab gains a route to its host, and it is dropped from the session, with the notice, when the person picks another host or agent. An external-agent execution keeps its host; a device that knows it cannot reach it refuses the turn at once with a typed reason instead of moving the chat, and the composer offers Tau as an explicit choice. A chat's `activeKernel` this runtime cannot execute stays on the chat; the device runs its own kernel and the composer says which.
 
-```typescript
-export const cadAgentConfigSchema = z.object({
-  profile: z.literal('cad'),
-  model: z.string(),
-  kernel: kernelIdSchema,
-  snapshot: chatSnapshotSchema.default({}),
-});
-```
+A run in flight on one device holds its chat on every other device. A run is never moved between devices while it runs: admission, and resume, refuse `RUN_ACTIVE_ON_ANOTHER_DEVICE` (`wait`) while another device's synced segment holds a run that has not settled and is not abandoned (`foreignRunStanding`, `packages/agent-host/src/log/foreign-runs.ts`). A run is abandoned only once pulls of the remote that kept finding its segment as this device holds it span more than `foreignRunStaleMilliseconds`: quiet must be evidenced by pulls, never by this device's clock alone, so a device that slept or went offline does not find a live run gone, and no other device's clock, fast, slow or corrupt, decides it, since the run's `recordedAt` is never read for it (`t11_unobserved_never_abandoned`, `t11_changed_segment_holds` in `ChatLedger.lean`). Sync keeps, for each chat holding another device's segment, a record in its `events/pulled-at`: this device's clock at the last recorded pull, taken before it lists the remote, and for each such segment its size here after that pull and its quiet, the sum of the gaps between recorded pulls that found it that size. Quiet never compares two readings of a clock that can jump: each gap counts at most two minutes, a gap the clock ran backwards across counts as nothing, and a pull that finds a segment changed starts its quiet again; a pull under half a minute after the recorded one that finds every segment as recorded records nothing, so a pull asked for once a minute is always recorded. A backward jump therefore only shortens quiet and a forward jump overstates it by at most two minutes, so a run is abandoned only after more than `foreignRunStaleMilliseconds` / two minutes + 1 pulls in a row found its segment unchanged (`t11_quiet_needs_pulls`, `t11_abandon_needs_quiet_pulls`, `t11_back_jump_recovers`, `t11_forward_jump_bounded`); the one clock assumption left is that this device's clock does not jump forward several times within one bound. The page and the agent host read that record before the segments, from the same files, and count its quiet only for a segment of the very size it names, so newer bytes carry none and both compute the same standing for a run. A run quiet here for `foreignRunAskPullMilliseconds` (two minutes), or whose segment changed later than this device's clock now reads, awaits pulls: the refusal asks the placement to pull (`pull`, at most once a heartbeat interval per chat; a placement session or server without the verb answers it as applied, and nothing is pulled), and the page asks its project's revisions to pull while it shows such a run. A device that cannot pull the chat (chat sync off, a project whose remotes read settled on no remote, or a host with no device id) never gets that evidence, so it does not wait for it: its placement answers the pull `CHAT_NOT_SHARED`, the admission waits for that answer within the segment bound, and a run that awaits pulls there is abandoned on that device and its turn carried as for any abandoned run (`t11_unpullable_released`). Only a settled answer is that evidence: a remotes read still running or one that failed, a device id the page has not sent the worker yet, and record devices this device cannot read now say nothing, so the pull is made. The page reads the same answer by the same rule: the pull it asks for is answered by the placement session's own pull (`pullRemote`, through the project's revisions), so where that pull is refused `CHAT_NOT_SHARED` the page no longer shows the run and its composer sends, which the admission then carries past it; it keeps asking once a heartbeat interval, so a device that can pull again shows the run again. A run quiet here for less than `foreignRunAskPullMilliseconds` still holds the chat, so a device that has only just lost its pulls never passes a run that was live a moment ago (`t11_unpullable_recent_holds`), and a placement with no pull verb, or one fenced, failing or not answering in time, is taken to pull. Only a segment read with no modification time is measured from when that reader first read the run's newest row, kept least recently read first out, and the composer says the chat is running on another device and holds its send without offering Stop. Each segment is read on its own ledger, never through this device's run bookkeeping. A device keeps one term per incarnation and terms merge whole, so before it admits a start or a resume whose incarnation already wrote under a term and whose log has read another device's rows since that term's first row (what this device read, never a comparison with another device's clock), it opens a new term for that incarnation, explicitly and before any of the command's rows, whatever the incarnation holds: nothing is closed, so an external agent waiting on its person keeps its slot, and the command's rows never land under the old term (`t10_new_term_whatever_the_slot` in `ChatLedger.lean`). The new term is the chat's only once the first row of the command's run (never a heartbeat) is written under it; a command refused or superseded withdraws it, so it leaves no trace, and a run live on this device keeps writing its heartbeats under the term it wrote under (`t12_refused_no_trace`, `t12_heartbeat_kept`). What a command proposes and carries is keyed by its admission, never by its command id: a copy of a command this device already sent on, in flight or applied, is a replay, applied as the chat's durable ledger records it, loaded again when an idle eviction, a fenced log, a reopen or a restart unloaded it; it is never admitted, reads nothing, proposes and carries nothing, shares its original's answer, and that answer withdraws nothing, the original's term and carried turns included (`t15_replay_no_change`, `t15_answer_own_only`). A batch decides its term once, as its write begins, and its first landed row commits exactly that decision, so a term proposed or withdrawn while the batch is written never parts the batch's term from the chat's (`t12_write_decided_once`); the turn's new term then starts after those rows and merges after them on every device. Rows are stamped by a hybrid logical clock: no earlier than one millisecond past the newest term start in the history the last read folded, and past every row of another device's unsettled run that read held out of the history, computed once per fold; so a turn, a takeover's included, merges after a held run's term once that run's device settles it. That history leaves out a term another device dated more than `foreignClockAheadMilliseconds` (ten minutes, `packages/agent-host/src/log/segments.ts`) past this device's clock, and says so, until this clock comes within it; what it keeps is a prefix of the whole merge, the same on every device for the same rows and clock. So a turn merges after every row its history read (`t7_projection_after_visible`, `t7_bounded_prefix`, `t7_bounded_same_rows` in `ChatLedger.lean`), and one fast clock never carries another device's stamps more than the bound ahead. The merge reads rows and writers, never segment ids: a segment's writer is the first term it holds, so the id a device reads its own file under, or an old file a device left when its id changed, never changes the order. A chat's commands reach its incarnation in the order they arrive, whatever each awaits first (a term check, an approval's fence), except a Stop: it never waits behind another command's checks, is applied at once, and the commands still waiting when it arrives are refused `COMMAND_SUPERSEDED` and never run. Every admission (a start, a Resume and an approval) reads the other devices' segments for at most `segmentRefreshMilliseconds` (ten seconds) and is refused `SEGMENTS_UNREADABLE` (`wait`) past it, which also releases the chat's dispatch turn, so a read that never returns never holds the commands behind it. The read runs outside the chat log's write queue and only its result is applied inside it, unless a read that began later has already been applied, so a read that never returns holds no append, read or fence check either: a Stop, a denial and a heartbeat still apply. One read runs at a time: a refresh while a read runs shares the one read queued to begin when it ends, so a read that never returns (a hung network mount) starts no other, and resends never fill the threads every file read in the host shares. Opening a chat log waits for its first read at most as long, and past it opens with the segments unread, so a start is refused `SEGMENTS_UNREADABLE` and a Stop still applies; the read is applied whenever it ends. The admission fails closed: a check that fails with anything but a decision (a log closed by an idle eviction mid-read, a storage error) refuses the command with the read's own `wait` code, else `SEGMENTS_UNREADABLE`, and never lets it through unchecked. A command that reaches an incarnation still closing (an idle eviction) waits for it at most the closing bound (`chatClosingWaitMilliseconds`, on the host's clock) and is refused `WRITER_LOCKED` (`wait`) past it, and no later command for the chat, a Stop included, waits on a close that never ends. Liveness never waits on content: the device that holds a run appends a `run.heartbeat` row whenever its chat has gone `runHeartbeatMilliseconds` (`packages/agent-host/src/host/tau-agent-host.ts`) without a row while the run is admitted, running, or paused with its incarnation open there, only under a term that incarnation already wrote the chat under (a heartbeat never opens a term), and asks its placement to publish the chat's ref. No heartbeat is written while the placement refuses `publish` with `CHAT_NOT_SHARED` (a project with no remote, a placement session with no publish verb, or a placement server older than XD3, whose missing verb the client reads as `CHAT_NOT_SHARED`): no other device reads the chat, and builds older than XD3 read a heartbeat as an opaque row of its run. A heartbeat row is the run's own liveness: only a definite `CHAT_NOT_SHARED` stops it. Only an applied publish marks the chat shared; a fenced or failing placement leaves sharing unknown, and the row is still written and published again, so publish trouble never makes a live run look gone elsewhere. The chat is asked once at the run's start; each heartbeat is published once, after its row; a "not shared" answer stands for one interval and is asked again by that tick's one publish, made before its row, and an answer of shared or unknown writes that tick's heartbeat then; so no heartbeat row lands on an unshared chat and no tick publishes twice. A run that keeps writing rows writes no heartbeat, and its chat is published at least once every `runHeartbeatMilliseconds` while rows were written since the last publish, so a busy run never looks stale elsewhere; a publish of those rows waits a whole interval before the next heartbeat, so no two publishes land within one interval and the newest row is at most two intervals old. A heartbeat a row overtakes while it waits for the chat's write chain is not written, and its tick publishes nothing: that row is the run's liveness and its write arms the next tick, so two ticks never both publish. A paused run holds the chat while its device keeps it open, for at most `pausedRunHoldMilliseconds` (thirty minutes) from its pause, and then goes stale like a run whose device went away, so a forgotten pause costs a bounded number of rows and pushes. A heartbeat is checked again inside the chat's write chain and never written after the run settles or its log closes. A resume on the holder device passes the same fence, and so does an approval that would continue a paused run: it is refused, before any row, while another device holds the chat, since the pause may have outlived its hold; an unreadable segment refuses it `SEGMENTS_UNREADABLE` (`wait`) inside the paused run's own hold too, since another device judges the run abandoned on its own pulls and this device cannot know when its heartbeats last reached the remote, so the hold is no evidence that no device went on past it (`t15_unread_refused`); a denial or cancellation is never refused. An approval is admitted as a resume is: one whose paused run another device already found abandoned and went on past (its segment says the run's turn) is refused `RUN_TAKEN_OVER` (`never`), before any row, with a reason the person reads, and its denial still applies; one whose log has read another device's rows since its term began opens a new term first, as a start does, so its rows merge after those rows (`t10_approval_refused_after_takeover`, `t10_new_term_after_foreign_rows` in `ChatLedger.lean`). A start or resume that a Stop supersedes releases what its dispatch held. A paused run has no driver; it goes on only through a resume or an approval, which reads the merged history again, so it continues after whatever another device ran meanwhile. The model's history leaves a foreign run that has not settled out entirely, live or stale: the history is a function of the rows, never of when they are read. The person's words of a run that settles before committing its turn reach it as data: the incarnation that settles the run `failed` (its own driver, or the next one abandoning it as an orphan) appends the message it was admitted with, marked `abandoned-turn` (an external agent's turn keeps its marker and the session it names, newest envelope first, and is marked `abandoned` beside it, so the handoff still credits that session with it), in the same batch as the `failed` row, and every command that starts or continues a run past another device's abandoned run (a start, a resume or an approval) appends that run's turn the same way, in its own run's first batch with a place for it: the first place after every rewind that batch holds at which the history leaves no tool call open, or at which a message other than an assistant turn or a tool output comes next (which leaves the open calls to the provider's adapter anyway), so the turn follows the outputs a Resume writes for the calls the history left open, the batch's own rewind, which names what it keeps before anything is carried, never cuts it, and a person's new turn stays the history's last message, after the turns its run carries, even when the history ends in a call no output answers: a run whose own turn is not yet committed has that turn next past its admission's batch, which says nothing, so the carried turns go in that batch, and the commit, one row that keeps the history and says the turn at once, keeps them before it (`t16_turn_last`, `t16_stale_prompt`); a batch with no such place (an approval's while its approved call is still open) carries the turn to the run's next batch (`t14_plan_well_formed`, `t14_carried_survive_rewind`, `t14_turns_place`, `t14_approval_waits` in `ChatLedger.lean`), and a row that settles the run (a Stop while that call is open) drops what it still carries: the chat's next admission derives the turns it goes on past afresh (`t15_settle_drops`). A start, a resume and an approval pass one admission that checks the run's and the other devices' runs' standing, decides the term, and hands the run's batches the turns of the abandoned runs it goes on past (`t13_one_admission`, `t13_passed_taken_over`); every other device then reads that run as no longer holding the chat, and its own device's approval of it is refused `RUN_TAKEN_OVER`, though its own rows stay out of the history until its device settles it. The ledger then reads that turn as committed, so a Resume continues the run and never commits the turn again, and the history keeps one copy of the message however many devices append it, and whether a copy merges before or after the run's own row of that turn (`t9_words_merge_once`, `t9_copy_then_turn`, `t9_history_ids_once`, `t9_words_commit` in `ChatLedger.lean`). A run's turn the history took from such a copy stays said once after a rewind drops it: that run's own row of the turn, or another copy of it, does not bring it back, while a later run's row of the same message, as a Retry re-admits it, is the message again (`t9_copy_then_turn_ever`, `t9_copy_rewound_stays_gone`, `t9_retry_after_rewind`). A copy is written under the abandoned run's id, often in another run's admission batch, so no view takes it for a run's start: `tau tui` follows the run whose `admitted` row it read last (every start writes it first), never a person's message. Nothing a stale run left half done joins. The model's history is well formed: every tool output follows its call directly, before any other message, so no provider is sent a stray tool result. A Resume closes only the calls the history leaves open at its tail; a call another message already followed is answered by the provider's adapter, and an output for it would be stray (`t14_reachable_well_formed`, `t14_no_late_output`). The history a log keeps as it appends is the one a fresh fold of the same rows serves: a row this device appends under a term older than another device's later term merges before that term, so the log folds the merge again rather than take the row at its tail (`t14_incremental_is_merge`). A segment that exists but cannot be read holds the fence too: admission and resume refuse `SEGMENTS_UNREADABLE` (`wait`), never treating it as no other device, until the segment has failed to read without changing for a whole `foreignRunStaleMilliseconds`. A live run keeps its device's segment changing, so such a segment holds no live run: it is left out of the history and the fence, and the history names it as unreadable. Any change to it starts the bound again. This device's rows can name another device's messages: while the segments cannot be read the history is unknown, never invalid, and the fence refuses `SEGMENTS_UNREADABLE`; once they read and no row here introduces those messages (a device removed from the project), the history leaves those names out, and says so: one rule for this device's rows alone and for the merge of any number of segments, and a name a segment later introduces folds the merge again whole. The page shows both waits, and `BRANCH_UNAVAILABLE`, as waiting on sync from another device; a placement refused `BRANCH_UNAVAILABLE` after admission ends the run `RUN_ABANDONED` with that code kept, and its card offers Resume. An external agent keeps its own session, so each prompt carries the chat's turns that session has not seen (Tau's, or another device's), as a `tau://chat-handoff` context block: the whole chat for a fresh session, and what follows its own last turn for one it continues (a turn whose marker names no session continues the session its own device and host most recently named: the host keeps the device's id on every external turn's marker, since every desktop places its own agents as `desktop`, and restores a session only from a record its own device wrote; a host given a device reader that cannot read its device (it answers none, or fails) refuses an external start `REVISIONS_UNAVAILABLE` (`wait`) before any row, so it never writes a marker that names no device, and resumes a run only on the session the run's own turn names, else its admission's; on a disk host that id is the record device its chat segment syncs under, a random id from the project's record set and never the machine's name or account, so a renamed machine keeps its sessions, two machines that share a name and account do not share them, and neither name reaches a synced row; a continued session whose own turns compaction or a rewind removed is sent nothing), within 24,000 characters, the newest message cut to its tail when it alone is longer.
 
-INCORRECT:
+### 7. Use the browser placement transport for CAD
 
-```typescript
-export const cadAgentConfigSchema = z
-  .object({
-    /* … */
-  })
-  .refine((value) => isAllowedKernel(value.kernel), { message: 'unknown kernel' });
-```
+`apps/libs/chat-ui/src/chat-clients/_internal/shared-chat-transport.ts` owns the shared `BrowserPlacementChatTransport` and one AI SDK `Chat` per CAD session. `useCadChatClient` supplies an asynchronous latest-body factory through `setLatestAgentBody`.
 
-### 4. Defaults Live in the Schema — But Only Real Defaults
+That factory must remain valid after the initiating component unmounts. It must return the durable agent, admission, and execution facts for retry, resume, or reconnect.
 
-Every optional configuration field that has a **sensible non-empty default value** (a number, an enum literal, a behaviour-shaping object) encodes that default in Zod via `.default(value)`. UI clients may pass `undefined`; the API never has to "fill in" missing keys.
+### 8. Limit API chat placement
 
-When the only "default" you can think of is an **empty object that means "absent"**, use `.optional()` instead. `.default({})` plus a controller-side "is this default empty? collapse to undefined" check is two indirections expressing one thing the schema can express directly. The wire ↔ parsed type identity (`z.input` ≡ `z.infer`) is also a feature: assembler hooks and handlers see the same shape.
+`apps/libs/api-chat/src/chat.controller.ts` accepts `project_name` and `commit_name` requests. A `cad` request to that HTTP endpoint must fail with `CHAT_CAD_NOT_API_PLACED`; the API must not reconstruct the removed server-side CAD executor.
 
-**Why**: Real defaults belong in the schema so the JSON Schema is honest (`"default": <value>` is published) and every handler stops re-deriving the same fallback. Sentinel-empty defaults are not real defaults — they are validation noise. Surfacing `undefined` straight through is cheaper and more accurate.
+Name-generation clients may use AI SDK `DefaultChatTransport` against the API. CAD clients may not.
 
-CORRECT — real default, encoded in schema:
+### 9. Preserve request identity through edits and retries
 
-```typescript
-maxTokens: z.number().int().positive().default(4096),
-mode: z.enum(['agent', 'plan']).default('agent'),
-```
+Editing message content, retrying a transport, restoring a draft, or reattaching a host must not strip the turn's agent, admission, or execution configuration. Rebuild display messages only from durable session state and the portable host event log.
 
-CORRECT — optional with no real default:
+### 10. Keep transport and profile concerns separate
 
-```typescript
-snapshot: chatSnapshotSchema.optional(),
-contextPayload: contextPayloadSchema.optional(),
-// Controller reads `agent.snapshot` directly; a single `if (snapshot)` check
-// downstream gates injection. No `isSnapshotEmpty` helper, no collapse step.
-```
+A transport moves a validated turn. It must not choose a kernel, rewrite a profile, or own UI stores. A profile assembler gathers current intent. The admitted turn freezes the accepted execution facts.
 
-INCORRECT — sentinel "empty default" that forces a controller-side collapse:
+### 11. Test the shared boundary
 
-```typescript
-snapshot: chatSnapshotSchema.default({}),
-// …and then in the controller, an ugly middle layer:
-const isSnapshotEmpty = (s: ChatSnapshot): boolean =>
-  s.fileTree === undefined && s.activeFile === undefined && s.openFiles === undefined;
-const snapshot = isSnapshotEmpty(agent.snapshot) ? undefined : agent.snapshot;
-```
+Contract tests must cover every profile, async UI-message normalization, CAD execution relationships, JSON Schema generation for the agent slice, API refusal of CAD placement, and durable latest-body behavior after unmount.
 
-### 5. Profile-Scoped Chat Clients Are the Only Wire Surface
+Assert parsed values and transport bodies. Avoid duplicate test fixtures that can drift from the schemas.
 
-Every UI site that wants to talk to `POST /v1/chat` goes through a profile-scoped client hook in `apps/ui/app/chat-clients/`:
+## Ownership
 
-| Profile        | Client hook              | Exposed verbs                                       |
-| -------------- | ------------------------ | --------------------------------------------------- |
-| `cad`          | `useCadChatClient()`     | `submit`, `edit`, `retry`, `regenerateTail`, `stop` |
-| `project_name` | `useProjectNameClient()` | `generate(prompt)`                                  |
-| `commit_name`  | `useCommitNameClient()`  | `generate(prompt)`                                  |
-
-The shared AI SDK transport + `Chat` factory live in `apps/ui/app/chat-clients/_internal/shared-chat-transport.ts` and may **only** be imported by those three client files. The chat-session store consumes the live `Chat` instance through the `_internal/use-active-chat-instance.ts` hook; no other module may touch the `_internal/` folder.
-
-**Why**: Indirection of one. Adding `testingEnabled` to the wire surface is exactly one assembler-hook line; adding a new profile is exactly one schema branch + one client file. No call-site sweeps.
-
-**Enforced by**: ESLint `no-restricted-imports` scoped to the `_internal/` path.
-
-CORRECT:
-
-```typescript
-const cadChat = useCadChatClient();
-cadChat.submit({ text });
-cadChat.edit(messageId, { text, imageUrls });
-cadChat.retry(messageId, modelIdOverride);
-```
-
-INCORRECT:
-
-```typescript
-import { Chat } from '@ai-sdk/react';
-import { sharedChatTransport } from '#chat-clients/_internal/shared-chat-transport.js';
-const chat = new Chat({ id, transport: sharedChatTransport /* … */ });
-
-// or, hand-building the body literal anywhere outside the three client modules:
-const body = { agent: { profile: 'cad', model, kernel, mode, toolChoice, testingEnabled } };
-fetch('/v1/chat', { method: 'POST', body: JSON.stringify({ messages, ...body }) });
-```
-
-### 6. Controller Dispatches via `switch (body.agent.profile)`
-
-`apps/api/app/api/chat/chat.controller.ts` opens with a single `switch (body.agent.profile)`. Each case receives a statically-typed `agent` variant (no re-parsing, no `lastUserMessage.metadata` reads, no `modelId === 'name-generator'` string-matching). New profiles are added by extending `agentConfigSchema` and adding one `case` arm.
-
-**Why**: Discrimination is the schema's job; handlers should never re-derive it from message bodies. The legacy `modelId === 'name-generator' | 'commit-name-generator'` string match was a smell that hid the profile in a sentinel value.
-
-CORRECT:
-
-```typescript
-switch (body.agent.profile) {
-  case 'project_name': { /* … */ }
-  case 'commit_name': { /* … */ }
-  case 'cad': {
-    const { agent } = body; // statically `Extract<AgentConfig, { profile: 'cad' }>`
-    return this.streamAgentResponse({ /* … */, modelId: agent.model, kernel: agent.kernel });
-  }
-}
-```
-
-INCORRECT:
-
-```typescript
-const { modelId, kernel, mode } = extractRequestConfig(body.messages);
-if (modelId === 'name-generator') return sendNameStream(/* … */);
-if (modelId === 'commit-name-generator') return sendCommitStream(/* … */);
-```
-
-### 7. Agent-Body Assemblers Are Hooks, Not Constants
-
-Each profile has an assembler hook (`useCadAgentConfig`, `useProjectNameAgentConfig`, `useCommitNameAgentConfig`) that composes the current `agent` payload from the producer hooks (`useActiveChatModel`, `useActiveChatKernel`, cookies, `useChatSnapshot`, `useContextPayload`). The chat-client memoises `body = { agent }` on assembler identity. Adding a new field is exactly one line in the assembler and one optional field on the schema.
-
-**Why**: Producer hooks already encode the "current UI state". Composing the body inside a hook means every render has the freshest values and the chat-client never has to reach across module boundaries to read state.
-
-### 8. Hydration Auto-Regenerate Falls Back to `latestAgentBody`
-
-When the persistence machine hydrates a chat whose last user message has `status: 'pending'`, it dispatches a `regenerate` request through the persistence machine before the chat-client has had a chance to attach a `body`. The chat-session store falls back to the `latestAgentBody` published by `useCadChatClient.useEffect`. Production code must always call `store.setLatestAgentBody(activeChatId, body)` from the chat-client mount effect.
-
-**Why**: Without the fallback, the first turn of a homepage-seeded chat would dispatch with `body: undefined` and the API would 400 with `agent: Required`. This rule keeps the hydration path on the same wire contract as every other dispatch.
-
-### 9. No Persisted-Metadata Reads in Handlers
-
-Server handlers must never read `message.metadata.<config>` to derive request configuration. Per-message metadata (`messageMetadataSchema`) carries display-side state only — creation timestamp and lifecycle status. It must not influence routing, model selection, kernel selection, tool choice, testing toggle, or anything else on the request path. Agent config lives exclusively on `body.agent`.
-
-**Why**: The persistence layer rewrites trailing messages on edit/retry; treating `messages[-1].metadata` as a configuration source is the original bug this refactor exists to fix. After the schema narrow, the historical config fields no longer exist on `MyMetadata`, so this rule is structurally enforced — the entry remains as documentation of intent.
-
-### 10. Test the Wire Contract End-to-End
-
-Every chat client ships a `*.wire.integration.test.tsx` co-located with its source. The test mounts the client in jsdom, invokes a verb (`submit`/`retry`/`regenerateTail`/`generate`), captures the request the client hands to `useChatActions` (or `fetch`), composes a full chat-turn request, and asserts `chatTurnRequestSchema.parse(...)` accepts it. The exact same schema is what the API uses to validate `POST /v1/chat`, so a green test proves the contract holds.
-
-**Why**: The class of bugs this policy exists to kill — "missing kernel", "missing testingEnabled", "wrong profile" — is caught at compile time by Zod inference, but only the wire-shape integration test proves that the producer hooks actually populate every required field on the live render path.
-
-## Anti-Patterns
-
-| Anti-pattern                                                                 | Why it's banned                                                                             |
-| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `lastUserMessage.metadata.<config>` reads on the server                      | Edit/retry rewrites the trailing message; configuration vanishes mid-flow.                  |
-| Inline `body: { agent: { … } }` literals outside `apps/ui/app/chat-clients/` | Defeats the indirection-of-one rule; each new flag requires another sweep.                  |
-| `.refine()` / `.superRefine()` on request schemas                            | Breaks JSON Schema generation; pollutes the published OpenAPI shape with `not`/`if`.        |
-| `import { Chat } from '@ai-sdk/react'` outside the chat-client tree          | Bypasses the body-composition layer; the new wire body never gets attached.                 |
-| `modelId === 'name-generator' \| 'commit-name-generator'` discrimination     | Profile lives on `agent.profile`; sentinel-string matching hides it from the type system.   |
-| `useChatConstants` (deleted in t18)                                          | Owned a second `DefaultChatTransport`; superseded by the `_internal/shared-chat-transport`. |
-
-## Summary Checklist
-
-- [ ] New configuration field defined on `agentConfigSchema` (pure Zod, default-encoded if optional)
-- [ ] UI producer hook surfaces the value (cookie, XState selector, snapshot, etc.)
-- [ ] Profile assembler hook reads the producer and exposes the field
-- [ ] No new `import { Chat }` / `import { DefaultChatTransport }` outside `_internal/`
-- [ ] No new `metadata.<config>` reads in handlers (structurally impossible — `MyMetadata` is `{ createdAt?, status? }`)
-- [ ] Wire-shape integration test covers the field
-- [ ] `chat.controller.json-schema.test.ts` snapshot regenerated and reviewed (still clean `oneOf`)
-
-## References
-
-- Blueprint: `docs/research/chat-metadata-first-class-architecture.md`
-- Smoking gun audit: `docs/research/chat-edit-message-metadata-stripping.md`
-- Schema source: `libs/chat/src/schemas/agent-config.schema.ts`
-- Wire schema: `libs/chat/src/schemas/chat-turn-request.schema.ts`
-- Controller dispatch: `apps/api/app/api/chat/chat.controller.ts`
-- Profile chat clients: `apps/ui/app/chat-clients/`
-- Shared transport (restricted): `apps/ui/app/chat-clients/_internal/shared-chat-transport.ts`
-- Related: `docs/policy/library-api-policy.md`, `docs/policy/testing-policy.md`
+- Agent profiles: `libs/chat/src/schemas/agent-config.schema.ts`
+- Turn envelope and relational validation: `libs/chat/src/schemas/chat-turn-request.schema.ts`
+- API binding and placement refusal: `apps/libs/api-chat/src/chat.dto.ts`, `apps/libs/api-chat/src/chat.controller.ts`
+- CAD assembler: `apps/ui/app/hooks/use-cad-agent-config.ts`
+- CAD client and durable body factory: `apps/ui/app/chat-clients/use-cad-chat-client.ts`
+- Browser placement transport: `apps/libs/chat-ui/src/chat-clients/_internal/shared-chat-transport.ts`
+- API name clients: `apps/ui/app/chat-clients/_internal/name-generator-client.ts`

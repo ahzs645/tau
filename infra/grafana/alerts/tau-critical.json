@@ -10,10 +10,15 @@
         {
           "refId": "redis_down",
           "queryType": "",
-          "relativeTimeRange": { "from": 300, "to": 0 },
+          "relativeTimeRange": {
+            "from": 300,
+            "to": 0
+          },
           "datasourceUid": "prometheus",
           "model": {
-            "expr": "redis_connection_state{service_name=\"tau-api\"} == 0",
+            "instant": true,
+            "range": false,
+            "expr": "redis_connection_state{app=~\".*\",service_name=\"tau-api\"} == bool 0",
             "intervalMs": 15000,
             "maxDataPoints": 20,
             "refId": "redis_down"
@@ -24,7 +29,8 @@
       "execErrState": "OK",
       "for": "1m",
       "annotations": {
-        "summary": "Redis connection is down. Chat RPC, session management, and adapter services are degraded."
+        "summary": "Redis connection is down. Host relay presence, session routing and adapter services are degraded.",
+        "runbook_url": "docs/handbooks/cloud/playbooks/redis-loss.md"
       },
       "labels": {
         "severity": "critical",
@@ -40,10 +46,13 @@
         {
           "refId": "db_startup_logs",
           "queryType": "range",
-          "relativeTimeRange": { "from": 600, "to": 0 },
+          "relativeTimeRange": {
+            "from": 600,
+            "to": 0
+          },
           "datasourceUid": "loki",
           "model": {
-            "expr": "sum(count_over_time({service_name=\"tau-api\"} |~ \"Database (connectivity probe|migration) failed\" [5m]))",
+            "expr": "sum(count_over_time({service_name=\"tau-api\"} |~ \"Database (connectivity probe|schema compatibility check) failed\" [5m]))",
             "intervalMs": 15000,
             "maxDataPoints": 43200,
             "queryType": "range",
@@ -53,7 +62,10 @@
         {
           "refId": "db_startup_reduce",
           "queryType": "",
-          "relativeTimeRange": { "from": 0, "to": 0 },
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
           "datasourceUid": "__expr__",
           "model": {
             "type": "reduce",
@@ -65,7 +77,10 @@
         {
           "refId": "db_startup_threshold",
           "queryType": "",
-          "relativeTimeRange": { "from": 0, "to": 0 },
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
           "datasourceUid": "__expr__",
           "model": {
             "type": "threshold",
@@ -73,8 +88,13 @@
             "conditions": [
               {
                 "type": "query",
-                "evaluator": { "type": "gt", "params": [0] },
-                "operator": { "type": "and" }
+                "evaluator": {
+                  "type": "gt",
+                  "params": [0]
+                },
+                "operator": {
+                  "type": "and"
+                }
               }
             ],
             "refId": "db_startup_threshold"
@@ -85,12 +105,381 @@
       "execErrState": "Error",
       "for": "0s",
       "annotations": {
-        "summary": "Database probe or migration failed during API startup. Inspect Loki for `Database connectivity probe failed` / `Database migration failed` lines and act on the structured `hint` field (paused provider, DNS, TCP timeout, role rotation, pooler exhaustion, privilege)."
+        "summary": "Database probe or schema compatibility check failed during API startup. Inspect Loki for `Database connectivity probe failed` / `Database schema compatibility check failed` lines and act on the structured `hint` field (paused provider, DNS, TCP timeout, role rotation, pooler exhaustion, privilege).",
+        "runbook_url": "docs/handbooks/cloud/playbooks/postgres-saturation.md"
       },
       "labels": {
         "severity": "critical",
         "service": "tau-api",
         "component": "database"
+      }
+    },
+    {
+      "uid": "billing-ledger-drift",
+      "title": "P0: Billing Ledger Drift",
+      "condition": "drift_threshold",
+      "data": [
+        {
+          "refId": "drift",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 900,
+            "to": 0
+          },
+          "datasourceUid": "prometheus",
+          "model": {
+            "expr": "max(max_over_time(tau_billing_ledger_drift{app=~\".*\",service_name=\"tau-api\"}[15m]))",
+            "intervalMs": 15000,
+            "maxDataPoints": 20,
+            "refId": "drift"
+          }
+        },
+        {
+          "refId": "drift_threshold",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "type": "threshold",
+            "expression": "drift",
+            "refId": "drift_threshold",
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "gt",
+                  "params": [0]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "OK",
+      "for": "5m",
+      "annotations": {
+        "summary": "SUM(credit_transaction.deltaMicro) disagrees with materialised balances (C12). Money invariant broken — treat as a page, not a log line. Runbook: repos/tau-cloud/docs/stripe-iac-runbook.md.",
+        "runbook_url": "docs/handbooks/cloud/playbooks/ledger-drift.md"
+      },
+      "labels": {
+        "severity": "critical",
+        "service": "tau-api",
+        "component": "billing"
+      }
+    },
+    {
+      "uid": "supplier-auth-failure",
+      "title": "P0: Supplier Rejected Tau's Key",
+      "condition": "supplier_auth",
+      "data": [
+        {
+          "refId": "supplier_auth",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 300,
+            "to": 0
+          },
+          "datasourceUid": "prometheus",
+          "model": {
+            "expr": "sum by (app, gen_ai_provider_name) (increase(gen_ai_client_operation_duration_count{app=~\".*\",service_name=\"tau-api\",error_type=\"upstream_auth\"}[5m])) > 0",
+            "intervalMs": 15000,
+            "maxDataPoints": 20,
+            "refId": "supplier_auth"
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "OK",
+      "for": "0s",
+      "annotations": {
+        "runbook_url": "docs/handbooks/cloud/playbooks/supplier-outage.md",
+        "summary": "A supplier answered a funded call with 401/403 (F-11). The key is Tau's, so every funded call to that supplier fails as PROVIDER_UNAVAILABLE until the key is replaced. A new process fires from its second rejection: increase() cannot see a series' first sample. Grouped by Fly `app`, so staging (tau-api-staging) and prod (tau-api) fire separately. Same event as tau_billing_provider_account_refusals_total{reason=\"credential_rejected\"}."
+      },
+      "labels": {
+        "severity": "critical",
+        "service": "tau-api",
+        "component": "billing"
+      }
+    },
+    {
+      "uid": "supplier-credit-exhausted",
+      "title": "P0: Supplier Account Out of Credit",
+      "condition": "supplier_credit",
+      "data": [
+        {
+          "refId": "supplier_credit",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 300,
+            "to": 0
+          },
+          "datasourceUid": "prometheus",
+          "model": {
+            "expr": "sum by (app, providerId) (increase(tau_billing_provider_account_refusals_total{app=~\".*\",service_name=\"tau-api\",reason!=\"credential_rejected\"}[5m])) > 0",
+            "intervalMs": 15000,
+            "maxDataPoints": 20,
+            "refId": "supplier_credit"
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "OK",
+      "for": "0s",
+      "annotations": {
+        "runbook_url": "docs/handbooks/cloud/playbooks/supplier-outage.md",
+        "summary": "A supplier refused a funded call because Tau's account with it is out of credit (BIL-11). Funded calls to that supplier fail until it is topped up. Credential rejections are excluded here; supplier-auth-failure pages for them."
+      },
+      "labels": {
+        "severity": "critical",
+        "service": "tau-api",
+        "component": "billing"
+      }
+    },
+    {
+      "uid": "billing-worker-stalled",
+      "title": "P0: Billing Worker Stalled",
+      "condition": "worker_stalled",
+      "data": [
+        {
+          "refId": "worker_stalled",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 600,
+            "to": 0
+          },
+          "datasourceUid": "prometheus",
+          "model": {
+            "expr": "sum by (app, tau_worker) (max_over_time(tau_billing_worker_passes_total{app=~\".*\",service_name=\"tau-api\"}[24h])) unless sum by (app, tau_worker) (increase(tau_billing_worker_passes_total{app=~\".*\",service_name=\"tau-api\",outcome=\"ok\"}[15m]) > 0)",
+            "intervalMs": 15000,
+            "maxDataPoints": 20,
+            "refId": "worker_stalled"
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "OK",
+      "for": "5m",
+      "annotations": {
+        "runbook_url": "docs/handbooks/cloud/playbooks/paid-not-credited.md",
+        "summary": "A billing worker seen in the last 24 h has completed no successful pass in 15 min: hung, dead or failing every pass (F-10). operations stalled means paid purchases are not credited; recovery stalled means no API replica is completing its in-process recovery pass, so funded operations stay held (see chat-llm-failing.md). Grouped by Fly `app` and `tau_worker`. A worker scaled to 0 on purpose also fires until 24 h pass, so silence it."
+      },
+      "labels": {
+        "severity": "critical",
+        "service": "tau-api",
+        "component": "billing"
+      }
+    },
+    {
+      "uid": "billing-account-spend-blocked",
+      "title": "P0: Customer Chat Blocked by a Financial Case",
+      "condition": "account_spend_blocked",
+      "data": [
+        {
+          "refId": "account_spend_blocked",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 600,
+            "to": 0
+          },
+          "datasourceUid": "prometheus",
+          "model": {
+            "expr": "max by (app, kind) (tau_billing_open_financial_cases{app=~\".*\",service_name=\"tau-api\",attributed=\"true\",kind=~\"dispute_unresolved|orphan_local_receipt|invalid_grant_cause|entitlement_source_disagreement|journal_.+\"}) > 0",
+            "intervalMs": 15000,
+            "maxDataPoints": 20,
+            "refId": "account_spend_blocked"
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "OK",
+      "for": "15m",
+      "annotations": {
+        "runbook_url": "docs/handbooks/cloud/playbooks/ledger-drift.md",
+        "summary": "Tier T1: a spend-blocking financial case (dispute, orphan receipt, invalid grant cause, entitlement disagreement or journal drift; charter D11) that names an account has been open for more than 15 min. That customer gets 403 BILLING_ACCOUNT_RESTRICTED on every model step and cannot start a new purchase until an operator resolves it. Start with the billing lifecycle `list-cases` with `attributed: true`. An unattributed case pages as billing-case-unattributed instead; owed-money and bookkeeping kinds never block and are not in this rule. Grouped by Fly `app` and case kind."
+      },
+      "labels": {
+        "severity": "critical",
+        "service": "tau-api",
+        "component": "billing"
+      }
+    },
+    {
+      "uid": "billing-case-unattributed",
+      "title": "P0: Financial Case Without an Account",
+      "condition": "case_unattributed",
+      "data": [
+        {
+          "refId": "case_unattributed",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 600,
+            "to": 0
+          },
+          "datasourceUid": "prometheus",
+          "model": {
+            "expr": "max by (app, kind) (tau_billing_open_financial_cases{app=~\".*\",service_name=\"tau-api\",attributed=\"false\",kind!~\"tax_registration_review|supplier_.+\"}) > 0",
+            "intervalMs": 15000,
+            "maxDataPoints": 20,
+            "refId": "case_unattributed"
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "OK",
+      "for": "0s",
+      "annotations": {
+        "runbook_url": "docs/handbooks/cloud/operate/refunds-and-financial-cases.md",
+        "summary": "Tier U (billing collection gate blueprint D5): an open financial case names no Tau account, usually foreign cash (a payment with no Tau customer) or a Stripe read that could not attribute it. No customer is refused anything; it is operator work and pages at the first evaluation after the hourly gauge write. Run the billing lifecycle `list-cases` with `attributed: false`, then close each row with `resolve-case` (`resolved` for foreign cash). tax_registration_review and supplier_* cases never name an account, so they are left to billing-books-overdue-24h (and billing-supplier-invoice-mismatch) instead of paging here. Grouped by Fly `app` and case kind."
+      },
+      "labels": {
+        "severity": "critical",
+        "service": "tau-api",
+        "component": "billing"
+      }
+    },
+    {
+      "uid": "billing-owed-overdue-24h",
+      "title": "P0: Customer Owed for More Than 24 h",
+      "condition": "owed_overdue",
+      "data": [
+        {
+          "refId": "owed_overdue",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 600,
+            "to": 0
+          },
+          "datasourceUid": "prometheus",
+          "model": {
+            "expr": "max by (app, kind) (tau_billing_open_financial_case_age_seconds{app=~\".*\",service_name=\"tau-api\",attributed=\"true\",kind=~\"missing_local_payment|paid_unfulfilled_recovery|unfulfilled_purchase_obligation\"}) > 86400",
+            "intervalMs": 15000,
+            "maxDataPoints": 20,
+            "refId": "owed_overdue"
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "OK",
+      "for": "0s",
+      "annotations": {
+        "runbook_url": "docs/handbooks/cloud/playbooks/paid-not-credited.md",
+        "summary": "Tier T2: Tau has owed a named customer for more than 24 h: the oldest open missing_local_payment, paid_unfulfilled_recovery or unfulfilled_purchase_obligation case (paid, not yet credited or fulfilled) is older than a day. Nothing is refused; the customer is still waiting for what they paid for. Start with the billing lifecycle `list-cases` with `attributed: true`, then follow paid-not-credited. billing-owed-stale-2h warned at 2 h. Reads the oldest-case age gauge, written hourly. Grouped by Fly `app` and case kind."
+      },
+      "labels": {
+        "severity": "critical",
+        "service": "tau-api",
+        "component": "billing"
+      }
+    },
+    {
+      "uid": "db-pooler-clients-near-cap",
+      "title": "P0: Pooler Login Near Its Session Pool Cap",
+      "condition": "db_pooler_clients_near_cap",
+      "data": [
+        {
+          "refId": "db_pooler_clients_near_cap",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 300,
+            "to": 0
+          },
+          "datasourceUid": "prometheus",
+          "model": {
+            "instant": true,
+            "range": false,
+            "expr": "sum(max_over_time(tau_db_client_connections{app=~\".*\",service_name=\"tau-api\",tau_db_pool=~\"request|background\"}[1m])) + 2 >= 14",
+            "intervalMs": 15000,
+            "maxDataPoints": 20,
+            "refId": "db_pooler_clients_near_cap"
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "OK",
+      "for": "1m",
+      "annotations": {
+        "runbook_url": "docs/handbooks/cloud/playbooks/postgres-saturation.md",
+        "summary": "API pooled PostgreSQL clients reached 14 of the 15-client session pool; the next connection is refused and fails its query (database connection audit R4). The sum is every API instance's own request and background sockets plus the 2 of revisions-maintenance, which shares the login and exports no metrics. The prod-us login's Supavisor session pool is 15 and the declared budget is 2 × (4 + 1) + 2 = 12 (apps/api/app/config/connection-budget.test.ts)."
+      },
+      "labels": {
+        "severity": "critical",
+        "service": "tau-api",
+        "component": "database"
+      }
+    },
+    {
+      "uid": "db-pool-refusals",
+      "title": "P0: Database Refused API Connections",
+      "condition": "db_pool_refusals",
+      "data": [
+        {
+          "refId": "db_pool_refusals",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 300,
+            "to": 0
+          },
+          "datasourceUid": "prometheus",
+          "model": {
+            "instant": true,
+            "range": false,
+            "expr": "sum(increase(tau_db_client_refusals_total{app=~\".*\",service_name=\"tau-api\"}[5m])) > 0",
+            "intervalMs": 15000,
+            "maxDataPoints": 20,
+            "refId": "db_pool_refusals"
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "OK",
+      "for": "0s",
+      "annotations": {
+        "runbook_url": "docs/handbooks/cloud/playbooks/postgres-saturation.md",
+        "summary": "A query on the API failed because the session pooler or PostgreSQL refused its connection (Supavisor EMAXCONN, SQLSTATE 53300). Each refused query fails, often as 500 Failed to get session (database connection audit R4)."
+      },
+      "labels": {
+        "severity": "critical",
+        "service": "tau-api",
+        "component": "database"
+      }
+    },
+    {
+      "uid": "agent-replay-rejected",
+      "title": "P0: Model Provider Rejected Replayed Reasoning",
+      "condition": "replay_rejected",
+      "data": [
+        {
+          "refId": "replay_rejected",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 900,
+            "to": 0
+          },
+          "datasourceUid": "prometheus",
+          "model": {
+            "instant": true,
+            "range": false,
+            "expr": "(sum by (app) (increase(tau_agent_errors_total{app=~\".*\",service_name=\"tau-api\",error_code=\"REASONING_REPLAY_REJECTED\"}[15m])) > 0) or (sum by (app) (tau_agent_errors_total{app=~\".*\",service_name=\"tau-api\",error_code=\"REASONING_REPLAY_REJECTED\"} unless tau_agent_errors_total{app=~\".*\",service_name=\"tau-api\",error_code=\"REASONING_REPLAY_REJECTED\"} offset 15m) > 0)",
+            "intervalMs": 15000,
+            "maxDataPoints": 20,
+            "refId": "replay_rejected"
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "OK",
+      "for": "0s",
+      "annotations": {
+        "runbook_url": "docs/handbooks/cloud/playbooks/chat-llm-failing.md",
+        "summary": "A model provider refused a request because of reasoning Tau replayed from earlier in the chat (REASONING_REPLAY_REJECTED, reported by the agent client). The user saw 'This model cannot continue this chat' with no Resume, and that chat cannot continue on that model. Every occurrence is a replay-rule bug. The second leg counts a series first seen in the window, which increase() reads as zero."
+      },
+      "labels": {
+        "severity": "critical",
+        "service": "tau-api",
+        "component": "agent"
       }
     }
   ]

@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import type { IDockviewPanelHeaderProps } from 'dockview-react';
 import { Box, Columns2, Copy, FolderTree, Rows2, X, XCircle } from 'lucide-react';
-import { ContextMenuItem, ContextMenuSeparator } from '#components/ui/context-menu.js';
+import { ContextMenuItem, ContextMenuSeparator } from '@taucad/ui/components/context-menu';
 import {
   closeOtherPanels,
   closePanelsToTheRight,
@@ -9,7 +9,9 @@ import {
   closeAllPanelsInGroup,
   copyPathToClipboard,
 } from '#components/panes/tab-context-menu-actions.js';
+import { useSelector } from '@xstate/react';
 import { useProject } from '#hooks/use-project.js';
+import { NativeFileManagerIcon, useRevealInFileManager } from '#hooks/use-native-file-manager.js';
 import { withTabContextMenu } from '#components/panes/with-tab-context-menu.js';
 
 type EditorPanelParameters = {
@@ -17,14 +19,16 @@ type EditorPanelParameters = {
 };
 
 /**
- * Context menu content for editor tabs.
+ * Shared context menu content for workbench tabs.
  *
- * Provides close operations, path copying, split controls,
- * and cross-dock navigation (open in viewer, reveal in file tree).
+ * Every tab gets close, path, and split operations. File tabs also get
+ * file-specific navigation actions.
  */
-function EditorTabContextMenu(properties: IDockviewPanelHeaderProps): React.JSX.Element {
-  const { api, containerApi } = properties;
+export function WorkbenchTabContextMenu(properties: IDockviewPanelHeaderProps): React.JSX.Element {
+  const { api } = properties;
   const { editorRef, projectRef } = useProject();
+  const projectId = useSelector(projectRef, (state) => state.context.project?.id);
+  const revealInFileManager = useRevealInFileManager(projectId);
 
   const filePath = (properties.params as EditorPanelParameters | undefined)?.filePath;
 
@@ -69,31 +73,29 @@ function EditorTabContextMenu(properties: IDockviewPanelHeaderProps): React.JSX.
 
   // ── Split actions ──
   const handleSplitRight = useCallback(() => {
-    containerApi.addGroup({
-      referenceGroup: api.group,
-      direction: 'right',
-    });
-  }, [api, containerApi]);
+    api.moveTo({ group: api.group, position: 'right' });
+  }, [api]);
 
   const handleSplitDown = useCallback(() => {
-    containerApi.addGroup({
-      referenceGroup: api.group,
-      direction: 'below',
-    });
-  }, [api, containerApi]);
+    api.moveTo({ group: api.group, position: 'bottom' });
+  }, [api]);
 
   // ── Navigation actions ──
   const handleOpenInViewer = useCallback(() => {
     if (filePath) {
-      projectRef.send({ type: 'openInViewer', entryFile: filePath });
+      projectRef.send({ type: 'openInViewer', entryPath: filePath });
     }
   }, [projectRef, filePath]);
 
   const handleRevealInFileTree = useCallback(() => {
     if (filePath) {
-      editorRef.send({ type: 'revealFileInTree', path: filePath });
+      api.updateParameters({ filesOpen: true });
+      api.setActive();
+      requestAnimationFrame(() => {
+        editorRef.send({ type: 'revealFileInTree', path: filePath });
+      });
     }
-  }, [editorRef, filePath]);
+  }, [api, editorRef, filePath]);
 
   return (
     <>
@@ -134,17 +136,31 @@ function EditorTabContextMenu(properties: IDockviewPanelHeaderProps): React.JSX.
         Split Down
       </ContextMenuItem>
 
-      <ContextMenuSeparator />
+      {filePath ? (
+        <>
+          <ContextMenuSeparator />
 
-      {/* ── Navigation group ── */}
-      <ContextMenuItem disabled={!filePath} onSelect={handleOpenInViewer}>
-        <Box />
-        Open in Viewer
-      </ContextMenuItem>
-      <ContextMenuItem disabled={!filePath} onSelect={handleRevealInFileTree}>
-        <FolderTree />
-        Reveal in File Tree
-      </ContextMenuItem>
+          {/* ── File navigation group ── */}
+          <ContextMenuItem onSelect={handleOpenInViewer}>
+            <Box />
+            Open in Viewer
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={handleRevealInFileTree}>
+            <FolderTree />
+            Reveal in File Tree
+          </ContextMenuItem>
+          {revealInFileManager ? (
+            <ContextMenuItem
+              onSelect={() => {
+                void revealInFileManager.reveal(filePath);
+              }}
+            >
+              <NativeFileManagerIcon icon={revealInFileManager.icon} />
+              {revealInFileManager.label}
+            </ContextMenuItem>
+          ) : null}
+        </>
+      ) : null}
     </>
   );
 }
@@ -153,4 +169,4 @@ function EditorTabContextMenu(properties: IDockviewPanelHeaderProps): React.JSX.
  * Editor tab component with a right-click context menu.
  * Use as `defaultTabComponent` in the editor Dockview.
  */
-export const EditorDockviewTab = withTabContextMenu(EditorTabContextMenu);
+export const EditorDockviewTab = withTabContextMenu(WorkbenchTabContextMenu);

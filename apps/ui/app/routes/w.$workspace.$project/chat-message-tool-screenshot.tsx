@@ -1,0 +1,128 @@
+import { Camera, XCircle } from 'lucide-react';
+import type { ToolInvocation } from '@taucad/chat';
+import { toolName } from '@taucad/chat/constants';
+import {
+  ChatToolCard,
+  ChatToolCardHeader,
+  ChatToolCardIcon,
+  ChatToolCardTitle,
+  ChatToolCardContent,
+} from '@taucad/chat-ui/components/chat-tool-card';
+import { ChatToolDescription } from '@taucad/chat-ui/components/chat-tool-text';
+import { ChatToolLabel } from '@taucad/chat-ui/components/chat-tool-label';
+import { ChatToolError } from '#components/chat/chat-tool-error.js';
+import { ViewerLink } from '@taucad/files-ui/components/files/viewer-link';
+import { ChatMessageMedia } from '#routes/w.$workspace.$project/chat-message-media.js';
+
+function FilenameLink({ targetFile }: { readonly targetFile: string }): React.JSX.Element {
+  return <ViewerLink path={targetFile}>{targetFile}</ViewerLink>;
+}
+
+export function ChatMessageToolScreenshot({
+  part,
+}: {
+  readonly part: ToolInvocation<typeof toolName.screenshot>;
+}): React.JSX.Element {
+  const targetFile = part.input?.targetFile;
+
+  switch (part.state) {
+    case 'input-streaming':
+    case 'input-available': {
+      const mode = part.input?.mode;
+      const subjectNoun = mode === 'multi_angle' ? 'orthographic views' : 'screenshot';
+
+      return (
+        <ChatToolCard variant='minimal' status='loading' isCollapsible={false}>
+          <ChatToolCardHeader>
+            <ChatToolCardIcon icon={Camera} />
+            <ChatToolCardTitle>
+              <ChatToolLabel verb='Capturing'>
+                <ChatToolDescription>
+                  {targetFile ? (
+                    <>
+                      {subjectNoun} of <FilenameLink targetFile={targetFile} />
+                      ...
+                    </>
+                  ) : (
+                    `${subjectNoun}...`
+                  )}
+                </ChatToolDescription>
+              </ChatToolLabel>
+            </ChatToolCardTitle>
+          </ChatToolCardHeader>
+        </ChatToolCard>
+      );
+    }
+
+    case 'output-available': {
+      const { output } = part;
+      const allImages = output.images;
+      const renderableImages = allImages.filter((image) =>
+        'dataUrl' in image ? image.dataUrl.startsWith('data:') : image.path.startsWith('attachments/'),
+      );
+      const count = allImages.length;
+      const noun = count === 1 ? 'screenshot' : 'screenshots';
+
+      return (
+        <ChatToolCard
+          className='@container'
+          variant='minimal'
+          status='ready'
+          isDefaultOpen={false}
+          isCollapsible={renderableImages.length > 0}
+        >
+          <ChatToolCardHeader>
+            <ChatToolCardIcon icon={Camera} />
+            <ChatToolCardTitle>
+              <ChatToolLabel verb='Captured'>
+                <ChatToolDescription>
+                  {targetFile ? (
+                    <>
+                      {count} {noun} of <FilenameLink targetFile={targetFile} />
+                    </>
+                  ) : (
+                    `${count} ${noun}`
+                  )}
+                </ChatToolDescription>
+              </ChatToolLabel>
+            </ChatToolCardTitle>
+          </ChatToolCardHeader>
+          {renderableImages.length > 0 ? (
+            <ChatToolCardContent>
+              <div
+                className={`grid gap-2 ${renderableImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2 @md:grid-cols-3'}`}
+              >
+                {renderableImages.map((image) => (
+                  <div
+                    key={JSON.stringify([image.view, image.instance, image.angle])}
+                    className='flex flex-col items-center gap-1'
+                  >
+                    <ChatMessageMedia
+                      media={
+                        'dataUrl' in image
+                          ? { url: image.dataUrl, mediaType: image.dataUrl.slice(5, image.dataUrl.indexOf(';')) }
+                          : { url: image.path, mediaType: image.mimeType }
+                      }
+                      alt={`${image.angle ?? image.view} view`}
+                    />
+                    <span className='text-xs text-muted-foreground'>{image.angle ?? image.view}</span>
+                  </div>
+                ))}
+              </div>
+            </ChatToolCardContent>
+          ) : undefined}
+        </ChatToolCard>
+      );
+    }
+
+    case 'output-error': {
+      return <ChatToolError errorText={part.errorText} icon={XCircle} noun='screenshot' />;
+    }
+
+    case 'approval-requested':
+    case 'approval-responded':
+    case 'output-denied': {
+      throw new Error(`Unexpected ${toolName.screenshot} state: ${part.state}`);
+    }
+  }
+}

@@ -1,0 +1,516 @@
+/**
+ * Pure readers over a chat's durable history that the host's services share: the external marker, the chat's vendor
+ * session, the calls a history leaves open, whether it is well formed and where a batch's carried turns go, and the
+ * record that clears a resumable failure's marker.
+ */
+
+import { transportFailureDiagnosticType } from '#harness/session-record.js';
+import { isAbandonedTurn } from '#log/event-types.js';
+import { reduceEventLog } from '#log/reducer.js';
+import type { LogRowBody } from '#log/chat-ledger.js';
+import type { AgentLogEvent, JsonObject, JsonValue, ProviderMessage, RunLifecycleState } from '#log/event-types.js';
+import type { ExternalSessionState } from '#host/external-agent.js';
+import type { InterruptRequest } from '#waist/ports.js';
+
+type SessionEvent = LogRowBody;
+
+/**
+ * Terminal lifecycle state for one external stop reason.
+ *
+ * Only `end_turn` is a completed turn. An agent that hit its output ceiling,
+ * refused, or exhausted its own request budget stopped with work outstanding,
+ * and recording that as `completed` tells every later reader — the transcript,
+ * a resume, the user — that the turn finished (V6). A reason this host has
+ * never heard of resolves to `completed`: D14 keeps an older reader able to read
+ * a newer writer, and the reason itself is recorded verbatim either way.
+ */
+export const externalStopStates = new Map<string, RunLifecycleState>([
+  ['end_turn', 'completed'],
+  ['cancelled', 'cancelled'],
+  ['max_tokens', 'failed'],
+  ['refusal', 'failed'],
+  ['max_turn_requests', 'failed'],
+]);
+
+/** User-safe reason for a stop that ended the turn short. */
+export const externalStopDetail = new Map<string, string>([
+  ['max_tokens', 'The agent reached its own output limit before finishing this turn.'],
+  ['refusal', 'The agent declined to answer this turn.'],
+  ['max_turn_requests', 'The agent used its whole request budget for this turn.'],
+]);
+
+/**
+ * The login record one thrown refusal carries, if it carries one.
+ *
+ * A runner refuses with a coded error (`EXTERNAL_AGENT_AUTH_REQUIRED`,
+ * `EXTERNAL_AGENT_MODEL_UNAVAILABLE`, …) and may hang the facts a surface needs
+ * on it — the login methods, a verification URL and code. The host is
+ * deliberately incurious about the payload's shape: it records what it was
+ * given, and the surfaces that render it own its schema (`agent-wire.ts`). The
+ * code itself, and any stop `details`, ride {@link codedFailureDetail}.
+ *
+ * @param error - Whatever the external runner threw.
+ * @returns The login record to append before the failure.
+ */
+export const externalRefusalOf = (
+  error: unknown,
+): {
+  readonly login: Omit<SessionEvent & { readonly type: 'interrupt.recorded' }, 'interruptId'> | undefined;
+} => {
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- reading one optional own property off a thrown value.
+  const fields = error !== null && typeof error === 'object' ? (error as Record<string, unknown>) : undefined;
+  const payload = fields?.['login'];
+  return {
+    login:
+      typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+        ? {
+            type: 'interrupt.recorded',
+            phase: 'requested',
+            reason: error instanceof Error ? error.message : 'This agent needs you to sign in.',
+            // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- a refusal payload is JSON by construction of its wire schema.
+            payload: payload as JsonValue,
+          }
+        : undefined,
+  };
+};
+
+/** Marker distinguishing an externally executed turn in the durable log. */
+export const externalTurnKind = 'external-agent';
+
+/**
+ * The external-agent marker on the turn's own user message: never on a copy another device's turn is said as
+ * (`abandonedTurnOf`), which this device's run did not admit.
+ *
+ * Deliberately *not* a new event type: the vocabulary already carries
+ * per-message provider metadata, and `tauInternal` is where Tau's own
+ * non-provider facts live. A reader that knows nothing about external agents
+ * still replays the log byte-for-byte.
+ *
+ * @param message - Message to inspect.
+ * @returns The marker, when this message admitted an external turn.
+ */
+export const externalMarker = (
+  message: ProviderMessage,
+): (JsonObject & { readonly agentId: string; readonly runKind: string }) | undefined => {
+  const marker = message.metadata?.tauInternal;
+  if (
+    marker === undefined ||
+    typeof marker !== 'object' ||
+    Array.isArray(marker) ||
+    marker['kind'] !== externalTurnKind ||
+    typeof marker['agentId'] !== 'string' ||
+    isAbandonedTurn(message)
+  ) {
+    return undefined;
+  }
+  /* `runKind` is absent on markers written before the registry existed; those
+   * were all ACP, which is what the node launcher registers under that key. */
+  const runKind = typeof marker['runKind'] === 'string' ? marker['runKind'] : 'acp';
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- the discriminating fields are checked above.
+  return { ...marker, runKind } as JsonObject & { readonly agentId: string; readonly runKind: string };
+};
+
+/**
+ * The external turn a log's last run admitted, if it was one.
+ *
+ * @param events - The chat's durable events.
+ * @returns The marker and the message carrying it, or `undefined` for a Tau run.
+ */
+export const externalTurnOf = (
+  events: readonly AgentLogEvent[],
+):
+  | { readonly marker: JsonObject & { readonly agentId: string; readonly runKind: string }; readonly messageId: string }
+  | undefined => {
+  const runId = events.at(-1)?.runId;
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index]!;
+    if (event.runId !== runId) {
+      break;
+    }
+    if (event.type === 'message.appended' && event.message.role === 'user') {
+      const marker = externalMarker(event.message);
+      return marker ? { marker, messageId: event.message.id } : undefined;
+    }
+  }
+  return undefined;
+};
+
+/**
+ * The session one agent last held in this chat, across every run in its log.
+ *
+ * Deliberately *not* {@link externalTurnOf}: that one answers "is the last run
+ * external and unfinished?" and stops at the run boundary, which is why every
+ * turn used to start a fresh vendor session. This one answers "what has this
+ * chat already opened with this agent?", so turn two continues turn one.
+ *
+ * @param events - The chat's durable events.
+ * @param agentId - Agent this turn selected; a different agent gets its own session.
+ * @param owner - Whose session it is.
+ * @param owner.hostId - Admitted placement; only records owned by that host may restore its session.
+ * @param owner.deviceId - This device, as the host's `deviceId` option names it: a record another device stamped names
+ *   a session on that device, whatever host id the two share (every desktop places as `desktop`).
+ * @param owner.turnId - Only this turn's own record, whatever device it names (round 27): a resume on a device that
+ *   cannot read its own id continues the run's own session, never another turn's.
+ * @returns The record the runner resumes from, or `undefined` for a first turn.
+ */
+export const externalSessionOf = (
+  events: readonly AgentLogEvent[],
+  agentId: string,
+  {
+    hostId,
+    deviceId,
+    turnId,
+  }: Readonly<{ hostId?: string | undefined; deviceId?: string | undefined; turnId?: string | undefined }> = {},
+): (JsonObject & ExternalSessionState) | undefined => {
+  /* Reduced, not raw: `remember` records the session id by *replacing* the
+   * user message's envelope, so only the reducer's view carries it. */
+  const messages = reduceEventLog(events);
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]!;
+    if (message.role !== 'user') {
+      continue;
+    }
+    const marker = externalMarker(message);
+    /* The most recent marker that actually *names* a session: only the turn
+     * that opened one records it, and every later turn of the same session
+     * carries a bare marker. */
+    if (
+      !marker ||
+      marker.agentId !== agentId ||
+      typeof marker['acpSessionId'] !== 'string' ||
+      (hostId !== undefined && marker['hostId'] !== hostId) ||
+      (turnId === undefined
+        ? marker['deviceId'] !== undefined && marker['deviceId'] !== deviceId
+        : message.id !== turnId)
+    ) {
+      continue;
+    }
+    const { kind: _kind, runKind: _runKind, ...state } = marker;
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- `agentId` is checked above and every other field is optional.
+    return state as JsonObject & ExternalSessionState;
+  }
+  return undefined;
+};
+
+/**
+ *
+ */
+export type InterruptPayload = {
+  readonly kind: InterruptRequest['kind'];
+  readonly prompt: string;
+  readonly context?: JsonValue | undefined;
+};
+
+export const isJsonObject = (value: JsonValue | undefined): value is JsonObject =>
+  value !== null && value !== undefined && typeof value === 'object' && !Array.isArray(value);
+
+export const isInterruptPayload = (value: JsonValue | undefined): value is InterruptPayload => {
+  if (!isJsonObject(value)) {
+    return false;
+  }
+  return (
+    (value['kind'] === 'approval' || value['kind'] === 'operator' || value['kind'] === 'safeguard') &&
+    typeof value['prompt'] === 'string'
+  );
+};
+
+export const internalKind = (message: ProviderMessage): string | undefined => {
+  const metadata = message.metadata?.tauInternal;
+  // oxlint-disable-next-line typescript/dot-notation -- JsonObject keys are index-signature properties under noPropertyAccessFromIndexSignature.
+  const kind = metadata?.['kind'];
+  return isJsonObject(metadata) && typeof kind === 'string' ? kind : undefined;
+};
+
+export const latestTurnId = (messages: readonly ProviderMessage[], fallback: string): string =>
+  messages.findLast((message) => message.role === 'user' && internalKind(message) !== 'interrupt-recovery')?.id ??
+  fallback;
+
+/** A tool call an assistant turn made. */
+type ToolCall = Readonly<{ toolCallId: string; toolName: string }>;
+
+const callsOf = (message: ProviderMessage): ToolCall[] => {
+  const blocks: readonly JsonValue[] =
+    message.role === 'assistant' && Array.isArray(message.content) ? message.content : [];
+  return blocks.flatMap((block) =>
+    isJsonObject(block) &&
+    block['type'] === 'toolCall' &&
+    typeof block['id'] === 'string' &&
+    typeof block['name'] === 'string'
+      ? [{ toolCallId: block['id'], toolName: block['name'] }]
+      : [],
+  );
+};
+
+/**
+ * The calls open after one more message (`openAfter` in ChatLedger.lean, T14). An assistant turn opens its own calls
+ * and leaves any before it open to the provider's adapter; a tool output closes its call; a `tool-input` row, which the
+ * provider never reads, changes nothing; any other message leaves every open call to the adapter. pi-ai's
+ * `transformMessages` answers a call so left with a synthetic "no result", and drops an assistant turn that errored or
+ * was aborted, calls and all, so such a turn opens none.
+ *
+ * @param open - The calls open before it.
+ * @param message - The message.
+ * @returns The calls open after it.
+ */
+const openAfter = (open: readonly ToolCall[], message: ProviderMessage): readonly ToolCall[] => {
+  switch (message.role) {
+    case 'assistant': {
+      const stop = message.metadata?.stopReason;
+      return stop === 'error' || stop === 'aborted' ? [] : callsOf(message);
+    }
+    case 'tool-output': {
+      const index = open.findIndex((call) => call.toolCallId === message.toolCallId);
+      return index === -1 ? open : open.toSpliced(index, 1);
+    }
+    case 'tool-input': {
+      return open;
+    }
+    default: {
+      return [];
+    }
+  }
+};
+
+/**
+ * The calls this history leaves open at its tail: those of its last assistant turn that only tool outputs follow and
+ * that none of them answered (`openCalls` in ChatLedger.lean, T14). A Resume answers each of these once
+ * (`CLIENT_DISCONNECTED`). A call another message already followed is not open: the provider's adapter answered it as
+ * having no result, and an output written for it now would follow that message, a stray result every provider rejects
+ * (`t14_no_late_output`).
+ *
+ * @param messages - The reduced history the resume starts from.
+ * @returns One entry per open call, in the order the turn made them.
+ */
+export const openToolCalls = (messages: readonly ProviderMessage[]): ToolCall[] => {
+  let open: readonly ToolCall[] = [];
+  for (const message of messages) {
+    open = openAfter(open, message);
+  }
+  return [...open];
+};
+
+/**
+ * Whether the history is well formed (`wf` in ChatLedger.lean, T14): every tool output follows its call directly,
+ * answering a call of the assistant turn that only outputs follow, before any other message. A call left open when
+ * another message follows is the provider adapter's to answer; an output after that message is a stray result.
+ *
+ * @param messages - The history.
+ * @returns Whether every tool output follows its call.
+ */
+export const historyWellFormed = (messages: readonly ProviderMessage[]): boolean => {
+  let open: readonly ToolCall[] = [];
+  for (const message of messages) {
+    if (message.role === 'tool-output' && !open.some((call) => call.toolCallId === message.toolCallId)) {
+      return false;
+    }
+    open = openAfter(open, message);
+  }
+  return true;
+};
+
+/** A row that drops messages it does not keep, which it names as its batch is built: a rewind of any kind (`Op.rewind`). */
+const dropsMessages = (body: LogRowBody): boolean =>
+  body.type === 'history.rewound' ||
+  body.type === 'turn.history-projection-committed' ||
+  body.type === 'history.compacted';
+
+/**
+ * The history after one more row, as the reducer folds it (`Op.apply` in ChatLedger.lean, T14), for the rows a batch
+ * holds. A message already held is a turn said again and changes nothing.
+ *
+ * @param messages - The history before it.
+ * @param body - The row.
+ * @returns The history after it.
+ */
+export const historyAfter = (messages: readonly ProviderMessage[], body: LogRowBody): readonly ProviderMessage[] => {
+  switch (body.type) {
+    case 'message.appended': {
+      return messages.some((message) => message.id === body.message.id) ? messages : [...messages, body.message];
+    }
+    case 'safeguard.recorded': {
+      return body.action === 'terminate' ? messages : [...messages, body.message];
+    }
+    case 'message.envelope-replaced': {
+      return messages.map((message) => (message.id === body.messageId ? body.replacement : message));
+    }
+    case 'history.rewound': {
+      const kept = new Set(body.retainedMessageIds);
+      return messages.filter((message) => kept.has(message.id));
+    }
+    case 'turn.history-projection-committed': {
+      const kept = new Set(body.retainedMessageIds);
+      return [...messages.filter((message) => kept.has(message.id)), body.message];
+    }
+    case 'history.compacted': {
+      const evicted = new Set(body.evictedMessageIds);
+      const first = messages.findIndex((message) => evicted.has(message.id));
+      const rest = messages.filter((message) => !evicted.has(message.id));
+      const at = first === -1 ? rest.length : first;
+      return [...rest.slice(0, at), body.summary, ...rest.slice(at)];
+    }
+    default: {
+      return messages;
+    }
+  }
+};
+
+/**
+ * The message a row appends, if any.
+ *
+ * @param body - The row.
+ * @returns The message it appends.
+ */
+const appendedBy = (body: LogRowBody): ProviderMessage | undefined =>
+  body.type === 'message.appended' || (body.type === 'safeguard.recorded' && body.action !== 'terminate')
+    ? body.message
+    : undefined;
+
+/**
+ * Whether the next message after the batch's rows from `index` on is a say (`nextSays` in ChatLedger.lean, T16): a
+ * person's words, a reminder, anything but an assistant turn or a tool's output. A say leaves every open call to the
+ * provider's adapter, so turns carried just before it leave the same calls to the adapter it did, and no output is ever
+ * written for them. A `tool-input` row, which the provider never reads, is passed over. Past the batch, the next message
+ * is the run's person's turn when it is still ahead.
+ *
+ * @param bodies - The batch's rows.
+ * @param index - The place in them.
+ * @param turnAhead - Whether the run's person's turn comes next past the batch.
+ * @returns Whether a say comes next.
+ */
+const saysNext = (bodies: readonly LogRowBody[], index: number, turnAhead: boolean): boolean => {
+  for (const body of bodies.slice(index)) {
+    const message = appendedBy(body);
+    if (message !== undefined && message.role !== 'tool-input') {
+      return message.role !== 'assistant' && message.role !== 'tool-output';
+    }
+  }
+  return turnAhead;
+};
+
+/**
+ * Where a batch's carried turns go (`placeAt` in ChatLedger.lean, T14 and T16; rounds 21 and 23): the first place after
+ * every rewind the batch holds at which the history leaves no tool call open, or at which the next message is a say
+ * ({@link saysNext}), which leaves every open call to the provider's adapter anyway. So the words of another device's
+ * abandoned run a command goes on past follow the outputs that close the calls a Resume found open, never parting a call
+ * from its output (`t14_plan_well_formed`); the batch's own rewind, which names what it keeps before anything is
+ * carried, never cuts them (`t14_carried_survive_rewind`); and a person's turn stays the history's last message, after
+ * them, even when the history ends in a call no output will answer (`t16_turn_last`). A start's, a Retry's and a
+ * Resume's batch always has a place (`t14_turns_place`); a batch at which every place leaves a call open that its run
+ * still answers, an approval's before its tool returns, has none, and the turns wait for the run's next batch
+ * (`t14_approval_waits`).
+ *
+ * @param history - The history the batch lands after.
+ * @param bodies - The batch's rows, as built before anything is carried.
+ * @param turnAhead - Whether the batch's run has its person's turn still to say (its turn is not committed), so the
+ *   run's next message past the batch is a say: a turn's admission and commit are separate batches.
+ * @returns The index to insert the carried rows at, or `undefined` when the batch has no place for them.
+ */
+export const carriedPlace = (
+  history: readonly ProviderMessage[],
+  bodies: readonly LogRowBody[],
+  turnAhead = false,
+): number | undefined => {
+  const lastDrop = bodies.findLastIndex((body) => dropsMessages(body));
+  let messages = history;
+  let open: readonly ToolCall[] = openToolCalls(history);
+  for (let index = 0; index <= bodies.length; index++) {
+    if (index > lastDrop && (open.length === 0 || saysNext(bodies, index, turnAhead))) {
+      return index;
+    }
+    const body = bodies[index];
+    if (body !== undefined) {
+      const next = historyAfter(messages, body);
+      const appended = body.type === 'message.appended' || body.type === 'safeguard.recorded';
+      open = next === messages ? open : appended ? openAfter(open, next.at(-1)!) : openToolCalls(next);
+      messages = next;
+    }
+  }
+  return undefined;
+};
+
+/**
+ * The failed call's marker, rewritten as the tool-use turn it actually was.
+ *
+ * A stream that fails *after* it completed a tool call leaves the marker mid
+ * history — the tool's own rows follow it — so there is no prefix to rewind to.
+ * Left as it stands, its transport-failure diagnostic is what every later
+ * `snapshot()` reports as this chat's failure, and the re-issued call tells the
+ * model its own last turn errored. Rewriting it keeps the work that settled and
+ * drops the failure: the message the stream would have written had it simply
+ * ended after that call.
+ *
+ * @param marker - The last assistant message of the failed run.
+ * @param messages - The reduced history the resume starts from.
+ * @returns The replacement envelope, or `undefined` when no tool call settled.
+ */
+export const settledMarkerEnvelope = (
+  marker: ProviderMessage,
+  messages: readonly ProviderMessage[],
+): ProviderMessage | undefined => {
+  const settled = new Set(messages.flatMap((message) => (message.role === 'tool-output' ? [message.toolCallId] : [])));
+  const isCall = (block: JsonValue): boolean => isJsonObject(block) && block['type'] === 'toolCall';
+  /* A call with no durable result is one the stream never finished writing. It
+   * has no `tool-input` row either, and a provider refuses an unanswered call,
+   * so it leaves with the failure. */
+  const blocks: readonly JsonValue[] = Array.isArray(marker.content) ? marker.content : [];
+  const content = blocks.filter(
+    (block) => !isCall(block) || (isJsonObject(block) && typeof block['id'] === 'string' && settled.has(block['id'])),
+  );
+  if (!content.some((block) => isCall(block))) {
+    return undefined;
+  }
+  const { errorMessage: _failed, diagnostics, ...metadata } = marker.metadata ?? {};
+  const kept = diagnostics?.filter(
+    (diagnostic) => !isJsonObject(diagnostic) || diagnostic['type'] !== transportFailureDiagnosticType,
+  );
+  return {
+    ...marker,
+    content,
+    metadata: { ...metadata, stopReason: 'toolUse', ...(kept?.length ? { diagnostics: kept } : {}) },
+  };
+};
+
+/**
+ * The record that clears a resumable failure's marker before its call is re-issued.
+ *
+ * The stream wrapper records a failed call as an assistant message carrying the
+ * transport-failure diagnostic. Left in place, pi refuses to continue from an
+ * assistant tail and the recovery reminder tells the model a network drop
+ * cancelled tools that in fact settled. The marker takes one of two shapes:
+ * nothing ran after it, and retracting it restores the exact context the failed
+ * call was built from; or a tool it had already started settled behind it, and
+ * only its envelope can change ({@link settledMarkerEnvelope}) because a rewind
+ * retains a prefix and the marker is no longer the tail.
+ *
+ * @param messages - The reduced history of the failed run.
+ * @returns The event to append, or `undefined` when there is nothing to clear.
+ */
+export const failureMarkerClearance = (messages: readonly ProviderMessage[]): SessionEvent | undefined => {
+  const marker = messages.findLast((message) => message.role === 'assistant');
+  if (!marker) {
+    return undefined;
+  }
+  /* Only a message that is provably the failure marker may be retracted or
+   * rewritten: an assistant turn without the diagnostic is somebody's real
+   * output, wherever it sits. A resumable failure is no longer only a gateway
+   * refusal — `RUN_ABANDONED` is one too, and its tail is the agent's committed
+   * work, so retracting it loses that work and asks the provider again from the
+   * user turn. */
+  const isMarker = marker.metadata?.diagnostics?.some(
+    (diagnostic) => isJsonObject(diagnostic) && diagnostic['type'] === transportFailureDiagnosticType,
+  );
+  if (!isMarker) {
+    return undefined;
+  }
+  if (messages.at(-1) === marker) {
+    return {
+      type: 'history.rewound',
+      trigger: 'retry',
+      retainedMessageIds: messages.slice(0, -1).map((message) => message.id),
+    };
+  }
+  const replacement = settledMarkerEnvelope(marker, messages);
+  return replacement === undefined
+    ? undefined
+    : { type: 'message.envelope-replaced', messageId: marker.id, replacement };
+};

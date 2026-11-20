@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Sharp",
+    "parameters": {
+      "width": 52,
+      "depth": 34,
+      "height": 20,
+      "fillet": 0,
+      "profile": "sharp"
+    }
+  },
+  {
+    "name": "Tall soft",
+    "parameters": {
+      "width": 42,
+      "depth": 30,
+      "height": 42,
+      "fillet": 4,
+      "profile": "soft"
+    }
+  }
+]

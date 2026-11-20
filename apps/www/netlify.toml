@@ -1,0 +1,51 @@
+# Dedicated marketing site. The UI edge function proxies its public routes.
+[build]
+base = "apps/www"
+command = "NODE_OPTIONS='--import tsx' NX_PREFER_NODE_STRIP_TYPES=true pnpm nx build www"
+publish = "build/client"
+
+[build.environment]
+NODE_VERSION = "24"
+NX_NO_CLOUD = "true"
+WWW_LAUNCH = "false"
+WWW_ORIGIN = "https://tau.new"
+
+# The adapter (4.x) creates this SSR function, which imports the server build
+# `build/server/index.js` and the adapter's `serverless` request handler.
+# Declare it explicitly so the CLI bundles from its real package directory.
+[functions]
+directory = ".netlify/v1/functions"
+
+[context.production.environment]
+WWW_LAUNCH = "true"
+
+[dev]
+command = "pnpm nx dev www"
+targetPort = 3003
+autoLaunch = false
+
+[[headers]]
+for = "/_www/bundles/*"
+[headers.values]
+Cache-Control = "public, max-age=31536000, immutable"
+Netlify-CDN-Cache-Control = "public, durable, max-age=31536000"
+
+# Stable artwork filenames revalidate so a deploy cannot leave an old poster cached.
+[[headers]]
+for = "/_www/assets/*"
+[headers.values]
+Cache-Control = "public, max-age=0, must-revalidate"
+Netlify-CDN-Cache-Control = "public, durable, s-maxage=86400"
+
+# The agent page changes with each deploy; browsers revalidate and the CDN keeps it an hour.
+[[headers]]
+for = "/llms.txt"
+[headers.values]
+Cache-Control = "public, max-age=0, must-revalidate"
+Netlify-CDN-Cache-Control = "public, durable, s-maxage=3600"
+
+[[headers]]
+for = "/*"
+[headers.values]
+X-Content-Type-Options = "nosniff"
+Referrer-Policy = "no-referrer"

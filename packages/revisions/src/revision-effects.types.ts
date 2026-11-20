@@ -1,0 +1,322 @@
+import type { PathPolicy, RootedFileSystem } from '@taucad/filesystem';
+import type { ParameterRecordCodec } from '#algorithms/index.js';
+import type { LargeObjectsReport } from '#project-revisions.types.js';
+import type { PublishPublicationActorInput, PublishPublicationActorOutput } from '#publish.types.js';
+import type { RemoteStorageSupplier } from '#remote.types.js';
+import type { RevisionCaptureIdentity } from '#revision-authority.js';
+import type { Checkout, RevisionPort } from '#revision-port.js';
+import type { RevisionStreamHandlers } from '#revision-stream.js';
+
+/**
+ * Opens the tree of one checkout.
+ *
+ * A host, not this module, knows what a checkout's `root` means: an absolute
+ * directory on a disk host, a `/projects/<id>` or `/checkouts/<id>` route in a
+ * page. One function rather than one filesystem, because a linked checkout is a
+ * different tree from the live one and capturing the wrong one is silent.
+ *
+ * @public
+ */
+export type RevisionFileSystem = Omit<RootedFileSystem, 'watch'>;
+
+/** Open the revision read/write capability for one checkout. @public */
+export type CheckoutFileSystems = (checkout: Checkout) => RevisionFileSystem | Promise<RevisionFileSystem>;
+
+/**
+ * Run one checkout filesystem operation inside its host-owned admission lifetime.
+ *
+ * Disk hosts use this seam to admit a linked checkout before placement is
+ * published, then revoke that temporary reachability when the operation
+ * settles. Browser hosts may omit it and use {@link CheckoutFileSystems}
+ * directly.
+ *
+ * @public
+ */
+export type UseCheckoutFileSystem = <Result>(
+  checkout: Checkout,
+  operation: (filesystem: RevisionFileSystem) => Promise<Result>,
+) => Promise<Result>;
+
+/** Host clock supplied to the revision actors without coupling this contract to XState. */
+type RevisionClock = Readonly<{
+  now?: () => number;
+  setTimeout(callback: (...args: unknown[]) => void, delay: number): unknown;
+  clearTimeout(id: unknown): void;
+}>;
+
+/**
+ * Where one turn was placed, that its lease is now held, or why it could not be
+ * placed at all.
+ *
+ * `leased` matters to a host with a fast turn: a completion that arrives while
+ * the turn is still `preparing` is dropped by the machine, whose wait set for
+ * `turnCompleted` is `leased`. A host holds the completion until this says the
+ * lease is held.
+ *
+ * @public
+ */
+export type TurnPlacement = Readonly<{ runId: string }> &
+  (
+    | Readonly<{
+        status: 'placed';
+        turnId: string;
+        chatId: string;
+        /** The checkout this turn attaches to; never one this call created. */
+        checkout: Checkout;
+        baseRevisionId: string | undefined;
+      }>
+    | Readonly<{ status: 'leased'; checkoutId: string }>
+    | Readonly<{
+        status: 'refused';
+        turnId: string;
+        chatId: string;
+        reason: string;
+      }>
+  );
+
+/**
+ * Why a tree is being materialized.
+ *
+ * - `apply` — an ordinary write into the checkout's current tree (a turn's settlement).
+ * - `tree` — another revision's tree replaces the checkout's (a restore, an undo,
+ *   a switch, a pull, a merge, a decision landing): the write announces a new
+ *   tree, and readiness re-enters at what that tree leaves it in (D10, I7).
+ * - `fill` — a large-object fill's flush.
+ *
+ * @public
+ */
+export type ApplyingTreePurpose = 'apply' | 'tree' | 'fill';
+
+/**
+ * What a tree write tells its host as it begins. A write that holds the tree
+ * names its entry closure (`tau.json` and the files it names), which it lands
+ * first; once the checkout's index has every one of them landed, the host may
+ * read the tree as `entryReady` (D10). It also hands over the `tau.json` bytes
+ * that closure lands, when the tree has one, so the host can say which
+ * manifest the landed closure is (STO-25).
+ *
+ * @public
+ */
+export type ApplyingTreeBracket = Readonly<{
+  purpose: ApplyingTreePurpose;
+  closure?: readonly string[];
+  manifest?: Uint8Array<ArrayBuffer>;
+}>;
+
+/**
+ * How a tree write ended, told as its bracket is released: `failed` when it
+ * threw or was aborted and left the checkout torn, so a host never reads the
+ * tree it began as written (D10, I7). A write that threw after changing
+ * nothing, or that put the prior files back, left the checkout whole and is
+ * told `failed: false`; the operation itself still rejects.
+ *
+ * @public
+ */
+export type ApplyingTreeOutcome = Readonly<{ failed: boolean }>;
+
+/** Dependencies one project's actor set is built from. @public */
+export type RevisionActorsOptions = Readonly<{
+  /** The content-addressed store every revision id comes from. */
+  port: RevisionPort;
+  filesystem: CheckoutFileSystems;
+  /** Optional host-owned admission wrapper around checkout tree reads and writes. */
+  useFileSystem?: UseCheckoutFileSystem;
+  projectId: string;
+  /**
+   * Timers and time for the whole tree (MC-R4): the actors' timers run on it, and
+   * its `now()` (milliseconds since the Unix epoch) stamps what this host mints,
+   * falling back to `Date.now`. Each root takes its own clock.
+   */
+  clock?: RevisionClock;
+  /**
+   * Who every revision this host mints is by, and which leg it is (S37, A26;
+   * blueprint B1, I1).
+   *
+   * Required, with no default: a capture cannot be built without a resolved
+   * identity. `resolve` is read per mint rather than captured once, because
+   * signing in, signing out and turning anonymity on all change the answer
+   * inside one session. The host owns the mapping — a page reads it from the
+   * session, a disk host from the account it was handed or its device
+   * pseudonym — and the anonymity setting is applied *there*, before the
+   * revision is written, so no later change rewrites a recorded identity.
+   */
+  identity: RevisionCaptureIdentity;
+  /**
+   * The classifier this project's layout answers with (EQ6, D6).
+   *
+   * Injected for the same reason the composed view's is: the mask is the
+   * mechanism and the layout is data. Defaults to Tau's own, which is the one
+   * place in this package that reads the registry — every site below asks this
+   * value, so a project opened under another layout cannot have Tau's rows
+   * quietly applied to its files.
+   *
+   * A non-default policy must also hand its layout to
+   * `generatedIgnoreContent`, or the generated ignore block and the capture
+   * disagree (PP5); `tauRevisionPolicy` keeps the pair together.
+   */
+  policy?: PathPolicy;
+  /**
+   * Called when a turn's placement settles, before its lease is written.
+   *
+   * Both outcomes: a host has to root the turn's agent where the placement put
+   * it, and has to refuse a turn it could not place rather than run it
+   * unrecorded (I-EDIT).
+   */
+  onPlacement?: (placement: TurnPlacement) => void;
+  /**
+   * Reports chat records only after a remote ref tree has been projected into
+   * this checkout's protected `.tau/chats/**` files.
+   */
+  onChatsProjected?: (chatIds: readonly string[]) => void;
+  /**
+   * Whether this host's `changed` feed is complete (NS15, E1).
+   *
+   * A host that promises it reports every write to a checkout — its own
+   * applies included — before any request that follows the write, and reports
+   * a change it lost track of as the path `''`. Its cuts then re-read only the
+   * paths written since the previous cut. A host that cannot promise it (a
+   * watcher that coalesces, drops or is absent) leaves it unset and every
+   * capture walks the checkout through the EQ7 memo.
+   */
+  completeChanges?: boolean;
+  /**
+   * Brackets tree materialization so a disk host can ignore its own watcher
+   * events instead of reporting them as editor changes.
+   *
+   * The bracket's `purpose` (see {@link ApplyingTreePurpose}) is `fill` for a
+   * large-object fill's flush, which replaces placeholders with their bytes in
+   * place; `tree` when another revision's tree replaces the checkout's, which
+   * readiness reads as a new tree; and `apply` (the default) for a write into
+   * the checkout's current tree. A host can hold a file tree's re-reads for
+   * `apply` and `tree` without holding them for every flush of a long fill. A
+   * write that holds the tree also names its entry `closure`, landed first.
+   *
+   * The returned release is called once, with the write's outcome (see
+   * {@link ApplyingTreeOutcome}): a `tree` write released `failed: true` left
+   * the checkout torn and is not its tree written.
+   */
+  onApplyingTree?: (
+    checkout: Checkout,
+    paths: readonly string[],
+    bracket?: ApplyingTreeBracket,
+  ) => ((outcome?: ApplyingTreeOutcome) => void) | void;
+  /**
+   * Told how a checkout's large-object placeholders are being filled.
+   *
+   * An open writes the checkout before its large objects arrive (the files
+   * open first, the model waits), then fills each placeholder as its object
+   * lands. Called on every change of that progress, at most a few times a second.
+   */
+  onLargeObjects?: (report: LargeObjectsReport) => void;
+  /**
+   * Where this project's Tau Cloud repository is.
+   *
+   * Host knowledge: only the host knows which API origin it is signed in to,
+   * and the URL is the whole of what *Tau Cloud* means to the port (S34).
+   * Without it, connecting to Tau Cloud is refused rather than guessed.
+   */
+  remoteUrl?: (projectId: string) => string | undefined;
+  /**
+   * What Tau Cloud says this project's owner stores against the plan (S35, D18).
+   *
+   * Not part of the git protocol: the Tau API answers it and a third-party Git
+   * remote does not, so the Sync region shows the storage row only when a host
+   * can fill it in. Asked on every arrival at `connected`, for Tau Cloud only.
+   */
+  remoteStorage?: RemoteStorageSupplier;
+  /**
+   * Registers this project on Tau Cloud, at *Connect* (P51, W18 DEF-1).
+   *
+   * Host knowledge for the same reason {@link RevisionEffectOptions.remoteUrl}
+   * is: only the host knows which API it is signed in to and how it
+   * authenticates there — a cookie in the page, a bearer on a disk host. No
+   * credential passes through this module.
+   *
+   * Connecting is the verb that makes a project exist on the remote: until it
+   * runs, nothing has written the `project` row the git server authorizes
+   * against, so both advertisements answer `404` and the connection can never
+   * take. It must be idempotent — a retried *Connect* calls it again — and
+   * without it connecting Tau Cloud proceeds unregistered, which is what every
+   * host did before P51.
+   */
+  registerRemoteProject?: (projectId: string) => Promise<void>;
+  /**
+   * Records one publication on Tau Cloud (S32, A21).
+   *
+   * Host knowledge for the same reason `remoteUrl` is: only the host knows
+   * which API it is signed in to and how it authenticates there — a cookie in
+   * the page, a bearer on a disk host. No credential passes through this
+   * module. Without it, publishing is refused rather than attempted.
+   */
+  publishPublication?: (input: PublishPublicationActorInput) => Promise<PublishPublicationActorOutput>;
+  /**
+   * This host's stable identity among the devices writing one chat (W13, W17).
+   *
+   * It gates chat refs and never leaves the host: a segment, an ops ref and a
+   * conflict line are named by a record device id per actor form
+   * (`.git/ops-devices.json`, EQ10(a)), so no pushed name carries it. In the
+   * browser it is `apps/libs/ui-core/src/lib/device-id.ts` and nothing else; on a disk
+   * host the host's own machine identity. Without it this module writes **no**
+   * chat refs at all.
+   *
+   * A reader rather than a value, because the browser's id lives in
+   * `localStorage`, which a worker cannot see: the page sends it once the port
+   * is open, and every read after that answers.
+   *
+   * @returns This device's id, or `undefined` before the host knows it.
+   */
+  deviceId?: () => string | undefined;
+  /**
+   * Whether this host can reach anything, as it changes (S41's three exits).
+   *
+   * Injected rather than read: the page has
+   * `apps/ui/app/hooks/use-network-connectivity.tsx`, a worker has
+   * `globalThis`'s own `online`/`offline`, and a daemon has neither — so the
+   * scheduler is told, and a host that says nothing is a host that is online.
+   *
+   * @param report - Called with the new value on every change.
+   * @returns The unsubscribe the actor runs when it stops.
+   */
+  connectivity?: (report: (online: boolean) => void) => () => void;
+  /**
+   * The project's `revision` entries, while its Tau Cloud remote is connected (D13).
+   *
+   * Host knowledge for the same reason `remoteUrl` is: only the host knows its
+   * API origin and how it authenticates there. A host passes
+   * `watchRevisionStream` bound to both. Without it an open project learns of
+   * another device's work only at its next open or push.
+   *
+   * @param input - The project to watch.
+   * @param handlers - Where each move, and a refusal, goes.
+   * @returns The unsubscribe the scheduler runs when the remote goes or the project closes.
+   */
+  remoteMoves?: (input: Readonly<{ projectId: string }>, handlers: RevisionStreamHandlers) => () => void;
+  /**
+   * How this host reads, validates and writes `.tau/parameters/**` records, for
+   * the per-key merge (D12): `@taucad/parameters`' `requireParameterRecord` and
+   * `serializeParameterRecord`.
+   *
+   * Every merge in this module uses it — a sync, a branch merge, a turn's
+   * settlement and the re-derivation of a recorded conflict — because a
+   * conflict read back with a different codec would settle differently from the
+   * merge that recorded it. Without it, a record both sides changed is a
+   * conflict: an unvalidated record is never merged.
+   */
+  parameters?: ParameterRecordCodec;
+  /**
+   * Remember the history set's push, for a host that can re-send one (A32, S41).
+   *
+   * The `pagehide` keepalive offers a POST the `hidden` flush already built, and
+   * D28/S41 say which POST that is: the **history-set** pack, never a chat ref's.
+   * Nothing in a receive-pack request says which set it carries — every ref goes
+   * to the same endpoint — so the scheduler marks the one push that is the
+   * history one rather than leaving a recorder to guess from a URL (review 2 R3).
+   *
+   * Absent on every host that cannot re-send anything at all (Node spawns `git`;
+   * there is no `pagehide`), and then this is the identity function.
+   *
+   * @param run - The history-set push.
+   * @returns Whatever the push answered.
+   */
+  recordHistoryPush?: <Result>(run: () => Promise<Result>) => Promise<Result>;
+}>;

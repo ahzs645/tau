@@ -1,69 +1,111 @@
 ---
 title: 'Filesystem Policy'
-description: 'Standards for filesystem access, data transfer, caching, concurrency, and watcher architecture in the Tau application. Covers ZenFS, bridge RPC, and kernel/UI watch planes.'
+description: 'Standards for filesystem access, data transfer, caching, concurrency, and watcher architecture in the Tau application. Covers read/write semantics, bridge RPC, and kernel/UI watch planes.'
 status: active
 created: '2026-03-05'
-updated: '2026-05-19'
+updated: '2026-11-16'
 related:
+  - docs/policy/compatibility-policy.md
+  - docs/policy/filesystem-authority-policy.md
+  - docs/policy/runtime-api-policy.md
+  - docs/research/runtime-model-load-project-root-regression-v3.md
+  - docs/research/runtime-rooted-filesystem-residual-migration.md
   - docs/research/filesystem-architecture.md
   - docs/research/fs-capabilities.md
   - docs/research/large-repo-import-performance.md
   - docs/research/vscode-fs-performance.md
   - docs/research/origin-client-id-propagation-audit.md
+  - docs/research/project-updated-at-activity-boundary.md
+  - docs/research/revision-restore-runtime-watcher-gap.md
+  - docs/research/pending-project-import-recovery-bootstrap-isolation.md
+  - docs/research/filesystem-post-implementation-congruency-audit.md
+  - docs/research/rooted-filesystem-root-relative-path-unification.md
+  - docs/research/filesystem-capability-redesign.md
+  - docs/research/filesystem-capability-north-star.md
 ---
 
 # Filesystem Policy
 
-Internal reference for filesystem access, data transfer, caching, and concurrency in the Tau application. Applies to all code that reads or writes user project data, cache files, or metadata through ZenFS.
+Internal reference for filesystem access, data transfer, caching, and concurrency in the Tau application. Applies to all code that reads or writes user project data, cache files, or metadata through the file-manager worker's provider stack. Topology — authority, providers, mounts, discovery, cross-tab coherence — lives in `docs/policy/filesystem-authority-policy.md`.
+
+The write, metadata, large-object and budget rules state what the [filesystem capability redesign](../research/filesystem-capability-redesign.md) shipped (W0–W12; design in its [North Star](../research/filesystem-capability-north-star.md)). Where a rule implements one of that charter's decisions it cites it as `D<n>`.
 
 ## Rationale
 
-A single-writer topology with zero-copy binary transfer and bounded caches prevents ZenFS directory corruption and memory bloat. Separate kernel and UI watch planes avoid coupling render invalidation to tree refresh, and explicit overflow handling ensures deterministic behavior under load.
+A single-writer topology with zero-copy binary transfer and bounded caches prevents backend index corruption and memory bloat. Separate kernel and UI watch planes avoid coupling render invalidation to tree refresh, and explicit overflow handling ensures deterministic behavior under load.
 
 ## Core Principles
 
-1. **Single writer, many readers** — all mutating FS operations flow through one worker with one serialization queue
-2. **Zero-copy binary transfer** — `Uint8Array` payloads must use `postMessage` transfer lists, never structured clone alone
+1. **Registry-owned providers, one mutation authority** — `ProviderRegistry` is the sole provider owner; non-owning mounts only route; all mutations flow through `WorkspaceFileService` queues
+2. **Transfer only owned binary buffers** — use transfer lists for disposable boundary-owned bytes; clone borrowed provider storage before transfer so reads never detach authority state
 3. **Lazy loading over eager recursion** — never traverse a directory tree deeper than the consumer needs
 4. **Bounded caches** — every in-memory cache must have an eviction policy (TTL, max size, or LRU)
 5. **Debounce refresh, don't spam** — background tree refreshes must be debounced; rapid mutations must coalesce
 6. **Kernel watcher fast path first** — file change -> kernel invalidation must not route through `use-project.tsx` fanout
-7. **Server-side watch filtering** — path/include/exclude/event filtering happens in the worker, not in clients
+7. **Server-side watch matching** — path/include/exclude matching happens in the worker, not in clients; do not expose unused event-kind filters
 8. **Loss-aware event streams** — watcher overflow/dropped-event conditions must trigger explicit resync behavior
-9. **Bridge skip-originator is internal** — when a filesystem bridge port initiates a mutation, the resulting `ChangeEvent` may carry an originating port id for intra-process routing only (`tagEventOrigin` / `getEventOrigin` on `@taucad/filesystem`). The runtime bridge (`exposeFileSystem`) skips delivering `fileChanged` back to that port. This metadata is **not** part of the wire shape of `ChangeEvent`, is **not** passed as a second argument to `ChangeEventBus.emit`, and **must not** surface in consumer-facing UI APIs.
+9. **Bridge skip-originator is internal** — when a filesystem bridge port initiates a mutation, the resulting `ChangeEvent` may carry an originating port id for intra-process routing only (`tagEventOrigin` / `getEventOrigin` on `@taucad/filesystem`). The filesystem bridge adapter (`@taucad/fs-bridge` `exposeFileSystem`) skips delivering `fileChanged` back to that port. This metadata is **not** part of the wire shape of `ChangeEvent`, is **not** passed as a second argument to `ChangeEventBus.emit`, and **must not** surface in consumer-facing UI APIs.
+10. **Filesystem transport reports facts, not project recency** — filesystem APIs emit typed content-change facts; project-domain participants and machines decide whether those facts are activity.
+11. **Virtual routes are projections, not physical identity** — `/projects/<id>` resolves through a persisted locator; provider paths come from `{ storageRootKey, providerBasePath }`, never from manifest fields.
+12. **Runtime reachability is filesystem-owned** — issue one rooted view with full authored-data writes per selected project; runtime receives only that filesystem and local paths. Host-record protection is the narrow exception owned by filesystem authority Rule 15.
 
 ## Bridge self-write suppression (skip-originator)
 
-Self-write suppression (so an editor port does not receive its own `fileChanged` echo) is enforced in `packages/runtime` at `filesystem-bridge.exposeFileSystem`: `deliverToHandles` reads the origin via `getEventOrigin(event)` and skips the recipient whose port id matches.
+Self-write suppression (so an editor port does not receive its own `fileChanged` echo) is enforced in `libs/fs-bridge` at `filesystem-bridge.exposeFileSystem`: `deliverToHandles` reads the origin via `getEventOrigin(event)` and skips the recipient whose port id matches.
 
 - **Author boundary:** `WorkspaceFileService` mutating methods accept optional `context?: { originClientId?: string }`. Context is bound at port-connect time via `bindMutationContextForPort` (in `filesystem-bridge.ts`), which wraps each connection's handler with a per-port closure that injects `{ originClientId: portId }` as the trailing argument on every mutating call. Before `ChangeEventBus.emit(event)`, the worker calls `tagEventOrigin(event, id)` when context is present. The bridge primitive (`createBridgeServer`) is unaware of context — it dispatches user args verbatim.
 - **Merge rule:** `EventCoalescer` / `coalesceChangeEvents` reads origins via `getEventOrigin` so mixed-origin batches clear the tag (every port receives the merged event), matching the blueprint Finding 14 rule.
-- **Forwarders:** `ChangeEventBus`, `WatchRegistry`, and `ThrottledWorker` chunk paths do not take a parallel `originClientId` parameter; the event object is the sole carrier.
-- **Registry:** `packages/filesystem/src/event-origin-registry.ts` (`WeakMap<ChangeEvent, string>`) plus `clearEventOrigin` when a coalesced survivor must lose its tag.
+- **Forwarders:** `ChangeEventBus` and `WatchRegistry` do not take a parallel `originClientId` parameter; the event object is the sole carrier.
+- **Registry:** `packages/filesystem/src/event-origin-registry.ts` stores origin metadata in a `WeakMap`; coalescing creates an untagged survivor when the merged path history has mixed origins.
 
 For rationale and alternatives considered, see [`docs/research/origin-client-id-propagation-audit.md`](../research/origin-client-id-propagation-audit.md).
 
+```text
+File manager worker: WorkspaceFileService + MountTable + providers
+  │
+  ├─ workspaceBridgeService(service) ── UNROOTED protocol v2
+  │    topology and lifecycle (9 methods)
+  │    scope-required reads: readScopedFile, readScopedShallowDirectory,
+  │                          getScopedZippedDirectory
+  │
+  └─ handlerForRoot(root, consumer) ─── ROOTED protocol v2
+       user          → composeView(..., { consumer: 'user' })
+       agent         → composeView(..., { consumer: 'agent' })
+       working-copy  → captured raw rooted filesystem (trusted composition only)
+       per-path content, mutations, search, statTree and watch
 ```
-Main Thread                       File Manager Worker              Kernel Worker
-     │                                   │                               │
-     │◄── createBridgeProxy             │              createBridgeProxy ──►│
-     │    <FileManagerProtocol>         │              <RuntimeFileSystemBase>│
-     │    (MessagePort)                  │              (MessagePort)        │
-     │   readFile, writeFile, stat       │   readFile, readFiles, stat   │
-     │   readShallowDirectory            │   exists, readdir             │
-     │   mount, readBackendFileTree      │   writeFile (cache only)      │
-     │                                   │                               │
-     │                                   │         ZenFS                 │
-     │                                   │   IndexedDB / WebAccess /    │
-     │                                   │   OPFS / Memory              │
-```
 
-All filesystem I/O runs on the file manager worker. The main thread and kernel workers access it exclusively via MessagePort RPC using the **same bridge mechanism** (`createFileSystemBridge` → `MessageChannel` → `createBridgeProxy`). The only difference is the TypeScript type used for the proxy:
+All browser filesystem I/O runs on the file manager worker. `workspaceBridgeService(service)` alone decides the unrooted authority wire: nine topology, project-lifecycle, polling and teardown methods plus the three scope-required reads named above. It exposes no per-path content call. Serve every per-path content call from a rooted connection.
 
-- **Main thread**: `createBridgeProxy<FileManagerProtocol>` — full API including worker management (`mount(prefix, MountConfig)`, `unmount`, `invalidateStandaloneProvider`), workspace-scoped operations via the `{ scope }` options bag (`readFile`, `unlink`, `rmdir`, `getZippedDirectory`, `readShallowDirectory`), diagnostics (`readBackendFileTree`), and higher-level operations (`copyDirectory`)
-- **Kernel worker**: `createBridgeProxy<RuntimeFileSystemBase>` — 11 base primitives only (`readFile`, `writeFile`, `stat`, `readdir`, `exists`, etc.)
+Every rooted bridge open names its `root` and `consumer` (`'user'`, `'agent'` or `'working-copy'`). Protocol version 2 requires the consumer and fails closed before `handlerForRoot` when the field is absent, unknown or paired with the wrong protocol version. The UI filesystem client owns and reuses connections by `(root, consumer)` so a raw working-copy connection cannot stand in for a masked connection. Only a `'user'` connection composes the system skills overlay at `.agents/skills`: the page's `'agent'` connections serve executors of project code, which never see it, and the agent's tools compose it themselves over `'working-copy'`.
 
-This is the Interface Segregation Principle (ISP): kernels receive a narrow API surface matching their needs. Both proxies talk to the same worker, same `fileManager` object, same bridge server. No thread may import or use ZenFS directly outside the worker.
+A host states one `PathPolicy`, beside `handlerForRoot` on `exposeFileSystem` and beside `allowRoot` on `serveNodeFsProvider`; both are required. The bridge rebases it on the connection's root and hands it to `handlerForRoot`, so the view a masked consumer reads and the change stream it hears are masked by the same object. Hosts do not compute a second `policyAtRoot` of their own.
+
+`serveNodeFsProvider` returns the served owner, `NodeFsServer { run, close }`. `close` is the disposer. `run` is for trusted in-process host composition only, never a renderer port: it holds one admitted root's whole-root `NodeFsAuthorityHost` claim and hands the operation a scope of rooted reads, checked file writes and the checked entry operations `renameChecked`, `mkdirChecked` and `rmdirChecked`. The scope is the unmasked rooted primitive, so a caller that publishes into it owns its own protected-path refusal. A caller never awaits a wire mutation of the same root inside `run`; that waits on the held claim forever.
+
+Open the `'agent'` view for agent tools and every executor of agent-authored project code: the kernel runtime, GeoSpec runner, Quick Look runtime, host-daemon runtime child and desktop `runtimeFileSystem` route. This view is defence in depth, not a sandbox: Node and desktop execute a real Node module that can import `node:fs`, and a browser worker can reach browser storage APIs directly. Use an OS or container sandbox when project code is adversarial.
+
+## Rooted runtime filesystem rules
+
+### Rule 0a: Canonicalize before routing or provider I/O
+
+Use the path grammar owned by the boundary. Authority routing uses `resolveAuthorityPath` and canonical absolute POSIX paths such as `/projects/<id>/main.ts`. An already-rooted filesystem capability uses `assertRootedPath` for canonical inputs and `resolveRootedPath` when normalization is explicitly part of the API; its root is `''`, and descendants such as `main.ts` never have a leading slash. Both grammars reject URLs, backslashes, drive-like paths, control characters, and traversal above their root. Host adapters translate rooted paths to native paths privately after validation.
+
+### Rule 0b: Capture one exact mount for each rooted view
+
+`createRootedFileSystem(authorityRoot)` resolves the selected mount once and captures its provider and base path. Every operation joins a canonical local path to that captured base directly; it must not call the global mount table again. If the mount is replaced, reject later admissions with `ESTALE` instead of silently switching storage. Rename validates both local operands before either provider call.
+
+### Rule 0c: Preserve full write and watch semantics inside the view
+
+A rooted view supports the same authored-data writes, queues, cache invalidation, persistence, and events as global WFS operations. Do not add cache-only writes, read-only source trees, or generic path allowlists. Apply only the canonical host-record protection in [filesystem authority Rule 15](filesystem-authority-policy.md#15-rooted-views-are-the-runtime-reachability-boundary), covering all mutation routes without duplicating its ownership rules here. Rebase watch requests and emitted events to the capability-local namespace (`''`, `main.ts`, `lib/part.ts`), and never deliver sibling-project events. Scoped runtime bridges receive file bytes only by transfer or copy through rooted RPC dispatch; there is no shared file pool, and none may be added that a read could hit without that dispatch.
+
+A rooted view preserves the exact canonical virtual paths carried by concrete create, change, delete, and rename events regardless of backing-filesystem naming semantics. It must not lowercase, normalize Unicode, infer aliases, or widen a concrete event to `reset`. Only explicit information-loss signals—such as overflow, observer `unknown`/`errored`, stale-root detection, backend replacement, or an irreducibly summarized change—use reset recovery. Preserve the hidden mutation origin through rooted writes and suppress only the originating scoped port's echo.
+
+Every admitted operation retains the exact captured mount entry through provider I/O and every resulting cache, tree, event, and watch side effect. After suspension, do not attribute old-provider work to a replacement or nested route. Cross-tab facts carry the existing physical identity `{ storageRootKey, providerBasePath }` and refresh only a matching projection before delivery.
+
+Mask watches per consumer. Before a recursive `rmdir`, `move`, `rename` or `bulkMove`, walk the affected subtree and refuse hidden paths at the view root for every consumer. Below the root, refuse hidden descendants for an `'agent'` view; a `'user'` view may remove or move a vendored directory that contains its own nested control store.
+
+The Node provider must refuse with `ELOOP` when a visible name resolves through a symlink onto a hidden real path, and `readdir` must drop that entry. Archive one file at a time and refuse with `ARCHIVE_TOO_LARGE` when the default 256 MiB byte ceiling would be crossed.
 
 ## Read Rules
 
@@ -71,44 +113,25 @@ This is the Interface Segregation Principle (ISP): kernels receive a narrow API 
 
 Always read a single directory level unless the consumer provably needs deep recursion.
 
-```typescript
-// CORRECT: Shallow read for tree display
-readShallowDirectory(path, backend);
-
-// INCORRECT: Full recursive read for tree display
-readBackendFileTree(backend); // Traverses entire FS depth-first
-```
-
-Deep reads are permitted only for: `getDirectoryContents` (ZIP/copy), startup-only `getDirectoryStat` hydration, and `readFiles` (kernel dependency batch). Deep reads are forbidden in mutation-triggered refresh paths.
+Deep reads are permitted only for: the rooted `contents` and `archive` content operations (ZIP/copy), startup-only `statTree` hydration, and `readFiles` (kernel dependency batch). Deep reads are forbidden in mutation-triggered refresh paths.
 
 ### Rule 2: Parallel stat, sequential traversal
 
 When listing a single directory, `readdir` + parallel `Promise.all(stat(...))` is preferred over sequential `stat` calls. Recursive traversal (when needed) should be sequential at the directory level to avoid overwhelming the storage backend.
 
-**ZenFS performance context:** Each `StoreFS.stat()` creates a new `WrappedTransaction` → `IndexedDBStore.transaction()` → `db.transaction('tau-fs', 'readwrite')`. Even though `IndexedDBStore.cache` serves data from memory (populated during mount preload), IDB transaction creation has fixed overhead (~0.1–0.3ms each). Parallelizing stat calls within a directory allows the browser to pipeline IDB transactions instead of sequentially awaiting each one.
+**Backend performance context:** IndexedDB transaction creation has fixed overhead (~0.1–0.3ms each) regardless of payload size. Parallelizing stat calls within a directory lets the browser pipeline IDB transactions instead of sequentially awaiting each one.
 
-```typescript
-// CORRECT: Parallel stat for one directory
-const entries = await fs.readdir(path);
-const stats = await Promise.all(entries.map((e) => fs.stat(joinPath(path, e))));
-
-// INCORRECT: Sequential stat for one directory
-for (const entry of entries) {
-  const stat = await fs.stat(joinPath(path, entry)); // Sequential IDB transactions
-}
-```
-
-**For metadata-only queries (tree display, file counts):** Prefer the in-memory tree at the `FileService` layer over ZenFS stat calls. See Rule 33.
+**For metadata-only queries (tree display, file counts):** Prefer the root's Project Index over provider stat calls. See Rule 33.
 
 ### Rule 3: Read caching expectations
 
-| Layer                    | Cache                          | Eviction                      | Notes                                  |
-| ------------------------ | ------------------------------ | ----------------------------- | -------------------------------------- |
-| File manager `openFiles` | `Map<path, Uint8Array>`        | Must have max size + TTL      | Stores recently accessed file contents |
-| Monaco `syncedPaths`     | Internal set                   | TTL 1h, max 200               | Background-synced JS/TS models         |
-| Kernel geometry cache    | `.tau/cache/geometry/*.bin`    | Max age + max entries         | MessagePack serialized meshes          |
-| Kernel parameter cache   | `.tau/cache/parameters/*.json` | None currently                | JSON parameter snapshots               |
-| Standalone FS instances  | Per-backend                    | Must be reused, not recreated | One per backend, cached in worker      |
+| Layer                    | Cache                          | Eviction                      | Notes                                       |
+| ------------------------ | ------------------------------ | ----------------------------- | ------------------------------------------- |
+| File manager `openFiles` | `Map<path, Uint8Array>`        | Must have max size + TTL      | Stores recently accessed file contents      |
+| Editor document session  | Background document map        | LRU, max 10 clean documents   | Held, dirty and saving documents stay owned |
+| Kernel geometry cache    | `.tau/cache/geometry/*.bin`    | Max age + max entries         | MessagePack serialized meshes               |
+| Kernel parameter cache   | `.tau/cache/parameters/*.json` | None currently                | JSON parameter snapshots                    |
+| Standalone providers     | Per storage root               | Must be reused, not recreated | `filesystem-authority-policy.md` Rules 8/14 |
 
 ### Rule 4: File size awareness
 
@@ -118,51 +141,73 @@ Source files are typically <100 KB. Binary CAD files (STL, STEP, glTF) can be 10
 - Main thread reads should avoid storing large binaries in `openFiles`
 - Future: streaming reads for files > 1 MB
 
+### Rule 4a: Content resolution and metadata stay truthful
+
+Content-facing UI facades resolve files to an explicit discriminated state such as loading, text, binary, too-large, orphaned, or error. Detect binary content from a bounded byte prefix with BOM and NUL handling rather than from a filename extension. Byte-only consumers use the typed byte-resolution path and receive typed failures instead of an unresolved loading state.
+
+A bounded content cache reports whether `set` admitted the value, keys entries by canonical path, and exposes entries for targeted prefix eviction. It must not silently discard an oversized value. File-tree rows carry provider-derived size and time metadata; consumers must not invent zero sizes or current timestamps.
+
+Normalize `''` and `/` to the same selected workspace root at the RPC tool-input boundary. Never delete an entire browser database as error recovery when it may contain user work; repair or remove the affected authority record under the provider's transaction rules.
+
 ## Write Rules
 
-### Rule 5: Write serialization scope
+### Rule 5: One lock set per changeset
 
-All mutating operations (`writeFile`, `writeFiles`, `mkdir`, `rename`, `unlink`, `rmdir`) must be serialized to prevent ZenFS directory listing corruption (zen-fs/core#256).
+Every authored-data mutation (`writeFile`, `writeFiles`, `appendFile`, `mkdir`, `rename`, `unlink`, `rmdir`, copies, checkout and pull apply) is a changeset through `MutationPipeline.apply` (D2, D3). Admit every entry before the first I/O, stage stream-backed entries before any lock is requested, then take **one lock set, once**, and hold it for every phase. The lock set is built per path from its **physical** hierarchy up to the provider base path — the path itself exclusive, each ancestor shared — plus the owning project's `project:<id>` token, shared. A changeset that writes, moves or removes a directory holds that directory exclusively, so a changeset inside it waits. A changeset marked `lifecycle` takes the project token exclusively: a fence. No production caller passes it today. A physical mount holds no logical tokens; a mount without physical identity holds its logical hierarchy up to its mount prefix. Tokens are deduplicated, requested in sorted order with `navigator.locks` (`tau-fs-write:` prefix), and ordered within the tab by `ResourceQueue` on the same tokens. Mount resolution keeps `storageRootKey`, `providerBasePath` and the provider path, so a mounted route and a named authority operation on the same bytes take the same token. Named project operations also take their logical-project token.
 
-**Verified TOCTOU scope (from ZenFS source audit):** The race condition is in `StoreFS.commitNew` — a read-modify-write on the parent directory's listing blob (`Record<string, number>` in JSON). Two concurrent `commitNew` calls to the **same parent directory** can lose entries. Writes to files in **different parent directories** are independent and safe to parallelize.
+The project-directory lifecycle and import placement are the exception: they run outside `MutationPipeline.apply`. `commitPendingProjectDirectory` and `permanentlyDeleteProjectDirectory` take `project:<id>` and the physical directory lock themselves (`crossTabCoordinator.withLocks`, then `ResourceQueue`). They write through `MutationPipeline.applyUnlocked` in bounded provider batches and publish their own `directory-change` notice. `adoptProjectDirectory` takes only the physical directory lock. An import's staging writes through `applyUnlocked` under the physical lock of the directory it claims (authority Rule 12).
 
-**Current implementation:** Global `WriteCoordinator` — a single FIFO promise chain (`_writeQueue: Promise<void>`). This is overly conservative.
+Bound each changeset to `maximumChangesetEntries` (256) entries and `maximumChangesetBytes` (32 MiB) of bytes in hand, so a save waits on a bulk writer for at most one changeset. Never hold a lock across network I/O or across a consumer-supplied stream (I11): stage first, publish under the lock.
 
-**Target implementation:** Per-parent-directory serialization. Serialize writes that share a parent directory; parallelize writes to different parent directories. This is safe today — it does not require a ZenFS fix.
+Generic scoped mutation APIs are forbidden. Ordinary mutation uses a mounted authority path; only the named project commit and permanent-delete operations may mutate an unmounted physical locator, after re-establishing identity under the shared physical lock.
 
-```typescript
-// CORRECT: Per-parent-directory serialization (safe now)
-const parentDir = path.substring(0, path.lastIndexOf('/')) || '/';
-await resourceQueue.queueFor(parentDir, () => provider.writeFile(path, data));
+**Why**: Two changesets conflict only when they write the same path or one replaces a directory the other is inside. A save during a 2,000-file checkout then waits on its own file, not on the checkout (S17), while a logical route and a physical locator for the same bytes still serialise.
 
-// INCORRECT: Global serialization (unnecessarily blocks independent writes)
-await globalQueue.serialized(() => provider.writeFile(path, data));
-```
+If a future backend reintroduces parent-directory read-modify-write metadata, use the parent directory as the queue key for that backend. Do not reintroduce a global write queue or a project-exclusive lock for ordinary writes.
 
-### Rule 6: Transfer, don't clone
+### Rule 5a: The changeset is the only mutation
 
-Binary data sent to the worker for writes must use `extractTransferables` to build a transfer list. The sender's buffer is detached after transfer — do not reference it after `postMessage`.
+The changeset is the mutation primitive (D2). A single-file write is a changeset of one, and the rooted convenience methods coalesce the calls one task issues into one changeset (D22; do not await a mutation convenience inside a loop). The per-resource guarantees (path normalisation, mount and backend resolution, mask, lock, writer-owned cache invalidation, Project Index update, exact event and origin metadata) are properties of the whole changeset. They are not reached by looping a per-file primitive. A changeset runs in up to three ordered phases, and a later phase starts only after every entry of the earlier one is durable, so completion markers (`tau.json`) go last. Each phase goes to its providers' `applyBatch` (Rule 34). The committed changeset publishes exactly one change set per port (D6, Rule 19a) and one cross-tab notice (Rule 25). A record-log append is an `append` entry carrying its `fence`, checked under the changeset's lock set (D23).
 
-```typescript
-// CORRECT: Transfer
-port.postMessage(response, extractTransferables(response));
+Control-plane bytes are not changesets. `.git/**` objects, packs and refs go through the rooted private store: no locks beyond ref compare-and-swap and the repack fence, no events, no index, no metadata (D7, I6). The authority is their only writer.
 
-// INCORRECT: Structured clone (double memory, double copy)
-port.postMessage(response);
-```
+Delivery coalescers may batch exact mutation facts after commit, and may merge the change sets of one delivery window into one (D6). They must not replace affected paths with a lossy root-directory summary. A merge that cannot stay exact (an entry bound, or a member that already carries a reset) becomes an explicit `ChangeSetReset` scoped to the common ancestor of everything it merged, never a silent truncation. Merging keeps order where order carries meaning: moves stay in place, and a deleted directory is never folded into a later create at the same path, so a consumer still learns the old directory's descendants are gone. When one changeset replaces two watched ancestors, the reset covers both.
+
+**Why**: Per-file mutations each took the project lock, refreshed the provider and emitted an event. A 2,000-file apply became about 4,000 serialised mutations (485 s on the reference fixture, against 11.6 s once it was a few changesets).
+
+Receipts must be truthful. Report every entry's outcome (`applied`, `failed`, `uncertain`, or `skipped` when an earlier phase failed or the call was aborted), and invalidate every resource whose commit state may have changed. A changeset may be partially applied, but it never reports success for an entry that is not durable (I1). Never claim atomicity across entries, reverse completed entries with an overwrite rollback, or reject while sibling entries continue in the background. A caller that sees a potentially applied changeset (Rule 32) re-reads what it changed before it retries.
+
+### Rule 5b: Provider projections change only after durable commit
+
+Providers that maintain in-memory path, directory, size, mtime, or content-metadata projections update them only after the backing mutation commits. `FileSystemAccessProvider` aborts the writable stream when write or close fails. `DirectIdbProvider` performs same-store file rename as one put+delete transaction and stages write and rename projection changes until transaction completion. A failed or aborted transaction leaves the prior projection intact; if commit state is uncertain, rehydrate before serving another metadata read.
+
+**Why**: Mutating the projection before durable completion turns a failed write into a false successful `stat`/`readdir`, which is data corruption at the API boundary.
+
+### Rule 5c: Providers expose one valid path tree
+
+Every provider must independently enforce one entry kind per canonical path. A file cannot be an ancestor or directory, `mkdir` cannot replace a file, `writeFile` cannot replace a directory, and `unlink`/`rmdir` must reject the wrong kind. Exact self-rename is a no-op; moving a directory beneath itself fails before mutation. A persistent provider must preserve explicit empty directories across reopen.
+
+All fallible validation and serialization for a destructive multi-path ingress completes before the first provider mutation. Use an inline `Set` parent walk for small payload preflights; do not add a trie or second metadata authority.
+
+Provider-native transactional artifacts are not virtual filesystem entries. Filter browser artifacts such as Chromium `.crswap` files inside `FileSystemAccessProvider` before directory snapshots, indexes, watches, RPC, or UI consumers observe them. Do not duplicate this filtering in generic consumers.
+
+### Rule 6: Transfer only bytes owned by the sending boundary
+
+Use `extractTransferables` when the sending boundary owns a disposable byte buffer. If a provider, cache, or caller retains the bytes, clone once at the boundary and transfer that owned clone. The transferred buffer is detached; no retained state may reference it.
 
 ### Rule 7: Mutation → targeted invalidation
 
 After a mutation (delete, rename, upload), invalidate only the parent directory of the affected path, not the entire tree. The caller must provide the affected path so the UI can selectively refresh.
 
-```typescript
-// CORRECT: Invalidate parent
-const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
-reloadDirectory(parentPath, backend);
+### Rule 7a: No project-recency flags in filesystem APIs
 
-// INCORRECT: Reload entire tree
-loadColumnTree(backend); // Full recursive traversal
-```
+Filesystem packages and UI file facades must not accept options that decide whether `ProjectLibraryState.lastActivityAt` changes. They should emit precise events (`written`, `batchWritten`, `fileCopied`, `directoryCopied`, `renamed`, `deleted`, etc.) with workspace-relative affected paths. The project route participant forwards those facts to `project.machine`, and the project machine applies the content-path classifier and owns the activity decision.
+
+**Why**: A filesystem layer cannot distinguish navigation repair, derived metadata, hydration, housekeeping, and user-visible content activity reliably after intent has been erased. Pushing project recency into file APIs creates per-callsite debate and reintroduces recent-project list jumps.
+
+### Rule 7b: System-artifact visibility is a UI projection
+
+`tau.json`, `thumbnail.webp`, and `.tau/**` are real filesystem entries and remain readable through ordinary APIs. File-tree presentation may hide or decorate them as system artifacts, but must do so in its projection layer. Providers, discovery, copy/export, and publication code must not pretend these files do not exist; callers that omit them do so through explicit artifact filters. Control-plane exclusion (`.git/**`, `.tau/revisions/**`, the rest of the registry's `hidden` class) is structural — every composed view refuses it (authority policy Rule 16) — while records and cache exclusion, such as a whole-project export carrying only `versioned` bytes, is an explicit caller filter.
 
 ## Tree Refresh Rules
 
@@ -176,97 +221,13 @@ Recommended debounce: 300-500ms after the last mutation event. VS Code uses 500m
 
 Use a synchronous `Map<key, Promise>` (not React state) to deduplicate concurrent requests for the same directory. This prevents race conditions across render cycles.
 
-```typescript
-// CORRECT: Synchronous dedup via ref
-const inflightRef = useRef(new Map<string, Promise>());
-if (inflightRef.current.has(key)) return inflightRef.current.get(key);
-const promise = readShallowDirectory(path, backend);
-inflightRef.current.set(key, promise);
-
-// INCORRECT: React state check (async, racy)
-if (loadingPaths.has(path)) return; // State may be stale
-```
-
 ### Rule 10: Error recovery on expand
 
 If a directory load fails, do not cache the failure. Allow retry on the next expand attempt. Optionally collapse the failed node (VS Code pattern).
 
-## Backend & Provider Rules
+## Backend & Provider Rules (moved)
 
-### Rule 11: Backend isolation
-
-Each backend (`indexeddb`, `webaccess`, `opfs`, `memory`) is an independent storage system. Operations on one backend must not affect another. The files route shows backends side-by-side; each column maintains its own state.
-
-### Rule 12: Standalone FS instance safety and reuse
-
-Standalone `FileSystem` instances (created via `resolveMountConfig`) are used to read from specific backends without affecting the main mount (e.g., the files route grid showing all backends side-by-side).
-
-**Safety**: Standalone read-only instances are safe to use alongside the main mounted FS. ZenFS's TOCTOU bug (zen-fs/core#256) only affects concurrent _writers_ — the read-modify-write cycle on directory listings. A standalone instance that only calls `readdir` + `stat` cannot trigger this corruption. The main risk is stale reads (file deleted between `readdir` and `stat`), which is handled by try/catch around individual stat calls.
-
-**Reuse**: Cache the standalone `FileSystem` instance per backend in the worker. Each `resolveMountConfig` call creates a new `IDBDatabase` connection via `indexedDB.open('tau-fs')` and then **preloads every key-value pair** (`getAllKeys()` + `get(id)` for each key) into `IndexedDBStore.cache`. For a project with 6265 files, this means ~12,530 `get` operations on mount (inode + data per file). Creating one per call is extremely wasteful — each instance pays this full preload cost. (Set `disableAsyncCache: true` in options to skip preload, but then every read hits IDB.)
-
-```typescript
-// CORRECT: Cache and reuse
-const standaloneInstances = new Map<string, FileSystem>();
-function getStandaloneFs(backend): FileSystem {
-  /* create or reuse */
-}
-
-// INCORRECT: Create per call
-const fs = await resolveMountConfig({ backend: IndexedDB, storeName }); // New connection + full preload
-```
-
-**Write prohibition**: Standalone instances must never be used for writes. All writes must go through the main mounted FS and its serialization queue.
-
-### Rule 13: WebAccess handle lifecycle is workspace-scoped
-
-The `webaccess` backend is multi-workspace: every `FileSystemDirectoryHandle` lives behind a first-class `workspaceId` (plain `string`, `wsp_*` prefix) and is owned by the multi-store `tau-fs-handles` IndexedDB schema (`workspaces`, `handles`, `configs`, `meta`). The legacy single-`'root'` handle pattern is forbidden.
-
-- Hand-off to the worker still uses structured clone (handles are not transferable). The FM machine resolves the project's bound `workspaceId` from `configs[projectId]`, reads its handle from `handles[workspaceId]`, then mounts the webaccess prefix in a single discriminated call: `proxy.mount(prefix, { backend: 'webaccess', directoryHandle, workspaceId, preservePath: true })`. The worker is stateless w.r.t. webaccess identity — there is no `setDirectoryHandle` knob and no ambient "active handle" between RPCs.
-- Permission must be re-requested from a user gesture after page reload. The FM machine surfaces a structured `unavailableReason` (`'missing' | 'permission'`) — silent downgrade to IndexedDB is forbidden (see Rule 13a).
-- Cross-workspace project access is forbidden. If a project's bound `workspaceId` does not match the currently active workspace, the FM machine must refuse to open and route through the `webAccessUnavailable` state (no implicit re-binding).
-
-### Rule 13a: No silent backend downgrade
-
-Every code path that fails to resolve a webaccess workspace (handle missing from IDB, permission revoked, `showDirectoryPicker` unsupported, picker aborted) must throw `WorkspaceDirectoryRequiredError` with one of the typed `code`s (`'missing' | 'permission' | 'unsupported'`). Call sites translate the error to actionable UI:
-
-- `/projects/new`: `toast.error` with a "Manage Workspaces" action, plus an inline `WorkspaceDirectoryPanel` that prevents submission until the workspace is connected.
-- `/projects/$id`: the `ProjectUnavailableOverlay` indirection renders `WorkspaceUnavailableRecovery` (full-shell overlay, not a banner — the dockview underneath must be fully covered).
-- Settings + `/files`: the relevant workspace row renders `WorkspaceDirectoryPanel` (row / banner variant) with `[Connect]` / `[Grant Access]` / `[Change Folder]` controls scoped to that workspace.
-
-It is forbidden to catch a `WorkspaceDirectoryRequiredError` and fall back to `indexeddb` — a project's backend binding is immutable once written to `configs[projectId]`.
-
-### Rule 13b: Workspace IDs are generated; project bindings live in one place
-
-Workspace identifiers must be minted via `generatePrefixedId(idPrefix.workspace)` from `@taucad/utils`. They are plain `string`s — there is no branded `WorkspaceId` type. Treat them as opaque identifiers: do not derive them from `handle.name`, content hashes, or any other property of the underlying directory (those values change as the user re-points or renames the folder).
-
-`ProjectFileSystemConfig.workspaceId` is the **single source of truth** for the project ↔ workspace binding. The `fileManagerMachine` MUST NOT carry that identity as ambient context; the machine's `activeWorkspaceId` / `activeWorkspaceName` fields are per-init _outputs_ populated by `initializeServicesActor` and cleared on every `setRoot` transition. The machine MUST NOT mutate `ProjectFileSystemConfig` directly — there is no actor-side self-persist branch.
-
-Any user-driven workspace change MUST go through the binding-transaction helper `bindProjectToWorkspace` on `useFileManager` (currently the only caller is `WorkspaceUnavailableRecovery`; the deferred Phase 10 per-project switcher will use the same helper). The helper performs three steps in order: (1) write `ProjectFileSystemConfig` with the new `{ projectId, backend: 'webaccess', workspaceId }`, (2) emit the `workspaceSwap` telemetry event, (3) dispatch `reloadWorkspace` (no payload) on the FM machine. The machine then re-runs `initializeServicesActor`, which reads the fresh persistent record. Subsequent project loads (or back-nav across projects) are silent because the persistent record already has the right binding.
-
-Missing or stale bindings surface `WorkspaceDirectoryRequiredError('missing')` via the recovery overlay; legacy projects without an explicit `workspaceId` are prompted on first load. The v2 → v3 IDB migration only promotes the legacy `'root'` handle to a regular workspace row — it does not auto-bind projects.
-
-### Rule 13c: Project creation is a single mount → write → unmount transaction
-
-Project creation MUST mount the project prefix on the workspace's storage, persist the file set, then unmount — atomically, inside `useProjectManager.createProject`. Webaccess creation MUST pass `(directoryHandle, workspaceId)` together via `MountConfig`; there is no separate handle-priming step. `memory` is rejected outright with `WorkspaceDirectoryRequiredError('unsupported')` — projects must commit to a durable backend at creation.
-
-The transaction is the only legitimate way to write a project's seed files. UI surfaces (`/projects/new`, "duplicate", remix-from-publication) MUST go through `createProject`; ad-hoc `fileManager.mount` + `writeFiles` flows from non-creation call sites are forbidden because they don't perform the `setProjectFileSystemConfig` write that binds the project to its backend.
-
-### Rule 13d: Root FM is pinned to `indexeddb`; `initialBackend` is required
-
-The root `<FileManagerProvider rootDirectory='/'>` MUST be instantiated with `initialBackend='indexeddb'`. `initialBackend` is a required prop; the provider's TypeScript surface compile-time-rejects `webaccess` without an accompanying `projectId` (Audit R15) so a workspace-bound FM can only be mounted inside a project route.
-
-The root provider MUST NOT consume the `filesystem-backend` cookie at mount time. The cookie is a _project-creation default_ read by `/projects/new` and `/files`, never the seed for the root machine. Cross-tab cookie flips therefore cannot break the root FM, and a stale `memory` cookie value is coerced back to `indexeddb` via `coerceFilesystemBackendCookie` at every selector read site.
-
-### Rule 13e: Standalone provider cache is keyed by `workspaceId`; invalidation has a typed contract
-
-`ProviderRegistry` caches one standalone provider per `(backend, workspaceId)` pair. Webaccess entries MUST NOT be keyed by `handle.name` — two workspaces pointing at folders with the same name would collide. The registry exposes `invalidateStandaloneProvider(backend, workspaceId?)`:
-
-- `invalidateStandaloneProvider('webaccess', workspaceId)` drops exactly one entry; required by `/files` "Change Folder", `forgetWorkspace`, and `bindProjectToWorkspace` (recovery binding) so the next standalone read uses the fresh handle.
-- `invalidateStandaloneProvider('webaccess')` drops every webaccess entry; reserved for the worker boot path.
-- `invalidateStandaloneProvider(non-webaccess)` drops the single backend entry.
-
-Failure to invalidate after a handle swap is a bug — the registry will silently serve reads against the previous handle until the cache entry is replaced by reload.
+Former Rules 11–13e (backend isolation, standalone instance safety and reuse, webaccess handle lifecycle, backend downgrade, workspace binding, creation transaction, root FM pinning, provider cache keying) live in `docs/policy/filesystem-authority-policy.md`, which also states the single-filesystem-authority invariant they serve; a rule-number mapping table there resolves old citations. The ZenFS-era mechanics formerly prescribed by Rules 11–12 (`resolveMountConfig`, full-data mount preload) are retired — the live architecture is `MountTable` + `ProviderRegistry` + direct providers.
 
 ## RPC Pattern Rules
 
@@ -313,9 +274,11 @@ Implement and maintain two distinct watch planes:
 
 Do not mix these planes into a single coarse "watch everything" stream.
 
+Both planes, and every other consumer on the hot write path (the Files tree and open documents through `WorkerChangeChannel`, a kernel's dependency watch through the runtime's worker-filesystem proxy, and the agent host's chat-log observation), register in the change-set form (Rule 19a), so an agent turn of fifty writes reaches each consumer once rather than fifty times. The per-path form remains for a source that answers the change-set form with `ENOTSUP`.
+
 ```mermaid
 flowchart LR
-    FileServiceWrite["FileService mutation"]
+    FileServiceWrite["WorkspaceFileService mutation"]
     EventBus["ChangeEventBus"]
     KernelWatchRouter["Kernel watch router"]
     TreeWatchRouter["Tree watch router"]
@@ -333,16 +296,18 @@ flowchart LR
 
 ### Rule 19: Watch API contract is first-class and explicit
 
-`FileService.watch(...)` must support an explicit request contract:
+`WorkspaceFileService.watch(...)` must support an explicit request contract:
 
 - `paths`: absolute normalized watch roots
 - `recursive`: default `false`
 - `includes`: optional include patterns
 - `excludes`: optional exclude patterns
-- `filter`: optional event type mask (`added|updated|deleted|renamed`)
-- `correlationId`: optional identifier echoed in outgoing events
 
 `watch()` must return an unsubscribe function (`() => void`) and be wrappable into `Disposable` via `toDisposable`, per `library-api-policy.md`.
+
+### Rule 19a: The change-set form delivers one change set per committed changeset
+
+`watchChangeSets(request, handler)` takes the same request and delivers one `ChangeSet` per committed changeset that reaches the watched paths, carrying only the facts the request admits (or one per frame with `coalesce: 'frame'`). Includes and excludes match the same globs as `watch()`, and excludes are applied first. Loss of exactness is an explicit `reset` with a prefix and a reason (`overflow`, `observer-uncertain`, `topology`, `sequence-gap`, `permission-lost`), never an empty or partial set. Across a bridge the form crosses the wire as one frame; a connection whose handlers have no change-set watch refuses it with `ENOTSUP`, and the client (`watchByChangeSets`) falls back to the per-path form. A rooted or composed view rebases the set's paths and reset prefix to its own namespace and masks what its consumer may not see.
 
 ### Rule 20: Watch requests must be deduplicated and ref-counted
 
@@ -353,27 +318,30 @@ Identical watch requests must share one underlying subscription. Keep:
 
 Unsubscribe decrements ref count. Actual disposal happens only when ref count reaches zero.
 
-### Rule 21: Event pipeline requires normalize -> coalesce -> filter -> deliver
+### Rule 21: Event pipeline requires normalize -> coalesce -> match -> deliver
 
 Before delivery, watcher events must pass this worker-side pipeline:
 
 1. **Normalize** paths and event shapes.
 2. **Coalesce** short bursts into canonical events.
-3. **Filter** by path scope, include/exclude globs, and event type mask.
-4. **Deliver** only matched events to subscribed ports.
+3. **Match** concrete events by canonical requested paths, recursion, includes, and excludes.
+4. **Classify explicit loss** — overflow, observer `unknown`/`errored`, stale-root, backend replacement, or an irreducibly summarized directory change — as reset only for affected watch scopes.
+5. **Deliver** the resulting concrete event or explicit loss signal to subscribed ports.
 
 Coalescing requirements:
 
-- `added -> deleted` within the same window cancels out.
-- `deleted -> added` within the same window collapses to `updated`.
-- Parent directory delete suppresses child delete spam.
-- Rename emits both old/new path invalidation semantics.
+- A write does not prove creation; write followed by delete retains the final delete.
+- Delete followed by write collapses to change.
+- A typed ancestor-directory delete or rename resets exact descendant watches instead of guessing child facts.
+- Rename preserves both old/new path invalidation semantics.
+- A file moved away from a path the same window writes or moves onto again is told as its arrival at the target, and a write to a path the window then moves away, with nothing after, is told by the move: a revision write's replacement (stage, move aside, publish, drop the backup) crosses as the publish and the backup's removal, and the replaced path never reads as gone. Such a move arrives as a write of its target, never a rename, so a consumer must not rely on following it as one (a watcher of the target reads it afresh; a holder of the source keeps it, because the source is present again). A copy onto a path counts as an arrival in the same way.
+- Coalescing must clone a survivor before changing hidden origin metadata; subscriptions never mutate one shared event.
 
 ### Rule 22: Kernel path is direct and low-latency
 
 For render reactivity, use this path only:
 
-`FileService change event -> runtime worker watch handler -> worker cache invalidation -> worker emits filesChanged -> CadMachine debounce -> render`
+`WorkspaceFileService change event -> runtime worker watch handler -> serialized cache/current-preview router -> worker debounce -> autonomous render`
 
 INCORRECT:
 
@@ -381,21 +349,25 @@ INCORRECT:
 - Sending `changedPaths` on each render command as the primary invalidation mechanism
 - A separate `fileChanged` command from main thread to worker for every edit
 
-### Rule 23: Watch set updates must be incremental
+### Rule 23: Complete watch replacement must preserve continuous coverage
 
-After each successful render/compile, compute the dependency set and diff it against the previous set:
+Current-preview observation is independent of successful artifact publication. A fresh entry is observed and acknowledged before dependency discovery. When a generation produces a complete dependency candidate:
 
-- add newly required paths
-- remove stale paths
-- keep unchanged paths subscribed
+- keep the old complete multi-path request live
+- subscribe the complete replacement and await one registration acknowledgement
+- batch-revalidate only paths added relative to the old request
+- route candidate-only events during validation as dirty handoff mismatches
+- commit the preview map and replacement handle atomically only when the candidate remains current and clean
+- dispose the old handle only after commitment; dispose only the replacement when dirty or superseded
 
-Avoid full unsubscribe/resubscribe when only a small subset changed.
+The steady state is one multi-path subscription, not one stream per dependency. Unchanged paths stay continuously covered by the overlapping old request; no filesystem revision protocol or permanent root watch is required.
 
 ### Rule 24: Overflow and dropped-event handling is mandatory
 
 Watcher streams are not lossless under all conditions. Define explicit overflow behavior:
 
-- emit an overflow/reset event to subscribers
+- emit internal `WatchEvent { type: 'reset' }` to watch subscribers
+- map a worker-to-client coalescing window that overflows to one existing `ChangeEvent { type: 'directoryChanged' }` per directory a discarded fact touched (a file's parent; a directory and its parent), so each rooted port resets only its own part of the loss (a discarded directory removal or move is kept as itself unless the same window fills its path again, when the directory's re-list stands for it so no open file reads as gone, and one above a port's root reaches that port as `directoryChanged` at `''`, its whole-root reset; a summary of a directory above the root says only that its listing changed and never reaches the port; within one delivery a summary that a later summary of the same or an ancestor directory covers is dropped); a discarded `backendChanged`, and a refresh failure, stay the transport-wide `backendChanged`; do not add another wire variant
 - kernel subscribers clear dependency-related caches and request a fresh dependency pass on next render
 - tree subscribers trigger targeted parent/subtree resync (not blind full tree unless required)
 
@@ -407,28 +379,36 @@ External changes (outside Tau writes) are handled in this order:
 
 1. `FileSystemObserver` when available and stable for the active backend/browser
 2. visibility-aware polling fallback when observer is unavailable
-3. periodic reconcile scan only when event quality is uncertain (`unknown`/overflow paths)
+3. one coalesced root reconcile scan whenever event quality is uncertain (`unknown`, `errored`, reset, or overflow)
 
 Treat `FileSystemObserver` as progressive enhancement, not a universal baseline.
 
+Every successful local or remote mutation, and every concrete observer event, enters the same invalidation plane: invalidate the affected provider, Project Index and file-tree projections, repair a DirectIDB index miss from backing storage when necessary, emit the ordinary change event, and refresh discovery when a project manifest may have appeared or disappeared. Web Locks serialize mutations when available; BroadcastChannel notification and invalidation still occur when locks are unavailable.
+
+Cross-tab freshness is one **sequenced notice** per committed changeset, `{tabId, seq, changes}`, where `seq` rises by one per notice from a tab (D3). Apply remote notices in arrival order on one tail. Group each notice's facts by storage root, and for each root run one provider refresh scoped to the paths they name, path-scoped invalidation and one change event. A notice whose `seq` skips one from the same tab means a notice was lost. Then refresh every storage root this authority owns, mark every index unknown, and emit `backendChanged` once per backend, so every consumer resets instead of trusting the facts that did arrive. A whole-provider refresh per mutation is retired. Resolve only an already registry-owned provider by `storageRootKey`; notification data must not instantiate a provider. When one root's scoped refresh fails, mark every index unknown and emit `backendChanged` for that root's backend only. The full reset is reserved for a gap. One `EventCoalescer` is the only bounded queue in the worker delivery path.
+
+A root that other programs edit (`ProviderCapabilities.externallyEdited`: a picked folder, a Node directory) also runs its Project Index's head-metadata compare on every external-change poll and on visibility regain (D5, Rule 33). A root only Tau writes (OPFS, IndexedDB) learns every change from its own hooks and notices, so a poll never compares it.
+
 ### Rule 26: Exclude self-generated churn from kernel watch streams
 
-Kernel watchers must exclude non-user-source churn paths, at minimum:
+Runtime dependency watchers must exclude only the runtime cache namespace:
 
 - `.tau/cache/**`
-- other generated internal artifacts
 
-`node_modules/**` may be excluded from kernel watch streams when dependency resolution does not require runtime file-level invalidation there.
+The exclusion applies to concrete cache-path events, including peer writes. It must not suppress genuine reset or overflow signals because those signals no longer contain a complete path set. Do not treat `src/.tau/cache/**` as cache. Do not exclude `node_modules/**`; installed or vendored package files may be live bundle inputs.
 
-### Rule 27: Path canonicalization and case behavior must be explicit
+### Rule 27: Concrete paths remain exact
 
-All watch matching must use canonical absolute paths:
+All watch matching must use canonical paths in the namespace owned by the watched filesystem. Runtime watches use root-relative runtime paths; authority-global watches use absolute authority-global paths:
 
 - normalize separators and duplicate slashes
-- define case handling by backend capability (case-sensitive vs insensitive)
-- preserve old/new path semantics for case-only renames on insensitive backends
+- preserve the exact spelling carried by every concrete provider event
+- preserve both old and new canonical paths for renames, matching a request when either endpoint qualifies
+- reserve reset for explicit information loss rather than backing-filesystem case or Unicode behavior
 
-Do not compare raw incoming paths directly.
+Do not lowercase, Unicode-normalize, or synthesize equivalence keys in the registry or runtime.
+
+Tau accepts that a rare out-of-band case-only or Unicode-equivalent edit may not match a differently spelled dependency path on some Web Access roots. A refresh or project reopen may be required in that case. If measured product behavior later requires alias-aware matching, add a provider-native canonical identity contract; do not reintroduce a speculative case-sensitivity boolean or broaden ordinary concrete events.
 
 ### Rule 28: Lifecycle safety for ports and watches
 
@@ -440,12 +420,12 @@ On port disconnect/dispose:
 
 On backend mount change:
 
-- invalidate watch subscriptions tied to old backend
-- emit backend reset events so clients can resync
+- make previously materialized rooted views reject new admissions with `ESTALE`
+- dispose old service/client/watch ownership once and create a fresh rooted binding from the new successful service identity
 
 ### Rule 29: Tree refresh remains incremental after startup
 
-`getDirectoryStat` may be used for initial hydration only. Post-startup updates must use:
+The rooted `statTree` may be used for initial hydration only. Post-startup updates must use:
 
 - parent-directory re-read on file create/delete/write
 - subtree invalidation on directory rename/remove
@@ -460,33 +440,17 @@ Expose watcher diagnostics from worker internals:
 - queue depth and coalescing window stats
 - dropped/overflow event counters
 - average and p95 delivery latency
+- per-form delivery counters: `watch.changeSets` (change sets delivered, one per handler) and `watch.pathEvents` (per-path events delivered, one per handler). The filesystem scenario S8 gates both: one change set to a rooted watch for an agent turn, and no per-path delivery with the production consumers registered.
 
 A watcher path that cannot be observed cannot be trusted at scale.
-
-## Plan Update Requirements (for next implementation plan)
-
-The next implementation plan is incomplete unless all of the following are explicitly covered:
-
-1. **Watch contract upgrade**: request shape includes `recursive/includes/excludes/filter/correlationId`.
-2. **Ref-counted watch dedup**: identical requests share one subscription.
-3. **Event coalescer**: canonicalization rules for add/delete/update/rename bursts.
-4. **Overflow protocol**: explicit reset/resync event and consumer behavior.
-5. **Kernel fast-path migration**: remove `use-project.tsx` relay and render-time `changedPaths` dependency.
-6. **Incremental dependency watch set diffing**: avoid full resubscribe churn.
-7. **Incremental tree patching**: no mutation-triggered full recursive tree scans.
-8. **Self-churn exclusion**: explicit ignore patterns for generated cache paths.
-9. **Lifecycle cleanup guarantees**: disconnect/unmount cleanup of watches and queues.
-10. **Performance acceptance gates**: concrete watch latency/throughput/flood tests.
-
-If one of these items is absent, the plan is not ready for "best-in-class" watcher implementation.
 
 ## Required Watch Test Matrix
 
 Minimum required test coverage for watcher correctness and performance:
 
-- **Contract tests**: `watch` request parsing, include/exclude/filter matching, recursive behavior.
+- **Contract tests**: `watch` request parsing, include/exclude matching, recursive behavior, and structural request identity.
 - **Dedup tests**: N identical requests -> 1 underlying subscription; proper ref-count disposal.
-- **Coalescing tests**: add-delete, delete-add, rename bursts, parent delete child suppression.
+- **Coalescing tests**: overwrite-delete, delete-write, rename bursts, typed ancestor-directory reset, and origin isolation.
 - **Overflow tests**: forced queue overflow emits reset and triggers deterministic resync path.
 - **Kernel integration tests**: file change invalidates caches and emits `filesChanged` without main-thread relay.
 - **Tree integration tests**: mutation updates only affected directory/subtree entries.
@@ -500,77 +464,171 @@ Minimum required test coverage for watcher correctness and performance:
 
 When a bridge proxy is disposed, the main-thread port (`port2`) is closed. The worker-side port (`port1`) should also be cleaned up. Each `exposeFileSystem` handler should track active ports and close them when the counterpart disconnects.
 
-### Rule 32: Timeout awareness
+### Rule 32: Report mutation deadlines causally
 
-All bridge calls have a 30-second timeout. Long-running operations (large file writes, directory copies) should not exceed this. If they might, the operation should be split into chunks or the timeout extended per-call.
+A bridge client may report that a mutation timed out only when the server-side operation is causally cancelled before that result is returned. Never reject a mutation locally while allowing the authority to continue writing in the background.
 
-## ZenFS Performance Rules
+Keep the 30-second default for ordinary bridge calls. Two classes of mutation may explicitly opt out of the wall-clock client timer, each by method identity:
 
-### Rule 33: In-memory file tree for metadata queries
+- A journal-backed, idempotent authority command whose durable operation can be replayed and whose caller does not place unrelated discovery or navigation behind completion.
+- A precondition-checked (compare-and-swap) mutation such as `writeFileChecked` or `deleteFileChecked`, whose caller serialises only that one resource's writes behind completion. A late original and a replacement can never both apply, so the call waits for the authority's terminal result instead of guessing. Connection loss or disposal still settles it as potentially applied.
 
-`FileService.getDirectoryStat` and related metadata queries must use an in-memory file tree at the `FileService` layer, not ZenFS stat/readdir calls. ZenFS's `StoreFS.stat()` and `StoreFS.readdir()` each create a new browser `IDBTransaction` via `IndexedDBStore.transaction()` → `db.transaction('tau-fs', 'readwrite')`, even though data is served from the in-memory `IndexedDBStore.cache`. IDB transaction creation has fixed overhead (~0.1–0.3ms each); for 6265 files this accumulates to ~2 seconds.
+  The editor's saves are this class (D17): the precondition is the SHA-256 the text was loaded at (`{ path, expectedSha256 }`, bridge protocol 11), read beside the bytes by `readFileWithDigest`, not the bytes themselves. The pipeline reads and hashes the replaced file under the write's lock set and answers the digest of what it wrote, so a digest check has no byte ceiling and the editor hashes nothing on the main thread. The cost is a lock hold that grows with the replaced file. A byte precondition stays bounded at 8 MiB (`maximumCheckedWriteBytes`). The Node wire still carries only byte preconditions, so a desktop checked write over 8 MiB is refused (charter F3).
 
-The in-memory tree should be built from ZenFS's internal `StoreFS._ids: Map<string, number>` (path → inode ID map, always in memory) or by reading all directory listing blobs on init. It should be maintained incrementally on writes (not rebuilt).
+The cost of an opt-out is that a hung authority holds that resource's writes until it answers or the connection closes. Callers must surface the unconfirmed state while they wait, and bound their own close-time waits without reporting a mutation timeout. Do not add a generic “disable timeouts” option.
+
+A third class, **progress-bearing bulk calls** (charter D14), replaces the wall-clock timer with a liveness bound (`'liveness'`): calls whose work grows with their input, such as `readMany`, `hashFiles`, `apply`, `glob`, `grep`, `indexStats`, `facts`, `changedSince`, `writeFiles`, `bulkMove`, `copyTree`, `duplicate`, `contents`, `archive`, `search`, `statTree`, `commitPendingProjectDirectory`, `listProjectManifests` and `getScopedZippedDirectory`. The authority's bridge server sends an `rp` heartbeat for every call still running (every 10 s), and the handler may send progress. The client fails the call `PEER_UNRESPONSIVE` only after 30 s without either. A transport deadline therefore never classifies a bulk mutation as failed while the authority is still applying it (I10). The list is `fileSystemLongCalls` in `filesystem-bridge-protocol.ts`, one table both ends read. A long call whose signature has an options slot also takes the caller's `LongCall` (`signal`, `onProgress`), and the bridge carries both across the wire. `apply` takes only a `signal` (on its options or on the changeset): it reports no progress and lives on the heartbeats, so a changeset still being applied is never reported failed. A caller's `readStream` is a sequence of ordinary `readRange` calls, one per page pulled, so it needs no long-call class of its own. A `grep` lives on the heartbeats too, but its pattern is bounded where it runs: a caller's regular expression never runs on the authority's thread. It runs in a dedicated matcher worker, one per call, with a deadline per file (`grepMatchDeadline`, 2 s). An overrun terminates that worker and fails the call `ETIMEDOUT`. A host whose platform has no web `Worker` passes `grepMatcherWorker`; without one, a non-literal pattern is refused with `ENOTSUP`. A `fixedStrings` pattern cannot backtrack, so it matches in-process. The index queries `facts` and `changedSince` are the connection's view's own, masked as `statTree` is. `changedSince` carries the caller's `epoch` and answers `epoch`, `removed` and `rescan` beside `entries`, so a wire caller keeps the epoch it was given, passes it back, and walks on `rescan` rather than reading an empty answer as nothing changed. A connection over a bare provider has no index and refuses both with `ENOTSUP`.
+
+**Liveness is not progress.** A heartbeat proves only that the authority's thread is alive and the call has not settled. It does not prove the call is moving. The bridge server sends `rp` for every running call from a timer, whatever the handler is doing, so a handler stuck awaiting a lock (the project token behind a long `lifecycle` apply, a provider batch that never resolves) stays alive indefinitely. The liveness bound catches a dead or wedged authority, not a stalled handler. A caller that needs a bound on a stalled call must pass its own `signal` and abort it, where the call takes one. Every such handler receives that signal (`bindFileSystemLongCall`), and the server aborts it when the caller sends `rc` or the connection closes. `writeFiles`, `bulkMove`, `commitPendingProjectDirectory`, `listProjectManifests` and `getScopedZippedDirectory` take no `LongCall`: a stall holds them until the authority answers or the connection closes.
+
+That is the trade-off taken when a call moves from the 30 s wall clock onto liveness. Before, a stalled call failed with `ETIMEDOUT` after 30 s. Now it waits until the authority answers, the caller aborts, or the authority stops heartbeating. The calls that moved, and what a stall now holds:
+
+| Call                       | A stall now holds                                     | Why the trade is accepted                                                       |
+| -------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `statTree`                 | The caller's tree load, until it aborts.              | Its work grows with the root; a fixed 30 s fails an honest large listing.       |
+| `search`                   | The caller's search, until it aborts.                 | Its work grows with the root's index.                                           |
+| `listProjectManifests`     | The project list's load, until the authority answers. | It reads one manifest per project.                                              |
+| `getScopedZippedDirectory` | An export, until the authority answers.               | Its work grows with the scope it archives.                                      |
+| `writeFiles`               | The caller's batch, and the project token it holds.   | A client deadline could report failure while the authority still commits (I10). |
+| `bulkMove`                 | The caller's move, and the project token it holds.    | The same split truth as `writeFiles`.                                           |
+
+Callers of these calls show the work as pending, and pass a `signal` wherever the call takes one and a person can give up on it.
+
+**A mutation cut off mid-call is potentially applied.** When `apply`, `writeFiles`, `bulkMove`, `commitPendingProjectDirectory`, `copyTree` or `duplicate` rejects with an `AbortError` or `PEER_UNRESPONSIVE` (or `PEER_GONE`) after the call was sent, the bridge client marks the error `applicationState: 'potentially-applied'`: the authority may have committed some or all of it. An abort before the call reached the wire is `'known-not-applied'`. A caller that sees `'potentially-applied'` re-reads what it changed before it retries. An abort stops a changeset at the start of its next phase, so the phases before it may have landed.
+
+**Schema maxima.** The bridge schemas refuse a request or result that is out of contract before any handler runs: `readMany`'s total result bytes (`maxReadManyBytes`, 512 MiB; the host fails the call `EFBIG` once its reads pass it), `grep`'s `maxFileBytes` (`maxGrepFileBytes`, 256 MiB), `facts`'s `byteCap` (`maxFactsByteCap`, 1 GiB), the length of a `glob` pattern and of `grep`'s `glob` (`maxGlobPatternLength`, 4096), and the length of a `grep` pattern (`maxGrepPatternLength`, 4096). Each is far above real use. Raise one only with a test that shows the need.
+
+CORRECT:
 
 ```typescript
-// CORRECT: Metadata from in-memory tree (O(1))
-const stat = inMemoryTree.stat(path);
-const entries = inMemoryTree.readdir(path);
-
-// INCORRECT: Metadata via ZenFS (1 IDB transaction per call)
-const stat = await provider.stat(path);
-const entries = await provider.readdir(path);
+createBridgeProxy(port, {
+  resolveCallTimeout: (method) =>
+    method === 'writeFileChecked' || method === 'deleteFileChecked' ? 'none' : undefined,
+});
 ```
 
-### Rule 34: Bulk import bypasses ZenFS
+INCORRECT:
 
-For bulk import operations (GitHub import, ZIP upload), bypass ZenFS and write directly to the `tau-fs` IndexedDB object store in a single `IDBTransaction`. ZenFS produces ~5 IDB transactions per `writeFile` call (exists + stat + createFile/commitNew + write + touch), totaling ~25,000–30,000 IDB transactions for 6265 files. A single batched IDB transaction with ~12,530 `put` requests (inode + data per file, plus directory listings) reduces this by 4 orders of magnitude.
+```typescript
+await Promise.race([authorityMutation(), rejectAfter(30_000)]);
+// The authority mutation continues after the caller reports failure.
+```
 
-After bulk write, invalidate `StoreFS._ids` and `IndexedDBStore.cache` (or remount the filesystem). The in-memory file tree (Rule 33) must also be rebuilt.
+**Why**: A client-only deadline creates split truth: durable storage may commit after the journal owner has already classified the same operation as failed.
 
-### Rule 35: ZenFS mount preload awareness
+### Rule 36: One event channel per connection, and a supervised compute worker
 
-ZenFS's `@zenfs/dom` IndexedDB backend **eagerly preloads all data** on mount: `getAllKeys()` + `get(id)` for every key in the store, populating `IndexedDBStore.cache`. For a project with 6265 files, this reads ~12,530 key-value pairs (inode + data per file). This preload is the reason subsequent reads are fast (cache hit), but it also means:
+A rooted connection hears the authority through one event channel (charter D14): `proxy.events(handler)`. It carries every change set of the root as that connection's view sees it (`changeSet`, masked by the same policy as its reads, never echoing the connection's own writes), `compute-restarted` when the authority's compute worker was replaced, and `authority-lost` once per loss: when the connection closes under its subscribers, or when a call finds the authority unresponsive (`PEER_UNRESPONSIVE`) while the port stays open, whichever comes first. However many subscribers there are, the connection holds one channel on the wire: the first subscriber opens it and the last to leave closes it. A subscriber that arrives after the loss still hears `authority-lost`. A caller disposing its own connection hears nothing. A client serves all of a connection's watches from that one channel: `WorkerChangeChannel` reads each watch's events off the root-wide change sets with `watchEventsOfChangeSetFor`. Do not open a second watch for news the event channel already carries. On `authority-lost`, every watch served from the channel hears a `reset`, and every live `watchChangeSets` watch on the proxy hears one D6 reset (`observer-uncertain`, at its last generation), so trees re-read instead of going stale. The loss clears once a call is answered again, so a later loss is announced too. `compute-restarted` has no watch consumer: a compute restart changes no stored content.
 
-- Mount time scales linearly with total stored data
-- Creating standalone `FileSystem` instances (Rule 12) repeats this preload
-- The `disableAsyncCache` option skips preload but makes every read hit IDB
+The authority's compute worker holds no storage handles and no durable state, so it is supervised, not trusted, and it has exactly one supervisor: the revisions package's `createSupervisedComputeWorker`. That supervisor watches the worker by heartbeat, fails the calls a dead worker held with a typed `ComputeWorkerCrashedError`, restarts the worker within its budget, and past the budget sends later calls to its inline fallback. The bridge does not supervise. It relays: the authority hands a `computeEventRelay()`'s `onCrash` to the supervisor and the relay's `source` to the bridge as `computeEvents` (on `exposeFileSystem`, `serveFileSystemBridgePort` or `createFileSystemBridgePort`). Every rooted connection then hears `{ kind: 'compute-restarted', failedCalls, restarts, abandoned }` once per death. Do not wrap the compute worker in a second supervisor.
 
-Design decisions should account for this preload cost when considering multiple mounts, backend switches, or standalone instances.
+**Why**: A worker death must never look like a hung call or a silent wrong answer. Callers learn which calls failed and retry them on the new worker. One channel per port keeps the wire cost of listening constant however many components subscribe.
 
-## ZenFS Internals Reference
+## Provider Performance Rules
 
-Quick reference for ZenFS internals that affect performance decisions. Verified from `repos/zenfs/core` and `repos/zenfs/dom` source.
+### Rule 33: The Project Index answers metadata, and metadata never reads content
 
-| Aspect                                 | Fact                                                                                                                                                   |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **IDB key format**                     | Numeric inode IDs (not path strings). `put(data, id)` / `get(id)`                                                                                      |
-| **IDB value format**                   | `Uint8Array` — packed binary inodes and raw file content                                                                                               |
-| **Directory listings**                 | UTF-8 JSON blob at key `inode.data`: `Record<string, number>` (filename → child inode ID)                                                              |
-| **In-memory path map**                 | `StoreFS._ids: Map<string, number>` (path → inode ID). Always in memory.                                                                               |
-| **In-memory data cache**               | `IndexedDBStore.cache: Map<number, Uint8Array>`. Populated during mount preload.                                                                       |
-| **`findInode` (with id tables)**       | `_ids.get(path)` → `tx.get(ino)` — 1 store read. O(1) path resolution.                                                                                 |
-| **`findInode` (no id tables)**         | Recursive walk from `/` via parent dir listings. Multiple store reads.                                                                                 |
-| **IDB tx per `stat()`**                | 1 new `db.transaction('tau-fs', 'readwrite')` + 1 `get` for inode bytes                                                                                |
-| **IDB tx per `readdir()`**             | 1 new `IDBTransaction` + 2 `get` ops (inode + directory listing blob)                                                                                  |
-| **IDB tx per `writeFile()`**           | ~5 transactions: exists/stat(1) + stat(1) + commitNew(1, 3 puts) + write(1) + touch(1)                                                                 |
-| **`WrappedTransaction.commit()`**      | Only sets `done = true`. Does NOT flush to IDB. Persistence is via IDB request completion.                                                             |
-| **`IndexedDBTransaction` sync bridge** | `setSync`/`removeSync` queue async IDB ops on a chained `asyncDone` promise                                                                            |
-| **Mount preload**                      | `getAllKeys()` + `get(id)` for every key → fills `IndexedDBStore.cache`                                                                                |
-| **DB/store name**                      | Both database and object store are named `storeName` param (Tau: `'tau-fs'`)                                                                           |
-| **TOCTOU scope**                       | `commitNew` read-modify-writes parent directory listing. Concurrent writes to same parent dir can lose entries. Different parent dirs are independent. |
+The rooted `statTree` and `search` and related metadata queries must be served from the root's `ProjectIndex`, not per-path provider stat/readdir calls. Backend metadata calls pay per-operation overhead (an IndexedDB transaction, an OPFS `getFile()`); for 6,265 files this accumulates to seconds.
+
+**Metadata never reads content (I3).** A provider's `stat`, `readdirWithStats` and `exists` answer kind, size and mtime only. `contentKind` and `lineCount` ride along only when already known — recorded on the write path or by an explicit `facts(paths, { lineCount, byteCap })` request, cached by `(size, mtimeMs)` (D4). Nothing sniffs, slices or counts lines to answer a stat. A `facts` request learns the kind from each file's first 512 bytes through a ranged read, so a binary is never read in full for it; it reads a text file in full only to count lines it was asked for, and only when the file is no larger than `byteCap`, at most `factsConcurrency` (8) files at a time. A consumer that lists files for a model (the agent's RPC filesystem) asks for line counts within `lineCountByteCap` (1 MiB) and shows a larger text file by its size alone; an unmeasured kind is reported as unknown, never as binary. A whole read through a rooted view already holds every fact, so it records them — the kind from the first 512 bytes of that read and the line count from the same bytes — and no later listing reads the file again; a walk that reads every file it finds (`grep`) lists with `{ contentFacts: false }` and measures nothing. A read keeps those facts beside the size it read and a clock reading taken before it began; they answer later only while the file's current size matches and its current mtime is older than that reading by more than the 2 s granularity — the caller's listing supplies both (`listed`), or one head stat does — so a write during or after the read, reported or not, is never answered from it. Only a provider that declares `trustworthyMtime` (OPFS, webaccess, Node and its bridge client) keeps read facts at all; one whose mtime does not follow its bytes (direct IndexedDB reports 0) measures every request afresh. On a warm index a read records only while the path is settled: no observation in flight, no external fact pending, the entry's mtime past the racy window. A `facts` request on a root whose index is not open answers from those reads and measures the rest; it never opens the index, so no listing waits for a scan. A client with no ranged read (the browser chat client) measures a stat or listing only within `lineCountByteCap` and reports a larger file by its size alone; its text read sniffs the first 512 bytes it read, so a binary past the cap is still refused as text.
+
+`ProjectIndexes` holds one `ProjectIndex` per root (D5):
+
+- **Persistent.** A root on a persistent provider whose mtime is trustworthy (`ProviderCapabilities.trustworthyMtime`) keeps its snapshot in `<root>/.tau/index/snapshot.json`: a member of Tau's `.tau` directory that every released client already leaves unversioned. Its registry row (cache class, root only) hides it from agents, leaves it unwatched and names it in the generated ignore block. The indexes reserve `.tau/index` and `.tau-staging` themselves (I9) and never list, watch or ingest an external fact about them, so the index's own write never echoes back as a rewrite. A provider without a trustworthy mtime opts out and scans, and its facts last only until the path is next invalidated or observed.
+- **Validated.** The index is a stat cache of the root, never an unverified truth (D5, I5). A load is not trusted until a full head-metadata compare of every entry (0 bytes read) has run: at load, after a cross-tab sequence gap, before a revision cut takes the index's changes (`changedSince`), on demand (`compareIndex`), and — for a root other programs edit (`ProviderCapabilities.externallyEdited`: a picked folder, a Node directory) — on every external-change poll and visibility regain (`pollExternalChanges`). A root only Tau writes (OPFS, IndexedDB) learns every change from its own hooks and cross-tab notices, so a poll never compares it. Facts survive a compare only while `(size, mtimeMs)` is unchanged, a write-path fact only while the provider's mtime is no newer than its measurement, and are trusted only once measured more than the 2 s timestamp granularity after the mtime (the racy rule, I5). Until a cut compares first (W3.2), a webaccess root offers no index-backed `hashFiles`.
+- **Scoped by topology.** A mount change drops only the indexes rooted at or under the changed prefix and the one that covers it; every other root stays warm. A topology change never clears every index (D5).
+- **Pending entries (D9, D10).** A checkout path whose large object has not reached the device holds the object's git-lfs pointer on disk. Whether a pointer is a placeholder depends on state the filesystem cannot see (the checkout's `.gitattributes` files, an open root, the host's health), so the filesystem never decides it from a file's shape: the revision layer, the placeholders' only writer, declares them (`declarePending`, whole-root after each capture and scoped to the paths a tree write touched) by one rule over every `.gitattributes` in the tree, nested files taking git's precedence and letters folding where the repository's `core.ignoreCase` folds them, the same rule its fill and its source use. A whole declaration carries the basis it was found on (`declarationBasis`, the count of tree writes that have announced their entries under the root), and changes nothing once a newer write has announced its entries since, even across its own wait for the index: a look that began before a tree write never speaks over the newer tree, whose own capture declares it. The index keeps one mark per path, at the pointer's size, in every complete index that holds it; an index that completes later receives the marks the others hold, and the shallowest complete index answers. Marks are persisted beside the snapshot, with a `declared` stamp once a whole declaration was made. A route becomes a revision root when the revision registry opens it (makes its raw view of it); a project nobody opened is no revision root, and its pointer-sized files never wait or refuse. A revision root is in one of two states. It is `unknown` from that moment until a whole declaration succeeds, and `declared` from then until an observation (a compare, a reload's compare, a refresh after another tab's or program's change) finds a file created or changed at 126 to 144 bytes that no mark names, which makes it `unknown` again and drops the stamp. Only a whole declaration makes a root `declared`, and a loaded stamp counts only when the reload's compare left every pointer-sized row unchanged. Ending the wait in any other way (the bound, a failed declaration, a first capture or a fill check that failed or stopped before it declared, and called `releaseDeclaration`) leaves the root `unknown`. A topology change elsewhere (such as at `/`) that leaves a `declared`, complete root resolving to the same provider and path carries its marks across the eviction: it stays `declared`, each carried mark answers while its file is at the size and mtime it was carried at, a file written within the racy window (2 s) is not carried and answers as in an `unknown` root, and the reopened index makes the root `unknown` only as an observation would. One outside edit of a pointer-sized file is enough to make a root `unknown` again, until the revision layer's next whole declaration. In a `declared` root, a non-raw rooted view and the authority's own `stat` and `lstat` answer a path by its mark alone: a file marked and still at its pointer's size stats as its object (`size` is the object's, `pending: true`, no content facts) in `stat`, `lstat`, `readdirWithStats`, `statTree`, `search` and `changedSince`, reading no bytes (I3), `hashFiles` answers its oid after a stat of it, and a read of it answers the object's bytes, from the device or fetched by oid, under one stall bound (`pendingStallMilliseconds`, 60 s without progress). An unmarked pointer there is plain text, no source is asked about it, and a copy of it is text too. Two sources answer a path before any declaration, so a first view never waits for a capture or a whole compare (STO-25): the expected entries of a tree write landing under the root answer each path they name once the write has landed it (one already in the checkout from the moment the entries are known), while a path the write has yet to land is the raw view's as what is on disk, by its mark there or as in an `unknown` root, and a write that fails ends its entries. A listing (`readdirWithStats`, `statTree`) also shows each entry the write has yet to land that is not on disk as a `pending` row at the size the tree gives it (a placeholder's, its object's), with no content facts, and a folder only such entries make lists them before it exists, itself `pending`; each such row is also `arriving`, which a consumer that reads what it lists (the agent's listings) leaves out. A first view opened once the entry closure lands never shows an arriving file as missing or its project as empty (I7). **A read of a path the write owes waits for it (STO-25 ruling, 2026-11-17)**: in every view but the raw one, `readFile`, `readFileStream`, `stat`, `lstat` and `exists` of a file the live write has yet to land wait until it lands (a placeholder until its own pointer lands, after which the read goes through to its object as above), of a file the write removes (named to `expectEntries` as `removing`) until it is gone, and of a folder only the write's entries make until one lands; a `readdir` or `readdirEntries`, which cannot show an arriving row, waits while a child it would list has yet to land or go. So a read never answers a path's previous bytes or a missing file in place of what the write is landing, and a kernel, bundler or parameter reader may run from the first view (the model surfaces' first-view gate, `modelFirstViewOpens`). Only a path the live write owes waits; every other path, the raw view (the writer's own, so a write never waits on itself), `readdirWithStats`, `statTree` and `search` answer at once. A file the write removes includes each folder that removing its files empties (no entry of the tree is under it), owed until it is gone or the write ends; a removed path put back (a failed step's move-back) is owed again, and a path the write writes lands only at the size its tree gives it, so a backup moved back never lands it. A held read wakes on each landing and asks again (and at least every 250 ms), follows the caller's abort signal (a listing's too, through `untilLanded`), and refuses with `ArrivingContentError` (code `PENDING`, `reason: 'stalled'`) once nothing the owing write names has landed or gone for the stall bound; another root's writes, or a write of a path it does not name, are not progress. When the write fails, every path it still owed then, and every folder whose listing would show one, refuses with `reason: 'failed'`, made before or after the failure, until the root's next expectation or end: the rollback's own, or the end the revision layer makes once the checkout is whole without one. Meanwhile `entriesLanded` answers `false` and `onExpectationEnd` tells each listener, so a host never reads a failed write's latched landings as its tree: the worker drops its `entryManifest` and reads `treeReady` from the failure, before the rollback begins. A path the write had landed before it failed reads as the disk. Every bridge call that may be held (`readFile`, `readFileWithDigest`, `readRange`, `stat`, `lstat`, `exists`, `readdir`) is a long call, and the language worker's synchronous slot waits 70 s, past the stall bound, so the filesystem's own answer or refusal arrives first. A kernel read refused `PENDING` is watched as a file the render observed missing, so a render that failed on it runs again when it lands. Hashes and content facts (`hashFiles`, `facts`) do not wait. The raw view lists only the disk. When the write's expectation ends, landed or failed, each directory holding the outermost rows it never put on disk raises `directoryChanged` (a placeholder whose pointer landed is on disk and raises nothing), so every watch at or under it lists again and no arriving row outlives its write. A file tree that holds its re-reads while an apply writes its root lets one re-read of every directory it has listed through the hold on each entry of the root's reading into `entryReady` while held, so each tree write's first view shows the entries landed and arriving, never the root as it was before the apply; and a durable root's stored snapshot, read once, answers a file still at its stored size and mtime by its stored mark (or its absence, when the stamp says `declared`). A stamp vouches only for the rows it stored: a pointer-sized file it does not cover at its stored size and mtime answers as in an `unknown` root, and an observation that drops a stamp makes its root `unknown`, even before the revision registry opens the reloaded root again. In an `unknown` root, a stat of a pointer-sized file nothing answers reads its bytes (at most 144) and, only when they parse as a pointer, waits for the declaration, once per root and at most the stall bound, and only for itself, then answers from the marks; an ordinary file the size of a pointer answers as itself at once, and one whose bytes cannot be read waits as a pointer would. A listing (`readdirWithStats`, `statTree`, `search`, `changedSince`) never waits: such a row is reported `pending: true` at its own size, without content facts, and every other row answers as it is. A read whose bytes parse as a pointer that nothing answers refuses with `PENDING` until the root is declared. Stats stay metadata-only but for that one bounded read (I3's trade, made only where a stat would otherwise wait); only a read looks at bytes otherwise, and no consumer measures a `pending` row's content facts from a read, since its size is not its bytes'. The wait follows the caller's abort signal and never refuses a row. A read that cannot be answered refuses with `PendingContentError` (code `PENDING`), never empty bytes or pointer text (I7). A marked file rewritten from outside answers as the bytes it holds once a stat finds another size, and loses its mark when a read finds bytes that are no pointer or the source says it is no placeholder. A read that finds another pointer than its mark names refuses with `PENDING`, as the stat before it said pending, and ends the mark only in a `declared` root with no tree write live over the path, after which its stat and read answer the text alike. Two windows remain. An outside rewrite of a marked file at the pointer's exact size that nothing reads stats as the marked object until a read of it or the revision layer's next capture; a reader that stats it and then reads bytes that are no pointer sees the two sizes disagree once. And a pointer's digest or content facts (`hashFiles`, `facts`) in an `unknown` root describe the pointer's bytes, since neither reads through. A copy of a pending entry copies the pointer and stays pending, and a write over one replaces it. Only the revision layer reads checkouts raw (`placeholders: 'raw'`).
+- **Merged, never discarded.** A scan that overlaps mutations keeps what the mutations recorded; a rename during an observation, or before the first one completes, re-observes its target; an external fact marks its path unknown and the next query re-observes that path alone.
+- **Removals are recorded, bounded, and never a silent gap (S10).** `changedSince(since, { epoch })` answers the entries changed after `since` and every path removed after it (`removed`: path, kind, generation; the path and everything under it are gone), with the index's `generation` and `epoch` to pass next time. A delete, a move's source, a path an observation no longer lists, and whatever a write of another kind replaced are each recorded once. The record keeps the newest `indexRemovalLimit` (4,096) removals; a `since` older than the oldest one dropped, from another epoch, without an epoch (unless it is `0`), or ahead of the index answers `rescan` with both lists empty, and the caller walks. The mask is asked about each removal's ancestors as directories, as the walk asks before each descent, so entries and removals agree. The record is stored with the snapshot under the same CAS, and a loaded index continues the epoch that stored it only for a `since` up to the stored generation: the writer may have issued later generations that the reload issues again. Every loaded row carries the snapshot's generation, so such a caller gets the whole tree as changed: more than changed, never less. Answering reads no content (I3).
+- **Stored under CAS, off the request path.** The snapshot is written on a timer, under the root's `tau-index:` Web Lock taken only when free — a held lock defers the write rather than waiting for it — and only when the writer's cross-tab vector has seen everything the stored one has; a tab that is behind never overwrites a newer snapshot, and two incomparable tabs store a snapshot that forces a rescan. The tab that rescans adopts that vector, so its next snapshot clears the mark. Before storing, the index re-observes what the notices it claims left unknown, and it stores again only when something changed.
+
+```typescript
+// CORRECT: metadata from the root's index; facts on request, within a cap
+const rows = await rooted.statTree('');
+const facts = await rooted.facts(['src/main.ts'], { lineCount: true, byteCap: lineCountByteCap });
+
+// INCORRECT: a stat that reads the file to classify it or count its lines
+const bytes = await provider.readFile(path);
+const stat = { ...(await provider.stat(path)), ...getFileContentMetadata(bytes) };
+```
+
+### Rule 34: Bulk writes are changesets, and providers batch them natively
+
+The changeset is the one bulk path (D2; charter conflict ruling C10). `writeFiles` is a changeset, and each phase goes to the provider's `applyBatch`: IndexedDB maps a phase to one transaction; OPFS and a picked folder write up to `batchConcurrency` (8) files at once through `createWritable`, whose swap file commits on close, and reuse the batch's directory handles; Node runs the staged temp-and-rename batch below. On IndexedDB, OPFS and a picked folder, a new file on an empty target is written at its final path with no rename, and the index records its expected size and oid until the changeset commits, so the next load verifies or removes a create a crash cut short (I1). Do not expose a second provider `bulkImport` mutation path, and do not add a write-worker pool until a measurement needs one (D19). After commit, update the provider path index and the affected Project Index before the next read; after uncertain failure, refresh before serving metadata.
+
+**One copy of every large object (D9).** A large object is stored once, content-addressed, in the private store in git-lfs's own layout (`.git/lfs/objects/<2>/<2>/<oid>`), and verified once: streamed into a `.partial` beside its name, read back and hashed once, then moved into place (revisions policy rule 13). In the browser the worktree keeps the pointer and the authority materialises on read (Rule 33, pending entries). Presence is answered by the store, never by reading bytes. Desktop keeps a physical worktree copy, cloned from the repository's own store through an authority-resolved `{largeObject, size}` write source where the filesystem supports reflinks (node protocol 11, D16).
+
+A file too large to hold whole (a large object's download) is written with `writeFileStream(path, stream)`, which the provider and the rooted `privateStore` offer, never with repeated `appendFile` calls: the default `appendFile` rewrites the whole file each time. An existing file holds its old bytes until the stream ends and then all the new ones (I1). OPFS stages the chunks through a sync access handle under `.tau-staging/<owner>` and moves the file into place; its crashed staging is removed when a realm next initializes. A picked folder, or OPFS without sync handles and a native move, replaces an existing file with the writable stream's swap file on close. A new file there is recorded as an uncommitted create before it is made and reads as empty until the stream ends, so a crash leaves only that empty file for `recoverUncommitted` to remove; a root that keeps no record (`stageCreates`) writes a `.tau-staged.` temporary sibling and moves it into place, which a picked folder without a native move does by copying it. Node writes its `.<name>.<pid>.<uuid>.tmp` sibling, syncs it, renames it and verifies the published entry by its SHA-256 read back in chunks; the first write a provider makes in a directory sweeps the siblings there whose writer process is gone and that have been idle for a minute, or that have been idle for a day. Each holds one chunk at a time. A stream that errors leaves the path as it was and nothing staged, and every refusal or failure cancels the source. A provider that keeps a file whole (memory, IndexedDB, the Node bridge client) gathers the stream and writes once. A provider that holds one chunk at a time declares `streamsWrites` in its capabilities, and the rooted `privateStore` offers `writeFileStream` only for one that does, so a consumer that streams to save memory never pays for the gathered copy.
+
+An import is not a bulk write through `writeFiles`: it is the streaming pipeline in `@taucad/filesystem/importer` (charter D12), run in the file-manager worker. A source (a zip `Blob` read by range from its central directory, a folder's `File`s, a picked directory handle, the handles of a drop, a downloaded archive spooled from a stream of declared size) lists names and sizes only, and a folder the path policy leaves behind (`.git`, `node_modules`) is never entered or counted. A zip's central directory is read a window at a time and refused before it is read when its size passes what its entries can need (a header, a name of at most twice the path limit and 512 bytes of extra field and comment each); a name past that is refused as it is met, a ZIP64 value outside its extra field is refused, and entries whose ranges overlap one another or the directory are refused; a directory too large for its entry count is a limit refusal (`archiveTooLarge`), not damage. Each entry carries where the next one begins, and its decode, once it has read the local header's own name and extra lengths, refuses data that runs past it. `planImport` judges the whole listing before a byte is decoded: the path policy refuses an absolute path, a drive, a `..` segment or a control character, skips what the injected `PathPolicy` classes as cache or control plane (and the manifest, identity, import facts `.tau/import.json` and in-place owner marker `.tau-import-owner.json` the commit writes, in every spelling the registry's fold resolves onto them), refuses collisions under that same fold and file-over-folder collisions, and skips symbolic links. A zip's pin carries its directory's identity (a CRC-32 of its bytes, its size and offset), so a resumed staging is of the same bytes. One limits policy (`importLimits`, EQ14) applies to every source: 1 GiB archive, 1 GiB expanded, 100 MiB per file, ratio 100 (per entry above 1 MiB and for the archive), 1 KiB paths, 50,000 entries, checked against declared sizes and again against decoded bytes, and a refusal keeps its reason across the compute worker. Each entry is decoded on the compute worker (`decodeImportEntry`: inflate into a buffer of exactly the declared size and check the zip CRC-32, the decode's only integrity check; nothing is hashed), and `stageImport` writes the bytes once as changesets of at most 256 files or 32 MB, decoding the next batch while the last one writes under one 64 MB budget (an entry larger than that is held alone); a failure or abort stops every decode still queued. Each written batch is then read back once and its facts are measured from that read-back on the compute worker (`measureImportBytes`: the git blob id and SHA-256 as one-shot WebCrypto digests, up to the 100 MiB per-file limit, and the content kind), so the ledger and `.tau/import.json` hold the facts of the bytes on disk and each file is hashed exactly once (charter EQ6, D11, I2); a read-back holds at most the batch's largest file beside the decode budget, and one at another size than written refuses the import as `corrupt`. A review's preview reads the files it asks for, in the order asked, without hashing them. The page hands sources over by reference and holds only paths and sizes. A GitHub repository archive is a source the worker downloads itself: the review lists paths and sizes the worker planned, the preview reads its few files from the worker, and the archive never reaches the page. **CORS prerequisite (D12):** GitHub's archive hosts answer no cross-origin read, so the browser path depends on the Tau API's archive gateway (`GET /v1/repositories/archive?provider=github&owner&repo&ref`), which admits public repositories only, resolves the ref to a commit, streams the zipball unbuffered with `Content-Length` when the upstream is unencoded, answers `413` past its cap and is rate-limited per address. The worker fetches it with `credentials: 'omit'`: no cookie, no GitHub token and no Tau session travels with the download, and only `http:` and `https:` addresses are fetched. The gateway's cap (`repositoryImportLimits.maxArchiveBytes`) is the import's own 1 GiB archive limit, so the gateway and the worker refuse the same declared size; import bytes also spend a per-network budget of 2 GiB an hour, refused with `429` and `Retry-After` once spent; a download the gateway cuts off partway fails as a transfer error, never a clean short archive, and the worker reports it as possibly rate limited rather than damaged. Only a GitHub archive (`provider: 'github'`) falls back to its top folder's sha for its pin. The gateway names the commit it resolved the ref to in `X-Tau-Commit` (40 hex, exposed to cross-origin reads), and the worker pins the archive at it (`pin.revision`), or, when the header is absent or not a commit, at the short sha of the archive's top folder (`<owner>-<repo>-<sha>/`). A chosen repository folder is planned as the project root (`planImport`'s `root`), relative to the archive's one top folder (never to however many folders its entries happen to share), `.` or an empty root being the whole repository, and is part of the pin. Only the newest plan of a session may become its plan: a newer plan stops one still running, and a plan its caller cancels (the review's actor ending) is stopped in the worker, its download aborted, so a slower earlier download never replaces what the review shows. A zip entry's name is UTF-8 when its entry sets the language-encoding flag or carries an Info-ZIP Unicode Path field whose CRC matches the stored name; otherwise it is UTF-8 when it decodes as strict UTF-8 (as the macOS archiver writes it) and IBM code page 437 when it does not, before the path policy judges it.
+
+On desktop, a folder pick or an Open With import is copied host-side, never read in the renderer (D12 as built in W7.4, node protocol 12; filesystem authority Rule 12). Drag-and-drop still reads its bytes in the renderer (charter F5).
+
+A changeset phase on Node is one provider batch (D16). `NodeFsProvider.applyBatch` stages every write to its temp sibling and syncs it, sixteen at a time, renames each over its target, syncs each directory the renames landed in once, and reads each file back once before its receipt says `applied`; so a phase costs at most one fsync per file plus one per directory, never two per file. Receipts follow the primitive batch's rule: a refusal is `failed`, and so is a write that fails before its rename is attempted (its target untouched) unless it had made a parent directory; any other failure, a rename that throws included, is `uncertain`. A watch handler that throws loses its own event and is reported, never the stream after it, and is owed a reset: retried once in order, then delivered ahead of the next event until one lands. Windows cannot sync a directory, so there each file syncs its own handle again after its rename. The Node bridge client sends a phase as one `applyBatch` request (node protocol 10) under one authority claim, reading a staged `Blob` before it is sent, and a receipt's error keeps its `code` and abort `name` across the port so a refusal still reads as known-not-applied. Node's `readdirWithStats` is one `lstat` per row when the directory's real path is its spelled one, since a regular child then inherits the directory's containment and mask answer; a link, or a row whose kind the listing did not report, is stat'ed through the full resolution. Node's watcher classifies events off the event loop: a native `delete` is trusted as reported, a create or update learns its kind from one asynchronous `stat`, no event is classified by a synchronous one, and a callback's events (and any reset a rearm reconciles) are delivered in arrival order before the next callback's.
+
+### Rule 35: Provider hydration awareness
+
+`DirectIdbProvider` hydrates a path index once per instance at initialization (`getAllKeys()`, ~26ms for 10k entries) — a metadata index, not a full-data preload. Hydration cost and index divergence are why provider instances are per-storage-root singletons (`filesystem-authority-policy.md` Rule 2): every extra instance repeats hydration and holds an index that never learns of the others' writes. (The ZenFS-era full-data mount preload this rule previously described is retired.)
+
+## Project-root configuration sync
+
+The main thread owns persisted `ProjectFileSystemConfig` and storage-root handles. It sends a cloneable `ProjectRootConfiguration` to the file-manager worker at boot and after a binding/discovery change. The worker atomically replaces non-owning project routes while reusing registry-owned providers. Reads and writes may proceed only after that sync resolves; page navigation is not a configuration event.
 
 ## Performance Budget
 
-| Operation                           | Target              | Current                     |
-| ----------------------------------- | ------------------- | --------------------------- |
-| Shallow directory read (20 entries) | < 50ms              | ~30ms (IndexedDB)           |
-| Single file read (source, <100KB)   | < 20ms              | ~10ms (IndexedDB)           |
-| File tree initial load (root only)  | < 100ms             | ~2s (full recursive)        |
-| Background refresh after mutation   | < 200ms (debounced) | ~500ms-5s (immediate, full) |
-| Folder expand (lazy load)           | < 100ms perceived   | N/A (not implemented)       |
-| Watch event -> kernel invalidate    | < 25ms p95          | N/A (not implemented)       |
-| Watch event -> UI tree patch        | < 75ms p95          | N/A (not implemented)       |
-| Sustained edit burst (100 events)   | 0 silent drops      | N/A (not implemented)       |
-| Bulk import (6265 files)            | < 5s                | ~143s (sequential ZenFS)    |
-| `getDirectoryStat` (6265 files)     | < 10ms (in-memory)  | ~2s (sequential IDB tx)     |
+Budgets are per scenario and are gates (D15, H17). A primitive is gated only where a scenario needs it to hold. Count-based gates are hard and never loosen: a gate red at HEAD is listed in `apps/ui-e2e/src/filesystem-scenarios/baseline/known-red.json` with the value it had, it may not move further from its limit, and it leaves the list in the change that turns it green (I8). A package that regresses a scenario is not verified. Time targets tighten only. Every row names its fixture, browser, server and network profile.
+
+### Scenario budgets
+
+The scenario harness (`apps/ui-e2e/src/filesystem-scenarios`, `pnpm nx run ui-e2e:test:e2e:filesystem-scenarios`) runs S1–S20 on real OPFS in Playwright's Chromium against the seeded STO-25-shaped fixture (2,000 files, 500 MiB, 200 revisions; a 1/20 small profile). The nightly run (`e2e-nightly.yml`) runs Chromium on the small profile. The committed baselines hold the last recorded run of each profile: `baseline/chromium-full.md` at `c8c0b7fc0d77` and `baseline/chromium-small.md` at `4775f8c73a11`, both from 2026-11-08. The baseline is not rerun at every merge, so a row can lag HEAD. In the table, the S3, S16 and S17 times are from the G-A quiet-box run (W1) and the S5 time from W3.2's run, both recorded in the charter's queue. Figures cited to a baseline or to the policy's earlier budget table say so. Targets are the charter's.
+
+**Closeout state (W13, 2026-11-09).** Each budget is stated as met, short, or not measured, with the cause:
+
+- **Time targets are recorded, not asserted.** The harness reports every time row on Chromium and asserts none of the time targets. The one time-valued hard gate is `S19.save` (save latency ≤ 100 ms while grep runs). Every other hard gate is a count. Wiring time assertions on Chromium is outstanding.
+- **WebKit and Firefox are not recorded.** The harness runs them where Playwright has them installed (`TAU_FS_SCENARIO_ENGINES`), but no WebKit or Firefox baseline is committed. Their count gates and time rows have no recorded value.
+- **Server-backed rows have not run.** S1, S2, S4, S9, S10, S18 and S20 need the local API with its object store and database (the api-e2e git tier: MinIO and PostgreSQL from Docker), and no harness host has had Docker. Their gates are declared and report no value. S11 waits on a fixture store holding the 200 revisions (W0.2).
+- **The real-project anchor is deferred.** D21's staging re-measure of STO-25 (1,221 s before the program) was deferred by the operator on 2026-11-08 until the rest of the program is complete. No scenario has a staging figure.
+
+| ID  | Scenario and target                                            | State                                                                                                                                                   | Gates                                                                                              | Shortfall and cause                                                                                                                                                                                                              |
+| --- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| S1  | Cold open, tree visible: ≤ 3 s, independent of history size    | Not measured                                                                                                                                            | declared `S1.blob-reads` = 0, `S1.whole-packs` = 0, `S1.upload-pack` = 0                           | Needs the server tier. The listing cold open shipped (D8, W5) and readiness follows it (D10, W4); production edge apply waits on the operator                                                                                    |
+| S2  | Cold open, entry model rendered: ≤ 5 s                         | Not measured                                                                                                                                            | declared `S2.objects`, `S2.lfs-batches`                                                            | Server tier, as S1                                                                                                                                                                                                               |
+| S3  | Cold open, all text materialised: ≤ 15 s                       | **Met**: 11,607 ms full profile (from 485 s); 8 changesets, 8 lock sets, 8 events, 2,000 writes (G-A)                                                   | hard `S3.changesets`, `S3.lock-sets`, `S3.events`, `S3.writes` = files, `S3.renames` = 0           | Time recorded, not asserted                                                                                                                                                                                                      |
+| S4  | LFS fill, 450 MB: ≥ 80 % of line rate, no stall                | Not measured                                                                                                                                            | declared `S4.downloads`, `S4.writes`, `S4.hashes`, `S4.read-back` ≤ 1                              | Server tier. The download batch keeps one HEAD per object by operator ruling until STO-7 relocates legacy objects (F2)                                                                                                           |
+| S5  | Warm open to render: ≤ 2 s                                     | **Met**: 1,032 ms full profile (from 1,812 ms before W3.2; 7–9 s before the program); 0 content bytes read, from 106.5 MB (earlier policy budget table) | hard `S5.blob-reads` = 0, `S5.index-compares` = 1; vacuous `S5.network`; model-bound `S5.compares` | The runner still stands in one stat per file for the status compare, so `S5.compares` is reported, not asserted                                                                                                                  |
+| S6  | Import 500 MB: ≤ 20 s to usable, main thread free              | Short: `S6.durable-writes` green, `S6.hash-passes` known red                                                                                            | hard `S6.durable-writes` ≤ 1.01; known red `S6.hash-passes` = 1                                    | The runner models only `commitPendingProjectDirectory` with the whole payload. W7's pipeline hashes once, from the staged read-back, so the runner counts no hash pass. Resident memory and main-thread freedom are not modelled |
+| S7  | Save one 1 MB text file: ≤ 100 ms                              | Measured; count gates green                                                                                                                             | hard `S7.changesets` = 1, `S7.events` = 1, `S7.copies` = 0                                         | Time recorded, not asserted. The warm-save B1 row below is a separate budget                                                                                                                                                     |
+| S8  | Agent turn writing 50 files: ≤ 500 ms                          | **Met** on counts (W8): 1 changeset, 1 watch delivery, 3 consumers, 0 per-path watch deliveries with 50 armed                                           | hard `S8.changesets`, `S8.watch`, `S8.consumers`, `S8.path-watch`, `S8.path-watch-armed`           | Time recorded, not asserted                                                                                                                                                                                                      |
+| S9  | Push after one edit, warm server: ≤ 3 s                        | Not measured                                                                                                                                            | declared `S9.unchanged-blobs` = 0, `S9.lfs-batch` = 0, `S9.info-refs` ≤ 1                          | Code shipped (D11, W6.1–W6.4); browser and server rows need the server tier                                                                                                                                                      |
+| S10 | Pull a one-file change, warm server: ≤ 2 s                     | Not measured                                                                                                                                            | declared `S10.files` ≤ 1, `S10.captures` = 0                                                       | As S9                                                                                                                                                                                                                            |
+| S11 | Revision compare of one file / switch: ≤ 1 s                   | Not measured                                                                                                                                            | declared `S11.objects`                                                                             | Needs a git object store holding the fixture's revisions, built through the revision port (W0.2)                                                                                                                                 |
+| S12 | Agent grep / glob: ≤ 2 s / ≤ 200 ms                            | Short on time: count gates green, walks 320 → 0 (W9); full-profile grep 3,984 ms against 2 s (`baseline/chromium-full.md`)                              | hard `S12.binary-bytes` = 0, `S12.walks` = 0, `S12.listing-bytes`                                  | `S12.binary-bytes` turned green from a fixture change (real format headers, W12.1), not from grep. A binary with no NUL in its first 512 bytes is still read in full                                                             |
+| S13 | LSP module resolution, 3,000 probes: ≤ 300 ms                  | **Met** with the index mirror built: 15 ms (W9, from 1,113 ms)                                                                                          | hard `S13.metadata-bytes` = 0 (from 18.4 MB, earlier policy budget table)                          | The mirror's first build, done once on attach, runs before the measured window and is not in the figure                                                                                                                          |
+| S14 | Export 500 MB zip: streams, ≤ 1.2× largest file resident       | Short: `S14.resident` green on the small profile (W12.2, `baseline/chromium-small.md`); no full-profile row recorded; streaming not met                 | hard `S14.resident` ≤ 1.2× largest file                                                            | The archive is gathered as a `Blob` in 1 MiB batches rather than streamed into the picked file, and the UI ceiling is 2 GiB with a save picker, otherwise 256 MiB (F6)                                                           |
+| S15 | Desktop cold open / save: ≤ 30 s / ≤ 150 ms                    | Not measured                                                                                                                                            | none                                                                                               | No desktop UI harness exists. W11's cold open (0.78–0.81 s) and saves (28–101 ms) are Node-level provider measurements, not S15                                                                                                  |
+| S16 | Second tab during S3: no stall, ≤ 1 invalidation per changeset | **Met**: second-tab read p95 36 ms (G-A); 8 invalidations for 8 changesets (`baseline/chromium-full.md`)                                                | hard `S16.invalidations` ≤ changesets                                                              | Time recorded, not asserted                                                                                                                                                                                                      |
+| S17 | Save during S3: S7 + ≤ 150 ms                                  | **Met**: `S17.lock-wait` 1 of a limit of 8; save 49 ms (G-A)                                                                                            | hard `S17.lock-wait` ≤ 8                                                                           | Time recorded, not asserted                                                                                                                                                                                                      |
+| S18 | Agent turn during the LFS fill: S8 + ≤ 100 ms                  | Not measured                                                                                                                                            | declared `S18.fill-waits` = 0                                                                      | Depends on S4 and the server tier                                                                                                                                                                                                |
+| S19 | Grep while saving and reading: S7 unchanged, read p95 ≤ 200 ms | Short: `S19.off-authority` and `S19.save` green, `S19.compute-worker` known red                                                                         | hard `S19.off-authority` = 0, `S19.save` ≤ 100 ms; known red `S19.compute-worker` = 0              | Grep runs off the authority, as the agent host runs it (ruling 2026-11-07), but its reads still cross to the authority. The gate still states the charter's compute-worker wording and has not been restated                     |
+| S20 | Two tabs cold-open one project: one fetch, one materialisation | Not measured                                                                                                                                            | declared `S20.downloads` ≤ 1                                                                       | Server tier                                                                                                                                                                                                                      |
+
+### Primitive gates
+
+The two in-memory tree-index timings take the best of five runs so scheduler stalls cannot weaken what the data-structure operation proves. Browser timings retain an explicit regression ceiling even when the stated product budget is not yet met.
+
+| Operation                                                           | Target                                                                                       | Measured state                                                                                     | Enforcement                                                                                                                                                                                                 |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Full-tree walks per turn settlement                                 | ≤ 2                                                                                          | 2 for settlement; 3 for the whole turn, 4 including cut                                            | `packages/revisions/src/apply-tree.test.ts` — `should walk the tree twice to settle a turn, and stage its writes as one batch`                                                                              |
+| File reads for a cut over an unchanged tree                         | 0                                                                                            | 0, from 4                                                                                          | `packages/revisions/src/apply-tree.test.ts` — `should read no file bytes for a cut over a tree nothing has touched`                                                                                         |
+| `stat`-class calls per directory during index build                 | ≤ 1 per directory                                                                            | 11 calls for 11 directories across every provider                                                  | `packages/filesystem/src/backend/provider-tree-conformance.test.ts` — `should build an index with one stat-class call per directory`                                                                        |
+| Index rebuilds caused by an unrelated mount                         | 0                                                                                            | 0                                                                                                  | `packages/filesystem/src/project-index/project-index.test.ts` — `should leave a warm sibling index warm when an unrelated prefix is mounted`                                                                |
+| `classify` calls for a 10,000-row composed listing                  | ≤ 1 per row plus the root                                                                    | 10,001                                                                                             | `packages/filesystem/src/composed-view.test.ts` — `should classify each row of a wide listing once`                                                                                                         |
+| DirectIDB transactions per 1,000-file `writeFiles` batch            | 1                                                                                            | 1, from 1,000                                                                                      | `packages/filesystem/src/mutation-pipeline.test.ts` — `should commit a thousand-file batch in one IndexedDB transaction`                                                                                    |
+| Live bridge ports per project session                               | ≤ 5                                                                                          | approximately 7–9 by static opener count                                                           | **Not enforced:** no runtime port-count measurement exists; transferred worker ports cannot share a main-thread proxy                                                                                       |
+| Native Git processes per 50-row history page / 4,000-file tree read | ≤ 5 / ≤ 3, with tree-read concurrency ≤ 16                                                   | ≤ 5 / ≤ 3                                                                                          | `packages/revisions/src/native-git-latency.test.ts` — `B5: a 50-row history page over 200 revisions costs a handful of processes`; `B6: reading a 4,000-file tree costs three processes and never fans out` |
+| Warm save, 100 files plus 5 MiB                                     | ≤ 100 ms                                                                                     | 339–350 ms quiet baseline; not remeasured after capture memoization                                | **Budget not enforced:** `apps/ui-e2e/src/revision-latency.spec.ts` — `records how long *Saved* takes after Mod+S in a project with bulk in it (B1)` enforces only a 3,000 ms regression ceiling            |
+| History open at depth                                               | ≤ 50 ms                                                                                      | 138 ms quiet baseline                                                                              | **Budget not enforced:** `apps/ui-e2e/src/revision-latency.spec.ts` — `records how long the History region takes to open at depth (B4)` enforces only an 800 ms regression ceiling                          |
+| Bare index `statTree` over 6,265 files                              | < 20 ms                                                                                      | < 20 ms, best of five                                                                              | `packages/filesystem/src/project-index/project-index.test.ts` — `should stat a 6,265-file tree under 20 ms`                                                                                                 |
+| Warm `statTree` over 6,265 files through rooted authority           | < 10 ms                                                                                      | < 10 ms, best of five                                                                              | `packages/filesystem/src/project-index/project-index.test.ts` — `should answer a warm statTree over 6,265 files inside its 10 ms budget`                                                                    |
+| Bulk import of 6,265 files                                          | < 5 s in browser                                                                             | 1.1–1.9 s under `fake-indexeddb`, from 27.9 s per-file                                             | **Not enforced:** the transaction-count gate above enforces batching, but no browser timing gate exists                                                                                                     |
+| Archive resident input bytes                                        | one file at a time; the caller sets the ceiling (UI: 2 GiB with a save picker, else 256 MiB) | one file at a time; an oversized file is refused from its declared size, before its bytes are read | `packages/filesystem/src/content-ops/index.test.ts` — `should refuse an oversized file before reading its bytes`                                                                                            |

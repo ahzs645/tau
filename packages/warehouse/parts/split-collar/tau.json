@@ -1,0 +1,17 @@
+{
+  "$schema": "https://tau.new/schemas/tau-v1.json",
+  "name": "Split clamp collar",
+  "description": "Slit collar with a transverse clamping screw opening.",
+  "tags": [
+    "Shafts and bushings",
+    "parametric",
+    "replicad",
+    "warehouse"
+  ],
+  "assets": {
+    "main": {
+      "entryPath": "main.ts",
+      "thumbnail": "thumbnail.webp"
+    }
+  }
+}

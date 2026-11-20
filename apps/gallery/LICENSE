@@ -1,0 +1,29 @@
+Gallery component licenses
+==========================
+
+The gallery contains components with separate licenses. The repository's
+Apache License 2.0 does not replace these component licenses.
+
+Gallery integration code outside src/runtime/classic follows the upstream
+Apache License 2.0, available in the repository's root license file and in the
+deployed site's /LICENSE file.
+
+The classic OpenSCAD compatibility adapter retains code from the original
+@taucad/openscad package, licensed GPL-2.0-or-later. Its license text and source
+provenance are in src/runtime/classic/LICENSE and src/runtime/classic/NOTICE.md.
+The unchanged openscad-wasm-prebuilt@1.2.0 engine also declares
+GPL-2.0-or-later and supplies its own COPYING file.
+
+The pinned Geist Regular and Bold font files use the SIL Open Font License 1.1.
+Their copyright and license are in src/runtime/classic/fonts/OFL.txt.
+
+Bundled model sources, assets and BOSL2 retain their own licenses and attribution
+under models/. Other dependencies retain the licenses supplied by their owners.
+
+The deployed gallery provides the OpenSCAD notices and license files at:
+  /licenses/openscad/NOTICE.md
+  /licenses/openscad/LICENSE
+  /licenses/openscad/ENGINE-COPYING.txt
+  /licenses/openscad/fonts/OFL.txt
+
+Source: https://github.com/ahzs645/tau/tree/main/apps/gallery

@@ -1,2 +1,12 @@
-export { useRender } from '#hooks/use-render.js';
-export type { UseRenderOptions, UseRenderResult, RenderStatus } from '#hooks/use-render.js';
+export { useRuntime } from '#hooks/use-runtime.js';
+export type {
+  RuntimeParameterRecord,
+  SetRuntimeParameters,
+  UseRuntimeClientOptionsProvider,
+  UseRuntimeExportModel,
+  UseRuntimeOptions,
+  UseRuntimeParameterOptions,
+  UseRuntimeResult,
+  UseRuntimeTransportPlugin,
+  UseRuntimeView,
+} from '#hooks/use-runtime.js';

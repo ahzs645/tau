@@ -4,32 +4,99 @@
  * Uses Zod for validation
  */
 import { z } from 'zod';
+import { isMachinesFeatureEnabled } from '@taucad/types/constants';
+import { cloudClientEnvironmentKeys, cloudEnvironmentShape } from '#cloud/environment-billing.js';
+import type { CloudBillingEnvironment } from '#cloud/environment-billing.types.js';
+import { isBuildReleaseLabel } from '#lib/build-identity.js';
+import { isDesktopTarget } from '#lib/build-target.js';
+
+type RawEnvironment = Record<string, string | undefined>;
+
+const toOriginOrRaw = (value: string | undefined): string | undefined => {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    return new URL(value).origin;
+  } catch {
+    return value;
+  }
+};
+
+/** The Netlify deploy contexts the error tracker's `deploy_context` tag names (browser observability SB1). */
+const deployContexts: ReadonlySet<string> = new Set(['production', 'deploy-preview', 'branch-deploy']);
+
+/**
+ * The Netlify deploy context this build was made for. Netlify sets `CONTEXT` for builds only, never for a
+ * Function at runtime, so the web build compiles it in (`tauBuildDeployContext`); a runtime `CONTEXT` (a
+ * local Netlify dev server) is read first. Anything else (`dev`, a non-Netlify host) is unset.
+ *
+ * @param rawEnvironment - The process environment.
+ * @returns `production`, `deploy-preview` or `branch-deploy`, or `undefined`.
+ */
+export const resolveDeployContext = (rawEnvironment: RawEnvironment): string | undefined => {
+  const context =
+    rawEnvironment['CONTEXT'] ?? (typeof tauBuildDeployContext === 'string' ? tauBuildDeployContext : undefined);
+  return context !== undefined && deployContexts.has(context) ? context : undefined;
+};
+
+export const resolveFrontendUrl = (rawEnvironment: RawEnvironment): string | undefined => {
+  if (rawEnvironment['TAU_FRONTEND_URL']) {
+    return rawEnvironment['TAU_FRONTEND_URL'];
+  }
+
+  if (rawEnvironment['PORTLESS_URL']) {
+    return rawEnvironment['PORTLESS_URL'];
+  }
+
+  if (rawEnvironment['NETLIFY'] !== 'true' || rawEnvironment['CONTEXT'] === 'production') {
+    return undefined;
+  }
+
+  return (
+    toOriginOrRaw(typeof tauBuildFrontendUrl === 'string' ? tauBuildFrontendUrl : undefined) ??
+    toOriginOrRaw(rawEnvironment['DEPLOY_PRIME_URL']) ??
+    toOriginOrRaw(rawEnvironment['DEPLOY_URL']) ??
+    toOriginOrRaw(rawEnvironment['NETLIFY_AI_GATEWAY_URL'])
+  );
+};
 
 // Define the schema for environment variables
 const environmentSchema = z.preprocess(
   (environment) => {
-    const rawEnvironment = environment as Record<string, string | undefined>;
-
-    // Extract base URL from NETLIFY_AI_GATEWAY_URL if TAU_FRONTEND_URL not set
-    // NETLIFY_AI_GATEWAY_URL format: https://deploy-preview-XX--site.netlify.app/.netlify/ai
-    let frontendUrl = rawEnvironment['TAU_FRONTEND_URL'];
-    if (!frontendUrl && rawEnvironment['NETLIFY_AI_GATEWAY_URL']) {
-      // Use URL constructor to reliably extract origin (protocol + host)
-      const url = new URL(rawEnvironment['NETLIFY_AI_GATEWAY_URL']);
-      frontendUrl = url.origin;
-    }
+    const rawEnvironment = environment as RawEnvironment;
+    const frontendUrl = resolveFrontendUrl(rawEnvironment);
 
     return {
       ...rawEnvironment,
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- environment variable name
+      /* eslint-disable @typescript-eslint/naming-convention -- environment variable names */
       TAU_FRONTEND_URL: frontendUrl,
+      TAU_DEPLOY_CONTEXT: resolveDeployContext(rawEnvironment),
+      /* A build product, not deployment configuration: the web build defines it for the server graph
+       * only, so client chunks keep stable hashes across rebuilds (`#lib/build-identity`). */
+      TAU_BUILD_ID: typeof tauBuildId === 'number' ? String(tauBuildId) : undefined,
+      /* The release label runtime telemetry stamps; a build product like `TAU_BUILD_ID`, server graph only. An
+       * unstamped web build holds a placeholder, which is not a label, and publishes none. */
+      TAU_RELEASE:
+        typeof tauBuildRelease === 'string' && isBuildReleaseLabel(tauBuildRelease) ? tauBuildRelease : undefined,
+      /* eslint-enable @typescript-eslint/naming-convention -- environment variable names */
     };
   },
   z.object({
     /* eslint-disable @typescript-eslint/naming-convention -- environment variables are not camelCase */
     TAU_API_URL: z.url(),
+    ...cloudEnvironmentShape,
     TAU_WEBSOCKET_URL: z.url().describe('WebSocket URL for the API (e.g., wss://api.tau.new or ws://localhost:4001)'),
     TAU_FRONTEND_URL: z.url(),
+    /** Ordered build identity for the stale-tab skew guard (blueprint DF20); set by the build, never the host. */
+    TAU_BUILD_ID: z.string().optional(),
+    /** The build's release label (short commit) for runtime telemetry; set by the build, never the host. */
+    TAU_RELEASE: z.string().optional(),
+    /** Netlify deploy context of the build (`resolveDeployContext`), the error tracker's `deploy_context` tag. */
+    TAU_DEPLOY_CONTEXT: z.enum(['production', 'deploy-preview', 'branch-deploy']).optional(),
+    /** Deployment opt-in while machine qualification is incomplete. Never a localStorage override. */
+    TAU_MACHINES_ENABLED: z.string().optional().transform(isMachinesFeatureEnabled),
     /**
      * Toggle in-app debug surfaces (per-route diagnostic panels, e2e
      * inspectors). Surfaced in the React tree via the `tauDebug` feature
@@ -43,29 +110,34 @@ const environmentSchema = z.preprocess(
       .transform((value) => (value === undefined ? false : /^(1|true)$/i.test(value)))
       .describe('Enable in-app debug surfaces (debug panel, inspectors). Default false.'),
     /**
-     * Disable "code mode": hide the Monaco code editor (and its toggles) so
-     * Tau runs as a parameter / viewer-only experience suitable for kiosk and
-     * gallery deployments. Surfaced in the React tree via the
-     * `disableCodeEditor` feature flag (`#flags/feature-flags.ts`). Accepts the
-     * canonical truthy strings `'1'` and `'true'` (case-insensitive) — anything
-     * else resolves to `false`.
+     * Let *Connect* accept a private or loopback `http://` git address (P50).
+     *
+     * A test posture, and only for the two rules a local git http-backend
+     * breaks: a credential in the address and a non-git path stay refused. The
+     * API reads a value of the same name for its own half of the proxy rule —
+     * each host passes what its own deployment allows, and nothing about the
+     * posture travels over the wire. Accepts `'1'`/`'true'`; anything else is
+     * `false`.
      */
-    TAU_DISABLE_CODE_EDITOR: z
+    TAU_GIT_REMOTE_ALLOW_PRIVATE: z
       .string()
       .optional()
       .transform((value) => (value === undefined ? false : /^(1|true)$/i.test(value)))
-      .describe('Disable the in-app code editor (kiosk / viewer-only mode). Default false.'),
+      .describe('Accept private/loopback http git remotes in Connect. Default false.'),
     /**
-     * Enable project-creation entry points. Disabled by default so gallery /
-     * viewer deployments do not invite users into unavailable creation flows.
+     * The managed acquisition profile (`TAU_ACQUISITION`). `locked` keeps the editor's type acquisition to the static
+     * types, with no request. Only unset, empty or `open` is `open`; any other value is `locked`, so a typo never
+     * opens the network.
      */
-    TAU_ENABLE_PROJECT_CREATION: z
+    TAU_ACQUISITION: z
       .string()
       .optional()
-      .transform((value) => (value === undefined ? false : /^(1|true)$/i.test(value)))
-      .describe('Enable project creation entry points. Default false.'),
+      .transform((value): 'open' | 'locked' => {
+        const trimmed = value?.trim() ?? '';
+        return trimmed === '' || trimmed === 'open' ? 'open' : 'locked';
+      })
+      .describe('Managed acquisition profile: open (default) or locked (no CDN type acquisition).'),
     NODE_ENV: z.enum(['development', 'production', 'test']),
-    GITHUB_API_TOKEN: z.string().optional().describe('GitHub API token for the GitHub API client.'),
 
     // PostHog Analytics
     POSTHOG_API_HOST: z.string().default('https://us.i.posthog.com').describe('PostHog host for the PostHog client.'),
@@ -75,12 +147,18 @@ const environmentSchema = z.preprocess(
       .default('us-assets.i.posthog.com')
       .describe('PostHog asset host for the PostHog client.'),
     POSTHOG_CLIENT_KEY: z.string().optional().describe('PostHog client key. Set to enable analytics.'),
+
+    // Sentry error reporting (launch gate OBS-7). Written to the Netlify site by tau-cloud; a DSN is public by design.
+    SENTRY_DSN: z.string().optional().describe('Sentry DSN for browser error reporting. Set to enable it.'),
+    SENTRY_ENVIRONMENT: z.string().optional().describe('Sentry environment name, such as staging or production.'),
     /* eslint-enable @typescript-eslint/naming-convention -- environment variables are not camelCase */
   }),
 );
 
-export const getEnvironment = async (): Promise<Environment> => {
-  const result = environmentSchema.safeParse(process.env);
+export type Environment = z.infer<typeof environmentSchema> & CloudBillingEnvironment;
+
+const parseEnvironment = (rawEnvironment: RawEnvironment): Environment => {
+  const result = environmentSchema.safeParse(rawEnvironment);
 
   if (!result.success) {
     const formattedError = z.treeifyError(result.error).properties;
@@ -92,9 +170,115 @@ export const getEnvironment = async (): Promise<Environment> => {
   return result.data;
 };
 
-export type Environment = z.infer<typeof environmentSchema>;
+export const getEnvironment = async (): Promise<Environment> => parseEnvironment(process.env);
+
+/**
+ * Keys serialised into `window.ENV` and shipped to every visitor in page
+ * source. Add a key only if it is safe to publish (public URLs, publishable
+ * keys, feature flags). Everything else stays server-only and is read through
+ * `getEnvironment()`.
+ */
+const baseClientEnvironmentKeys = [
+  'TAU_API_URL',
+  'TAU_WEBSOCKET_URL',
+  'TAU_FRONTEND_URL',
+  'TAU_BUILD_ID',
+  'TAU_RELEASE',
+  'TAU_DEPLOY_CONTEXT',
+  'TAU_DEBUG',
+  'TAU_MACHINES_ENABLED',
+  'TAU_GIT_REMOTE_ALLOW_PRIVATE',
+  'TAU_ACQUISITION',
+  'NODE_ENV',
+  'POSTHOG_API_HOST',
+  'POSTHOG_UI_HOST',
+  'POSTHOG_ASSET_HOST',
+  'POSTHOG_CLIENT_KEY',
+  'SENTRY_DSN',
+  'SENTRY_ENVIRONMENT',
+] as const satisfies ReadonlyArray<keyof Environment>;
+const clientEnvironmentKeys = [...baseClientEnvironmentKeys, ...cloudClientEnvironmentKeys] as const;
+
+export type ClientEnvironment = Pick<
+  Environment,
+  (typeof baseClientEnvironmentKeys)[number] | keyof CloudBillingEnvironment
+>;
+
+const selectClientEnvironment = (environment: Environment): Partial<ClientEnvironment> => {
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- fromEntries cannot retain tuple-key completeness.
+  return Object.fromEntries(clientEnvironmentKeys.map((key) => [key, environment[key]])) as Partial<ClientEnvironment>;
+};
+
+/**
+ * The allowlisted subset safe to inject into the document. Use this — never
+ * `getEnvironment()` — for anything that reaches a loader's return value.
+ */
+export const getClientEnvironment = async (): Promise<Partial<ClientEnvironment>> =>
+  selectClientEnvironment(await getEnvironment());
+
+/**
+ * Isomorphic environment access, narrowed to the client-safe allowlist so a
+ * server-only key cannot be read from code that also runs in the browser.
+ * Server-only code reads the full environment via `getEnvironment()`.
+ *
+ * Any host that sets `window.ENV` before app-module evaluation is a valid
+ * environment producer. The injected object may be partial when loader data
+ * is unavailable; consumers of required values must fail explicitly.
+ */
+const resolveIsomorphicClientEnvironment = (): Partial<ClientEnvironment> => {
+  // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- globalThis.window is absent during SSR.
+  if (globalThis.window) {
+    return globalThis.window.ENV ?? {};
+  }
+
+  /* Desktop SPA generation runs in Node before preload injects window.ENV,
+   * but remains an unbootstrapped client, not a web server. A Web Worker has
+   * neither `window` nor `process`: it is a client without a
+   * document, not a server. Treating "no window" as "node" dereferenced
+   * `process.env` and threw, which is how one `ENV.TAU_DEBUG` read inside the
+   * agent-host worker abandoned a queued capture job for 900 s
+   * (`agent-host-transports-and-offline.md` § "Addendum: FIX-SCREENSHOT",
+   * defect 1). A worker gets the same empty environment SSR would get from an
+   * absent injection: `requireClientEnvironment` still names the missing key. */
+  // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- globalThis.process is absent in a worker.
+  if (!globalThis.process || isDesktopTarget()) {
+    return {};
+  }
+
+  return selectClientEnvironment(parseEnvironment(globalThis.process.env));
+};
+
+/** Resolve one required host-injected value at the point it is used. */
+export const requireClientEnvironment = <Key extends keyof ClientEnvironment>(
+  key: Key,
+): NonNullable<ClientEnvironment[Key]> => {
+  const value = resolveIsomorphicClientEnvironment()[key];
+  if (value === undefined) {
+    throw new Error(`Missing ${key}: the host must inject it through window.ENV before app-module evaluation.`);
+  }
+  return value;
+};
+
+/** Resolve a required client base URL without its optional trailing slash. */
+export const requireClientEnvironmentUrl = (key: 'TAU_API_URL' | 'TAU_WEBSOCKET_URL'): string =>
+  requireClientEnvironment(key).replace(/\/$/u, '');
+
+const createEnvironmentFacade = (): ClientEnvironment => {
+  const facade = {};
+  for (const key of clientEnvironmentKeys) {
+    Object.defineProperty(facade, key, {
+      enumerable: true,
+      get: () => {
+        if (key === 'TAU_API_URL' || key === 'TAU_WEBSOCKET_URL') {
+          return requireClientEnvironmentUrl(key);
+        }
+        return resolveIsomorphicClientEnvironment()[key];
+      },
+    });
+  }
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- every ClientEnvironment key is defined above.
+  return facade as ClientEnvironment;
+};
 
 // eslint-disable-next-line @typescript-eslint/naming-convention -- easier to distinguish this constant with UPPER_CASE.
-export const ENV =
-  // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- globalThis.window can be undefined in SSR
-  globalThis.window ? globalThis.window.ENV : globalThis.process.env;
+export const ENV = createEnvironmentFacade();

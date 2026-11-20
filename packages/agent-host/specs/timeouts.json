@@ -1,0 +1,1383 @@
+{
+  "scan": [
+    "packages/agent-host/src",
+    "packages/rpc/src",
+    "packages/revisions/src",
+    "packages/host/src",
+    "libs/shell-service/src",
+    "packages/cli/src",
+    "apps/desktop/src/main/main.ts",
+    "apps/desktop/src/main/services-broker.ts",
+    "apps/libs/desktop-services-host/src",
+    "apps/libs/desktop-terminal/src",
+    "apps/ui/app/workers/agent-host.impl.ts",
+    "apps/ui/app/workers/agent-host.worker.ts",
+    "apps/ui/app/services",
+    "apps/ui/app/lib/agent-host-placement.ts",
+    "apps/ui/app/chat-clients",
+    "apps/libs/revisions-ui/src/hooks/use-revision-status.ts",
+    "apps/ui/app/machines/file-manager.worker.revisions.ts",
+    "apps/ui/app/machines/file-manager.machine.ts",
+    "apps/ui/app/workers/agent-host-projects.ts",
+    "apps/libs/lsp-fs/src/sync/sync-fs-server.ts"
+  ],
+  "rows": [
+    {
+      "id": "STORAGE-LFS-RETRY",
+      "bound": "Abortable LFS transfer recovery backoff: 200 ms then 400 ms, at most three attempts per object",
+      "site": "packages/revisions/src/lfs-client.ts",
+      "token": "signal?.removeEventListener('abort', abort)",
+      "class": "Backoff",
+      "owner": "storage-gateway W15"
+    },
+    {
+      "id": "STORAGE-LFS-STALL",
+      "bound": "LFS transfer no-progress stall: a download that receives no bytes for 60 s (lfsTransferStallMilliseconds, transferStallMilliseconds) is aborted; it restarts on every chunk",
+      "site": "packages/revisions/src/lfs-client.ts",
+      "token": "No bytes arrived for",
+      "class": "Liveness",
+      "owner": "viewer-first open W4 (D9, I10)"
+    },
+    {
+      "id": "STORAGE-FILL-STALL",
+      "bound": "Large-object fill waiter stall: a wait given a stall answers false once that many milliseconds pass with nothing arriving, flushed or told; it restarts on every wake",
+      "site": "packages/revisions/src/large-object-fill.ts",
+      "token": "stalled = setTimeout(",
+      "class": "Liveness",
+      "owner": "viewer-first open W4 (D9, I10)"
+    },
+    {
+      "id": "STORAGE-PENDING-ARRIVAL",
+      "bound": "Pending read arrival wait: the caller's wait, capped at the 60 s materialize stall (defaultStallMilliseconds); on expiry the read answers without the object",
+      "site": "packages/revisions/src/open/content-reads.ts",
+      "token": "arrivalTimeout = AbortSignal.timeout(wait)",
+      "class": "Liveness",
+      "owner": "viewer-first open W4 (D9, I10)"
+    },
+    {
+      "id": "STORAGE-HTTP-RETRY",
+      "bound": "Abortable Tau git HTTP client retry wait: a 429, or a 503 that names Retry-After, waits Retry-After plus up to 1 s of jitter (without one, 0.5 to 1 s doubling); a wait over 10 s is not taken, at most four attempts per request",
+      "site": "packages/revisions/src/http-client.ts",
+      "token": "signal?.removeEventListener('abort', abort)",
+      "class": "Backoff",
+      "owner": "Hosted Remote Storage DA6"
+    },
+    {
+      "id": "STORAGE-PROCESS-CLEANUP",
+      "bound": "Windows taskkill process-tree cleanup, 1 second inside the close persistence margin; failure is reported",
+      "site": "packages/revisions/src/git-command.ts",
+      "token": "spawnSync('taskkill'",
+      "class": "External edge",
+      "owner": "storage-gateway W15"
+    },
+    {
+      "id": "STORAGE-CLOSE-GRACE",
+      "bound": "Cancel owned network transports after 10 seconds of close grace; local reconciliation is not cancelled",
+      "site": "packages/revisions/src/revision-effects.ts",
+      "token": "const cancel = setTimeout(",
+      "class": "External edge",
+      "owner": "storage-gateway W15"
+    },
+    {
+      "id": "STORAGE-LOCAL-CUT",
+      "bound": "Existing pre-merge checkout cut wait, 10 seconds; separated from the longer network budget",
+      "site": "packages/revisions/src/sync.machine.ts",
+      "token": "mintDeadline:",
+      "class": "Peer",
+      "owner": "revisions W5",
+      "fixedBy": "revisions W5 follow-up: answer-only local pre-merge cut settlement (existing correlated cut wait, previously covered by A9)"
+    },
+    {
+      "id": "A3",
+      "bound": "Checkout idle window",
+      "site": "packages/revisions/src/checkout.machine.ts",
+      "token": "idleWindow",
+      "class": "Debounce",
+      "owner": "W5"
+    },
+    {
+      "id": "REVISIONS-MINT-FLOOR",
+      "bound": "Floor between a checkout's published mints, 1 second (D11); requests queue meanwhile, and close and hidden cuts skip it",
+      "site": "packages/revisions/src/checkout.machine.ts",
+      "token": "mintFloor",
+      "class": "Debounce",
+      "owner": "filesystem redesign W6.4"
+    },
+    {
+      "id": "REVISIONS-GIT-WAIT",
+      "bound": "Re-probe while the person's own Git operation holds the checkout (a rebase, merge, cherry-pick or held index.lock), every 2 seconds; the save waits and resumes when it ends, and nothing times out",
+      "site": "packages/revisions/src/checkout.machine.ts",
+      "token": "waitWindow",
+      "class": "Debounce",
+      "owner": "Terminal git access TG4"
+    },
+    {
+      "id": "A8",
+      "bound": "Pull render window",
+      "site": "packages/revisions/src/sync.machine.ts",
+      "token": "pullRenderWindow",
+      "class": "Presentation",
+      "owner": "W5"
+    },
+    {
+      "id": "A9",
+      "bound": "Active background pull budget, 15 minutes; local render remains 3 seconds",
+      "site": "packages/revisions/src/sync.machine.ts",
+      "token": "pullDeadline",
+      "class": "External edge",
+      "owner": "W5"
+    },
+    {
+      "id": "A10",
+      "bound": "Sync debounce",
+      "site": "packages/revisions/src/sync.machine.ts",
+      "token": "syncDebounce",
+      "class": "Debounce",
+      "owner": "W5"
+    },
+    {
+      "id": "A10P",
+      "bound": "Run heartbeat: a live run (admitted, running, or paused and held by an open incarnation) whose chat went a minute without a row writes a run.heartbeat and asks the placement to publish the chat's ref, so another device's run fence sees it alive (XD3)",
+      "site": "packages/agent-host/src/host/tau-agent-host.ts",
+      "token": "runHeartbeatMilliseconds",
+      "class": "Debounce",
+      "owner": "XD3"
+    },
+    {
+      "id": "SEGMENT-REFRESH",
+      "bound": "An admission (a start, a Resume or an approval) waits at most ten seconds to read the other devices' segments, then is refused SEGMENTS_UNREADABLE (wait) and releases the chat's dispatch turn, instead of running on a fence it could not check or holding the commands behind it",
+      "site": "packages/agent-host/src/host/tau-agent-host.ts",
+      "token": "segmentRefreshMilliseconds",
+      "class": "Liveness",
+      "owner": "XD3"
+    },
+    {
+      "id": "SEGMENT-OPEN",
+      "bound": "Opening a chat log waits at most ten seconds for its first read of the other devices' segments, then opens with them unread (SEGMENTS_UNREADABLE at admission) and applies the read whenever it ends; every segment read runs outside the log's write queue, so a read that never returns holds no append, Stop or denial (round 27); a refresh queued behind a read begins its own read once that read has run past the same bound, so a hung read never holds the history and at most two reads are outstanding (tau #1098)",
+      "site": "packages/agent-host/src/log/event-log-appender.ts",
+      "token": "segmentRefreshMilliseconds",
+      "class": "Liveness",
+      "owner": "XD3"
+    },
+    {
+      "id": "CHAT-CLOSING-WAIT",
+      "bound": "A command that reaches a chat whose incarnation is closing waits at most ten seconds for its log to close, then is refused WRITER_LOCKED (wait)",
+      "site": "packages/agent-host/src/host/chat-run-registry.ts",
+      "token": "chatClosingWaitMilliseconds",
+      "class": "Liveness",
+      "owner": "XD3"
+    },
+    {
+      "id": "XD4-OPEN",
+      "bound": "Turn placement waits at most thirty seconds for a branch's checkout to open on this device, then refuses REVISIONS_UNAVAILABLE (wait) (XD4)",
+      "site": "packages/revisions/src/turn-placement.ts",
+      "token": "checkoutOpenMilliseconds",
+      "class": "External edge",
+      "owner": "XD4"
+    },
+    {
+      "id": "REVISIONS-REMOTE-READ-RETRY",
+      "bound": "A failed remotes read is asked again after 1 second, doubling to at most 60 seconds, until it settles on no remote or a connected one; the failure and its reason show meanwhile (tau #1098)",
+      "site": "packages/revisions/src/remote.machine.ts",
+      "token": "remoteReadRetry",
+      "class": "Backoff",
+      "owner": "W41"
+    },
+    {
+      "id": "A11",
+      "bound": "Sync backoff",
+      "site": "packages/revisions/src/sync.machine.ts",
+      "token": "syncBackoff",
+      "class": "Backoff",
+      "owner": "W5"
+    },
+    {
+      "id": "A12",
+      "bound": "Active background push budget, 15 minutes; close has its own shorter cancellation bound",
+      "site": "packages/revisions/src/sync.machine.ts",
+      "token": "pushDeadline",
+      "class": "External edge",
+      "owner": "W5"
+    },
+    {
+      "id": "A13",
+      "bound": "Git command deadline: local plumbing 30 seconds; explicit fetch/push and LFS operations 15 minutes",
+      "site": "packages/revisions/src/git-command.ts",
+      "token": "stop('deadline')",
+      "class": "External edge",
+      "owner": "W5"
+    },
+    {
+      "id": "B2",
+      "bound": "Sync quiesce at close, 12 seconds; refusal unless remote persistence or durable local retry is confirmed",
+      "site": "packages/revisions/src/revision-effects.ts",
+      "token": "timeoutMilliseconds",
+      "class": "External edge",
+      "owner": "W8"
+    },
+    {
+      "id": "B8",
+      "bound": "Cut wait at close (awaitCheckoutCuts), the `hidden` cut only (closeCutMilliseconds): the page may be frozen after `pagehide`; `save` and `close` are answered by request id",
+      "site": "packages/revisions/src/revision-effects.ts",
+      "token": "trigger === 'hidden' ? closeCutMilliseconds",
+      "class": "External edge",
+      "owner": "W8"
+    },
+    {
+      "id": "B9",
+      "bound": "Desktop quit hold",
+      "site": "apps/desktop/src/main/main.ts",
+      "token": "settle('timeout')",
+      "class": "External edge",
+      "owner": "W8"
+    },
+    {
+      "id": "B11",
+      "bound": "GitHub credential renewal",
+      "site": "apps/libs/revisions-ui/src/hooks/use-revision-status.ts",
+      "token": "lease.timer = undefined",
+      "class": "External edge",
+      "owner": "W8"
+    },
+    {
+      "id": "B12",
+      "bound": "Desktop agent-host release",
+      "site": "apps/desktop/src/main/services-broker.ts",
+      "token": "release timed out",
+      "class": "External edge",
+      "owner": "W6"
+    },
+    {
+      "id": "B13",
+      "bound": "Desktop utility quiescence",
+      "site": "apps/desktop/src/main/services-broker.ts",
+      "token": "settleQuiescence?.({ status: 'timeout' })",
+      "class": "External edge",
+      "owner": "W6"
+    },
+    {
+      "id": "B14",
+      "bound": "Runtime-port request to main",
+      "site": "apps/libs/desktop-services-host/src/services-host.ts",
+      "token": "runtimePortTimeout",
+      "class": "Peer",
+      "owner": "W6",
+      "fixedBy": "W6"
+    },
+    {
+      "id": "B14G",
+      "bound": "Geometry-runner port request to main (10 s)",
+      "site": "apps/libs/desktop-services-host/src/services-host.ts",
+      "token": "geometryPortTimeout",
+      "class": "Peer",
+      "owner": "desktop geometry broker",
+      "fixedBy": "outside this charter: desktop geometry broker owner"
+    },
+    {
+      "id": "B14I",
+      "bound": "Desktop agent-tool runtime client idle retirement (120 s with no tool call or open document)",
+      "site": "apps/libs/desktop-services-host/src/idle-runtime-clients.ts",
+      "token": "entry.timer = setTimeout(",
+      "class": "Debounce",
+      "owner": "desktop memory"
+    },
+    {
+      "id": "B15",
+      "bound": "Agent-host configuration from main",
+      "site": "apps/libs/desktop-services-host/src/services-host.impl.ts",
+      "token": "agentHostConfigTimeout",
+      "class": "Peer",
+      "owner": "W6",
+      "fixedBy": "W6"
+    },
+    {
+      "id": "IMPORT-GRANT-WAIT",
+      "bound": "Desktop import grant not yet seen by the services utility (2 s): main mints it and sends it on another channel just before the renderer's request can arrive",
+      "site": "apps/libs/desktop-services-host/src/services-host.impl.ts",
+      "token": "setTimeout(wake, Math.max(0, deadline - Date.now()))",
+      "class": "Peer",
+      "owner": "W7.4",
+      "fixedBy": "outside this charter: desktop import grant delivery (a grant carried with the port request would remove the wait)"
+    },
+    {
+      "id": "TRUSTED-ROOT-SETTLE",
+      "bound": "A kernel or agent-host port request naming an admitted root by a spelling not matched yet waits for the background realpath of the admitted roots (2 s), then is refused; requests for other roots never wait on it",
+      "site": "apps/libs/desktop-services-host/src/services-host.impl.ts",
+      "token": "setTimeout(resolve, trustedRootSettleMilliseconds)",
+      "class": "External edge",
+      "owner": "desktop resilient startup WP1"
+    },
+    {
+      "id": "B18",
+      "bound": "Geometry-runner port request to main (10 s)",
+      "site": "apps/libs/desktop-services-host/src/services-host.ts",
+      "token": "geometryPortTimeout",
+      "class": "Peer",
+      "owner": "GM",
+      "fixedBy": "outside this charter: desktop geometry-runner port ceremony"
+    },
+    {
+      "id": "B19",
+      "bound": "Desktop update feed request (30 s): one update check runs at a time, so a feed request that never settles would stop every later check",
+      "site": "apps/desktop/src/main/main.ts",
+      "token": "AbortSignal.timeout(30_000)",
+      "class": "External edge",
+      "owner": "desktop updater"
+    },
+    {
+      "id": "B20",
+      "bound": "Desktop first-window reveal (15 s): a window whose first page has not painted is shown as it is, so a load that never finishes still leaves a visible window and its menu (B17)",
+      "site": "apps/desktop/src/main/main.ts",
+      "token": "setTimeout(reveal, windowRevealMilliseconds)",
+      "class": "Presentation",
+      "owner": "desktop boot"
+    },
+    {
+      "id": "B21",
+      "bound": "Desktop boot watchdog (R12): no shell-mounted 45 s after the window loaded offers the recovery window beside the app, and the 60 s launch deadline marks the boot-health record; suspend and resume restart both deadlines (boot-watchdog.ts bootDeadlines)",
+      "site": "apps/desktop/src/main/main.ts",
+      "token": "setTimeout: (callback, milliseconds) => setTimeout(callback, milliseconds),",
+      "class": "Liveness",
+      "owner": "desktop boot"
+    },
+    {
+      "id": "B22",
+      "bound": "Desktop renderer hang rule (B24, 30 s): a window unresponsive this long is reported while it lasts and the person is offered Wait, Reload or Restart in Safe Mode; Wait asks again after another 30 s, and a page that answers first closes the choice (diagnostics.ts rendererHangOfferMilliseconds)",
+      "site": "apps/desktop/src/main/main.ts",
+      "token": "setTimeout: (offerHangChoice, milliseconds) => setTimeout(offerHangChoice, milliseconds),",
+      "class": "Liveness",
+      "owner": "desktop boot"
+    },
+    {
+      "id": "C1",
+      "bound": "Leader heartbeat (M2 leading)",
+      "site": "packages/agent-host/src/launchers/leadership/leadership.machine.ts",
+      "token": "heartbeatInterval: refines",
+      "class": "Liveness",
+      "owner": "W6"
+    },
+    {
+      "id": "C2",
+      "bound": "Follower liveness: an unheard holder (M2 following.unheard)",
+      "site": "packages/agent-host/src/launchers/leadership/leadership.machine.ts",
+      "token": "heartbeatTimeout: refines('TimeOut'",
+      "class": "Liveness",
+      "owner": "W6"
+    },
+    {
+      "id": "C4",
+      "bound": "Forwarded command, re-armed per addressed epoch and once for frozen time (M2 following.alive)",
+      "site": "packages/agent-host/src/launchers/leadership/leadership.machine.ts",
+      "token": "heartbeatTimeout: refines('Unmodelled'",
+      "class": "Liveness",
+      "owner": "W6"
+    },
+    {
+      "id": "C9",
+      "bound": "A claim's reread of the log (M2 claiming): pending writes answered PEER_UNRESPONSIVE",
+      "site": "packages/agent-host/src/launchers/leadership/leadership.machine.ts",
+      "token": "claimBound: refines",
+      "class": "Liveness",
+      "owner": "W6"
+    },
+    {
+      "id": "C10",
+      "bound": "A write queued behind a silent or frozen holder (M2 following.silent): WRITER_LOCKED on OPFS, else PEER_UNRESPONSIVE",
+      "site": "packages/agent-host/src/launchers/leadership/leadership.machine.ts",
+      "token": "queuedWriteBound: refines",
+      "class": "Liveness",
+      "owner": "W6"
+    },
+    {
+      "id": "C5",
+      "bound": "WRITER_LOCKED backoff before queuing again (M2 idle.backoff)",
+      "site": "packages/agent-host/src/launchers/leadership/leadership.machine.ts",
+      "token": "recoveryDelay: refines",
+      "class": "Backoff",
+      "owner": "W6"
+    },
+    {
+      "id": "C8",
+      "bound": "Forwarded read window served for another tab",
+      "site": "packages/agent-host/src/browser/leadership.ts",
+      "token": "forwardedReadBound",
+      "class": "Liveness",
+      "owner": "W6"
+    },
+    {
+      "id": "E1",
+      "bound": "rpc hello",
+      "site": "packages/rpc/src/channel.ts",
+      "token": "defaultHelloTimeout",
+      "class": "Liveness",
+      "owner": "W4"
+    },
+    {
+      "id": "E2",
+      "bound": "rpc close",
+      "site": "packages/rpc/src/channel.ts",
+      "token": "closeHandshakeTimeout",
+      "class": "Liveness",
+      "owner": "W4"
+    },
+    {
+      "id": "E3",
+      "bound": "rpc keepalive",
+      "site": "packages/rpc/src/channel.ts",
+      "token": "keepaliveInterval",
+      "class": "Liveness",
+      "owner": "W4"
+    },
+    {
+      "id": "E3b",
+      "bound": "rpc keepalive, worker owner (1 s)",
+      "site": "apps/ui/app/workers/agent-host.worker.ts",
+      "token": "keepaliveInterval",
+      "class": "Liveness",
+      "owner": "W4"
+    },
+    {
+      "id": "E3c",
+      "bound": "rpc keepalive, daemon owner (2 s)",
+      "site": "packages/agent-host/src/launchers/agent-channel.ts",
+      "token": "defaultKeepaliveInterval",
+      "class": "Liveness",
+      "owner": "W4"
+    },
+    {
+      "id": "E4",
+      "bound": "rpc liveness",
+      "site": "packages/rpc/src/channel.ts",
+      "token": "livenessBound",
+      "class": "Liveness",
+      "owner": "W4"
+    },
+    {
+      "id": "E4b",
+      "bound": "rpc liveness, page to worker (3.5 s)",
+      "site": "apps/ui/app/services/agent-host-client.ts",
+      "token": "workerLivenessTimeout",
+      "class": "Liveness",
+      "owner": "W4"
+    },
+    {
+      "id": "E4c",
+      "bound": "rpc liveness, page to daemon (10 s)",
+      "site": "apps/ui/app/lib/agent-host-placement.ts",
+      "token": "daemonLivenessTimeout",
+      "class": "Liveness",
+      "owner": "W4"
+    },
+    {
+      "id": "E4d",
+      "bound": "rpc liveness, CLI to daemon (10 s)",
+      "site": "packages/cli/src/commands/agent/client.ts",
+      "token": "livenessTimeout",
+      "class": "Liveness",
+      "owner": "W4"
+    },
+    {
+      "id": "E3d",
+      "bound": "rpc keepalive, each agent-wire stream of a browser project host (1 s)",
+      "site": "apps/ui/app/workers/agent-host.impl.ts",
+      "token": "keepaliveInterval",
+      "class": "Liveness",
+      "owner": "W6"
+    },
+    {
+      "id": "E4e",
+      "bound": "rpc liveness, page to each agent-wire stream of the resident worker (3.5 s, the control channel's bound)",
+      "site": "apps/ui/app/services/agent-host-client.ts",
+      "token": "livenessTimeout: workerLivenessTimeout,\n    sessionKey: `agent-host:${projectId}`",
+      "class": "Liveness",
+      "owner": "W6"
+    },
+    {
+      "id": "E4f",
+      "bound": "File-manager worker restart window (3.5 s): a root mount restarts a dead worker once; a second death within it shows the error (RV1-F1)",
+      "site": "apps/ui/app/machines/file-manager.machine.ts",
+      "token": "restartWindow",
+      "class": "Liveness",
+      "owner": "W6"
+    },
+    {
+      "id": "FS-START-DEADLINE",
+      "bound": "File service start deadline (20 s, fileManagerStartDeadlineMilliseconds): connecting the worker and initializing its services each end in the error state with code START_DEADLINE when it passes",
+      "site": "apps/ui/app/machines/file-manager.machine.ts",
+      "token": "startDeadline",
+      "class": "Liveness",
+      "owner": "desktop resilient startup WP2 (B31)"
+    },
+    {
+      "id": "FS-TRANSIENT-RETRY",
+      "bound": "One automatic retry of a transient root-mount start failure after 1 s; a second failure waits for the person",
+      "site": "apps/ui/app/machines/file-manager.machine.ts",
+      "token": "transientRetry",
+      "class": "Backoff",
+      "owner": "desktop resilient startup WP2 (D3)"
+    },
+    {
+      "id": "FS-ROOT-RECHECK",
+      "bound": "Roots that are not found, need access or do not answer are probed again every 30 s while the page is visible, and on window focus; a probe only re-reads",
+      "site": "apps/ui/app/machines/file-manager.machine.ts",
+      "token": "rootRecheckIntervalMilliseconds",
+      "class": "Liveness",
+      "owner": "desktop resilient startup WP4 (B2, R4)"
+    },
+    {
+      "id": "E5",
+      "bound": "Socket open",
+      "site": "apps/ui/app/lib/agent-host-placement.ts",
+      "token": "settle(new Error('The agent host did not answer in time.'))",
+      "class": "External edge",
+      "owner": "W4"
+    },
+    {
+      "id": "E7",
+      "bound": "Daemon redial, shared by every agent channel client",
+      "site": "packages/agent-host/src/channel/agent-channel-client.ts",
+      "token": "redialTimer",
+      "class": "Backoff",
+      "owner": "W4"
+    },
+    {
+      "id": "E11",
+      "bound": "Host socket open",
+      "site": "packages/host/src/host-daemon.ts",
+      "token": "socketOpenTimeout",
+      "class": "External edge",
+      "owner": "W6"
+    },
+    {
+      "id": "E12",
+      "bound": "Host reconnect cap",
+      "site": "packages/host/src/host-daemon.ts",
+      "token": "reconnectDelayMaximum",
+      "class": "Backoff",
+      "owner": "W6"
+    },
+    {
+      "id": "E13",
+      "bound": "ACP session/close",
+      "site": "packages/host/src/acp/acp-session.machine.ts",
+      "token": "sessionCloseTimeout",
+      "class": "External edge",
+      "owner": "W10"
+    },
+    {
+      "id": "E14",
+      "bound": "Watch coalesce",
+      "site": "packages/host/src/revisions.ts",
+      "token": "coalescing = undefined",
+      "class": "Debounce",
+      "owner": "W8"
+    },
+    {
+      "id": "E16",
+      "bound": "ACP adapter start: spawn, skill publication and initialize",
+      "site": "packages/host/src/acp/acp-session.machine.ts",
+      "token": "acpStartTimeout",
+      "class": "External edge",
+      "owner": "W10"
+    },
+    {
+      "id": "E17",
+      "bound": "ACP SIGTERM to SIGKILL of the adapter's process group",
+      "site": "packages/host/src/acp/acp-session.machine.ts",
+      "token": "acpKillGrace",
+      "class": "External edge",
+      "owner": "W10"
+    },
+    {
+      "id": "E18",
+      "bound": "ACP terminating backstop; kills the group again before it ends the state",
+      "site": "packages/host/src/acp/acp-session.machine.ts",
+      "token": "acpTerminateBackstop",
+      "class": "External edge (backstop)",
+      "owner": "W10"
+    },
+    {
+      "id": "E19",
+      "bound": "ACP idle session",
+      "site": "packages/host/src/acp/acp-sessions.machine.ts",
+      "token": "idleTimeout",
+      "class": "Debounce",
+      "owner": "W10"
+    },
+    {
+      "id": "E20",
+      "bound": "MCP binding lease ceiling past capability expiry",
+      "site": "packages/host/src/mcp-server.ts",
+      "token": "hostMcpLeaseCeiling",
+      "class": "External edge",
+      "owner": "W10"
+    },
+    {
+      "id": "E22",
+      "bound": "ACP cancel settlement",
+      "site": "packages/host/src/acp/acp-session.machine.ts",
+      "token": "acpCancelSettleTimeout",
+      "class": "External edge",
+      "owner": "W10"
+    },
+    {
+      "id": "E23",
+      "bound": "ACP text checkpoint",
+      "site": "packages/host/src/acp/session.ts",
+      "token": "textIdleFlushDelay",
+      "class": "Debounce",
+      "owner": "W10"
+    },
+    {
+      "id": "RUNTIME-OBS-CHILD-RESIDENT",
+      "bound": "Native worker resident-memory sample answer: 1 s, then the sample reports none",
+      "site": "packages/host/src/runtime-child-workers.ts",
+      "token": "sampleAnswerTimeout",
+      "class": "External edge",
+      "owner": "Runtime Observability PR-1c"
+    },
+    {
+      "id": "E24",
+      "bound": "ACP CLI version probe",
+      "site": "packages/host/src/acp/registry.ts",
+      "token": "acpCliProbeTimeout",
+      "class": "External edge",
+      "owner": "W10"
+    },
+    {
+      "id": "E25",
+      "bound": "ACP model probe",
+      "site": "packages/host/src/acp/registry.ts",
+      "token": "modelProbeTimeout",
+      "class": "External edge",
+      "owner": "W10"
+    },
+    {
+      "id": "ACP-MODEL-LIST-GRACE",
+      "bound": "ACP model probe's wait for an agent's pushed model list after session/new, 1 s within the model probe's deadline; only for a profile that declares it, and expiry keeps the answered list",
+      "site": "packages/host/src/acp/registry.ts",
+      "token": "modelListGrace",
+      "class": "External edge",
+      "owner": "W10"
+    },
+    {
+      "id": "E26",
+      "bound": "Relay session lifetime",
+      "site": "packages/host/src/host-daemon.ts",
+      "token": "remainingLifetime",
+      "class": "External edge",
+      "owner": "W6"
+    },
+    {
+      "id": "E27",
+      "bound": "Agent server socket close grace",
+      "site": "packages/host/src/agent-server.ts",
+      "token": "closeGrace",
+      "class": "External edge",
+      "owner": "W6"
+    },
+    {
+      "id": "E28",
+      "bound": "Relay socket close grace",
+      "site": "packages/host/src/frame-splice.ts",
+      "token": "closeTimer",
+      "class": "External edge",
+      "owner": "W6"
+    },
+    {
+      "id": "E29",
+      "bound": "rpc bridge call",
+      "site": "packages/rpc/src/bridge/bridge-call.ts",
+      "token": "pendingCalls.delete(entry!)",
+      "class": "Peer",
+      "owner": "runtime",
+      "fixedBy": "outside this charter: the runtime owner (rpc bridge-call timer)"
+    },
+    {
+      "id": "E30",
+      "bound": "Desktop bridge connect before DESKTOP_ROOT_NOT_GRANTED",
+      "site": "apps/ui/app/lib/agent-host-placement.ts",
+      "token": "options.openTimeout ?? socketOpenTimeout",
+      "class": "Peer",
+      "owner": "W6",
+      "fixedBy": "W6"
+    },
+    {
+      "id": "E31",
+      "bound": "Gateway attempt lookup (resolveInvocation), 10 s, then `unavailable` (RA-Q5)",
+      "site": "packages/agent-host/src/transport/gateway-model-transport.ts",
+      "token": "attemptLookupTimeout",
+      "class": "External edge",
+      "owner": "W11"
+    },
+    {
+      "id": "E41",
+      "bound": "Deployment answer at a run's admission or reopening (ModelDeployment.resolve), 10 s or the run's Stop, then `unknown`: the run ends DEPLOYMENT_UNKNOWN before any call (I1)",
+      "site": "packages/agent-host/src/transport/gateway-model-transport.ts",
+      "token": "deploymentAnswerTimeout",
+      "class": "External edge",
+      "owner": "unified-model-transport W3"
+    },
+    {
+      "id": "N1",
+      "bound": "Not a timer: a parameter named after",
+      "site": "packages/agent-host/src/harness/compaction.ts",
+      "token": "laterCutoff",
+      "class": "None",
+      "owner": "W4"
+    },
+    {
+      "id": "C6",
+      "bound": "Chat idle eviction (M1 idle.free and idle.paused)",
+      "site": "packages/agent-host/src/host/chat-run.machine.ts",
+      "token": "idleEviction",
+      "class": "Debounce",
+      "owner": "W7"
+    },
+    {
+      "id": "E15",
+      "bound": "Driver stop bound before the tool port is abandoned",
+      "site": "packages/agent-host/src/host/chat-run.machine.ts",
+      "token": "driverStopBound",
+      "class": "External edge",
+      "owner": "W7"
+    },
+    {
+      "id": "W7-1",
+      "bound": "Cut retry after CUT_FAILED",
+      "site": "packages/agent-host/src/host/chat-run.machine.ts",
+      "token": "cutRetry",
+      "class": "Backoff",
+      "owner": "W7"
+    },
+    {
+      "id": "E9",
+      "bound": "Model-stream stall between transport events (fails MODEL_STREAM_STALLED; a late firing after a freeze re-arms once)",
+      "site": "packages/agent-host/src/harness/session.ts",
+      "token": "stallTimer",
+      "class": "External edge",
+      "owner": "W7"
+    },
+    {
+      "id": "E35",
+      "bound": "Waits between lookups of an earlier model attempt the gateway is still settling, by a run's first step or a Resume (about 15 s in all; then MODEL_ATTEMPT_PENDING)",
+      "site": "packages/agent-host/src/harness/session.ts",
+      "token": "waitTimer",
+      "class": "External edge",
+      "owner": "W7"
+    },
+    {
+      "id": "B16",
+      "bound": "Project-host drain before the close begins (15 min; the close stops what is left and records its terminal rows)",
+      "site": "packages/host/src/project-host.ts",
+      "token": "projectHostDrainBound",
+      "class": "Liveness",
+      "owner": "W6"
+    },
+    {
+      "id": "D12",
+      "bound": "Browser project-host drain before the close begins (15 min, as B16; the close still records what is left)",
+      "site": "apps/ui/app/workers/agent-host-projects.ts",
+      "token": "drainBound",
+      "class": "Liveness",
+      "owner": "W6"
+    },
+    {
+      "id": "B17",
+      "bound": "Remote open deadline on the HTTP leg (found by the AbortSignal.timeout match)",
+      "site": "packages/revisions/src/revision-effects.ts",
+      "token": "input.deadlineMilliseconds",
+      "class": "External edge",
+      "owner": "W8"
+    },
+    {
+      "id": "W30-LEASE",
+      "bound": "Chat-log lease wait for each chat's leadership lock, 5 s by default (chatLogLeaseWaitMilliseconds): a session that just closed releases its locks in that time; on expiry the lease is refused with the chat another process leads, so the delete it guards does not run",
+      "site": "packages/agent-host/src/browser.ts",
+      "token": "AbortSignal.timeout(waitMilliseconds)",
+      "class": "Liveness",
+      "owner": "W30 project lifecycle"
+    },
+    {
+      "id": "D13",
+      "bound": "Chat name generation request, 10 s (found by the AbortSignal.timeout match)",
+      "site": "apps/ui/app/chat-clients/_internal/name-generator-client.ts",
+      "token": "AbortSignal.timeout(10_000)",
+      "class": "External edge",
+      "owner": "runtime"
+    },
+    {
+      "id": "C11",
+      "bound": "A forwarded start or resume a draining leader refused HOST_CLOSED waits for its release or a successor (10 s), then is answered",
+      "site": "packages/agent-host/src/launchers/leadership/leadership.machine.ts",
+      "token": "delay: context.closedHostBound",
+      "class": "Liveness",
+      "owner": "W6"
+    },
+    {
+      "id": "D14",
+      "bound": "A project filesystem bridge's hello (15 s), so a hung provide or rebridge cannot hold its project's order",
+      "site": "apps/ui/app/workers/agent-host.impl.ts",
+      "token": "bridgeReadyBound",
+      "class": "Liveness",
+      "owner": "W6"
+    },
+    {
+      "id": "D15",
+      "bound": "A parameter actor's last write when its project host closes (10 s)",
+      "site": "apps/ui/app/workers/agent-host.impl.ts",
+      "token": "parameterCloseBound",
+      "class": "External edge",
+      "owner": "W6"
+    },
+    {
+      "id": "D16",
+      "bound": "A parameter actor's last write when its desktop, daemon or tau mcp host closes (10 s)",
+      "site": "packages/host/src/parameter-actors.ts",
+      "token": "parameterCloseBound",
+      "class": "External edge",
+      "owner": "W6"
+    },
+    {
+      "id": "D17",
+      "bound": "Observed chat attachment retry after loss (250 ms doubling to a 30 s delay ceiling)",
+      "site": "apps/ui/app/services/chat-session-store.ts",
+      "token": "const retry = setTimeout",
+      "class": "Backoff",
+      "owner": "W9"
+    },
+    {
+      "id": "D17b",
+      "bound": "Retry of a run watch or transcript read that failed on a dropped or replaced connection (250 ms doubling, three rounds per run, then latched)",
+      "site": "apps/ui/app/services/chat-session-store.ts",
+      "token": "const presentationRetry = setTimeout",
+      "class": "Backoff",
+      "owner": "W9"
+    },
+    {
+      "id": "D19",
+      "bound": "Host command retry delay (20 ms doubling to 250 ms within its 30 s deadline)",
+      "site": "apps/ui/app/chat-clients/_internal/host-command.ts",
+      "token": "const timer = setTimeout",
+      "class": "Backoff",
+      "owner": "W9"
+    },
+    {
+      "id": "D20",
+      "bound": "Composer predecessor drain over filesystem I/O (30 s)",
+      "site": "apps/ui/app/services/chat-session-store-composer.ts",
+      "token": "const timer = globalThis.setTimeout",
+      "class": "External edge",
+      "owner": "W9"
+    },
+    {
+      "id": "D21",
+      "bound": "GeoSpec candidate fetch remote transport abort after 15 s; local consent and filesystem work is not globally timed",
+      "site": "apps/ui/app/machines/file-manager.worker.revisions.ts",
+      "token": "candidateFetchTimeout = setTimeout",
+      "class": "External edge",
+      "owner": "GM"
+    },
+    {
+      "id": "D22",
+      "bound": "GeoSpec candidate publish remote transport abort after 15 s; local consent and filesystem work is not globally timed",
+      "site": "apps/ui/app/machines/file-manager.worker.revisions.ts",
+      "token": "candidatePublishTimeout = setTimeout",
+      "class": "External edge",
+      "owner": "GM"
+    },
+    {
+      "id": "D23",
+      "bound": "TUI start admission: 20 s ceiling on retries of answered, not-applied settling refusals; unanswered execute remains channel-owned",
+      "site": "packages/cli/src/tui/app.ts",
+      "token": "// Start settling retry ceiling",
+      "class": "Backoff",
+      "owner": "W4"
+    },
+    {
+      "id": "D24",
+      "bound": "TUI approval admission: 20 s ceiling on retries of answered, not-applied settling refusals; unanswered execute remains channel-owned",
+      "site": "packages/cli/src/tui/app.ts",
+      "token": "// Approval settling retry ceiling",
+      "class": "Backoff",
+      "owner": "W4"
+    },
+    {
+      "id": "A14",
+      "bound": "Restore's own cut, before and after the tree is applied (30 s, restoreCutMilliseconds; geospec D15). The cut is answered by its request id, so this waits on a peer that always answers",
+      "site": "packages/revisions/src/restore.machine.ts",
+      "token": "restoreCutMilliseconds",
+      "class": "Peer",
+      "owner": "GM",
+      "fixedBy": "GM follow-up, open at the merge: an answer-only restore cut (RM-R11, B8)"
+    },
+    {
+      "id": "A15",
+      "bound": "Sync burst ceiling: a pending push goes at most this long after the first mint of a burst (syncMaxWait, D28)",
+      "site": "packages/revisions/src/sync.machine.ts",
+      "token": "syncMaxWait",
+      "class": "Debounce",
+      "owner": "GM"
+    },
+    {
+      "id": "A16",
+      "bound": "An open pull's wait for the revision stream's tail (2 s, W5b a1b); a stream that never answers holds the pull at most this long",
+      "site": "packages/revisions/src/revision-effects.ts",
+      "token": "streamTailWaitMilliseconds",
+      "class": "External edge",
+      "owner": "GM"
+    },
+    {
+      "id": "A17",
+      "bound": "Revision stream retry delay between failed long polls (D13)",
+      "site": "packages/revisions/src/revision-stream.ts",
+      "token": "setTimeout(resolve, milliseconds)",
+      "class": "Backoff",
+      "owner": "GM"
+    },
+    {
+      "id": "A18",
+      "bound": "Revision stream long-poll request deadline (long poll + 10 s, D13; found by the AbortSignal.timeout match)",
+      "site": "packages/revisions/src/revision-stream.ts",
+      "token": "AbortSignal.timeout(requestTimeout)",
+      "class": "External edge",
+      "owner": "GM"
+    },
+    {
+      "id": "N2",
+      "bound": "Not a timer: a variable named after",
+      "site": "packages/revisions/src/revision-stream.ts",
+      "token": "let failures = 0;",
+      "class": "None",
+      "owner": "GM"
+    },
+    {
+      "id": "E14c",
+      "bound": "Watch settle cookie (500 ms, E1): an unanswered cookie reads every path instead of the feed",
+      "site": "packages/host/src/revisions.ts",
+      "token": "watchSettleMilliseconds",
+      "class": "External edge",
+      "owner": "GM"
+    },
+    {
+      "id": "M1",
+      "bound": "Machine certificate probe",
+      "site": "packages/host/src/machine-host.ts",
+      "token": "MACHINE_CERTIFICATE_PROBE_TIMEOUT",
+      "class": "External edge",
+      "owner": "machines"
+    },
+    {
+      "id": "M2",
+      "bound": "Machine connect",
+      "site": "packages/host/src/machine-host.ts",
+      "token": "MACHINE_CONNECT_TIMEOUT",
+      "class": "External edge",
+      "owner": "machines"
+    },
+    {
+      "id": "M3",
+      "bound": "Machine stream idle",
+      "site": "packages/host/src/machine-host.ts",
+      "token": "MACHINE_STREAM_IDLE_TIMEOUT",
+      "class": "External edge",
+      "owner": "machines"
+    },
+    {
+      "id": "M4",
+      "bound": "Machine discovery listen window (found by the AbortSignal.timeout match)",
+      "site": "packages/host/src/machine-host.ts",
+      "token": "AbortSignal.timeout(input.durationMs)",
+      "class": "External edge",
+      "owner": "machines"
+    },
+    {
+      "id": "M5",
+      "bound": "Machine camera still deadline",
+      "site": "packages/host/src/rtsps-still.ts",
+      "token": "MACHINE_STILL_TIMEOUT",
+      "class": "External edge",
+      "owner": "machines"
+    },
+    {
+      "id": "M6",
+      "bound": "Keychain security CLI call",
+      "site": "packages/host/src/secret-vault.ts",
+      "token": "securityTimeout",
+      "class": "External edge",
+      "owner": "machines"
+    },
+    {
+      "id": "M7",
+      "bound": "Desktop machine-binding ceremony answer from the services utility",
+      "site": "apps/desktop/src/main/services-broker.ts",
+      "token": "The desktop machine binding timed out.",
+      "class": "Peer",
+      "owner": "machines",
+      "fixedBy": "outside this charter: the machines owner (desktop binding ceremony)"
+    },
+    {
+      "id": "M8",
+      "bound": "Refused machines channel held open 1 s so calls made together read the same refusal",
+      "site": "apps/libs/desktop-services-host/src/services-host.impl.ts",
+      "token": "server.dispose(reason.message)",
+      "class": "Debounce",
+      "owner": "machines"
+    },
+    {
+      "id": "M9",
+      "bound": "Keep-awake poll of the machines a streamed run is feeding (20 s, inside the shortest one-minute sleep timer); a slow answer skips the next tick",
+      "site": "packages/host/src/keep-awake.ts",
+      "token": "options.intervalMilliseconds ?? 20_000",
+      "class": "Liveness",
+      "owner": "machines"
+    },
+    {
+      "id": "M10",
+      "bound": "Desktop quit and keep-awake question to the services utility: which machines a streamed run is feeding (bound derived from machineStartWaitMilliseconds)",
+      "site": "apps/desktop/src/main/services-broker.ts",
+      "token": "The desktop machine host did not say whether a program is streaming.",
+      "class": "Peer",
+      "owner": "machines",
+      "fixedBy": "outside this charter: the machines owner (desktop streaming read answered by the utility)"
+    },
+    {
+      "id": "N3",
+      "bound": "Not a timer: the RevisionClock host-clock interface declares setTimeout without scheduling it",
+      "site": "packages/revisions/src/revision-effects.types.ts",
+      "token": "setTimeout(callback:",
+      "class": "None",
+      "owner": "revisions host clock"
+    },
+    {
+      "id": "E21",
+      "bound": "Agent usage telemetry: drop a turn that never settles after 6 h, unreported",
+      "site": "apps/ui/app/chat-clients/_internal/agent-usage-telemetry.ts",
+      "token": "abandonAfter",
+      "class": "External edge (backstop)",
+      "owner": "W36"
+    },
+    {
+      "id": "E32",
+      "bound": "tau mcp idle release: a project's worker thread closes after --idle-release seconds (default 900) with no tool call in flight",
+      "site": "packages/cli/src/commands/mcp.ts",
+      "token": "idleRelease",
+      "class": "Debounce",
+      "owner": "tau mcp"
+    },
+    {
+      "id": "E33",
+      "bound": "tau check evaluation deadline: one evaluation fails with EVALUATION_TIMEOUT (exit 1) after 600 s, the MCP operation budget",
+      "site": "packages/cli/src/commands/check.ts",
+      "token": "evaluationTimeout",
+      "class": "External edge (backstop)",
+      "owner": "W17"
+    },
+    {
+      "id": "E34",
+      "bound": "tau serve --smoke-test: the daemon's /.well-known/tau-host descriptor must answer within 30 s",
+      "site": "packages/cli/src/commands/serve.ts",
+      "token": "smokeTestTimeout",
+      "class": "Liveness",
+      "owner": "W17"
+    },
+    {
+      "id": "E36",
+      "bound": "tau mcp compute store open: a project's durable store must answer its first inspect within 10 s, else that project's builds stay in memory",
+      "site": "packages/cli/src/commands/mcp.ts",
+      "token": "computeStoreOpenLimit",
+      "class": "Liveness",
+      "owner": "tau mcp"
+    },
+    {
+      "id": "E37",
+      "bound": "tau runtime describe: the runtime worker thread must report its resolved kernels and native deployments within 120 s, else prepare/describe fails",
+      "site": "packages/cli/src/native-kernels.ts",
+      "token": "describeTimeout",
+      "class": "Liveness",
+      "owner": "tau prepare"
+    },
+    {
+      "id": "E38",
+      "bound": "rpc long-call liveness: a long call fails PEER_UNRESPONSIVE after 30 s with neither a heartbeat nor progress from the server",
+      "site": "packages/rpc/src/channel.ts",
+      "token": "callLivenessTimer",
+      "class": "Liveness",
+      "owner": "W10"
+    },
+    {
+      "id": "E39",
+      "bound": "rpc long-call heartbeat: the server sends an rp frame every 10 s for each call still running",
+      "site": "packages/rpc/src/channel.ts",
+      "token": "heartbeatTimer",
+      "class": "Liveness",
+      "owner": "W10"
+    },
+    {
+      "id": "E40",
+      "bound": "Agent media transcode: one host-runtime conversion of an ACP image is aborted after 30 s and the image is filed as sent",
+      "site": "packages/host/src/acp/media.ts",
+      "token": "transcodeTimeout",
+      "class": "External edge",
+      "owner": "composer-image-format-support WP6"
+    },
+    {
+      "id": "D25",
+      "bound": "Charter D17: read-only oversized replay retirement after 2 s idle; cancelled by active reads/acquisition, never source freshness authority",
+      "site": "packages/agent-host/src/launchers/agent-launcher.ts",
+      "token": "retirements.get(chatId)",
+      "class": "Debounce",
+      "owner": "filesystem-projection-performance-charter / N2 N3"
+    },
+    {
+      "id": "D26",
+      "bound": "Viewer page long poll: a held app_sync answers unchanged after 20 s",
+      "site": "packages/host/src/mcp-viewer-sessions.ts",
+      "token": "setTimeout(finish, hold)",
+      "class": "Liveness",
+      "owner": "agent-plugin-ui-blueprint W6"
+    },
+    {
+      "id": "D27",
+      "bound": "view_state live capture: the page's answer, 20 s",
+      "site": "packages/host/src/mcp-viewer-sessions.ts",
+      "token": "captureTimeout",
+      "class": "External edge",
+      "owner": "agent-plugin-ui-blueprint W6"
+    },
+    {
+      "id": "D28",
+      "bound": "Viewer page view kept in .tau/workbench 1.5 s after the person's last change",
+      "site": "packages/host/src/mcp-viewer-workbench.ts",
+      "token": "void flush();",
+      "class": "Debounce",
+      "owner": "agent-plugin-ui-blueprint W10"
+    },
+    {
+      "id": "D30",
+      "bound": "Viewer Files pane: a project's file changes settle 100 ms before a held app_sync answers with the new filesVersion",
+      "site": "packages/host/src/mcp-viewer-files.ts",
+      "token": "}, settle);",
+      "class": "Debounce",
+      "owner": "agent-plugin-workbench-parity-closeout-blueprint PAR-9"
+    },
+    {
+      "id": "D31",
+      "bound": "show_model on a watched source waits at most the entry's render timeout (Viewer settings, .tau/workbench/entries.json) before RENDER_TIMEOUT",
+      "site": "packages/host/src/mcp-viewer.ts",
+      "token": "AbortSignal.timeout(renderTimeout)",
+      "class": "External edge",
+      "owner": "agent-plugin-workbench-parity-closeout-blueprint PAR-8"
+    },
+    {
+      "id": "M11",
+      "bound": "Desktop recovery waits for actual utility settlement before replacing its service",
+      "site": "apps/desktop/src/main/services-broker.ts",
+      "token": "Projects are still settling. Retry recovery when saving finishes.",
+      "class": "External edge",
+      "owner": "machines"
+    },
+    {
+      "id": "SHELL-TERMINAL-COUNT-TIMEOUT",
+      "bound": "Desktop quit, window close and reload question to the services utility: how many Terminal sessions are live (bound derived from the quit assessment bound)",
+      "site": "apps/desktop/src/main/services-broker.ts",
+      "token": "The desktop shell service did not say whether a Terminal is running.",
+      "class": "External edge",
+      "owner": "desktop-bash-terminal W7"
+    },
+    {
+      "id": "ACP-PERMISSION-READBACK",
+      "bound": "Optional native Grok version/repository probes and settings snapshot, 2 s; expiry reports unverified state and never decides approval",
+      "site": "packages/host/src/acp/grok-permission-readback.ts",
+      "token": "probeTimeout",
+      "class": "External edge",
+      "owner": "Provider permission readback"
+    },
+    {
+      "id": "HI1",
+      "bound": "Headless image worker idle release (30 s with no queued or running render)",
+      "site": "apps/ui/app/services/headless-image.service.ts",
+      "token": "this.idleTimer = setTimeout(",
+      "class": "Debounce",
+      "owner": "viewer memory"
+    },
+    {
+      "id": "AI1",
+      "bound": "Composer attachment worker idle release (60 s after the last conversion)",
+      "site": "apps/ui/app/services/attachment-image.service.ts",
+      "token": "this.idleTimer = setTimeout(",
+      "class": "Debounce",
+      "owner": "composer-image-format-support WP5"
+    },
+    {
+      "id": "M12",
+      "bound": "object store whole-pack cache idle expiry (wholePackIdle, 2 s)",
+      "site": "packages/revisions/src/object-store/object-store.ts",
+      "token": "touched.idle = setTimeout",
+      "class": "Debounce",
+      "owner": "revisions memory"
+    },
+    {
+      "id": "M13",
+      "bound": "compute worker heartbeat: while calls are held, ping on an interval and take a worker silent for the whole window as gone",
+      "site": "packages/revisions/src/compute-worker/supervisor.ts",
+      "token": "beat ??= setInterval",
+      "class": "Liveness",
+      "owner": "revisions compute worker"
+    },
+    {
+      "id": "M14",
+      "bound": "read-through miss batching: one macrotask yield gathers a turn's misses into one Range request",
+      "site": "packages/revisions/src/object-store/object-store.ts",
+      "token": "setTimeout(resolve, 0)",
+      "class": "Debounce",
+      "owner": "revisions memory"
+    },
+    {
+      "id": "CLI-AUTH-HTTP",
+      "bound": "15-second HTTP deadline for CLI authentication requests, combined with caller cancellation",
+      "site": "packages/cli/src/auth.ts",
+      "token": "AbortSignal.timeout(15_000)",
+      "class": "External edge",
+      "owner": "CLI-A1"
+    },
+    {
+      "id": "CLI-AUTH-POLL",
+      "bound": "Device grant polling uses the advertised interval (five seconds normally), increases on slow_down, and stops within the ten-minute grant lifetime or caller cancellation",
+      "site": "packages/cli/src/auth.ts",
+      "token": "await delay(pollInterval, undefined, { signal })",
+      "class": "External edge",
+      "owner": "CLI-A1"
+    },
+    {
+      "id": "SHELL-COMMAND-TIMEOUT",
+      "bound": "Agent shell command deadline: the call's timeoutMs clamped to 1 s..600 s (default 120 s); on expiry the provider stops the command and every descendant and the call returns timed-out",
+      "site": "libs/shell-service/src/shell/shell-service.ts",
+      "token": "admitted.commandTimeout",
+      "class": "External edge",
+      "owner": "desktop-bash-terminal W3"
+    },
+    {
+      "id": "SHELL-PROBE-TIMEOUT",
+      "bound": "30-second bound on the shell availability probe's version command",
+      "site": "libs/shell-service/src/shell/shell-service.ts",
+      "token": "AbortSignal.timeout(30_000)",
+      "class": "External edge",
+      "owner": "desktop-bash-terminal W3"
+    },
+    {
+      "id": "SHELL-DRAIN-TIMEOUT",
+      "bound": "2-second bound on waiting for output readers after an unconfirmed cleanup",
+      "site": "libs/shell-service/src/shell/shell-service.ts",
+      "token": "setTimeout(resolve, milliseconds)",
+      "class": "External edge",
+      "owner": "desktop-bash-terminal W3"
+    },
+    {
+      "id": "TERMINAL-ADMISSION-WAIT",
+      "bound": "5-second bound (terminalAdmissionMilliseconds) on main admitting a Terminal start's project root to the trusted-root allowlist; each wait ends on the next allowlist change, the connection ending, or the bound, after which the start is refused project-not-admitted",
+      "site": "apps/libs/desktop-terminal/src/terminal-concern.ts",
+      "token": "timer = setTimeout(resolve, remaining)",
+      "class": "Peer",
+      "owner": "desktop-bash-terminal W7",
+      "fixedBy": "outside this charter: main sending the trusted-root allowlist within the terminal port handshake would delete this wait (desktop main/services-broker owner)"
+    },
+    {
+      "id": "TERMINAL-REGISTRATION-RETRY",
+      "bound": "250 ms retry (terminalRegistrationRetryMilliseconds) of a Terminal start the shell service refuses project-not-admitted, within the same admission bound; the service learns a project only when its agent host is served, which the pane does not wait for. Any other refusal is final, and a connection that ends stops the retry",
+      "site": "apps/libs/desktop-terminal/src/terminal-concern.ts",
+      "token": "setTimeout(resolve, terminalRegistrationRetryMilliseconds)",
+      "class": "Peer",
+      "owner": "desktop-bash-terminal W7",
+      "fixedBy": "outside this charter: registering a project with the shell service when main admits it, rather than when its agent host is served, would delete this wait (desktop services-host owner)"
+    },
+    {
+      "id": "TERMINAL-OPEN-TIMEOUT",
+      "bound": "30-second bound on a fresh desktop terminal port's open frame; a port that never opens is closed before any shell starts",
+      "site": "apps/libs/desktop-terminal/src/terminal-concern.ts",
+      "token": "setTimeout(abandonUnopened, openMilliseconds)",
+      "class": "External edge",
+      "owner": "desktop-bash-terminal W5"
+    },
+    {
+      "id": "SHELL-QUALIFICATION-OBSERVATION",
+      "bound": "Qualification-only external process/file readiness polling every 50 ms until the caller-supplied bounded row deadline; failure remains a failed assertion, never a peer acknowledgement",
+      "site": "packages/host/src/shell/qualification.fixture.ts",
+      "token": "setTimeout(resolve, 50)",
+      "class": "External edge",
+      "owner": "desktop Bash/Terminal W7 Q9"
+    },
+    {
+      "id": "LFS-FILL-REPORT",
+      "bound": "Large-object fill progress report coalescing, 250 ms (reportMilliseconds): arrivals between reports are told once; a fill's end or failure is told at once",
+      "site": "packages/revisions/src/large-object-fill.ts",
+      "token": "fill.reportTimer ??= setTimeout(",
+      "class": "Presentation",
+      "owner": "open first, model waits"
+    },
+    {
+      "id": "LFS-FILL-FLUSH",
+      "bound": "Large-object fill write coalescing, 1 s (flushMilliseconds): objects that landed meanwhile are written into the checkout in one fenced materialization; a flush a writer kept conflicting is re-armed here; cleared when the fill ends or the project closes",
+      "site": "packages/revisions/src/large-object-fill.ts",
+      "token": "fill.flushTimer ??= setTimeout(",
+      "class": "Debounce",
+      "owner": "open first, model waits"
+    },
+    {
+      "id": "LFS-FILL-RETRY",
+      "bound": "Failed large-object fill retries on its own after 2 s, 5 s, 15 s, 30 s, then every 60 s (retryMilliseconds), keeping what arrived; cleared by a manual retry, a success, or the fill being replaced or the project closing",
+      "site": "packages/revisions/src/large-object-fill.ts",
+      "token": "fill.retryTimer = setTimeout(",
+      "class": "Liveness",
+      "owner": "open first, model waits"
+    },
+    {
+      "id": "LFS-FILL-RESUME",
+      "bound": "Large-object fill resume, deferred one task (0 ms) so the capture or root start that asked is not delayed; cleared when the project closes",
+      "site": "packages/revisions/src/revision-effects.ts",
+      "token": "resumeTimers.delete(timer)",
+      "class": "Debounce",
+      "owner": "open first, model waits"
+    },
+    {
+      "id": "REVISIONS-COMPARE-RECORD-KEEP",
+      "bound": "Debounce a comparison record's write, 2 seconds per checkout; settle flushes it and no keep starts once settling begins",
+      "site": "packages/revisions/src/revision-effects.ts",
+      "token": "keepComparisonDelayMilliseconds); // Bound",
+      "class": "Debounce",
+      "owner": "filesystem speed phase SP2c"
+    },
+    {
+      "id": "LSP-INDEX-MIRROR-RETRY",
+      "bound": "Language-worker index mirror feed retry after a failed index ask: 250 ms, doubling to at most 8 s (indexMirrorRetryBackoff, indexMirrorRetryCeiling); reset on a successful ask, replaced by an immediate ask on the next change set, cleared on dispose",
+      "site": "apps/libs/lsp-fs/src/sync/sync-fs-server.ts",
+      "token": "retry = setTimeout(() => {",
+      "class": "Backoff",
+      "owner": "filesystem capability W9 (D13)"
+    },
+    {
+      "id": "SHELL-PS-MODULE-CACHE-SCHEDULE",
+      "bound": "Windows PowerShell module analysis cache build scheduler: starts after 10 s of shell idleness (idleDelay), at most two failed attempts per session; the timer is unref'd and cleared on dispose",
+      "site": "libs/shell-service/src/shell/shell-module-cache.ts",
+      "token": "state.timer = setTimeout(run, startDelay)",
+      "class": "Backoff",
+      "owner": "windows-shell-sandbox L5"
+    },
+    {
+      "id": "SHELL-PS-MODULE-CACHE-BUILD",
+      "bound": "Windows PowerShell module analysis cache build deadline: 600 s (moduleCacheMilliseconds) for the sandboxed build launch; on expiry the launch is aborted and no cache is published",
+      "site": "libs/shell-service/src/shell/shell-service.ts",
+      "token": "AbortSignal.timeout(milliseconds)",
+      "class": "External edge",
+      "owner": "windows-shell-sandbox L5"
+    },
+    {
+      "id": "SHELL-WINDOWS-SETUP-PROGRAM",
+      "bound": "Windows shell sandbox setup programs: whoami 10 s; the elevated helper setup through one UAC prompt 10 min (the person may take time to answer the prompt); on expiry setup reports failed",
+      "site": "apps/libs/desktop-services-host/src/services-host-shell.ts",
+      "token": "timeout: timeoutMilliseconds",
+      "class": "External edge",
+      "owner": "windows-shell-sandbox L5"
+    }
+  ]
+}

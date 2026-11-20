@@ -1,0 +1,818 @@
+/* oxlint-disable new-cap, @typescript-eslint/consistent-type-imports -- NestJS decorators are factories and metadata requires runtime class imports */
+import {
+  BadGatewayException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  Logger,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { Octokit } from '@octokit/rest';
+import { normalizeRepositoryArchive, repositoryImportLimits } from '@taucad/share/repository-archive';
+import { shareArtifactLimits } from '@taucad/share/artifact';
+import { isShareError } from '@taucad/share/provider';
+import { parseRepositoryTarget } from '@taucad/share/repository-target';
+import type {
+  BitbucketRepoTargetV1,
+  GitHubRepoTargetV1,
+  GitLabRepoTargetV1,
+  RepositoryProviderId,
+} from '@taucad/share/repository-target';
+import type { Environment } from '@taucad/api-core';
+import { corsBaseConfiguration } from '@taucad/api-core/constants/cors';
+import { RedisService } from '@taucad/api-redis';
+import type { ArchiveQueryDto, BranchesQueryDto, GithubBranchesResponse } from '#api/repositories/repositories.dto.js';
+
+/** Until the provider answers with headers; a share request also reads its whole body within it. */
+const requestTimeoutMilliseconds = 20_000;
+/** A streamed import body that delivers nothing for this long has stalled. */
+const importBodyIdleMilliseconds = 30_000;
+/** The longest a streamed import body may take, however steadily it arrives. */
+const importBodyDeadlineMilliseconds = 10 * 60_000;
+const maximumMetadataBytes = 1024 * 1024;
+const maximumRedirects = 3;
+const archiveContentTypes = new Set(['application/zip', 'application/x-zip-compressed', 'application/octet-stream']);
+const githubOwnerPattern = /^[A-Za-z\d](?:[A-Za-z\d-]{0,37}[A-Za-z\d])?$/u;
+const githubRepositoryPattern = /^[A-Za-z\d_.-]{1,100}$/u;
+const providerPaths: Readonly<Record<RepositoryProviderId, Readonly<Record<string, readonly RegExp[]>>>> = {
+  github: {
+    'api.github.com': [/^\/repositories\/\d+$/u, /^\/repos\/[^/]+\/[^/]+(?:\/(?:commits|zipball)\/[^/]+)?$/u],
+    'codeload.github.com': [/^\/[^/]+\/[^/]+\/(?:legacy\.)?zip\/[0-9a-f]{40}$/u],
+  },
+  gitlab: { 'gitlab.com': [/^\/api\/v4\/projects\/\d+\/repository\/archive\.zip$/u] },
+  bitbucket: {
+    'api.bitbucket.org': [/^\/2\.0\/repositories\/[^/]+\/[^/]+$/u],
+    'bitbucket.org': [/^\/[^/]+\/[^/]+\/get\/[0-9a-f]{40}\.zip$/u],
+  },
+};
+
+/* The code travels as `code` and the sentence as `error` (E14). */
+const repositoryRateLimited = (): HttpException =>
+  new HttpException(
+    {
+      code: 'REPOSITORY_RATE_LIMITED',
+      message: 'Too many GitHub repository requests from this network in the last hour. Try again later.',
+    },
+    HttpStatus.TOO_MANY_REQUESTS,
+  );
+
+class GatewayError extends Error {
+  public readonly status: number;
+  public readonly retryAfter?: string;
+
+  public constructor(status: number, message: string, retryAfter?: string) {
+    super(message);
+    this.status = status;
+    this.retryAfter = retryAfter;
+  }
+}
+
+const isProviderId = (value: string | undefined): value is RepositoryProviderId =>
+  value === 'github' || value === 'gitlab' || value === 'bitbucket';
+
+const assertAllowedUrl = (providerId: RepositoryProviderId, url: URL): void => {
+  const paths = providerPaths[providerId][url.hostname];
+  if (
+    url.protocol !== 'https:' ||
+    url.username !== '' ||
+    url.password !== '' ||
+    url.port !== '' ||
+    !paths?.some((pattern) => pattern.test(url.pathname)) ||
+    url.pathname.split('/').some((segment) => segment === '.' || segment === '..')
+  ) {
+    throw new GatewayError(502, 'The repository provider returned an unsafe redirect.');
+  }
+};
+
+const githubHeaders = (url: URL, token: string | undefined): Headers => {
+  const headers = new Headers({ accept: 'application/vnd.github+json', 'user-agent': 'tau-repository-gateway' });
+  if (token && url.hostname === 'api.github.com') {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  return headers;
+};
+
+const retryAfter = (response: Response): string | undefined => {
+  const direct = response.headers.get('retry-after');
+  if (direct && direct.length <= 128) {
+    return direct;
+  }
+  const reset = Number(response.headers.get('x-ratelimit-reset'));
+  return Number.isSafeInteger(reset) ? String(Math.max(0, Math.ceil(reset - Date.now() / 1000))) : undefined;
+};
+
+const fetchProvider = async ({
+  providerId,
+  url,
+  signal,
+  githubToken,
+}: {
+  readonly providerId: RepositoryProviderId;
+  readonly url: URL;
+  readonly signal: AbortSignal;
+  readonly githubToken?: string;
+}): Promise<Response> => {
+  let current = url;
+  for (let redirects = 0; redirects <= maximumRedirects; redirects++) {
+    assertAllowedUrl(providerId, current);
+    let response: Response;
+    try {
+      // oxlint-disable-next-line no-await-in-loop -- redirects are deliberately validated one at a time.
+      response = await fetch(current, {
+        headers: providerId === 'github' ? githubHeaders(current, githubToken) : { accept: 'application/zip' },
+        credentials: 'omit',
+        redirect: 'manual',
+        signal,
+      });
+    } catch (error) {
+      if (error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')) {
+        throw error;
+      }
+      throw new GatewayError(502, 'The repository provider could not be reached.');
+    }
+    if (![301, 302, 303, 307, 308].includes(response.status)) {
+      if (!response.ok) {
+        const rateLimited =
+          response.status === 429 || (response.status === 403 && response.headers.get('x-ratelimit-remaining') === '0');
+        throw new GatewayError(
+          response.status === 404 ? 404 : rateLimited ? 429 : 502,
+          'The repository archive could not be fetched.',
+          rateLimited ? retryAfter(response) : undefined,
+        );
+      }
+      return response;
+    }
+    const location = response.headers.get('location');
+    if (!location || redirects === maximumRedirects) {
+      throw new GatewayError(502, 'The repository provider returned an invalid redirect.');
+    }
+    current = new URL(location, current);
+  }
+  throw new GatewayError(502, 'The repository provider returned too many redirects.');
+};
+
+const readBounded = async (response: Response, maximumBytes: number): Promise<Uint8Array<ArrayBuffer>> => {
+  const declared = Number(response.headers.get('content-length') ?? 0);
+  if (Number.isFinite(declared) && declared > maximumBytes) {
+    throw new GatewayError(413, 'The repository response exceeds the size limit.');
+  }
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new GatewayError(502, 'The repository provider returned an unreadable response.');
+  }
+  const chunks: Array<Uint8Array<ArrayBuffer>> = [];
+  let length = 0;
+  try {
+    // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- standard stream reader contract.
+    while (true) {
+      // oxlint-disable-next-line no-await-in-loop -- streamed bounds must be applied before reading the next chunk.
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      length += value.byteLength;
+      if (length > maximumBytes) {
+        // oxlint-disable-next-line no-await-in-loop -- cancellation must settle before the stream lock is released.
+        await reader.cancel();
+        throw new GatewayError(413, 'The repository response exceeds the size limit.');
+      }
+      chunks.push(new Uint8Array(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+};
+
+const readJson = async (response: Response): Promise<Record<string, unknown>> => {
+  const bytes = await readBounded(response, maximumMetadataBytes);
+  try {
+    const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new TypeError('Expected an object');
+    }
+    return value as Record<string, unknown>;
+  } catch {
+    throw new GatewayError(502, 'The repository provider returned invalid metadata.');
+  }
+};
+
+const assertPublicGithubRepository = (metadata: Readonly<Record<string, unknown>>): void => {
+  if (metadata['visibility'] !== 'public') {
+    throw new GatewayError(404, 'The repository archive could not be fetched.');
+  }
+};
+
+const githubArchiveUrl = async (
+  target: GitHubRepoTargetV1,
+  signal: AbortSignal,
+  githubToken: string | undefined,
+): Promise<URL> => {
+  const metadataResponse = await fetchProvider({
+    providerId: 'github',
+    url: new URL(`https://api.github.com/repositories/${target.repositoryId}`),
+    signal,
+    githubToken,
+  });
+  const metadata = await readJson(metadataResponse);
+  if (githubToken) {
+    assertPublicGithubRepository(metadata);
+  }
+  if (metadata['id'] !== target.repositoryId || typeof metadata['full_name'] !== 'string') {
+    throw new GatewayError(404, 'The GitHub repository identity does not match this share link.');
+  }
+  const [owner, repository, ...extra] = metadata['full_name'].split('/');
+  if (
+    !owner ||
+    !repository ||
+    extra.length > 0 ||
+    !githubOwnerPattern.test(owner) ||
+    !githubRepositoryPattern.test(repository)
+  ) {
+    throw new GatewayError(502, 'GitHub returned an invalid repository identity.');
+  }
+  return new URL(
+    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/zipball/${target.commit}`,
+  );
+};
+
+const bitbucketArchiveUrl = async (target: BitbucketRepoTargetV1, signal: AbortSignal): Promise<URL> => {
+  const metadataResponse = await fetchProvider({
+    providerId: 'bitbucket',
+    url: new URL(
+      `https://api.bitbucket.org/2.0/repositories/${encodeURIComponent(target.workspaceUuid)}/${encodeURIComponent(target.repositoryUuid)}`,
+    ),
+    signal,
+  });
+  const metadata = await readJson(metadataResponse);
+  const { workspace } = metadata;
+  if (
+    metadata['uuid'] !== target.repositoryUuid ||
+    typeof workspace !== 'object' ||
+    workspace === null ||
+    Array.isArray(workspace) ||
+    (workspace as Record<string, unknown>)['uuid'] !== target.workspaceUuid ||
+    typeof metadata['full_name'] !== 'string'
+  ) {
+    throw new GatewayError(404, 'The Bitbucket repository identity does not match this share link.');
+  }
+  const [workspaceSlug, repositorySlug, ...extra] = metadata['full_name'].split('/');
+  if (!workspaceSlug || !repositorySlug || extra.length > 0) {
+    throw new GatewayError(502, 'Bitbucket returned an invalid repository identity.');
+  }
+  return new URL(
+    `https://bitbucket.org/${encodeURIComponent(workspaceSlug)}/${encodeURIComponent(repositorySlug)}/get/${target.commit}.zip`,
+  );
+};
+
+const archiveUrl = async (options: {
+  readonly providerId: RepositoryProviderId;
+  readonly target: GitHubRepoTargetV1 | GitLabRepoTargetV1 | BitbucketRepoTargetV1;
+  readonly signal: AbortSignal;
+  readonly githubToken?: string;
+}): Promise<URL> => {
+  const { providerId, target, signal, githubToken } = options;
+  switch (providerId) {
+    case 'github': {
+      return githubArchiveUrl(target as GitHubRepoTargetV1, signal, githubToken);
+    }
+    case 'gitlab': {
+      const value = target as GitLabRepoTargetV1;
+      return new URL(
+        `https://gitlab.com/api/v4/projects/${value.projectId}/repository/archive.zip?${new URLSearchParams({ sha: value.commit })}`,
+      );
+    }
+    case 'bitbucket': {
+      return bitbucketArchiveUrl(target as BitbucketRepoTargetV1, signal);
+    }
+  }
+};
+
+const githubImportArchiveUrl = async ({
+  owner,
+  repository,
+  ref,
+  signal,
+  githubToken,
+}: {
+  readonly owner: string;
+  readonly repository: string;
+  readonly ref: string;
+  readonly signal: AbortSignal;
+  readonly githubToken?: string;
+}): Promise<Readonly<{ url: URL; commit: string }>> => {
+  if (
+    !githubOwnerPattern.test(owner) ||
+    !githubRepositoryPattern.test(repository) ||
+    ref.length === 0 ||
+    ref.length > 256
+  ) {
+    throw new GatewayError(400, 'The GitHub import target is malformed.');
+  }
+  if (githubToken) {
+    const metadataResponse = await fetchProvider({
+      providerId: 'github',
+      url: new URL(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}`),
+      signal,
+      githubToken,
+    });
+    assertPublicGithubRepository(await readJson(metadataResponse));
+  }
+  const commitResponse = await fetchProvider({
+    providerId: 'github',
+    url: new URL(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/commits/${encodeURIComponent(ref)}`,
+    ),
+    signal,
+    githubToken,
+  });
+  const commit = await readJson(commitResponse);
+  if (typeof commit['sha'] !== 'string' || !/^[0-9a-f]{40}$/u.test(commit['sha'])) {
+    throw new GatewayError(502, 'GitHub returned an invalid commit identity.');
+  }
+  return {
+    url: new URL(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/zipball/${commit['sha']}`,
+    ),
+    commit: commit['sha'],
+  };
+};
+
+/**
+ * The header naming the commit an import archive was resolved to (40 hex), so
+ * the client pins the revision it imported rather than the ref it asked for.
+ */
+const importCommitHeader = 'X-Tau-Commit';
+
+const contentTypeIsArchive = (response: Response): boolean => {
+  const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
+  return contentType !== undefined && archiveContentTypes.has(contentType);
+};
+
+const timeoutError = (): DOMException => new DOMException('The repository provider timed out.', 'TimeoutError');
+
+/**
+ * Pass an import archive through without holding it, counting its bytes.
+ *
+ * The 200 and its headers are already sent when a body without a usable
+ * `Content-Length` passes the import limit, so a 413 is no longer possible.
+ * The chunk that crosses the limit is forwarded and the body ends: the import
+ * worker applies the same limit and refuses what it received as too large.
+ * A body that stalls or outlasts its deadline aborts the upstream request.
+ * Its bytes are spent from the caller's hourly byte budget as they pass, a
+ * flush at a time. A body that spends the last of it, or whose spending
+ * cannot be counted, fails with an error (never a clean end that would pass
+ * for a whole archive), and the upstream request is cancelled and aborted.
+ *
+ * @param source - The provider's archive body.
+ * @param abortUpstream - Aborts the provider request with a reason.
+ * @param spend - Spends bytes from the caller's budget, answering whether any is left.
+ * @returns The bounded body to send.
+ */
+const boundedImportBody = (
+  source: ReadableStream<Uint8Array<ArrayBuffer>>,
+  abortUpstream: (reason: DOMException) => void,
+  spend: (bytes: number) => Promise<boolean>,
+): ReadableStream<Uint8Array<ArrayBuffer>> => {
+  const reader = source.getReader();
+  let received = 0;
+  let unspent = 0;
+  const flush = async (): Promise<boolean> => {
+    const bytes = unspent;
+    unspent = 0;
+    return bytes === 0 ? true : spend(bytes);
+  };
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  const deadlineTimer = setTimeout(() => {
+    abortUpstream(timeoutError());
+  }, importBodyDeadlineMilliseconds);
+  const stopTimers = (): void => {
+    clearTimeout(idleTimer);
+    clearTimeout(deadlineTimer);
+  };
+  const restartIdleTimer = (): void => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      abortUpstream(timeoutError());
+    }, importBodyIdleMilliseconds);
+  };
+  restartIdleTimer();
+  /* Ends the upstream whatever happens to the budget's last flush, which never rejects past here. */
+  const release = async (reason: unknown): Promise<void> => {
+    stopTimers();
+    try {
+      await flush().catch(() => false);
+    } finally {
+      await reader.cancel(reason).catch(() => undefined);
+      abortUpstream(new DOMException('The import body ended.', 'AbortError'));
+    }
+  };
+  return new ReadableStream<Uint8Array<ArrayBuffer>>({
+    async pull(controller) {
+      let read: ReadableStreamReadResult<Uint8Array<ArrayBuffer>>;
+      try {
+        read = await reader.read();
+      } catch (error) {
+        /* The provider failed mid-body: what it sent is still spent. */
+        stopTimers();
+        await flush().catch(() => false);
+        controller.error(error);
+        return;
+      }
+      if (read.done) {
+        stopTimers();
+        /* The whole archive went: a failed last flush does not take it back. */
+        await flush().catch(() => false);
+        controller.close();
+        return;
+      }
+      const { value } = read;
+      restartIdleTimer();
+      received += value.byteLength;
+      unspent += value.byteLength;
+      controller.enqueue(value);
+      let withinBudget: boolean;
+      try {
+        withinBudget = unspent >= importBudgetFlushBytes ? await flush() : true;
+      } catch (error) {
+        /* The budget cannot be counted (Redis failed): the body fails, and the upstream goes with it. */
+        await release(error);
+        controller.error(error);
+        return;
+      }
+      if (!withinBudget) {
+        /* An error, not an end: the browser sees a failed transfer, never a short archive that looks whole. */
+        const spent = new Error('The hourly repository import allowance ran out during the download.');
+        await release(spent);
+        controller.error(spent);
+        return;
+      }
+      if (received > repositoryImportLimits.maxArchiveBytes) {
+        stopTimers();
+        await flush().catch(() => false);
+        controller.close();
+        await reader.cancel().catch(() => undefined);
+      }
+    },
+    async cancel(reason) {
+      await release(reason);
+    },
+  });
+};
+
+/**
+ * Stream an import archive to the caller under {@link repositoryImportLimits}.
+ *
+ * @param response - The provider's archive response.
+ * @param abortUpstream - Aborts the provider request with a reason.
+ * @param pinned - The commit the ref resolved to, sent as {@link importCommitHeader}, and the
+ *   caller's hourly byte budget: what is left, and how to spend from it.
+ * @param pinned.commit - The resolved commit.
+ * @param pinned.budget - The byte budget.
+ * @returns The streamed, uncached response.
+ */
+const streamImportArchive = (
+  response: Response,
+  abortUpstream: (reason: DOMException) => void,
+  {
+    commit,
+    budget,
+  }: Readonly<{ commit: string; budget: Readonly<{ left: number; spend: (bytes: number) => Promise<boolean> }> }>,
+): Response => {
+  const declared = Number(response.headers.get('content-length') ?? Number.NaN);
+  if (Number.isFinite(declared) && declared > repositoryImportLimits.maxArchiveBytes) {
+    void response.body?.cancel();
+    throw new GatewayError(413, 'The repository archive exceeds the import size limit.');
+  }
+  /* A declared archive larger than what is left of the hour's budget is refused before a byte is sent. */
+  if (Number.isFinite(declared) && declared > budget.left) {
+    void response.body?.cancel();
+    throw importBudgetSpent();
+  }
+  if (!response.body) {
+    throw new GatewayError(502, 'The repository provider returned an unreadable response.');
+  }
+  const headers = new Headers({
+    'Content-Type': 'application/zip',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    [importCommitHeader]: commit,
+    /* The reply's own list replaces the CORS plugin's, so it names every exposed header, the commit among them. */
+    'Access-Control-Expose-Headers': corsBaseConfiguration.exposedHeaders.join(', '),
+  });
+  /* A decoded body no longer matches an encoded length, so only an unencoded length is forwarded. */
+  if (Number.isSafeInteger(declared) && declared > 0 && !response.headers.has('content-encoding')) {
+    headers.set('Content-Length', String(declared));
+  }
+  return new Response(boundedImportBody(response.body, abortUpstream, budget.spend), { headers });
+};
+
+type BranchNode = {
+  readonly name: string;
+  readonly target: {
+    readonly oid: string;
+    readonly committedDate?: string;
+  };
+};
+
+type BranchesGraphqlResponse = {
+  readonly repository?: {
+    readonly visibility: string;
+    readonly defaultBranchRef?: {
+      readonly name: string;
+      readonly target: {
+        readonly oid: string;
+        readonly committedDate?: string;
+      };
+    };
+    readonly refs: {
+      readonly pageInfo: {
+        readonly hasNextPage: boolean;
+        readonly endCursor: string | undefined;
+      };
+      readonly nodes: readonly BranchNode[];
+    };
+  };
+};
+
+const rateLimitWindowSeconds = 3600;
+const branchesPerIpPerHour = 300;
+const archivesPerIpPerHour = 60;
+/** Archive bytes one network may download for imports in an hour: two imports at the 1 GiB limit. */
+const archiveBytesPerIpPerHour = 2 * 1024 * 1024 * 1024;
+/** Streamed bytes are spent from the budget in steps of this, and once more at the end. */
+const importBudgetFlushBytes = 8 * 1024 * 1024;
+
+const incrByAmountExpireLua = `
+local current = redis.call('INCRBY', KEYS[1], ARGV[2])
+if redis.call('TTL', KEYS[1]) < 0 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return current
+`;
+
+/* Seconds until the hour's bucket ends and the budget starts over. */
+const secondsLeftInHour = (): number => 3600 - Math.floor((Date.now() / 1000) % 3600);
+
+const importBudgetSpent = (): GatewayError =>
+  new GatewayError(
+    429,
+    'This network has downloaded its hourly allowance of repository imports. Try again later.',
+    String(secondsLeftInHour()),
+  );
+
+const incrByExpireLua = `
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return current
+`;
+
+const hourBucket = (): string => new Date().toISOString().slice(0, 13);
+
+const branchesQuery = (includeDefaultBranch: boolean): string => `
+  query($owner: String!, $repo: String!, $first: Int!, $after: String) {
+    repository(owner: $owner, name: $repo) {
+      visibility
+      ${
+        includeDefaultBranch
+          ? `defaultBranchRef {
+              name
+              target {
+                ... on Commit {
+                  oid
+                  committedDate
+                }
+              }
+            }`
+          : ''
+      }
+      refs(refPrefix: "refs/heads/", first: $first, after: $after) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          name
+          target {
+            ... on Commit {
+              oid
+              committedDate
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const hasCommittedDate = (
+  node: BranchNode,
+): node is BranchNode & { readonly target: { readonly oid: string; readonly committedDate: string } } =>
+  node.target.committedDate !== undefined;
+
+@Injectable()
+export class RepositoriesService {
+  private readonly logger = new Logger(RepositoriesService.name);
+
+  public constructor(
+    private readonly configService: ConfigService<Environment, true>,
+    private readonly redisService: RedisService,
+  ) {}
+
+  /** Fixed-provider, bounded repository archive gateway used by sharing and the existing GitHub importer. */
+  // oxlint-disable-next-line complexity -- preserving the hardened gateway's explicit error/status mapping is clearer than splitting the flow.
+  public async getArchive(query: ArchiveQueryDto, ip: string, requestSignal: AbortSignal): Promise<Response> {
+    await this.consumeArchiveSlot(ip);
+    const providerId = query.provider;
+    if (!isProviderId(providerId)) {
+      return new Response('Unsupported repository provider', { status: 400 });
+    }
+    const upstream = new AbortController();
+    const abortUpstream = (reason: DOMException): void => {
+      upstream.abort(reason);
+    };
+    const responseTimer = setTimeout(() => {
+      abortUpstream(timeoutError());
+    }, requestTimeoutMilliseconds);
+    const signal = AbortSignal.any([requestSignal, upstream.signal]);
+    try {
+      const githubToken = this.configService.get('GITHUB_API_TOKEN', { infer: true });
+      const reference = query.target ?? null;
+      const isShareRequest = reference !== null;
+      let targetUrl: URL;
+      let importCommit = '';
+      let left = 0;
+      let root = '';
+      if (reference) {
+        const target = parseRepositoryTarget(providerId, reference);
+        root = target.root;
+        targetUrl = await archiveUrl({ providerId, target, signal, githubToken });
+      } else if (providerId === 'github') {
+        /* Imports spend an hourly byte budget per network; one already spent is refused before GitHub is asked. */
+        left = archiveBytesPerIpPerHour - (await this.spendArchiveBytes(ip, 0));
+        if (left <= 0) {
+          throw importBudgetSpent();
+        }
+        ({ url: targetUrl, commit: importCommit } = await githubImportArchiveUrl({
+          owner: query.owner ?? '',
+          repository: query.repo ?? '',
+          ref: query.ref ?? '',
+          signal,
+          githubToken,
+        }));
+      } else {
+        throw new GatewayError(400, 'The repository share target is missing.');
+      }
+      const response = await fetchProvider({ providerId, url: targetUrl, signal, githubToken });
+      if (!contentTypeIsArchive(response)) {
+        throw new GatewayError(502, 'The repository provider returned an unexpected content type.');
+      }
+      if (!isShareRequest) {
+        /* The provider has answered; from here the body has its own idle and overall bounds. */
+        clearTimeout(responseTimer);
+        return streamImportArchive(response, abortUpstream, {
+          commit: importCommit,
+          budget: {
+            left,
+            spend: async (bytes) => (await this.spendArchiveBytes(ip, bytes)) < archiveBytesPerIpPerHour,
+          },
+        });
+      }
+      const archive = await readBounded(response, shareArtifactLimits.maxArchiveBytes);
+      const { archive: body } = await normalizeRepositoryArchive(archive, root);
+      return new Response(body, {
+        headers: {
+          'Content-Type': 'application/zip',
+          'Content-Length': String(body.byteLength),
+          'Cache-Control': 'public, max-age=31536000, immutable',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    } catch (error) {
+      if (error instanceof GatewayError) {
+        const headers = new Headers({ 'Cache-Control': 'no-store' });
+        if (error.retryAfter) {
+          headers.set('Retry-After', error.retryAfter);
+        }
+        return new Response(error.message, { status: error.status, headers });
+      }
+      if (isShareError(error)) {
+        const status = error.code === 'SHARE_LOCATOR_INVALID' ? 400 : error.code === 'SHARE_ARTIFACT_LIMIT' ? 413 : 422;
+        return new Response(error.message, { status, headers: { 'Cache-Control': 'no-store' } });
+      }
+      if (error instanceof Error && error.name === 'TimeoutError') {
+        return new Response('The repository provider timed out.', {
+          status: 504,
+          headers: { 'Cache-Control': 'no-store' },
+        });
+      }
+      if (error instanceof Error && error.name === 'AbortError') {
+        return new Response('The repository request was cancelled.', {
+          status: 499,
+          headers: { 'Cache-Control': 'no-store' },
+        });
+      }
+      return new Response('The repository archive could not be loaded.', {
+        status: 502,
+        headers: { 'Cache-Control': 'no-store' },
+      });
+    } finally {
+      clearTimeout(responseTimer);
+    }
+  }
+
+  public async listBranches(query: BranchesQueryDto, ip: string): Promise<GithubBranchesResponse> {
+    await this.consumeBranchSlot(ip);
+    const token = this.configService.get('GITHUB_API_TOKEN', { infer: true });
+    if (!token) {
+      throw new ServiceUnavailableException({
+        code: 'GITHUB_API_TOKEN_UNAVAILABLE',
+        message: 'GitHub branch listing is not configured on this server.',
+      });
+    }
+
+    const isFirstPage = query.cursor === undefined;
+    const octokit = new Octokit({ auth: token, userAgent: 'TauCAD' });
+    let response: BranchesGraphqlResponse;
+    try {
+      response = await octokit.graphql<BranchesGraphqlResponse>(branchesQuery(isFirstPage), {
+        owner: query.owner,
+        repo: query.repo,
+        first: query.pageSize,
+        after: query.cursor,
+      });
+    } catch (error) {
+      this.logger.error('Failed to list GitHub branches', error instanceof Error ? error.stack : String(error));
+      throw new BadGatewayException('GitHub API token is invalid or expired. Branches list unavailable.');
+    }
+
+    const { repository } = response;
+    if (repository?.visibility !== 'PUBLIC') {
+      throw new NotFoundException('Repository not found.');
+    }
+
+    const branches = repository.refs.nodes
+      .filter((node) => hasCommittedDate(node))
+      .map((node) => ({
+        name: node.name,
+        sha: node.target.oid,
+        updatedAt: new Date(node.target.committedDate).getTime(),
+      }))
+      .sort((left, right) => right.updatedAt - left.updatedAt);
+
+    if (isFirstPage && repository.defaultBranchRef) {
+      const defaultBranchIndex = branches.findIndex((branch) => branch.name === repository.defaultBranchRef?.name);
+      if (defaultBranchIndex > 0) {
+        const [defaultBranch] = branches.splice(defaultBranchIndex, 1);
+        if (defaultBranch) {
+          branches.unshift(defaultBranch);
+        }
+      }
+    }
+
+    return {
+      branches,
+      hasMore: repository.refs.pageInfo.hasNextPage,
+      endCursor: repository.refs.pageInfo.endCursor,
+    };
+  }
+
+  private async consumeBranchSlot(ip: string): Promise<void> {
+    const key = `tau:repositories:branches:${hourBucket()}:${ip}`;
+    const raw = await this.redisService.client.eval(incrByExpireLua, 1, key, String(rateLimitWindowSeconds));
+    if (Number(raw) > branchesPerIpPerHour) {
+      throw repositoryRateLimited();
+    }
+  }
+
+  /** Spend bytes from this network's hourly import budget (0 reads it), answering the hour's total. */
+  private async spendArchiveBytes(ip: string, bytes: number): Promise<number> {
+    const key = `tau:repositories:archive-bytes:${hourBucket()}:${ip}`;
+    const raw = await this.redisService.client.eval(
+      incrByAmountExpireLua,
+      1,
+      key,
+      String(rateLimitWindowSeconds),
+      String(bytes),
+    );
+    return Number(raw);
+  }
+
+  private async consumeArchiveSlot(ip: string): Promise<void> {
+    const key = `tau:repositories:archive:${hourBucket()}:${ip}`;
+    const raw = await this.redisService.client.eval(incrByExpireLua, 1, key, String(rateLimitWindowSeconds));
+    if (Number(raw) > archivesPerIpPerHour) {
+      throw repositoryRateLimited();
+    }
+  }
+}

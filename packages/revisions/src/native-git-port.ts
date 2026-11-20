@@ -1,0 +1,3480 @@
+/**
+ * `RevisionPort` over a native Git repository (S12).
+ *
+ * The engine is the `git` binary — its object store, its `update-ref`
+ * transaction, its linked worktrees — and the commit object is Tau's, exactly
+ * as on the browser leg: `encodeCommit` produces the bytes and
+ * `git hash-object -t commit -w` stores them, because neither `git commit-tree`
+ * nor `isomorphic-git`'s `CommitObject` can carry `change-id`, `jj:trees` or
+ * `jj:conflict-labels`. One encoder, two object stores, one identity — which is
+ * what the conformance suite's cross-adapter test measures (I4).
+ *
+ * Trees go in incrementally (D16): the store's tree-id memo names every
+ * object a tree needs, digesting only what changed since the last mint, and
+ * only the objects the store lacks are written — changed blobs through one
+ * blob-only `fast-import`, changed trees through one `mktree --batch` — so a
+ * save streams the paths it changed, never the whole project.
+ */
+
+import { randomUUID } from 'node:crypto';
+import { access, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, resolve as resolvePath } from 'node:path';
+import { ResourceQueue } from '@taucad/filesystem';
+import { ImmutableRevisionTree, revisionId } from '#algorithms/index.js';
+import type { FileMode } from '@taucad/filesystem';
+import type { RevisionId, RevisionTreeInput } from '#algorithms/index.js';
+import type { RecordedProvenance } from '#revision-authority.js';
+import { decodeCommit, decodeTag, encodeCommit, encodeTag } from '#git-objects.js';
+import type { DecodedCommit } from '#git-objects.js';
+import { CommandAbortedError, runGitCommand } from '#git-command.js';
+import type { GitCommandResult } from '#git-command.js';
+import { parseTransportValue } from '#native-git-adapter.js';
+import { createTreeIdMemo } from '#tree-id-memo.js';
+import type { TreeObject } from '#tree-id-memo.js';
+import { NativeGitError } from '#native-git.types.js';
+import { checkoutIdOfBranch } from '#checkout-id.js';
+import type { ObjectFormat } from '#object-hash.js';
+import {
+  deriveChangeId,
+  parseRevisionCommitMessage,
+  parseRevisionTagMessage,
+  revisionAuthorSignature,
+  revisionCommitMessage,
+  revisionCommitterSignature,
+  revisionTagMessage,
+  taggerSignature,
+  unrecordedAuthorOf,
+} from '#revision-headers.js';
+import type { RevisionTrailer } from '#revision-headers.js';
+import { walkRevisionLog } from '#revision-log-order.js';
+import { RevisionPortError, versionTagName, versionTagRef } from '#revision-port.js';
+import { versionNumberOfTag, versionTagWrite } from '#version-numbers.js';
+import { assertMaterializableRevisionTree } from '#portable-tree.js';
+import type {
+  AddCheckoutInput,
+  Checkout,
+  CreateRevisionTagInput,
+  ListRevisionTagsInput,
+  InitRevisionStoreInput,
+  RevisionConflict,
+  RevisionDiffEntry,
+  RevisionDiffInput,
+  RevisionDivergence,
+  RevisionDivergenceInput,
+  RevisionEngineDescriptor,
+  RevisionGitOperation,
+  RevisionHead,
+  RevisionLogEntry,
+  RevisionLogInput,
+  RevisionPort,
+  ReadTreeOptions,
+  RevisionReceipt,
+  RevisionRecord,
+  RevisionFetchInput,
+  RevisionFetchResult,
+  RevisionPushInput,
+  RevisionPushRef,
+  RevisionPushRefResult,
+  RevisionPushResult,
+  SetRevisionRemoteInput,
+  RevisionRef,
+  RevisionTag,
+  RevisionTreeListing,
+  RemoteRef,
+  RevisionRemoteAddress,
+  UpdateRevisionRefInput,
+  UpdateRevisionRefResult,
+  WriteRevisionInput,
+} from '#revision-port.js';
+import { cleanLargeObjects, largeObjectBasisOf, lfsObjectPath, readLfsPointer } from '#lfs.js';
+import type { LargeObjectBasis } from '#lfs.js';
+import { digestHex } from '#object-hash.js';
+import { LfsQuotaError } from '#lfs-client.js';
+import { isStorageRefusal, withoutQuotaMarker } from '#refusal-markers.js';
+import {
+  isHostLocalRef,
+  isTauApiUrl,
+  lfsRemoteUnsupportedMessage,
+  remoteCarriesLargeObjects,
+  remoteOf,
+  refMoved,
+  remoteRefusalSaid,
+  remoteTrackingRef,
+  remoteTransportError,
+} from '#remotes.js';
+import type { Remote } from '#remotes.js';
+import {
+  generatedGitattributesPath,
+  generatedIgnoreContent,
+  generatedIgnorePath,
+  hasGeneratedBlock,
+  tauRevisionPolicy,
+} from '#workspace-config.js';
+
+/** Where linked checkouts live, and which project they belong to. @public */
+export type NativeGitCheckoutOptions = Readonly<{
+  projectId: string;
+  /**
+   * Host data directory every linked worktree is created under. Never inside
+   * the repository's own worktree: native Git refuses a worktree in a worktree,
+   * and `tau serve` treats its cwd as the project (S6).
+   */
+  directory: string;
+  /**
+   * Hold the host's existing writer authority around one native worktree
+   * mutation. The target is derived here, beside the Git command: for an add,
+   * `parentRoot` already exists while `targetRoot` does not yet.
+   */
+  withMutationAuthority?:
+    | (<Result>(
+        target: Readonly<{
+          operation: 'add' | 'remove';
+          repositoryRoot: string;
+          parentRoot: string;
+          targetPath: string;
+          targetRoot: string;
+        }>,
+        mutation: () => Promise<Result>,
+      ) => Promise<Result>)
+    | undefined;
+}>;
+
+/**
+ * What authorizes this leg's requests to Tau's own git remotes (P40).
+ *
+ * The browser sends its session cookie; a terminal or a daemon has none, so the
+ * same session travels as a header this port passes to git per spawn. It is
+ * never written to disk, the remote URL, or process arguments: Git reads the
+ * one-shot `http.extraHeader` from its child environment.
+ *
+ * @public
+ */
+export type TauApiCredential = Readonly<{
+  /** Origin the Tau API is reachable at, which decides which remotes get it. */
+  apiBaseUrl: string;
+  /** The whole header value, e.g. `Bearer <session token>`. */
+  authorization: string;
+}>;
+
+/**
+ * In-memory credential for one exact non-Tau Git repository.
+ *
+ * Either the header Tau minted for it, or the sentence saying why Tau could not
+ * mint one. Both make the repository Tau-managed (ruling G1): git runs with the
+ * user's credential helpers switched off, and an `unavailable` repository is
+ * refused before git starts rather than reached with somebody's own keychain.
+ *
+ * @public
+ */
+export type NativeGitRemoteCredential =
+  | Readonly<{ repositoryUrl: string; authorization: string }>
+  | Readonly<{ repositoryUrl: string; unavailable: string }>;
+
+/** Native-Git revision port configuration. @public */
+export type NativeGitRevisionPortOptions = Readonly<{
+  /** The project directory. `init` creates the repository in it when absent. */
+  repositoryPath: string;
+  gitExecutable?: string;
+  /** Supplied, the port advertises and implements the `checkouts` capability. */
+  checkouts?: NativeGitCheckoutOptions;
+  /**
+   * Read before every request to a remote, so a session that is refreshed or
+   * signed out takes effect on the next command rather than at the next open.
+   */
+  tauCredential?: () => TauApiCredential | undefined;
+  /** Read per network command and injected through the child environment, never argv or git config. */
+  remoteCredential?: () => NativeGitRemoteCredential | undefined;
+}>;
+
+/**
+ * A lost lease, in the one word both legs answer with.
+ *
+ * `--force-with-lease` is refused by *git itself* — the summary is
+ * `[rejected] (stale info)` — while the browser leg refuses the same case in
+ * its own code and says `leaseLost`. A caller must not have to know which leg
+ * it is holding: `revision-effects` reads this word to tell somebody that the
+ * project moved in the cloud, and every other refusal keeps the server's own
+ * words (P38, D14).
+ *
+ * @param summary - git's `--porcelain` summary for a refused ref.
+ * @returns `leaseLost`, or the summary unchanged.
+ */
+const refusalReason = (summary: string): string => (/stale info/iu.test(summary) ? 'leaseLost' : summary);
+
+/**
+ * How far past its own bound a bounded log walk is prefetched.
+ *
+ * ponytail: a constant, not a measurement. The walk's real window is the width
+ * of the committer-time tie at its frontier, which nothing can know before
+ * reading it; under-reading costs one `cat-file` per missed revision and never
+ * changes the answer.
+ */
+const commitWalkSlack = 32;
+/** How many files a quota refusal names: the server's `refusedFileLimit` (RV-W8 F11). */
+const refusedFileLimit = 10;
+const branchRefPrefix = 'refs/heads';
+const tagRefPrefix = 'refs/tags';
+
+/* How many times one `tag` call chooses its number again after another writer claimed the ref first (B6). */
+const tagWriteAttempts = 8;
+
+const symbolicRefPrefix = 'ref: ';
+/** A rebase todo line Git runs as a command: `exec` or `x`, after blanks, with an argument (git's `parse_insn_line`). */
+const rebaseExecLine = /^[ \t]*(?:exec|x)[ \t]+\S/mu;
+const stagingRefPrefix = 'refs/tau/transactions/port';
+const initialBranch = 'main';
+/** The store this port owns, relative to the project directory. */
+const gitDirectoryName = '.git';
+/* Paths per `ls-files` when only named paths are asked: well inside any platform's command-line limit. */
+const ignorePathspecBatch = 512;
+const liveCheckoutId = 'live';
+/**
+ * Configuration this port pins on every command, ahead of the subcommand.
+ *
+ * The environment scrub takes care of `GIT_*`; these three reach git from the
+ * user's own `~/.gitconfig` instead, and each of them changes the bytes a
+ * checkout or a new repository ends up holding (W3a review R43):
+ *
+ * - `core.autocrlf` rewrites line endings on checkout, so a tree recorded on one
+ *   machine would materialize differently on another — and `treeId` is the
+ *   identity every host compares (I4).
+ * - `core.hooksPath` runs somebody else's scripts inside Tau's own plumbing. A
+ *   path that is not a directory disables hooks on every platform.
+ * - `init.templateDir` installs hooks and config into a repository this port
+ *   creates. Empty is git's own "no template", and it is silent.
+ * - `core.fsmonitor` names a program git runs on `status`, `diff` and every
+ *   index refresh. A value in the store's own `config` is somebody else's
+ *   program run by Tau's plumbing; `false` is git's own "no monitor"
+ *   (linux-terminal-git-parity LP4, threat case 1).
+ */
+const pinnedConfiguration: readonly string[] = Object.freeze([
+  '-c',
+  'core.autocrlf=false',
+  '-c',
+  'core.hooksPath=/dev/null',
+  '-c',
+  'core.fsmonitor=false',
+  '-c',
+  'init.templateDir=',
+]);
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder('utf-8', { fatal: true });
+
+const frozenChange = (path: string, kind: RevisionDiffEntry['kind']): RevisionDiffEntry =>
+  Object.freeze({ path, kind });
+
+/**
+ * `diff-tree --name-status`' letter, as a port change kind.
+ *
+ * @param status - The status field Git emitted.
+ * @returns The kind, or `undefined` for a status this port does not record.
+ */
+const diffKind = (status: string): RevisionDiffEntry['kind'] | undefined => {
+  switch (status.charAt(0)) {
+    case 'A': {
+      return 'added';
+    }
+    case 'D': {
+      return 'deleted';
+    }
+    // A type change is a content change as far as a path diff is concerned.
+    case 'M':
+    case 'T': {
+      return 'modified';
+    }
+    default: {
+      return undefined;
+    }
+  }
+};
+
+/*
+ * One queue per repository for the whole process, never one per port (tau #1282). A host opens one project from more
+ * than one place and each place makes its own port: queued per port, two ports on the same repository each ran
+ * `git init` and `git lfs install --local` at once, and the loser failed with "could not lock config file". Keyed by
+ * the repository's canonical path, so a port opened through a symlink queues with one opened on the real path. Another
+ * process still races; git's own locks and the compare-and-swap ref writes answer that.
+ */
+const repositoryQueue = new ResourceQueue();
+
+/**
+ * Create a `RevisionPort` over a native Git repository.
+ *
+ * @param options - Project directory, Git executable and checkout directory.
+ * @returns A port whose revision ids are Git commit ids.
+ * @public
+ * @example <caption>Attach a disk host's project</caption>
+ * ```typescript
+ * import { createNativeGitRevisionPort } from '@taucad/revisions/node';
+ *
+ * const port = createNativeGitRevisionPort({ repositoryPath: '/srv/tau/project' });
+ * await port.init({ author: { name: 'Tau', email: 'tau@example.com' } });
+ * ```
+ */
+export const createNativeGitRevisionPort = (options: NativeGitRevisionPortOptions): RevisionPort => {
+  if (options.repositoryPath.length === 0) {
+    throw new TypeError('repositoryPath is required.');
+  }
+  const { repositoryPath, checkouts } = options;
+  const gitExecutable = options.gitExecutable ?? 'git';
+  /* The repository's canonical path, read once: the key every port on this repository queues under. A path that cannot
+   * be resolved yet keys by its absolute spelling. */
+  let canonical: Promise<string> | undefined;
+  const resolveCanonical = async (): Promise<string> => {
+    try {
+      return await realpath(repositoryPath);
+    } catch {
+      return resolvePath(repositoryPath);
+    }
+  };
+  const canonicalPath = async (): Promise<string> => {
+    canonical ??= resolveCanonical();
+    return canonical;
+  };
+  const refQueue = {
+    queueFor: async <T>(name: string, operation: () => Promise<T>): Promise<T> =>
+      repositoryQueue.queueFor(`${await canonicalPath()}:${name}`, operation),
+  };
+  let objectFormat: ObjectFormat | undefined;
+
+  /**
+   * Every `GIT_*` variable the caller exported, unset.
+   *
+   * `runCommand` spreads `process.env` into the child, so one exported
+   * `GIT_DIR` re-points every command — `git init` included — at somebody
+   * else's repository, which is the R2 defect through another door (review 4
+   * R25). The two variables the port needs, it sets itself.
+   *
+   * @returns One `undefined` per inherited `GIT_*` name.
+   */
+  const clearedGitEnvironment = (): Record<string, string | undefined> =>
+    Object.fromEntries(
+      Object.keys(process.env)
+        .filter((name) => name.startsWith('GIT_'))
+        .map((name) => [name, undefined]),
+    );
+
+  /** The store this port owns: every checkout's common directory. */
+  const storePath = join(repositoryPath, gitDirectoryName);
+
+  /**
+   * The cleared environment, pinned to this project's own store as its common
+   * directory, for a command in a linked checkout.
+   *
+   * A linked checkout finds its admin directory, `worktrees/<id>`, from its
+   * `.git` file, and git then reads the common directory — config, hooks,
+   * objects, refs — from that admin directory's `commondir` file, as it reads
+   * the store's own `commondir` when one is present. Either file, written by
+   * anything that can write the store, would re-point every command at a
+   * config of its choosing (linux-terminal-git-parity LP4, threat cases 3 and
+   * 5). `GIT_COMMON_DIR` wins over both, so the admin directory stays the
+   * checkout's own and the common directory stays the real store.
+   *
+   * @returns The environment a linked checkout's commands run under.
+   */
+  const linkedGitEnvironment = (): Record<string, string | undefined> => {
+    const pinned = clearedGitEnvironment();
+    pinned['GIT_COMMON_DIR'] = storePath;
+    return pinned;
+  };
+
+  /**
+   * The cleared environment, pinned to this project's own store and work tree.
+   *
+   * @returns The environment every command of this port runs under.
+   */
+  const gitEnvironment = (): Record<string, string | undefined> => {
+    const pinned = linkedGitEnvironment();
+    // Environment names, not identifiers: assigned rather than spelled as keys.
+    pinned['GIT_DIR'] = storePath;
+    pinned['GIT_WORK_TREE'] = repositoryPath;
+    pinned['GIT_TERMINAL_PROMPT'] = '0';
+    return pinned;
+  };
+
+  // Network LFS operations can carry several admitted objects. Keep a finite wall cap
+  // independent of the 30-second local plumbing budget and stock LFS activity/retry limits.
+  const transferDeadline = 15 * 60_000;
+
+  type GitRunOptions = Readonly<{
+    deadline?: number;
+    input?: ReadonlyArray<Uint8Array<ArrayBuffer>>;
+    env?: Record<string, string | undefined>;
+    signal?: AbortSignal;
+    /**
+     * The remote this command talks to, when one does.
+     *
+     * Only the refusal classifier reads it, and only to decide whose credential
+     * a 401 or 403 refused (N1).
+     */
+    remote?: string;
+  }>;
+
+  /**
+   * What git itself said about a remote refusal, or `undefined` when its stderr
+   * names no HTTP status at all — which is every local failure (C2).
+   *
+   * `runCommand` has always captured stderr and both throw sites discarded it,
+   * so a stale session, a wrong owner, a missing project and a full store were
+   * all reported as *Native Git could not reach the remote.* — false in every
+   * one of those cases, and the sentence the Sync row showed verbatim.
+   *
+   * @param stderr - Everything the command wrote to its error stream.
+   * @param remote - The remote it was talking to.
+   * @returns The typed refusal, or `undefined` when this was not one.
+   */
+  const remoteRefusalOf = (stderr: string, remote?: string): RevisionPortError | undefined => {
+    const classified = remoteTransportError(new Error(stderr.trim()), {
+      ...(remote === undefined ? {} : { remote }),
+      stderr,
+    });
+    return classified.code === 'ENGINE_FAILED' ? undefined : classified;
+  };
+
+  /**
+   * Refuse a command whose admin directory names a common directory other than the store.
+   *
+   * `GIT_COMMON_DIR` moves config, hooks and objects, but git's files ref
+   * backend reads `<admin>/commondir` for itself and ignores the variable
+   * (stock git 2.43, measured for LP4): a planted file would still send every
+   * branch read and write to the folder it names. The store's own admin
+   * directory never has one, and a linked checkout's must name the store, so
+   * either case is refused before git starts. A file planted between this
+   * check and git's own read is the plant LP4 cannot see; the store policy is
+   * the first line against it.
+   *
+   * @param args - The command, `-C <root>` first when it runs in a linked checkout.
+   * @returns Once the command may run.
+   */
+  const assertOwnCommonDirectory = async (args: readonly string[]): Promise<void> => {
+    const refusal = new RevisionPortError(
+      'INVALID_REPOSITORY',
+      "The project's Git folder names another folder as its common directory; Tau reads and writes only its own.",
+    );
+    const planted = await lstat(join(storePath, 'commondir')).then(
+      () => true,
+      () => false,
+    );
+    if (planted) {
+      throw refusal;
+    }
+    const root = args[0] === '-C' ? args[1] : undefined;
+    if (root === undefined) {
+      return;
+    }
+    const gitFile = await readFile(join(root, gitDirectoryName), 'utf8').catch(() => '');
+    const named = /^gitdir: (?<admin>.+)$/mu.exec(gitFile)?.groups?.['admin']?.trim();
+    if (named === undefined) {
+      /* Not a linked checkout yet: git refuses on its own. */
+      return;
+    }
+    const admin = resolvePath(root, named);
+    const commonFile = await readFile(join(admin, 'commondir'), 'utf8').catch(() => undefined);
+    const common = commonFile === undefined ? admin : resolvePath(admin, commonFile.trim());
+    const [actual, store] = await Promise.all(
+      [common, storePath].map(async (path) => realpath(path).catch(() => path)),
+    );
+    if (actual !== store) {
+      throw refusal;
+    }
+  };
+
+  const run = async (args: readonly string[], options: GitRunOptions = {}): Promise<GitCommandResult> => {
+    await assertOwnCommonDirectory(args);
+    try {
+      return await runGitCommand({
+        gitExecutable,
+        cwd: repositoryPath,
+        args: [...pinnedConfiguration, ...args],
+        env: options.env ?? gitEnvironment(),
+        ...(options.input === undefined ? {} : { input: options.input }),
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+        ...(options.deadline === undefined ? {} : { deadline: options.deadline }),
+      });
+    } catch (error) {
+      if (error instanceof CommandAbortedError) {
+        throw new RevisionPortError('ENGINE_FAILED', `Native Git stopped ${args[0] ?? 'a command'}: ${error.reason}.`, {
+          cause: error,
+        });
+      }
+      throw new RevisionPortError('ENGINE_UNAVAILABLE', `Native Git could not start ${args[0] ?? 'a command'}.`, {
+        cause: error,
+      });
+    }
+  };
+
+  const output = async (args: readonly string[], options: GitRunOptions = {}): Promise<Uint8Array<ArrayBuffer>> => {
+    const result = await run(args, options);
+    if (result.exitCode !== 0) {
+      const stderr = textDecoder.decode(result.stderr);
+      /* Keep git's own words: a refusal that names a status is classified, and
+       * anything else keeps its subcommand sentence with the stderr as its
+       * cause rather than being thrown away entirely. */
+      throw (
+        remoteRefusalOf(stderr, options.remote) ??
+        new RevisionPortError(
+          'ENGINE_FAILED',
+          `Native Git failed ${args[0] ?? 'a command'}.`,
+          stderr.trim() === '' ? undefined : { cause: new Error(stderr.trim()) },
+        )
+      );
+    }
+    return result.stdout;
+  };
+
+  const text = async (args: readonly string[], env?: Record<string, string | undefined>): Promise<string> =>
+    textDecoder.decode(await output(args, { env })).trim();
+
+  const optionalConfig = async (name: string): Promise<string> => {
+    const result = await run(['config', '--get', name]);
+    return result.exitCode === 0 ? textDecoder.decode(result.stdout).trim() : '';
+  };
+
+  /**
+   * The one-shot child environment carrying URL-scoped credentials and LFS endpoint for this remote.
+   *
+   * Only for a remote on the API's origin: a header minted for Tau must never
+   * reach a third-party remote, which is the same rule the browser leg's
+   * transport applies to the cookie (W11b review Q2).
+   *
+   * A remote Tau credits is Tau's alone (ruling G1): the empty
+   * `credential.helper` resets the helper list, URL-scoped helpers included,
+   * and the empty `GIT_ASKPASS` stops `core.askPass`/`SSH_ASKPASS`, so a
+   * rejected or expired App token fails instead of pushing as the person's own
+   * keychain identity. A remote Tau marked unavailable is refused before git
+   * starts. Every other remote keeps the user's git configuration.
+   *
+   * @param remote - The remote a command is about to talk to.
+   * @param known - Git's remotes list, when the caller has already read it.
+   *   `listRemotes` costs `1 + 3R` processes on this leg and a push asked for it
+   *   two or three times over (C73); the answer cannot change inside one push.
+   * @returns The configuration arguments, or none.
+   */
+  const remoteEnvironment = async (
+    remote: string,
+    known?: readonly Remote[],
+    writing = false,
+  ): Promise<Record<string, string | undefined>> => {
+    const env = gitEnvironment();
+    const held = options.tauCredential?.();
+    const remotes = known ?? (await port.listRemotes());
+    const url = remotes.find((entry) => entry.name === remote)?.url;
+    const remoteHeld = options.remoteCredential?.();
+    const normalized = (value: string): string | undefined => {
+      try {
+        const parsed = new URL(value);
+        parsed.username = '';
+        parsed.password = '';
+        return parsed.toString().replace(/\/+$/u, '');
+      } catch {
+        return undefined;
+      }
+    };
+    const remoteRecord =
+      remoteHeld !== undefined && url !== undefined && normalized(remoteHeld.repositoryUrl) === normalized(url)
+        ? remoteHeld
+        : undefined;
+    if (remoteRecord !== undefined && 'unavailable' in remoteRecord) {
+      throw new RevisionPortError('REMOTE_REAUTHORIZATION_REQUIRED', remoteRecord.unavailable);
+    }
+    /* A Tau API remote travels on the Tau session alone, so a held GitHub credential is never at stake for it. */
+    const tauRemote = held !== undefined && url !== undefined && isTauApiUrl(held.apiBaseUrl, url);
+    const authorization = tauRemote ? held.authorization : remoteRecord?.authorization;
+    const github = remotes.find((entry) => entry.name === remote)?.provider === 'github';
+    if (github) {
+      env['GIT_ALLOW_PROTOCOL'] = 'http:https';
+    }
+    if (github && (url === undefined || !/^https?:\/\//u.test(url))) {
+      throw new RevisionPortError(
+        'INVALID_TRANSPORT',
+        'Reconnect this GitHub repository through Tau using HTTPS. SSH credentials are not used.',
+      );
+    }
+    if (remoteHeld !== undefined && remoteRecord === undefined && !tauRemote) {
+      throw new RevisionPortError(
+        'INVALID_TRANSPORT',
+        'The repository destination changed. Review it before continuing.',
+      );
+    }
+    if (writing && github && authorization === undefined) {
+      throw new RevisionPortError(
+        'REMOTE_REAUTHORIZATION_REQUIRED',
+        'Reconnect this GitHub repository in Tau before using it.',
+      );
+    }
+    const normalizedUrl = url === undefined ? undefined : normalized(url);
+    if (authorization !== undefined && normalizedUrl !== undefined) {
+      env['GIT_CONFIG_COUNT'] = '4';
+      env['GIT_CONFIG_KEY_0'] = `http.${normalizedUrl}.extraHeader`;
+      env['GIT_CONFIG_VALUE_0'] = `Authorization: ${authorization}`;
+      env['GIT_CONFIG_KEY_1'] = 'lfs.url';
+      env['GIT_CONFIG_VALUE_1'] = `${normalizedUrl}/info/lfs`;
+      env['GIT_CONFIG_KEY_2'] = 'credential.helper';
+      env['GIT_CONFIG_VALUE_2'] = '';
+      env['GIT_CONFIG_KEY_3'] = `http.${normalizedUrl}.followRedirects`;
+      env['GIT_CONFIG_VALUE_3'] = 'false';
+      env['GIT_ASKPASS'] = '';
+    }
+    if (github && authorization === undefined) {
+      env['GIT_CONFIG_COUNT'] = '1';
+      env['GIT_CONFIG_KEY_0'] = 'credential.helper';
+      env['GIT_CONFIG_VALUE_0'] = '';
+      env['GIT_ASKPASS'] = '';
+    }
+    return env;
+  };
+
+  const format = async (): Promise<ObjectFormat> => {
+    if (objectFormat === undefined) {
+      const recorded = await text(['rev-parse', '--show-object-format']);
+      if (recorded !== 'sha1' && recorded !== 'sha256') {
+        throw new RevisionPortError('INVALID_REPOSITORY', 'The repository uses an unsupported Git object format.');
+      }
+      objectFormat = recorded;
+    }
+    return objectFormat;
+  };
+
+  const zeroObjectId = async (): Promise<string> => '0'.repeat((await format()) === 'sha1' ? 40 : 64);
+
+  const readCommitObject = async (id: string): Promise<DecodedCommit | undefined> => {
+    const result = await run(['cat-file', 'commit', id]);
+    return result.exitCode === 0 ? decodeCommit(result.stdout) : undefined;
+  };
+
+  const requireCommit = async (id: RevisionId): Promise<DecodedCommit> => {
+    const commit = await readCommitObject(id);
+    if (commit === undefined) {
+      throw new RevisionPortError('UNKNOWN_REVISION', 'The revision is not in the store.');
+    }
+    return commit;
+  };
+
+  const entryOf = (id: RevisionId, commit: DecodedCommit): RevisionLogEntry => {
+    const trailer = parseRevisionCommitMessage(commit.message);
+    /* A project Tau did not write carries no trailer, and its date is still the
+     * one git shows: the commit's own author time. */
+    const unattributed: RecordedProvenance = {
+      source: 'import',
+      createdAt: commit.author.seconds * 1000,
+    };
+    return Object.freeze({
+      id,
+      changeId: commit.changeId ?? '',
+      parents: Object.freeze(commit.parents.map((parent) => revisionId(parent))),
+      treeId: commit.tree,
+      summary: trailer?.summary ?? { generated: commit.message.split('\n')[0] ?? '' },
+      provenance: trailer?.provenance ?? unattributed,
+      /* B3: a commit Tau did not record reads as its git author, as GitHub shows it. */
+      ...(trailer === undefined ? unrecordedAuthorOf(commit) : {}),
+      conflicted: commit.conflictedTrees !== undefined,
+    });
+  };
+
+  const receiptOf = async (id: RevisionId, commit: DecodedCommit): Promise<RevisionReceipt> =>
+    Object.freeze({
+      engine: 'native-git',
+      commitId: id,
+      changeId: commit.changeId ?? '',
+      objectFormat: await format(),
+      conflicted: commit.conflictedTrees !== undefined,
+    });
+
+  /**
+   * Where one large object lives in this repository's own LFS store.
+   *
+   * @param oid - The pointer's object id.
+   * @returns The absolute path git-lfs reads and writes that object at.
+   */
+  const lfsObjectFile = (oid: string): string => join(repositoryPath, gitDirectoryName, lfsObjectPath(oid));
+
+  /**
+   * Put one large object in this repository's own LFS store.
+   *
+   * Content-addressed, so an object that is already stored is the same object:
+   * a second revision over the same bytes writes nothing.
+   *
+   * @param oid - The pointer's object id.
+   * @param content - The object's real bytes.
+   */
+  /**
+   * The large files a push would carry, by project-relative path (P20).
+   *
+   * `git lfs ls-files` is the disk leg's own answer to the question the browser
+   * leg answers by reading pointer blobs out of the offered trees: both name the
+   * LFS files reachable from the refs being offered, so the two legs refuse the
+   * same push with the same list. git-lfs is on the toolchain by the time a
+   * store exists (`resolveGitLfs`), so this asks the tool rather than
+   * re-implementing pointer detection here.
+   *
+   * Largest first (RV-W8 F11), so a quota refusal's list reads like the
+   * server's. Sizes come from `--json` (git-lfs 3.3+); an older git-lfs
+   * answers `--name-only` and those paths keep ls-files' order after the sized ones.
+   *
+   * @param references - The refs this push offers.
+   * @returns Their large files, deduplicated, largest first.
+   */
+  const largeObjectPaths = async (references: readonly RevisionPushRef[]): Promise<readonly string[]> => {
+    const sizes = new Map<string, number>();
+    for (const reference of references) {
+      // oxlint-disable-next-line no-await-in-loop -- one tip per offered ref, on the pre-push check only.
+      const listed = await run(['lfs', 'ls-files', '--json', reference.name]).catch(() => undefined);
+      if (listed?.exitCode === 0) {
+        // A ref with no large files answers `{"files": null}`, which `??` reads as none.
+        const { files } = JSON.parse(textDecoder.decode(listed.stdout)) as {
+          files?: ReadonlyArray<{ name: string; size: number }>;
+        };
+        for (const file of files ?? []) {
+          sizes.set(file.name, Math.max(file.size, sizes.get(file.name) ?? 0));
+        }
+        continue;
+      }
+      // oxlint-disable-next-line no-await-in-loop -- the fallback for the same ref.
+      const named = await run(['lfs', 'ls-files', '--name-only', reference.name]).catch(() => undefined);
+      if (named?.exitCode !== 0) {
+        continue;
+      }
+      for (const line of textDecoder.decode(named.stdout).split('\n')) {
+        const path = line.trim();
+        if (path !== '' && !sizes.has(path)) {
+          sizes.set(path, -1);
+        }
+      }
+    }
+    return [...sizes].toSorted(([, left], [, right]) => right - left).map(([path]) => path);
+  };
+
+  /**
+   * Bring here the large objects a push carries that this store lacks (D16).
+   *
+   * Large objects fill lazily, so a revision fetched from one remote may hold
+   * pointers whose bytes never came: `git lfs push` to another remote would
+   * then have nothing to send. Each pointer blob the push offers — the objects
+   * reachable from its refs and not from the destination's tracking refs, as
+   * `git push` reckons them — is read from the object store; when any names an
+   * object that is not here, the commits offered are fetched from each other
+   * remote that carries large objects, newest first, until none is missing. A
+   * push whose objects are all here spawns only the `rev-list` and one
+   * `cat-file`. What no remote supplies is left to `git lfs push`, which
+   * succeeds when the destination already holds it.
+   *
+   * @param references - The refs this push offers.
+   * @param push - The remote being pushed to, this store's remotes, and the signal that stops the transfer.
+   */
+  const fillPushedLargeObjects = async (
+    references: readonly RevisionPushRef[],
+    push: Readonly<{ destination: string; configuredRemotes: readonly Remote[]; signal: AbortSignal | undefined }>,
+  ): Promise<void> => {
+    const { destination, configuredRemotes, signal } = push;
+    const sources = configuredRemotes.filter(
+      (remote) => remote.name !== destination && remoteCarriesLargeObjects(remote),
+    );
+    if (sources.length === 0) {
+      return;
+    }
+    const listed = textDecoder
+      .decode(
+        await output([
+          'rev-list',
+          '--objects',
+          ...references.map((reference) => reference.name),
+          '--not',
+          `--remotes=${destination}`,
+          '--',
+        ]),
+      )
+      .split('\n')
+      .filter((line) => line !== '');
+    const commits = listed.filter((line) => !line.includes(' '));
+    const named = listed.flatMap((line) => {
+      const [oid, path] = line.split(' ');
+      return path === undefined || path === '' || oid === undefined ? [] : [oid];
+    });
+    if (named.length === 0) {
+      return;
+    }
+    /* Only a blob small enough to be a pointer is read; everything else is known from its header. */
+    const headers = textDecoder
+      .decode(
+        await output(['cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'], {
+          input: [textEncoder.encode(`${named.join('\n')}\n`)],
+        }),
+      )
+      .split('\n');
+    const small = headers.flatMap((line) => {
+      const [oid, type, size] = line.split(' ');
+      return oid !== undefined && type === 'blob' && Number(size) < 1024 ? [oid] : [];
+    });
+    const blobs = small.length === 0 ? new Map<string, Uint8Array<ArrayBuffer>>() : await readObjects(small, 'blob');
+    const wanted = [...blobs.values()].flatMap((content) => {
+      const pointer = readLfsPointer(content);
+      return pointer === undefined ? [] : [pointer.oid];
+    });
+    const absent = async (): Promise<boolean> => {
+      const here = await Promise.all(
+        wanted.map(async (oid) =>
+          access(lfsObjectFile(oid)).then(
+            () => true,
+            () => false,
+          ),
+        ),
+      );
+      return here.includes(false);
+    };
+    if (!(await absent())) {
+      return;
+    }
+    /* Bounded argument lists: a first push may offer the whole history. */
+    const batches: string[][] = [];
+    for (let start = 0; start < commits.length; start += 256) {
+      batches.push(commits.slice(start, start + 256));
+    }
+    for (const source of sources) {
+      for (const batch of batches) {
+        signal?.throwIfAborted();
+        try {
+          // oxlint-disable-next-line no-await-in-loop -- one source after another, until every object is here.
+          await output(['lfs', 'fetch', '--', source.name, ...batch], {
+            deadline: transferDeadline,
+            // oxlint-disable-next-line no-await-in-loop -- the credentials belong to this remote.
+            env: await remoteEnvironment(source.name, configuredRemotes),
+            ...(signal === undefined ? {} : { signal }),
+            remote: source.name,
+          });
+        } catch (error) {
+          if (signal?.aborted === true) {
+            throw error;
+          }
+          /* This source could not supply them; the next is asked. */
+          break;
+        }
+        // oxlint-disable-next-line no-await-in-loop -- the next batch is fetched only while objects are missing.
+        if (!(await absent())) {
+          return;
+        }
+      }
+    }
+  };
+
+  /**
+   * Why `git lfs push` failed, in the vocabulary `remote.machine` already owns.
+   *
+   * An over-quota batch refusal is an `LfsQuotaError` carrying the **file
+   * list** (policy Rule 13, D16/AC16) — the same class the browser leg raises
+   * from its own LFS client, so `revision-effects`' three `instanceof
+   * LfsQuotaError` branches work on this leg too. Anything else is an ordinary
+   * remote refusal.
+   *
+   * The paths come from {@link largeObjectPaths}, not from
+   * `withQuotaPaths(refusal, oids)`: git-lfs prints the server's *sentence* and
+   * not its object list, so there are no oids here to map. The port already
+   * knows exactly which paths this push offered, which is the answer the person
+   * needs.
+   *
+   * @param stderr - What `git lfs push` wrote to its error stream.
+   * @param remote - The remote it was pushing to.
+   * @param paths - Project-relative paths of the large objects in this push.
+   * @returns The error to throw.
+   */
+  const lfsTransferRefusal = (stderr: string, remote: string, paths: readonly string[]): Error => {
+    if (
+      /\b413\b|GIT_LFS_QUOTA_EXCEEDED|entity too large|storage (?:quota|plan)/iu.test(stderr) ||
+      isStorageRefusal(stderr)
+    ) {
+      /* The server's marker, when it puts one in front, is a key and not the sentence. */
+      const batch = /batch response:\s*(?<said>.+)/u.exec(stderr)?.groups?.['said'];
+      const said = batch === undefined ? undefined : withoutQuotaMarker(batch).trim();
+      return new LfsQuotaError({
+        message: said === undefined || said === '' ? 'This project doesn’t fit in its backup.' : said,
+        oids: Object.freeze([]),
+        /* Largest first and at most the server's ten (RV-W8 F11). */
+        paths: Object.freeze(paths.slice(0, refusedFileLimit)),
+      });
+    }
+    return (
+      remoteRefusalOf(stderr, remote) ??
+      new RevisionPortError(
+        'ENGINE_FAILED',
+        'The remote could not be reached.',
+        stderr.trim() === '' ? undefined : { cause: new Error(stderr.trim()) },
+      )
+    );
+  };
+
+  /* Once per port, before its first large-object write: a `.partial` a crashed writer left is removed once it has
+   * sat an hour, long past any live writer's sync and rename. */
+  let partialsSwept: Promise<void> | undefined;
+  const abandonedPartialMilliseconds = 60 * 60 * 1000;
+  const sweepAbandonedPartials = async (): Promise<void> => {
+    const objects = join(repositoryPath, gitDirectoryName, 'lfs', 'objects');
+    const names = await readdir(objects, { recursive: true }).catch((): string[] => []);
+    const now = Date.now();
+    await Promise.all(
+      names
+        .filter((name) => name.endsWith('.partial'))
+        .map(async (name) => {
+          const file = join(objects, name);
+          const stats = await lstat(file).catch(() => undefined);
+          if (stats?.isFile() === true && now - stats.mtimeMs > abandonedPartialMilliseconds) {
+            await rm(file, { force: true });
+          }
+        }),
+    );
+  };
+
+  /* Written to a synced `.partial` sibling and renamed into place (I1), so the store never names a torn object;
+   * content-addressed, so a rename over a concurrent writer's copy replaces identical bytes. */
+  const storeLfsObject = async (oid: string, content: Uint8Array<ArrayBuffer>): Promise<void> => {
+    partialsSwept ??= sweepAbandonedPartials();
+    try {
+      await partialsSwept;
+    } catch {
+      /* A sweep is housekeeping: one that fails never stops a store. */
+    }
+    const file = lfsObjectFile(oid);
+    /* A whole copy is kept; a file of another size at the object's name is not the object, and is replaced. */
+    const held = await stat(file).then(
+      (stats) => stats.isFile() && stats.size === content.byteLength,
+      () => false,
+    );
+    if (held) {
+      return;
+    }
+    await mkdir(dirname(file), { recursive: true });
+    const partial = `${file}.${String(process.pid)}.${randomUUID()}.partial`;
+    try {
+      const handle = await open(partial, 'wx');
+      try {
+        await handle.writeFile(content);
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await rename(partial, file);
+    } finally {
+      await rm(partial, { force: true });
+    }
+  };
+
+  /**
+   * One blob as a caller reads it: the pointer resolved back to its content.
+   *
+   * @param content - Bytes as the object store holds them.
+   * @returns The real bytes.
+   */
+  const smudged = async (content: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> => {
+    const pointer = readLfsPointer(content);
+    if (pointer === undefined) {
+      return content;
+    }
+    try {
+      const stored = await readFile(lfsObjectFile(pointer.oid));
+      return new Uint8Array(stored.buffer as ArrayBuffer, stored.byteOffset, stored.byteLength);
+    } catch (error) {
+      throw new RevisionPortError(
+        (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'MISSING_LARGE_OBJECT' : 'ENGINE_FAILED',
+        'A large object this revision references could not be read on this machine.',
+        { cause: error },
+      );
+    }
+  };
+
+  /* What git-lfs prints around a transfer that are no verdict on it: progress, the failure summary, the log hint. */
+  const transferChatter =
+    /^(?:Downloading .*|Fetching .*|fetch: .*|(?:error: )?[Ff]ailed to fetch some objects from .*|Errors logged to .*|Use `git lfs logs last` to view the log\.)$/u;
+  /* An object-level not-found for one oid, as git-lfs spells a batch API object error (`fetch`), or wraps it (`smudge`). */
+  const objectAbsent =
+    /^(?:Error downloading object: .*: )?\[(?<oid>[\da-f]{64})\] Object does not exist(?: on the server)?: \[404\] /u;
+
+  /**
+   * What one remote's failed large-object transfer said (D16).
+   *
+   * It lacks the objects only when every line that is not progress names one
+   * of the objects asked for as not found there. Anything else — a repository
+   * the batch endpoint did not find, a credential it refused, a network
+   * failure, beside or instead of an object not found — is the remote's own
+   * refusal: it may hold the objects, so it is never read as "missing". GitHub
+   * answers a repository the token cannot see as not found, so on a GitHub
+   * remote that is a credential to grant again.
+   *
+   * @param result - The transfer's outcome.
+   * @param asked - The objects it was asked for.
+   * @param remote - The remote it talked to.
+   * @returns `'lacks'`, or the error to keep.
+   */
+  const transferVerdict = (
+    result: GitCommandResult,
+    asked: ReadonlySet<string>,
+    remote: Remote,
+  ): 'lacks' | RevisionPortError => {
+    const stderr = textDecoder.decode(result.stderr);
+    /* A progress meter redraws its line with a carriage return, so each redraw is a line of its own. */
+    const lines = stderr.split(/[\r\n]/u).filter((line) => line.trim() !== '' && !transferChatter.test(line.trim()));
+    if (
+      lines.length > 0 &&
+      lines.every((line) => {
+        const oid = objectAbsent.exec(line.trim())?.groups?.['oid'];
+        return oid !== undefined && asked.has(oid);
+      })
+    ) {
+      return 'lacks';
+    }
+    const refusal =
+      remoteRefusalOf(stderr, remote.name) ??
+      new RevisionPortError(
+        'ENGINE_FAILED',
+        'The remote could not supply this project’s large objects.',
+        stderr.trim() === '' ? undefined : { cause: new Error(stderr.trim()) },
+      );
+    if (refusal.code === 'REMOTE_NOT_FOUND' && remote.provider === 'github') {
+      return new RevisionPortError(
+        'REMOTE_REAUTHORIZATION_REQUIRED',
+        'GitHub did not find this repository for the connected account. Reconnect it in Tau.',
+        { cause: refusal },
+      );
+    }
+    return refusal;
+  };
+
+  /**
+   * Ask each remote that carries large objects, in turn, until nothing is missing (D16).
+   *
+   * A remote that fails is passed over for the next. When objects are still
+   * missing after every remote, the first refusal is thrown; with none, every
+   * remote answered that it lacks them and the caller raises
+   * `MISSING_LARGE_OBJECT`. A cancelled transfer rejects at once.
+   *
+   * @param attempt - One remote's transfer, answering its verdict.
+   * @param stillMissing - Whether anything is still missing here.
+   * @param signal - Stops the transfers.
+   */
+  const fromEachRemote = async (
+    attempt: (remote: Remote, env: Record<string, string | undefined>) => Promise<'done' | 'lacks' | Error>,
+    stillMissing: () => Promise<boolean>,
+    signal: AbortSignal | undefined,
+  ): Promise<void> => {
+    const configuredRemotes = await port.listRemotes();
+    let refusal: Error | undefined;
+    for (const remote of configuredRemotes.filter((candidate) => remoteCarriesLargeObjects(candidate))) {
+      signal?.throwIfAborted();
+      let verdict: 'done' | 'lacks' | Error;
+      try {
+        // oxlint-disable-next-line no-await-in-loop -- one remote after another, until every object is here.
+        verdict = await attempt(remote, await remoteEnvironment(remote.name, configuredRemotes));
+      } catch (error) {
+        if (signal?.aborted === true) {
+          throw error;
+        }
+        verdict = error instanceof Error ? error : new Error(String(error));
+      }
+      if (verdict instanceof Error) {
+        refusal ??= verdict;
+      }
+      /* A failed transfer may still have landed some objects; the next remote is asked only for the rest. */
+      // oxlint-disable-next-line no-await-in-loop -- one remote after another, until every object is here.
+      if (!(await stillMissing())) {
+        return;
+      }
+    }
+    if (refusal !== undefined) {
+      throw refusal;
+    }
+  };
+
+  /**
+   * One blob as a `local` read answers it: the content when the large object
+   * is here, else the pointer itself. Nothing is fetched.
+   *
+   * @param content - Bytes as the object store holds them.
+   * @returns The real bytes, or the pointer.
+   */
+  /**
+   * A pointer whose object this store holds whole, answered as the pointer
+   * (`largeObjects: 'stored'`, W11.3): the size is checked, so a writer that
+   * clones the stored object lands the bytes the pointer names.
+   *
+   * @param content - A blob's bytes.
+   * @returns The same bytes.
+   */
+  const storedPointer = async (content: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> => {
+    const pointer = readLfsPointer(content);
+    if (pointer === undefined) {
+      return content;
+    }
+    const held = await stat(lfsObjectFile(pointer.oid)).catch((error: unknown) => {
+      throw new RevisionPortError(
+        (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'MISSING_LARGE_OBJECT' : 'ENGINE_FAILED',
+        'A large object this revision references could not be read on this machine.',
+        { cause: error },
+      );
+    });
+    if (held.size !== pointer.size) {
+      throw new RevisionPortError('ENGINE_FAILED', 'A stored large object does not have the size its pointer names.');
+    }
+    return content;
+  };
+
+  const smudgedIfHere = async (content: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> => {
+    try {
+      return await smudged(content);
+    } catch (error) {
+      if (error instanceof RevisionPortError && error.code === 'MISSING_LARGE_OBJECT') {
+        return content;
+      }
+      throw error;
+    }
+  };
+
+  /**
+   * Whether every one of `oids` is in this store.
+   *
+   * @param oids - Large-object ids.
+   * @returns `true` when none is missing.
+   */
+  const allStored = async (oids: readonly string[]): Promise<boolean> => {
+    const present = await Promise.all(
+      oids.map(async (oid) =>
+        access(lfsObjectFile(oid)).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    );
+    return !present.includes(false);
+  };
+
+  /**
+   * The pointers whose objects this store lacks.
+   *
+   * @param pointers - Candidate objects.
+   * @returns Those not stored, deduplicated, in order.
+   */
+  const missingOf = async (
+    pointers: ReadonlyArray<Readonly<{ oid: string; size: number }>>,
+  ): Promise<Array<Readonly<{ oid: string; size: number }>>> => {
+    const unique = [...new Map(pointers.map((pointer) => [pointer.oid, pointer])).values()];
+    const stored = await Promise.all(unique.map(async ({ oid }) => allStored([oid])));
+    return unique.filter((_pointer, index) => !stored[index]);
+  };
+
+  /* One fill per commit at a time; a read that joins one shares its outcome, unless only its caller cancelled it. */
+  const fillsInFlight = new Map<string, Readonly<{ fill: Promise<void>; signal: AbortSignal | undefined }>>();
+
+  /**
+   * Fetch the large objects one read needs and this store lacks (D16): one
+   * `git lfs fetch` of that commit's objects from each remote that carries
+   * large objects, in turn, until none is missing (see {@link fromEachRemote}).
+   * A read with none missing spawns nothing.
+   *
+   * @param commit - The commit whose tree is being read.
+   * @param pointers - The pointers the read holds.
+   * @param signal - Stops the transfer; the read then rejects.
+   */
+  const fillLargeObjects = async (
+    commit: string,
+    pointers: ReadonlyArray<Readonly<{ oid: string; size: number }>>,
+    signal: AbortSignal | undefined,
+  ): Promise<void> => {
+    const oids = pointers.map(({ oid }) => oid);
+    if (await allStored(oids)) {
+      return;
+    }
+    const running = fillsInFlight.get(commit);
+    if (running !== undefined) {
+      try {
+        await running.fill;
+      } catch (error) {
+        /* Its failure is this read's too, unless only the read that started it was cancelled. */
+        if (running.signal?.aborted !== true) {
+          throw error;
+        }
+      }
+      signal?.throwIfAborted();
+      if (await allStored(oids)) {
+        return;
+      }
+    }
+    const asked = new Set(oids);
+    const fill = (async (): Promise<void> => {
+      await fromEachRemote(
+        async (remote, env) => {
+          const result = await run(['lfs', 'fetch', '--', remote.name, commit], {
+            deadline: transferDeadline,
+            env,
+            ...(signal === undefined ? {} : { signal }),
+            remote: remote.name,
+          });
+          if (result.exitCode === 0) {
+            return 'done';
+          }
+          const verdict = transferVerdict(result, asked, remote);
+          if (verdict === 'lacks' || signal?.aborted === true) {
+            return verdict;
+          }
+          /* The fetch's own words did not settle it (a git-lfs whose output this port does not know, a meter drawn
+           * under load): each object still missing is asked by its oid, whose answer is that object's alone. A real
+           * refusal refuses these too, so it is never read as "lacks". */
+          const left = await missingOf(pointers);
+          return left.length === 0 ? 'done' : smudgeFromRemote(remote, left, { env, signal });
+        },
+        async () => !(await allStored(oids)),
+        signal,
+      );
+      /* Every remote answered that it lacks what is still missing: one verdict, for every read that joined. */
+      if (!(await allStored(oids))) {
+        throw new RevisionPortError('MISSING_LARGE_OBJECT', 'A large object this revision references is on no remote.');
+      }
+    })();
+    fillsInFlight.set(commit, { fill, signal });
+    try {
+      await fill;
+    } finally {
+      if (fillsInFlight.get(commit)?.fill === fill) {
+        fillsInFlight.delete(commit);
+      }
+    }
+  };
+
+  /* Objects fetched by their own oid at once, per remote: enough to hide a round trip, few enough to bound processes. */
+  const fetchByOidConcurrency = 4;
+
+  /**
+   * Fetch objects by their own oid from one remote, through `git lfs smudge`
+   * with that remote as its default: each verified against its oid, stored,
+   * then handed to `arrived`. Each object's failure is its own, so the verdict
+   * is per object: `'lacks'` only when every failure was that object not found.
+   *
+   * @param remote - The remote asked.
+   * @param pointers - The objects, in the order to ask for them.
+   * @param transfer - The remote's credentials, the signal that stops the transfers, and who is told each object.
+   * @returns The remote's verdict.
+   */
+  const smudgeFromRemote = async (
+    remote: Remote,
+    pointers: ReadonlyArray<Readonly<{ oid: string; size: number }>>,
+    transfer: Readonly<{
+      env: Record<string, string | undefined>;
+      signal: AbortSignal | undefined;
+      arrived?: (oid: string, content: Uint8Array<ArrayBuffer>) => void;
+    }>,
+  ): Promise<'done' | 'lacks' | Error> => {
+    const { env, signal } = transfer;
+    const verdicts: Array<'done' | 'lacks' | Error> = [];
+    const queue = [...pointers];
+    const fetchOne = async ({ oid, size }: Readonly<{ oid: string; size: number }>): Promise<void> => {
+      const result = await run(['-c', `remote.lfsdefault=${remote.name}`, 'lfs', 'smudge'], {
+        input: [
+          textEncoder.encode(`version https://git-lfs.github.com/spec/v1\noid sha256:${oid}\nsize ${String(size)}\n`),
+        ],
+        deadline: transferDeadline,
+        env,
+        ...(signal === undefined ? {} : { signal }),
+        remote: remote.name,
+      });
+      if (result.exitCode !== 0) {
+        verdicts.push(transferVerdict(result, new Set([oid]), remote));
+        return;
+      }
+      /* Content-addressed: bytes that are not the object are no answer at all. */
+      if (result.stdout.byteLength !== size || digestHex('sha256', result.stdout) !== oid) {
+        verdicts.push(
+          new RevisionPortError('ENGINE_FAILED', 'A large object arrived with bytes that are not its own.'),
+        );
+        return;
+      }
+      /* Stored before it is delivered, so a crash keeps it. */
+      await storeLfsObject(oid, result.stdout);
+      transfer.arrived?.(oid, result.stdout);
+      verdicts.push('done');
+    };
+    /*
+     * A worker never rejects while the others still drain: a store or a
+     * delivery that throws (a full disk) ends this remote's round, its queue
+     * emptied, so the remote's verdict is settled only once every transfer it
+     * started has ended, and none outlives it to deliver late. Aborted, that
+     * abort is what the round answers, once the rest have stopped too.
+     */
+    let abort: { error: unknown } | undefined;
+    const worker = async (): Promise<void> => {
+      for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
+        try {
+          // oxlint-disable-next-line no-await-in-loop -- one object after another in this worker.
+          await fetchOne(next);
+        } catch (error) {
+          queue.length = 0;
+          if (signal?.aborted === true) {
+            abort ??= { error };
+          } else {
+            verdicts.push(error instanceof Error ? error : new Error(String(error)));
+          }
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(fetchByOidConcurrency, queue.length) }, worker));
+    if (abort !== undefined) {
+      throw abort.error;
+    }
+    return (
+      verdicts.find((verdict): verdict is Error => verdict instanceof Error) ??
+      (verdicts.includes('lacks') ? 'lacks' : 'done')
+    );
+  };
+
+  /**
+   * Large objects by their pointers alone (D10 `filled`): what this store holds
+   * is read here; the rest is fetched object by object through `git lfs
+   * smudge` with each remote that carries large objects as its default, in
+   * turn, verified against its oid and stored, whether or not any revision
+   * names it.
+   *
+   * @param pointers - The objects wanted.
+   * @param fetchOptions - The delivery callback, the order to fetch in, and the signal.
+   * @returns Every object's bytes, by oid.
+   */
+  const fetchLargeObjectsByOid = async (
+    pointers: ReadonlyArray<Readonly<{ oid: string; size: number }>>,
+    fetchOptions?: Pick<ReadTreeOptions, 'onLargeObject' | 'firstLargeObjects' | 'signal'>,
+  ): Promise<ReadonlyMap<string, Uint8Array<ArrayBuffer>>> => {
+    const signal = fetchOptions?.signal;
+    const contents = new Map<string, Uint8Array<ArrayBuffer>>();
+    const wanted = new Map(pointers.map((pointer) => [pointer.oid, pointer.size]));
+    const deliver = (oid: string, content: Uint8Array<ArrayBuffer>): void => {
+      contents.set(oid, content);
+      fetchOptions?.onLargeObject?.(oid, content);
+    };
+    const readHere = async (oid: string): Promise<Uint8Array<ArrayBuffer> | undefined> => {
+      try {
+        const stored = await readFile(lfsObjectFile(oid));
+        return new Uint8Array(stored.buffer as ArrayBuffer, stored.byteOffset, stored.byteLength);
+      } catch {
+        return undefined;
+      }
+    };
+    for (const oid of wanted.keys()) {
+      // oxlint-disable-next-line no-await-in-loop -- one local read at a time; nothing is transferred here.
+      const here = await readHere(oid);
+      if (here !== undefined) {
+        deliver(oid, here);
+      }
+    }
+    const missing = (): string[] => {
+      const first = fetchOptions?.firstLargeObjects?.() ?? new Set<string>();
+      const left = [...wanted.keys()].filter((oid) => !contents.has(oid));
+      return [...left.filter((oid) => first.has(oid)), ...left.filter((oid) => !first.has(oid))];
+    };
+    if (missing().length > 0) {
+      await fromEachRemote(
+        async (remote, env) =>
+          smudgeFromRemote(
+            remote,
+            missing().map((oid) => ({ oid, size: wanted.get(oid)! })),
+            { env, signal, arrived: deliver },
+          ),
+        async () => missing().length > 0,
+        signal,
+      );
+    }
+    if (missing().length > 0) {
+      throw new RevisionPortError('MISSING_LARGE_OBJECT', 'A large object this checkout holds is on no remote.');
+    }
+    return contents;
+  };
+
+  /*
+   * Objects this store is known to hold, so a mint walks only what changed
+   * (D16). A tree is written only after everything it names, so a held tree
+   * proves its whole subtree is held. Forgotten wholesale every hour and past a
+   * bound: an object a mint wrote but no ref reached is garbage to `git gc`
+   * after its two-week expiry, and must never be trusted that long.
+   */
+  const heldObjects = new Set<string>();
+  let heldSince = Date.now();
+  const heldObjectLimit = 262_144;
+  const heldObjectMilliseconds = 60 * 60 * 1000;
+  const forgetStaleHeldObjects = (): void => {
+    if (Date.now() - heldSince > heldObjectMilliseconds || heldObjects.size > heldObjectLimit) {
+      heldObjects.clear();
+      heldSince = Date.now();
+    }
+  };
+  /* Tree and blob ids for this store's successive mints, digesting only what changed (E3). */
+  const treeIds = createTreeIdMemo();
+
+  /**
+   * Which of `oids` the object store holds, from their headers alone: no
+   * object's content is read.
+   *
+   * @param oids - Candidate object ids.
+   * @returns The ones present.
+   */
+  const presentObjects = async (oids: readonly string[]): Promise<ReadonlySet<string>> => {
+    if (oids.length === 0) {
+      return new Set();
+    }
+    const stdout = await output(['cat-file', '--batch-check=%(objectname)'], {
+      input: [textEncoder.encode(`${oids.join('\n')}\n`)],
+    });
+    return new Set(
+      textDecoder
+        .decode(stdout)
+        .split('\n')
+        .filter((line) => line !== '' && !line.endsWith(' missing')),
+    );
+  };
+
+  /**
+   * Write what the store lacks of one named tree, children first.
+   *
+   * @param root - The tree, as the memo names it.
+   * @returns The root tree's object id.
+   */
+  const storeTreeObjects = async (root: TreeObject): Promise<string> => {
+    forgetStaleHeldObjects();
+    /* A held root is still asked about, header only: a prune, a re-clone or a restore may have removed it since,
+     * and a commit must never be written over a tree the store lacks. */
+    if (root.entries.length === 0) {
+      /* Git answers the empty tree as present whether or not it is stored, so it is never trusted held. */
+      heldObjects.delete(root.oid);
+    } else if (heldObjects.has(root.oid)) {
+      const present = await presentObjects([root.oid]);
+      if (present.has(root.oid)) {
+        return root.oid;
+      }
+      heldObjects.clear();
+      heldSince = Date.now();
+    }
+    /* Children before their parents, and nothing under a tree already held. */
+    const trees: TreeObject[] = [];
+    const blobs = new Map<string, Uint8Array<ArrayBuffer>>();
+    const visited = new Set<string>();
+    const visit = (node: TreeObject): void => {
+      if (heldObjects.has(node.oid) || visited.has(node.oid)) {
+        return;
+      }
+      visited.add(node.oid);
+      for (const entry of node.entries) {
+        if (entry.type === 'tree') {
+          visit(entry.tree);
+        } else if (!heldObjects.has(entry.oid)) {
+          blobs.set(entry.oid, entry.content);
+        }
+      }
+      trees.push(node);
+    };
+    visit(root);
+    const present = await presentObjects([...trees.map(({ oid }) => oid), ...blobs.keys()]);
+    const missingBlobs = [...blobs].filter(([oid]) => !present.has(oid));
+    if (missingBlobs.length > 0) {
+      const chunks: Array<Uint8Array<ArrayBuffer>> = [];
+      for (const [, content] of missingBlobs) {
+        chunks.push(
+          textEncoder.encode(`blob\ndata ${String(content.byteLength)}\n`),
+          content,
+          textEncoder.encode('\n'),
+        );
+      }
+      chunks.push(textEncoder.encode('done\n'));
+      await output(['fast-import', '--quiet'], { input: chunks });
+    }
+    /* Git answers the empty tree as present whether or not it is stored, so it is always written. */
+    const missingTrees = trees.filter(({ oid, entries }) => entries.length === 0 || !present.has(oid));
+    if (missingTrees.length > 0) {
+      const listing = (node: TreeObject): string =>
+        node.entries
+          .map((entry) =>
+            entry.type === 'tree'
+              ? `040000 tree ${entry.oid}\t${entry.name}\0`
+              : `${entry.mode} blob ${entry.oid}\t${entry.name}\0`,
+          )
+          .join('');
+      /* An empty root is the one tree with no entries; batch mode cannot spell it, so it goes alone. */
+      const written =
+        missingTrees.length === 1 && missingTrees[0]!.entries.length === 0
+          ? [await text(['mktree', '-z'])]
+          : textDecoder
+              .decode(
+                await output(['mktree', '-z', '--batch'], {
+                  input: [textEncoder.encode(`${missingTrees.map((node) => `${listing(node)}\0`).join('')}`)],
+                }),
+              )
+              .split(/\s+/u)
+              .filter((line) => line !== '');
+      /* Git's ids are the memo's ids, or this engine and the host disagree on identity (I4). */
+      if (written.length !== missingTrees.length || written.some((oid, index) => oid !== missingTrees[index]!.oid)) {
+        throw new RevisionPortError('ENGINE_FAILED', 'Native Git recorded a tree under an unexpected id.');
+      }
+    }
+    for (const node of trees) {
+      heldObjects.add(node.oid);
+    }
+    for (const oid of blobs.keys()) {
+      heldObjects.add(oid);
+    }
+    return root.oid;
+  };
+
+  /**
+   * Store one tree incrementally (D16): the tree's objects are named by the
+   * store's own memo, which digests only blobs and directories that changed
+   * since the last mint, and only what the store lacks is written — the
+   * changed blobs through one blob-only `fast-import`, the changed trees through
+   * one `mktree --batch`, children first. A one-file save streams that file and
+   * the trees on its path to Git, never the project.
+   *
+   * @param tree - The tree to store.
+   * @param largeObjects - Whether the clean step runs; `false` stores the tree verbatim.
+   * @param parents - The revision's parents, whose unchanged entries keep their representation (rule 13).
+   * @returns The root tree's object id.
+   */
+  const writeTreeObject = async (
+    tree: ImmutableRevisionTree,
+    largeObjects: boolean,
+    parents: readonly RevisionId[] = [],
+  ): Promise<string> => {
+    /* The pointer decision is the host-neutral cut's (`lfs.ts`), which the cut's `treeId` is computed from,
+     * so the id this engine records is the id the host predicted; Git's clean filter never runs. The tree's
+     * own attributes decide new and changed content, adopted or not (D16). */
+    const recorded = largeObjects
+      ? cleanLargeObjects(tree, {
+          basis: parents.length === 0 ? undefined : await basisOf(parents),
+          ignoreCase: await ignoresCase(),
+        })
+      : { tree, objects: new Map<string, Uint8Array<ArrayBuffer>>() };
+    /* Each asked of the disk, never of a memo: a pruned object is stored again. */
+    await Promise.all([...recorded.objects].map(async ([oid, content]) => storeLfsObject(oid, content)));
+    const root = treeIds.treeObject(recorded.tree, await format());
+    try {
+      return await storeTreeObjects(root);
+    } catch (error) {
+      /* A held object the store lost (a pruned subtree) fails the write; forgotten, the retry asks Git for all. */
+      heldObjects.clear();
+      heldSince = Date.now();
+      if (error instanceof RevisionPortError && error.code === 'ENGINE_UNAVAILABLE') {
+        throw error;
+      }
+      return storeTreeObjects(root);
+    }
+  };
+
+  /* A branch name is spelled short and everything else is spelled in full: the
+   * record set the design pushes lives outside `refs/heads` (`refs/tau/chats/*`,
+   * W17), so a port that could only name branches could not address half of what
+   * its own `push` moves. */
+  const refOf = (name: string): string => (name.startsWith('refs/') ? name : `${branchRefPrefix}/${name}`);
+
+  /**
+   * One version, or `undefined` when the ref is gone or is not a version.
+   *
+   * A version is an annotated tag at `refs/tags/v<n>` with a valid `Tau-Tag`
+   * record (B6, I7). Its id and name come from that record, never from the
+   * ref; any other tag there is not a version, though it holds its number.
+   *
+   * @param oid - The object its ref holds, unpeeled.
+   * @param number - The number its ref says.
+   * @returns The version.
+   */
+  const readTagObject = async (oid: string, number: number): Promise<RevisionTag | undefined> => {
+    /* `resolve` peels (`^{commit}`), which is right everywhere else and wrong
+     * here: the tag object itself is what carries the name, note and actor. */
+    if ((await text(['cat-file', '-t', oid])) !== 'tag') {
+      return undefined;
+    }
+    const decoded = decodeTag(await output(['cat-file', 'tag', oid]));
+    const trailer = parseRevisionTagMessage(decoded.message);
+    return trailer === undefined
+      ? undefined
+      : Object.freeze({
+          id: trailer.id,
+          number,
+          name: trailer.name,
+          revisionId: revisionId(decoded.object),
+          note: trailer.note,
+          actor: trailer.actor,
+          createdAt: decoded.tagger.seconds * 1000,
+        });
+  };
+
+  /* Every `refs/tags/v<n>` under one prefix, version or not, with its number and unpeeled object. */
+  const numberedTagReferences = async (
+    prefix: string,
+  ): Promise<ReadonlyArray<Readonly<{ oid: string; number: number }>>> => {
+    const records = await text(['for-each-ref', '--format=%(refname)%00%(objectname)', `${prefix}/`]);
+    return records
+      .split('\n')
+      .filter((line) => line !== '')
+      .flatMap((line) => {
+        const [ref = '', oid = ''] = line.split('\0');
+        const number = versionNumberOfTag(ref.slice(prefix.length + 1));
+        return number === undefined ? [] : [{ oid, number }];
+      });
+  };
+
+  const tagsOf = async (
+    numbered: ReadonlyArray<Readonly<{ oid: string; number: number }>>,
+  ): Promise<readonly RevisionTag[]> => {
+    const tags = await Promise.all(numbered.map(async (entry) => readTagObject(entry.oid, entry.number)));
+    return Object.freeze(
+      tags.filter((entry) => entry !== undefined).toSorted((left, right) => left.number - right.number),
+    );
+  };
+
+  /* Whether two tag objects are the same version: both versions, with one id (B6). */
+  const sameVersionObjects = async (left: string, right: string): Promise<boolean> => {
+    const [one, other] = await Promise.all([readTagObject(left, 2), readTagObject(right, 2)]);
+    return one !== undefined && one.id === other?.id;
+  };
+
+  /* Every version, lowest number first (B6): this store's, or a remote's as last fetched. */
+  const listTags = async (input?: ListRevisionTagsInput): Promise<readonly RevisionTag[]> =>
+    tagsOf(
+      await numberedTagReferences(
+        input?.remote === undefined ? tagRefPrefix : remoteTrackingRef(input.remote, tagRefPrefix),
+      ),
+    );
+
+  const resolve = async (ref: string): Promise<string | undefined> => {
+    const result = await run(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
+    if (result.exitCode !== 0) {
+      return undefined;
+    }
+    return textDecoder.decode(result.stdout).trim();
+  };
+
+  const listTree = async (
+    commit: string,
+  ): Promise<ReadonlyMap<string, Readonly<{ oid: string; mode: FileMode; size: number }>>> => {
+    /* `-l` adds each blob's size, padded with spaces: git reads it from the object header, not the blob. */
+    const stdout = await output(['ls-tree', '-rlz', '--full-tree', commit]);
+    const paths = new Map<string, Readonly<{ oid: string; mode: FileMode; size: number }>>();
+    for (const record of textDecoder.decode(stdout).split('\0')) {
+      if (record === '') {
+        continue;
+      }
+      const tab = record.indexOf('\t');
+      const header = record.slice(0, tab).split(/ +/u);
+      if (
+        tab === -1 ||
+        header[1] !== 'blob' ||
+        header[2] === undefined ||
+        (header[0] !== '100644' && header[0] !== '100755')
+      ) {
+        throw new RevisionPortError('ENGINE_FAILED', 'A revision tree holds a non-file entry.');
+      }
+      paths.set(record.slice(tab + 1), { oid: header[2], mode: header[0], size: Number(header[3]) });
+    }
+    return paths;
+  };
+
+  /* The parents' blob ids, from their tree objects alone (rule 13); the last few are kept, as a save asks for the same parent twice. */
+  const bases = new Map<string, Promise<LargeObjectBasis>>();
+  const basisOf = async (parents: readonly RevisionId[]): Promise<LargeObjectBasis> => {
+    const key = parents.join(' ');
+    let held = bases.get(key);
+    if (held === undefined) {
+      /* `ls-tree` takes each commit itself: one process a parent, and no blob is read. A failed listing is forgotten. */
+      held = (async () => {
+        try {
+          const listings = await Promise.all(parents.map(async (parent) => listTree(parent)));
+          return largeObjectBasisOf(
+            await format(),
+            ...listings.map((listing) => [...listing].map(([path, { oid }]) => ({ path, oid }))),
+          );
+        } catch (error) {
+          bases.delete(key);
+          throw error;
+        }
+      })();
+      bases.set(key, held);
+      if (bases.size > 4) {
+        bases.delete(bases.keys().next().value!);
+      }
+    }
+    return held;
+  };
+
+  /* `core.ignoreCase`, read once the store exists: the repository's own answer for how its attributes match
+   * (git-config(1)). `init` forgets it, since `git init` is what probes the disk and writes it. */
+  let ignoreCase: Promise<boolean> | undefined;
+  const ignoresCase = async (): Promise<boolean> => {
+    ignoreCase ??= (async () => {
+      try {
+        const result = await run(['config', '--bool', 'core.ignoreCase']);
+        return result.exitCode === 0 && textDecoder.decode(result.stdout).trim() === 'true';
+      } catch {
+        return false;
+      }
+    })();
+    return ignoreCase;
+  };
+
+  /* The store's own `core.ignoreCase`, never a device's (`--local`): what the browser leg reads too, so the
+   * ignore rules fold case alike on both legs. Read again by every `ignoreContext`, so a `git config` while
+   * the store is open moves the context, and the listing after it folds as that reading said. */
+  const readStoreIgnoreCase = async (): Promise<boolean> => {
+    try {
+      const result = await run(['config', '--local', '--bool', 'core.ignoreCase']);
+      return result.exitCode === 0 && textDecoder.decode(result.stdout).trim() === 'true';
+    } catch {
+      return false;
+    }
+  };
+  let contextIgnoreCase: Promise<boolean> | undefined;
+  const storeIgnoresCase = async (): Promise<boolean> => contextIgnoreCase ?? readStoreIgnoreCase();
+
+  /**
+   * Every named blob, in one `cat-file --batch` (rule 20's `readTree` cost).
+   *
+   * `--batch` reads object names on stdin and answers
+   * `<oid> SP <type> SP <size> LF <content> LF` for each, in the order it was
+   * asked — so the whole tree costs one process instead of one per file. A
+   * 4,000-file project was 4,001 spawns, which is where opening History or a
+   * second checkout spent its time, and no amount of concurrency fixes a cost
+   * that *is* the process count.
+   *
+   * ponytail: one batch, no chunking. The answer is bounded by `runCommand`'s
+   * own captured-output limit (256 MiB), which a tree that large would already
+   * have exhausted through `ImmutableRevisionTree` anyway.
+   *
+   * @param ids - Object ids to read; duplicates are read once.
+   * @param want - The object kind `cat-file` is asked for.
+   * @returns The bytes by object id.
+   */
+  const readObjects = async (
+    ids: readonly string[],
+    want: 'blob' | 'commit',
+  ): Promise<ReadonlyMap<string, Uint8Array<ArrayBuffer>>> => {
+    const wanted = [...new Set(ids)];
+    const objects = new Map<string, Uint8Array<ArrayBuffer>>();
+    if (wanted.length === 0) {
+      return objects;
+    }
+    const stdout = await output(['cat-file', '--batch'], { input: [textEncoder.encode(`${wanted.join('\n')}\n`)] });
+    let offset = 0;
+    for (const id of wanted) {
+      const newline = stdout.indexOf(0x0a, offset);
+      const [reported, kind, size] =
+        newline === -1 ? [] : textDecoder.decode(stdout.subarray(offset, newline)).split(' ');
+      if (reported !== id || kind !== want || size === undefined || !/^\d+$/u.test(size)) {
+        /* `missing`, the wrong type, or a short answer: the batch named
+         * something this store cannot hand back, which is the same failure one
+         * `cat-file <type>` raised per object. */
+        throw new RevisionPortError('ENGINE_FAILED', 'This store cannot read an object a revision names.');
+      }
+      const start = newline + 1;
+      const end = start + Number(size);
+      /* Copied, not a view: a view would hold the whole batch alive for the
+       * life of every object in it. */
+      objects.set(id, stdout.slice(start, end));
+      offset = end + 1;
+    }
+    return objects;
+  };
+
+  /**
+   * The commits a walk from these heads is about to read, in two processes (rule 20's log cost).
+   *
+   * `rev-list` answers the reachable *set* and `--batch` reads it; the promised
+   * order is still {@link walkRevisionLog}'s, computed from the same parents and
+   * committer times it would have read one process at a time. Best effort by
+   * design: anything this does not hold — a head that is not a commit, a walk
+   * that reaches past the bound — falls back to a single `cat-file`, so the
+   * result is identical either way.
+   *
+   * @param heads - Where the walk starts.
+   * @param limit - The walk's own bound, when it has one.
+   * @returns The decoded commits by id, empty when the prefetch could not run.
+   */
+  const prefetchCommits = async (
+    heads: readonly string[],
+    limit: number | undefined,
+  ): Promise<ReadonlyMap<string, DecodedCommit>> => {
+    const commits = new Map<string, DecodedCommit>();
+    if (heads.length === 0) {
+      return commits;
+    }
+    try {
+      /* Slack over the bound: a bounded walk expands every revision whose time
+       * is not older than the one it is about to emit, so it reads a little
+       * more than it emits. Reading a few extra objects in the same process is
+       * free; reading too few just costs one `cat-file` each. */
+      const listed = await run([
+        'rev-list',
+        ...(limit === undefined ? [] : [`--max-count=${String(limit + commitWalkSlack)}`]),
+        ...heads,
+        '--',
+      ]);
+      if (listed.exitCode !== 0) {
+        return commits;
+      }
+      const ids = textDecoder
+        .decode(listed.stdout)
+        .split('\n')
+        .filter((line) => line !== '');
+      for (const [id, body] of await readObjects(ids, 'commit')) {
+        commits.set(id, decodeCommit(body));
+      }
+    } catch {
+      /* A store that cannot answer the batch answers one object at a time. */
+      return new Map();
+    }
+    return commits;
+  };
+
+  const checkoutIdOf = async (branch: string): Promise<string> => checkoutIdOfBranch(await format(), branch);
+
+  const requireCheckouts = (): NativeGitCheckoutOptions => {
+    if (checkouts === undefined) {
+      throw new RevisionPortError(
+        'UNSUPPORTED_OPERATION',
+        'This port has no checkouts directory; construct it with `checkouts` to use them.',
+      );
+    }
+    return checkouts;
+  };
+
+  /**
+   * Every worktree this repository has, as Git itself reports them.
+   *
+   * @returns The live checkout first, then every linked one.
+   */
+  const listWorktrees = async (): Promise<readonly Checkout[]> => {
+    const { projectId, directory } = requireCheckouts();
+    const zero = await zeroObjectId();
+    const checkoutsRoot = await realpath(directory).catch(() => directory);
+    const listing = await text(['worktree', 'list', '--porcelain']);
+    const blocks = listing.split('\n\n');
+    const collected: Checkout[] = [];
+    for (const block of blocks) {
+      const lines = block.split('\n').filter((line) => line !== '');
+      const root = lines.find((line) => line.startsWith('worktree '))?.slice('worktree '.length);
+      if (root === undefined) {
+        continue;
+      }
+      const head = lines.find((line) => line.startsWith('HEAD '))?.slice('HEAD '.length);
+      const branch = lines.find((line) => line.startsWith('branch '))?.slice('branch '.length);
+      const linked = collected.length > 0;
+      /* An adopted repository can have worktrees the person made. They are not
+       * this project's checkouts: listing one watched it, cut it at close and
+       * committed onto its branch. Only a worktree this port created, directly
+       * under its checkouts directory, is a linked checkout. */
+      // oxlint-disable-next-line no-await-in-loop -- one realpath per worktree, in Git's order.
+      if (linked && dirname(await realpath(root).catch(() => root)) !== checkoutsRoot) {
+        continue;
+      }
+      collected.push(
+        Object.freeze({
+          /* The id is the directory name this port created, not a slice of the
+           * configured prefix: Git reports a resolved path, and on macOS that is
+           * `/private/var/…` where the caller said `/var/…`. */
+          id: linked ? basename(root) : liveCheckoutId,
+          projectId,
+          root,
+          kind: linked ? 'linked' : 'live',
+          branch: branch?.startsWith(`${branchRefPrefix}/`) ? branch.slice(branchRefPrefix.length + 1) : undefined,
+          baseRevisionId: head === undefined || head === zero ? undefined : revisionId(head),
+        }),
+      );
+    }
+    return Object.freeze(collected);
+  };
+
+  /**
+   * One environment with one more variable.
+   *
+   * @param environment - The environment to extend.
+   * @param name - The variable's name.
+   * @param value - Its value.
+   * @returns A copy of the environment with it set.
+   */
+  const withVariable = (
+    environment: Record<string, string | undefined>,
+    name: string,
+    value: string,
+  ): Record<string, string | undefined> => {
+    const extended = { ...environment };
+    // Environment names, not identifiers: assigned rather than spelled as keys.
+    extended[name] = value;
+    return extended;
+  };
+
+  /** The head a branch move replaced; `head` is `undefined` when the branch was unborn. */
+  type ReplacedHead = Readonly<{ head: string | undefined }>;
+
+  /**
+   * One worktree's admin directory: the store for the live checkout, its own
+   * `worktrees/<name>` for a linked one.
+   *
+   * @param root - A linked checkout's root, or `undefined` for the live checkout.
+   * @returns The absolute directory, or `undefined` when Git cannot name one.
+   */
+  const adminDirectoryOf = async (root: string | undefined): Promise<string | undefined> => {
+    if (root === undefined) {
+      return join(repositoryPath, gitDirectoryName);
+    }
+    const result = await run(['-C', root, 'rev-parse', '--absolute-git-dir'], { env: linkedGitEnvironment() });
+    return result.exitCode === 0 ? textDecoder.decode(result.stdout).trim() : undefined;
+  };
+
+  /**
+   * Point one worktree's index at the tree its branch now names, carrying the
+   * person's staging forward onto it.
+   *
+   * Every path whose index entry differs from the tree of the head the move
+   * replaced holds the person's own staging (`git add -p`, a resolved
+   * conflict), and keeps that entry; every other path takes the new head's.
+   * So `git diff --cached` names only what the person staged, and a plain
+   * `git commit` records it on top of Tau's head instead of undoing Tau's
+   * saves of the paths they never staged. A path the person staged that the
+   * new head also changed keeps the person's entry, and `git status` shows it
+   * staged and modified: Tau never decides between the two, and never drops
+   * either. An index with unmerged entries, or one Git cannot compare, is
+   * left as it is.
+   *
+   * The comparison and the write happen under Git's own `index.lock`, taken
+   * here, so the person's Git cannot stage between them. The new index is
+   * written beside it and renamed through the lock, which is how Git itself
+   * writes one. A lock someone else holds means their Git is mid-operation,
+   * and the refresh is skipped.
+   *
+   * @param root - A linked checkout's root, or `undefined` for the live checkout.
+   * @param head - The commit the branch now names, or `undefined` on an unborn branch.
+   * @param replaced - The head the move replaced, whose `head` is `undefined`
+   *   when the branch was unborn; absent, the index is replaced without
+   *   comparing (an open that found none).
+   * @returns Once the index was refreshed or left.
+   */
+  const refreshIndex = async (
+    root: string | undefined,
+    head: string | undefined,
+    replaced: ReplacedHead | undefined,
+  ): Promise<void> => {
+    /* A linked worktree finds its own admin directory from its `.git` file. */
+    const prefix = root === undefined ? [] : ['-C', root];
+    const environment = root === undefined ? gitEnvironment() : linkedGitEnvironment();
+    const readTree = head === undefined ? ['read-tree', '--empty'] : ['read-tree', head];
+    if (replaced === undefined) {
+      await run([...prefix, ...readTree], { env: environment });
+      return;
+    }
+    const admin = await adminDirectoryOf(root);
+    if (admin === undefined) {
+      return;
+    }
+    const index = join(admin, 'index');
+    const lock = `${index}.lock`;
+    const held = await open(lock, 'wx').then(
+      async (handle) => {
+        await handle.close();
+        return true;
+      },
+      () => false,
+    );
+    if (!held) {
+      return;
+    }
+    let locked = true;
+    const temporary = `${index}.tau-${randomUUID()}`;
+    try {
+      const indexed = await access(index).then(
+        () => true,
+        () => false,
+      );
+      const staged = indexed ? await stagedEntries(prefix, environment, replaced.head) : [];
+      if (staged === undefined) {
+        return;
+      }
+      const writing = { env: withVariable(environment, 'GIT_INDEX_FILE', temporary) };
+      const written = await run([...prefix, ...readTree], writing);
+      if (written.exitCode !== 0) {
+        return;
+      }
+      if (staged.length > 0) {
+        const zero = await zeroObjectId();
+        const records = staged.map(({ mode, object, path }) =>
+          mode === undefined ? `0 ${zero}\t${path}\0` : `${mode} ${object}\t${path}\0`,
+        );
+        const carried = await run([...prefix, 'update-index', '-z', '--index-info'], {
+          ...writing,
+          input: [textEncoder.encode(records.join(''))],
+        });
+        if (carried.exitCode !== 0) {
+          return;
+        }
+      }
+      await rename(temporary, lock);
+      await rename(lock, index);
+      locked = false;
+    } finally {
+      await rm(temporary, { force: true });
+      if (locked) {
+        await rm(lock, { force: true });
+      }
+    }
+  };
+
+  /**
+   * The index entries a worktree's index holds that differ from the tree of one head: what the person staged.
+   *
+   * @param prefix - The arguments that select the worktree.
+   * @param environment - The environment its commands run under.
+   * @param replaced - The head, or `undefined` for an unborn one (the empty tree).
+   * @returns One entry per staged path, its `mode` absent where the person
+   *   staged a removal; `undefined` when the index has unmerged entries or Git
+   *   could not compare, and the index is not Tau's to rebuild.
+   */
+  const stagedEntries = async (
+    prefix: readonly string[],
+    environment: Record<string, string | undefined>,
+    replaced: string | undefined,
+  ): Promise<ReadonlyArray<Readonly<{ mode?: string; object: string; path: string }>> | undefined> => {
+    const reading = { env: withVariable(environment, 'GIT_OPTIONAL_LOCKS', '0') };
+    const fields = (result: GitCommandResult): string[] | undefined =>
+      result.exitCode === 0 ? textDecoder.decode(result.stdout).split('\0') : undefined;
+    if (replaced === undefined) {
+      /* Against an unborn head, every entry was staged by someone: `<mode> <object> <stage>\t<path>`. */
+      const listed = fields(await run([...prefix, 'ls-files', '--stage', '-z'], reading));
+      if (listed === undefined) {
+        return undefined;
+      }
+      const entries = listed
+        .filter((record) => record !== '')
+        .map((record) => {
+          const [meta = '', path = ''] = record.split('\t');
+          const [mode = '', object = '', stage = ''] = meta.split(' ');
+          return { mode, object, stage, path };
+        });
+      return entries.some((entry) => entry.stage !== '0')
+        ? undefined
+        : entries.map(({ mode, object, path }) => ({ mode, object, path }));
+    }
+    /* `:<old mode> <new mode> <old object> <new object> <status>`, then the path; the new side is the index's. */
+    const compared = fields(
+      await run([...prefix, 'diff-index', '--cached', '--raw', '-z', '--no-renames', replaced, '--'], reading),
+    );
+    if (compared === undefined) {
+      return undefined;
+    }
+    const entries: Array<Readonly<{ mode?: string; object: string; path: string }>> = [];
+    for (let at = 0; at + 1 < compared.length; at += 2) {
+      const [, mode = '', , object = '', status = ''] = (compared[at] ?? '').slice(1).split(' ');
+      const path = compared[at + 1] ?? '';
+      if (status.startsWith('U')) {
+        return undefined;
+      }
+      entries.push(status.startsWith('D') ? { object, path } : { mode, object, path });
+    }
+    return entries;
+  };
+
+  /**
+   * Point each worktree's index at the tree its branch names (R14).
+   *
+   * Tau never reads the index: it applies trees through the filesystem provider
+   * and decides dirtiness by capture. Stock Git does read it, and an index left
+   * behind by a moved branch makes `git status` show every Tau revision
+   * reversed and `git commit -a` record it undone. So after a branch moves,
+   * every worktree that has it checked out gets `read-tree` of the new head:
+   * the state `git reset` leaves, with stat data zero for Git to fill in on
+   * its own next refresh. What the person staged is carried onto the new
+   * head (see `refreshIndex`).
+   *
+   * One queue so the last refresh reads the last head, and every failure is
+   * swallowed: the ref has already moved, and a held `index.lock` means the
+   * person's own Git is mid-operation.
+   *
+   * @param moved - The fully-qualified branch that moved, or `undefined` for
+   *   the live worktree alone (an open that found no index).
+   * @param replaced - The head the move replaced; absent, each index is replaced without comparing.
+   * @returns Once every matching worktree's index was refreshed or skipped.
+   */
+  const syncIndexes = async (moved: string | undefined, replaced?: ReplacedHead): Promise<void> =>
+    refQueue.queueFor('index', async () => {
+      const listing = await run(['worktree', 'list', '--porcelain']);
+      if (listing.exitCode !== 0) {
+        return;
+      }
+      const zero = await zeroObjectId();
+      const blocks = textDecoder.decode(listing.stdout).split('\n\n');
+      for (const [index, block] of blocks.entries()) {
+        const lines = block.split('\n');
+        const root = lines.find((line) => line.startsWith('worktree '))?.slice('worktree '.length);
+        const head = lines.find((line) => line.startsWith('HEAD '))?.slice('HEAD '.length);
+        const branch = lines.find((line) => line.startsWith('branch '))?.slice('branch '.length);
+        const wanted = moved === undefined ? index === 0 : branch === moved;
+        if (root === undefined || !wanted) {
+          continue;
+        }
+        // oxlint-disable-next-line no-await-in-loop -- at most one worktree holds a branch.
+        await refreshIndex(index === 0 ? undefined : root, head === zero ? undefined : head, replaced).catch(
+          () => undefined,
+        );
+      }
+    });
+
+  /**
+   * Refuse a remote or ref that Git could read as an option, and any ref this
+   * host keeps to itself.
+   *
+   * @param value - The remote name or fully-qualified ref.
+   * @param label - What it names, for the diagnostic.
+   * @param ref - Whether the value is a ref and therefore subject to the host-local list.
+   */
+  const guardTransportValue = (value: string, label: string, ref = false): void => {
+    try {
+      parseTransportValue(value, label);
+    } catch (error) {
+      throw new RevisionPortError(
+        'INVALID_TRANSPORT',
+        error instanceof NativeGitError ? error.message : 'Unsafe Git transport value.',
+        { cause: error },
+      );
+    }
+    if (ref && isHostLocalRef(value)) {
+      throw new RevisionPortError('INVALID_TRANSPORT', `${label} names a ref that never leaves this host.`);
+    }
+  };
+
+  const listRemoteReferences = async (
+    remote: string | RevisionRemoteAddress,
+    options?: Readonly<{ signal?: AbortSignal }>,
+  ): Promise<readonly RemoteRef[]> => {
+    options?.signal?.throwIfAborted();
+    const name = typeof remote === 'string' ? remote : remote.name;
+    guardTransportValue(name, 'remote');
+    /* R2: an address not recorded yet is read by URL, with the credential its
+     * address would get once recorded under `name`; git's config is not written. */
+    const target = typeof remote === 'string' ? remote : remote.url;
+    if (typeof remote !== 'string') {
+      guardTransportValue(remote.url, 'url');
+    }
+    const env = await remoteEnvironment(name, typeof remote === 'string' ? undefined : [remoteOf(name, remote.url)]);
+    const listing = textDecoder
+      .decode(await output(['ls-remote', '--refs', '--', target], { env, remote: name, signal: options?.signal }))
+      .trim();
+    return Object.freeze(
+      listing
+        .split('\n')
+        .map((line) => line.split('\t'))
+        .filter((parts): parts is [string, string] => parts.length === 2 && parts[0] !== '' && parts[1] !== undefined)
+        .map(([oid, name]) => Object.freeze({ name, head: revisionId(oid) })),
+    );
+  };
+
+  /**
+   * One push's per-ref outcome, from `--porcelain`'s own table.
+   *
+   * `git push` writes one line per offered ref whether it succeeded or not, so
+   * a refused record ref is *data* here rather than a failed command — which is
+   * the whole point of the two push sets (A39).
+   *
+   * @param stdout - The command's `--porcelain` output.
+   * @param offered - The local refs, in the order they were offered, each with
+   *   the commit it named before `git push` was spawned.
+   * @param said - The server's own sideband sentence, when it sent one.
+   * @param sideband - Every `remote:` line, read by {@link refMoved} as the browser leg reads its own.
+   * @returns One result per offered ref.
+   */
+  // oxlint-disable-next-line max-params -- the push's output, its offer and the two readings of its sideband.
+  const parsePushPorcelain = (
+    stdout: string,
+    offered: ReadonlyArray<Readonly<{ name: string; head: string | undefined }>>,
+    said: string | undefined,
+    sideband: readonly string[],
+  ): readonly RevisionPushRefResult[] => {
+    const rows = new Map<string, Readonly<{ flag: string; summary: string; moved: boolean }>>();
+    for (const line of stdout.split('\n')) {
+      const parts = line.split('\t');
+      if (parts.length < 3 || parts[0] === undefined || parts[1] === undefined) {
+        continue;
+      }
+      const [from = '', to = ''] = parts[1].split(':');
+      const summary = parts[2] ?? '';
+      rows.set(
+        from,
+        Object.freeze({ flag: parts[0], summary, moved: parts[0] === '!' && refMoved(to, summary, sideband) }),
+      );
+    }
+    /* The server's compare-and-set refused one ref of an atomic push: the others fall with it (D39). */
+    const movedAny = [...rows.values()].some(({ moved }) => moved);
+    return Object.freeze(
+      offered.map(({ name, head }): RevisionPushRefResult => {
+        const row = rows.get(name);
+        if (row === undefined || row.flag === '!') {
+          return Object.freeze({
+            name,
+            status: 'rejected',
+            head: undefined,
+            reason:
+              row === undefined
+                ? 'The remote did not report this ref.'
+                : row.moved || (movedAny && /atomic transaction failed/iu.test(row.summary))
+                  ? 'leaseLost'
+                  : remoteRefusalSaid(refusalReason(row.summary), said === undefined ? [] : [said]),
+          });
+        }
+        return Object.freeze({
+          name,
+          status: row.flag === '=' ? 'upToDate' : 'updated',
+          head: head === undefined ? undefined : revisionId(head),
+        });
+      }),
+    );
+  };
+
+  /**
+   * Whether this project directory *is* the top level of a repository.
+   *
+   * `rev-parse --git-dir` answers for the nearest enclosing repository, so a
+   * project nested inside one would adopt it and write its revisions there
+   * (review 4 R2). The question the port actually has is whether the store at
+   * this path is its own, which only `--show-toplevel` answers.
+   *
+   * @returns Whether a repository exists here and its top level is this path.
+   */
+  const ownsStore = async (): Promise<boolean> => {
+    /* A linked worktree or a submodule has a one-line `.git` file naming an
+     * administrative directory inside another repository. Every path this port
+     * derives from `<project>/.git` — the index it heals, the LFS objects it
+     * writes, `worktree list`'s first entry as the live checkout — then names
+     * somebody else's, so a close revision committed the worktree's files onto
+     * the main checkout's branch and the open rewrote this worktree's index
+     * from that checkout's HEAD. */
+    const gitEntry = await stat(join(repositoryPath, gitDirectoryName)).catch(() => undefined);
+    if (gitEntry?.isFile() === true) {
+      throw new RevisionPortError(
+        'INVALID_REPOSITORY',
+        'The project path is a linked Git worktree or submodule; a revision store needs a repository of its own.',
+      );
+    }
+    /* Discovery, not the pinned store: the question is what is *already* at
+     * this path, so `GIT_DIR` must be absent here rather than pointed at the
+     * answer. Every `GIT_*` the caller exported is still stripped. A store
+     * directory that is already here is the one discovery finds first, so its
+     * common directory is pinned to itself and a `commondir` planted in it
+     * cannot answer for it (LP4); with no store yet there is nothing to pin,
+     * and pinning a missing one would hide a bare repository at this path. */
+    const discovery = gitEntry?.isDirectory() === true ? linkedGitEnvironment() : clearedGitEnvironment();
+    const bare = await run(['rev-parse', '--is-bare-repository'], { env: discovery });
+    if (bare.exitCode === 0 && textDecoder.decode(bare.stdout).trim() === 'true') {
+      // Review 4 R26: a bare repository has no work tree to snapshot, and
+      // `--show-toplevel` below would call it "not a repository" and re-init it.
+      throw new RevisionPortError(
+        'INVALID_REPOSITORY',
+        'The project path is a bare repository; a revision store needs a work tree.',
+      );
+    }
+    const result = await run(['rev-parse', '--show-toplevel'], { env: discovery });
+    if (result.exitCode !== 0) {
+      return false;
+    }
+    const reported = textDecoder.decode(result.stdout).trim();
+    if (reported.length === 0) {
+      return false;
+    }
+    try {
+      return (await realpath(reported)) === (await realpath(repositoryPath));
+    } catch {
+      return false;
+    }
+  };
+
+  /**
+   * What is at the project path, derived from disk alone.
+   *
+   * `adopted` is a repository the person made: Tau creates its setup files
+   * before `git init`, so a store it created carries one of its blocks. An
+   * adopted repository's files and config are left alone, and only the
+   * adoption refusals and the LFS filter install depend on it: which paths are
+   * pointers is the tree's own attributes, and which untracked paths a cut
+   * leaves out its own ignore rules, on every repository (D16, revisions
+   * policy rules 5 and 13).
+   *
+   * Every session reaches the same answer for the same folder: before the
+   * store exists the folder is Tau's, because Tau is about to create its store
+   * (A6), and `init` forgets the answer once the store is made, so the next
+   * question reads the disk again.
+   */
+  let opened: Promise<Readonly<{ owned: boolean; adopted: boolean }>> | undefined;
+  const openState = async (): Promise<Readonly<{ owned: boolean; adopted: boolean }>> => {
+    opened ??= (async () => {
+      try {
+        const owned = await ownsStore();
+        const [ignore, attributes] = await Promise.all(
+          [generatedIgnorePath, generatedGitattributesPath].map(async (path) =>
+            readFile(join(repositoryPath, path), 'utf8').catch(() => undefined),
+          ),
+        );
+        const theirs = !hasGeneratedBlock(ignore) && !hasGeneratedBlock(attributes);
+        /* Whether a store is Tau's is decided by Tau having created it (A6): a
+         * folder with no store yet is Tau's once `init` makes one, whatever its
+         * own ignore and attributes files say, and the Start mint merges both
+         * generated blocks into them, so the next session reads it as Tau's too. */
+        return { owned, adopted: owned && theirs };
+      } catch (error) {
+        /* A refusal is asked again, never remembered: the path may be mended. */
+        opened = undefined;
+        throw error;
+      }
+    })();
+    return opened;
+  };
+  /* A path `init` refuses is never adopted; it never reaches a write either. */
+  const isAdopted = async (): Promise<boolean> => {
+    try {
+      const { adopted } = await openState();
+      return adopted;
+    } catch {
+      return false;
+    }
+  };
+
+  /**
+   * Refuse a repository whose recorded tree Tau cannot carry unchanged.
+   *
+   * Every path in `HEAD` must be one the registry versions and a regular file,
+   * or the first revision would drop it (rule 4) or record a link as a file
+   * (rule 5). Large-file pointers are carried (D16): the tree's own attributes
+   * decide which paths are pointers, on every repository, so an unchanged
+   * entry keeps its representation (rule 13).
+   */
+  const assertAdoptable = async (): Promise<void> => {
+    const refuse = (reason: string): never => {
+      throw new RevisionPortError('INVALID_REPOSITORY', `Tau cannot record revisions in this repository: ${reason}`);
+    };
+    const head = await run(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+    if (head.exitCode !== 0) {
+      return;
+    }
+    const listing = await text(['ls-tree', '-r', '-z', '--full-tree', 'HEAD']);
+    for (const record of listing.split('\0')) {
+      const tab = record.indexOf('\t');
+      if (tab === -1) {
+        continue;
+      }
+      const [mode = ''] = record.slice(0, tab).split(' ');
+      const path = record.slice(tab + 1);
+      if (mode !== '100644' && mode !== '100755') {
+        refuse(`${path} is a link or a nested repository, which a revision cannot hold.`);
+      }
+      if (!tauRevisionPolicy.policy.classify(path).versioned) {
+        refuse(`${path} is a path Tau reserves for its own records.`);
+      }
+    }
+  };
+
+  const initStore = async (input: InitRevisionStoreInput): Promise<void> => {
+    /* Asked first, and it throws for a bare repository or a `.git` file: a path this port
+     * refuses is left exactly as it was, ignore file included (review 4 R40).
+     * The ordering that matters is the ignore file before `git init`, not
+     * before the question of what is already here. */
+    const { owned, adopted } = await openState();
+    if (adopted && owned) {
+      await assertAdoptable();
+    }
+    /* Opening a project writes nothing in the tracked tree (I4): only a store
+     * this call creates gets Tau's ignore file, created, never merged into
+     * (D16). The attributes file is never written here: the cut supplies it in
+     * the recorded tree and writes its live copy in the same mint
+     * (`revision-effects`, A4), so a project an older build created without
+     * one (DEF-W22-1) is left exactly as it was until something is saved. */
+    if (!owned && !adopted && input.createSetupFiles !== false) {
+      const ignorePath = join(repositoryPath, generatedIgnorePath);
+      if ((await readFile(ignorePath, 'utf8').catch(() => undefined)) === undefined) {
+        await writeFile(ignorePath, generatedIgnoreContent(undefined, input.additionalIgnores ?? []));
+      }
+    }
+    // Only now: the repository is created after the file that decides what a
+    // snapshot may ever contain already exists.
+    if (!owned) {
+      await output(['init', '--quiet', `--initial-branch=${initialBranch}`]);
+      /* The store exists now: the next question reads the disk again, and reaches the answer a second session would. */
+      opened = undefined;
+      ignoreCase = undefined;
+    }
+    /* Tau's derived-content ignores go where stock Git reads them and no
+     * revision records them, in every store, so the records Tau keeps under
+     * `.tau/` stay out of `git status` without a line in the person's ignore
+     * file. Written once the store exists, and merged: the file is the store's, never versioned. */
+    const excludePath = join(repositoryPath, gitDirectoryName, 'info', 'exclude');
+    const existingExclude = await readFile(excludePath, 'utf8').catch(() => undefined);
+    const exclude = generatedIgnoreContent(existingExclude, input.additionalIgnores ?? []);
+    if (exclude !== existingExclude) {
+      await mkdir(dirname(excludePath), { recursive: true });
+      await writeFile(excludePath, exclude);
+    }
+    /* Pointers are Tau's (they must be identical on every host), but a *stock*
+     * checkout of this repository — `git worktree add` for a linked checkout,
+     * or somebody's own `git clone` — needs git-lfs's filters configured to
+     * resolve them. Best effort: a machine without the binary still records
+     * and reads revisions through this port, and `resolveGitLfs` is what tells
+     * an operator the transport half is missing. An adopted repository's
+     * config is the person's: the pointers its own attributes ask for are
+     * resolved by whatever filters they configured (D16). Asked on every
+     * open and idempotent, so a session after a crash between `git init` and
+     * here still configures them. */
+    if (!(await isAdopted())) {
+      await run(['lfs', 'install', '--local']);
+    }
+    /* Every project an older build recorded has no index at all, so this open
+     * heals it. An existing index is left alone: in a repository Tau adopted
+     * it may hold the person's own staged work. */
+    const indexed = await access(join(repositoryPath, gitDirectoryName, 'index')).then(
+      () => true,
+      () => false,
+    );
+    if (!indexed) {
+      await syncIndexes(undefined);
+    }
+  };
+
+  const port: RevisionPort = Object.freeze({
+    describe: async (): Promise<RevisionEngineDescriptor> => {
+      const reported = await text(['--version']);
+      return Object.freeze({
+        engine: 'native-git',
+        version: reported.replace('git version ', ''),
+        objectFormat: await format(),
+        changeIds: true,
+        conflictsAsValues: true,
+        transports: true,
+        nWayMerge: false,
+        checkouts: checkouts !== undefined,
+        largeObjects: true,
+        ...((await ignoresCase()) ? { ignoreCase: true } : {}),
+        keepsLargeObjectFiles: true,
+      });
+    },
+
+    /*
+     * Also the open seam: `revision-effects.ensureStore` calls this once per
+     * authority, before the first question is asked of the store, and `git init`
+     * below is skipped for a store that is already here. So a project created by
+     * an older build reaches this with a stale generated block, and the merge
+     * below is its migration (G0-9) — written only when the merged bytes differ,
+     * so a current project's working copy is not touched on every open and a
+     * rewrite cannot repeat.
+     */
+    /*
+     * One `init` at a time per repository, across every port on it (tau
+     * #1282). A host opens its store from more than one place — the effects'
+     * `ensureStore`, which the large-object resume reaches on a timer as the
+     * root starts, a caller's own `init`, and a second port on the same
+     * project — and two runs at once each ran `git init` and `git lfs install
+     * --local`, which take `.git/config.lock`: the loser failed with "could
+     * not lock config file". Queued, the second run finds the store the first
+     * one made.
+     */
+    init: async (input: InitRevisionStoreInput): Promise<void> =>
+      refQueue.queueFor('init', async () => initStore(input)),
+
+    ignoredPaths: async (root?: string, paths?: readonly string[]): Promise<readonly string[] | undefined> => {
+      /* Git's own answer, on every repository: the checkout's nested ignore
+       * files and the store's `info/exclude`. Never `core.excludesFile`,
+       * which is per device and which the browser leg cannot read, and the
+       * store's own `core.ignoreCase` rather than a device's, so both legs
+       * leave the same untracked paths out of a cut (I5). Named paths are
+       * literal pathspecs, so Git reads only their own directories. */
+      if (paths?.length === 0) {
+        return [];
+      }
+      const args = [
+        '--literal-pathspecs',
+        '-c',
+        'core.excludesFile=',
+        '-c',
+        `core.ignoreCase=${String(await storeIgnoresCase())}`,
+        'ls-files',
+        '-z',
+        '--others',
+        '--ignored',
+        '--exclude-standard',
+        '--directory',
+      ];
+      const list = async (pathspecs: readonly string[]): Promise<readonly string[]> => {
+        const command = pathspecs.length === 0 ? args : [...args, '--', ...pathspecs];
+        const listed =
+          root === undefined
+            ? await output(command)
+            : // A linked worktree finds its own admin directory from its `.git` file.
+              await output(['-C', root, ...command], { env: linkedGitEnvironment() });
+        return textDecoder
+          .decode(listed)
+          .split('\0')
+          .filter((path) => path !== '');
+      };
+      if (paths === undefined) {
+        return list([]);
+      }
+      /* A command line holds so much: the paths go in batches. Each batch also names `.git`, which Git
+       * never lists, so its common prefix is always the root: a batch whose paths all sit two levels
+       * inside an ignored folder (`build/deep/o.js` under `build/`) otherwise stops Git with "directory
+       * entry not superset of prefix", where the root answers `build/`. */
+      const listed = new Set<string>();
+      for (let index = 0; index < paths.length; index += ignorePathspecBatch) {
+        // oxlint-disable-next-line no-await-in-loop -- one Git at a time over one checkout.
+        for (const entry of await list(['.git', ...paths.slice(index, index + ignorePathspecBatch)])) {
+          listed.add(entry);
+        }
+      }
+      return [...listed].toSorted();
+    },
+
+    ignoreContext: async (): Promise<string> => {
+      const exclude = await readFile(join(repositoryPath, gitDirectoryName, 'info', 'exclude'), 'utf8').catch(
+        () => undefined,
+      );
+      contextIgnoreCase = readStoreIgnoreCase();
+      return JSON.stringify([exclude ?? null, await contextIgnoreCase]);
+    },
+
+    readRevision: async (id: RevisionId): Promise<RevisionRecord | undefined> => {
+      const commit = await readCommitObject(id);
+      if (commit === undefined) {
+        return undefined;
+      }
+      const entry = entryOf(id, commit);
+      return Object.freeze({
+        id,
+        parents: entry.parents,
+        treeId: commit.tree,
+        provenance: entry.provenance,
+        summary: entry.summary,
+        receipt: await receiptOf(id, commit),
+      });
+    },
+
+    listTree: async (id: RevisionId): Promise<readonly RevisionTreeListing[] | undefined> => {
+      const commit = await readCommitObject(id);
+      if (commit === undefined) {
+        return undefined;
+      }
+      return Object.freeze(
+        [...(await listTree(commit.tree))]
+          .toSorted(([left], [right]) => (left < right ? -1 : 1))
+          .map(([path, entry]) => Object.freeze({ path, ...entry })),
+      );
+    },
+
+    /* Three processes whatever the tree holds: the commit, its paths, and one
+     * `cat-file --batch` for every blob in it (rule 20's `readTree` cost). */
+    /* Large objects fill lazily (D16): a fetch moves refs only, and a read
+     * that needs a large object this store lacks fetches that one commit's
+     * objects then, never every fetched ref's. A `local` read fetches nothing
+     * and answers a missing object with its pointer, for the placeholder fill
+     * to bring (`large-object-fill.ts`): through a fetching read when the head
+     * names it, and through `fetchLargeObjects` by its oid when it does not. */
+    fetchLargeObjects: async (pointers, fetchOptions) => fetchLargeObjectsByOid(pointers, fetchOptions),
+
+    /* D9 on the native leg: the repository's own LFS store, read and written in place, never through a fetch.
+     * The size is checked first, so a partial another writer left is never answered as the object. Size only,
+     * never a hash, as the browser's store checks it: objects land renamed whole (I1), and a hash per read
+     * would cost every open a SHA-256 of every part (W11.2 review, kept as is). */
+    readLargeObject: async (pointer) => {
+      const file = lfsObjectFile(pointer.oid);
+      const stats = await stat(file).catch(() => undefined);
+      if (stats?.isFile() !== true || stats.size !== pointer.size) {
+        return undefined;
+      }
+      try {
+        const stored = await readFile(file);
+        return stored.byteLength === pointer.size
+          ? new Uint8Array(stored.buffer as ArrayBuffer, stored.byteOffset, stored.byteLength)
+          : undefined;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          return undefined;
+        }
+        throw error;
+      }
+    },
+    storeLargeObject: async (pointer, content) => {
+      if (content.byteLength !== pointer.size) {
+        throw new RevisionPortError(
+          'ENGINE_FAILED',
+          `Large object ${pointer.oid} is not ${String(pointer.size)} bytes.`,
+        );
+      }
+      await storeLfsObject(pointer.oid, content);
+    },
+
+    readTree: async (id: RevisionId, readOptions?: ReadTreeOptions): Promise<ImmutableRevisionTree | undefined> => {
+      const commit = await readCommitObject(id);
+      if (commit === undefined) {
+        return undefined;
+      }
+      const listed = await listTree(commit.tree);
+      const wanted = readOptions?.paths === undefined ? undefined : new Set(readOptions.paths);
+      const paths = wanted === undefined ? [...listed] : [...listed].filter(([path]) => wanted.has(path));
+      const blobs = await readObjects(
+        paths.map(([, entry]) => entry.oid),
+        'blob',
+      );
+      const pointers = paths.flatMap(([, { oid }]) => {
+        const pointer = readLfsPointer(blobs.get(oid)!);
+        return pointer === undefined ? [] : [pointer];
+      });
+      const local = readOptions?.largeObjects === 'local';
+      const stored = readOptions?.largeObjects === 'stored';
+      if (!local && pointers.length > 0) {
+        await fillLargeObjects(id, pointers, readOptions?.signal);
+      }
+      const entries = await Promise.all(
+        paths.map(async ([path, { oid, mode }]): Promise<RevisionTreeInput> => {
+          const content = blobs.get(oid)!;
+          const answer = local
+            ? await smudgedIfHere(content)
+            : stored
+              ? await storedPointer(content)
+              : await smudged(content);
+          return [path, answer, mode];
+        }),
+      );
+      return new ImmutableRevisionTree(entries);
+    },
+
+    writeRevision: async (input: WriteRevisionInput): Promise<RevisionReceipt> => {
+      const treeId = await writeTreeObject(input.tree, input.largeObjects !== false, input.parents);
+      const trailer: RevisionTrailer = {
+        parents: [...input.parents],
+        provenance: input.provenance,
+        summary: input.summary,
+      };
+      const commit = encodeCommit({
+        objectFormat: await format(),
+        tree: treeId,
+        parents: [...input.parents],
+        /* A26: the person wrote it, Tau recorded it — git's own split. */
+        author: revisionAuthorSignature(input.provenance, input.commitAuthor),
+        committer: revisionCommitterSignature(input.provenance),
+        message: revisionCommitMessage(trailer),
+        changeId: deriveChangeId(await format(), { treeId, parents: input.parents, trailer }),
+        ...(input.conflict === undefined
+          ? {}
+          : { conflictedTrees: [...input.conflict.trees], conflictLabels: [...input.conflict.labels] }),
+      });
+      const written = await run(['hash-object', '-t', 'commit', '-w', '--stdin'], { input: [commit.body] }).catch(
+        (error: unknown) => {
+          heldObjects.clear();
+          throw error;
+        },
+      );
+      if (written.exitCode !== 0) {
+        /* A failed mint trusts nothing it remembered: the next one asks Git again. */
+        heldObjects.clear();
+        throw new RevisionPortError('ENGINE_FAILED', 'Native Git refused the revision commit object.');
+      }
+      return receiptOf(revisionId(textDecoder.decode(written.stdout).trim()), decodeCommit(commit.body));
+    },
+
+    /* S31: the same annotated tag bytes the browser leg writes, stored by
+     * `hash-object` for the same reason the commit is — `git tag -a` would take
+     * its tagger from the repository's config identity, not from the actor. */
+    tag: async (input: CreateRevisionTagInput): Promise<RevisionTag> => {
+      const named = await resolve(input.revisionId);
+      if (named === undefined) {
+        throw new RevisionPortError('UNKNOWN_REVISION', 'The revision this name would point at is not in the store.');
+      }
+      /*
+       * Choosing the number and claiming its ref are one step (B6):
+       * `update-ref` writes the ref only while it still holds what the choice
+       * read — the zero id for a new number — so of two writers that chose
+       * the same number one wins and the other chooses again. Calls on every
+       * port this process opened on the repository also queue behind each
+       * other, so only another process ever makes one choose again.
+       */
+      return refQueue.queueFor('refs/tags/v*', async () => {
+        const zero = await zeroObjectId();
+        for (let attempt = 0; attempt < tagWriteAttempts; attempt += 1) {
+          // oxlint-disable-next-line no-await-in-loop -- each attempt reads what the last one lost to.
+          const numbered = await numberedTagReferences(tagRefPrefix);
+          const version = versionTagWrite({
+            // oxlint-disable-next-line no-await-in-loop -- as above.
+            tags: await tagsOf(numbered),
+            held: numbered.map((entry) => entry.number),
+            input,
+            now: Date.now(),
+          });
+          const chosen = numbered.find((entry) => entry.number === version.number)?.oid ?? zero;
+          const object = encodeTag({
+            // oxlint-disable-next-line no-await-in-loop -- read once per attempt, cached by the port.
+            objectFormat: await format(),
+            object: version.revisionId,
+            tag: versionTagName(version.number),
+            tagger: taggerSignature(version.actor, version.createdAt),
+            message: revisionTagMessage(version),
+          });
+          // oxlint-disable-next-line no-await-in-loop -- one object per attempt.
+          const written = await run(['hash-object', '-t', 'tag', '-w', '--stdin'], { input: [object.body] });
+          if (written.exitCode !== 0) {
+            throw new RevisionPortError('ENGINE_FAILED', 'Native Git refused the version tag object.');
+          }
+          const oid = textDecoder.decode(written.stdout).trim();
+          // oxlint-disable-next-line no-await-in-loop -- one guarded ref write per attempt.
+          const updated = await run(['update-ref', versionTagRef(version.number), oid, chosen]);
+          if (updated.exitCode === 0) {
+            return Object.freeze({ ...version, createdAt: Math.floor(version.createdAt / 1000) * 1000 });
+          }
+        }
+        throw new RevisionPortError('ENGINE_FAILED', 'Another writer kept changing the version tags; try again.');
+      });
+    },
+
+    listTags,
+
+    deleteTag: async (number: number): Promise<void> => {
+      const removed = await run(['update-ref', '-d', versionTagRef(number)]);
+      /* Exit 1 is "no such ref": removing a tag that is already gone is the
+       * outcome the caller asked for. */
+      if (removed.exitCode !== 0 && removed.exitCode !== 1) {
+        throw new RevisionPortError('ENGINE_FAILED', `Native Git refused to remove the tag ${versionTagName(number)}.`);
+      }
+    },
+
+    readRef: async (name: string): Promise<RevisionId | undefined> => {
+      const head = await resolve(refOf(name));
+      return head === undefined ? undefined : revisionId(head);
+    },
+
+    /**
+     * Git's own `update-ref` transaction is the linearization point: the
+     * expected-old value is passed to it, so the compare and the write are one
+     * operation under the repository's ref lock (I7). The queue below only keeps
+     * this process's own concurrent writers off the same name. A branch that
+     * moved takes the index of whichever worktree holds it along (R14).
+     *
+     * @param input - The ref, the value it must currently hold, and the new one.
+     * @returns The publication, or the conflict that refused it.
+     */
+    updateRef: async (input: UpdateRevisionRefInput): Promise<UpdateRevisionRefResult> => {
+      const ref = refOf(input.name);
+      const result = await refQueue.queueFor(input.name, async () => {
+        const expected = input.expectedHead ?? (await zeroObjectId());
+        const conflicted = async (): Promise<UpdateRevisionRefResult> => {
+          const actual = await resolve(ref);
+          return Object.freeze({
+            status: 'conflicted',
+            name: input.name,
+            expectedHead: input.expectedHead,
+            actualHead: actual === undefined ? undefined : revisionId(actual),
+            proposedHead: input.head,
+          });
+        };
+        if (input.head === undefined) {
+          const actual = await resolve(ref);
+          if (actual !== input.expectedHead) {
+            return conflicted();
+          }
+          if (actual !== undefined) {
+            await output(['update-ref', '-d', ref, actual]);
+          }
+          return Object.freeze({
+            status: 'updated',
+            name: input.name,
+            previousHead: input.expectedHead,
+            head: undefined,
+          });
+        }
+        if ((await readCommitObject(input.head)) === undefined) {
+          throw new RevisionPortError('UNKNOWN_REVISION', 'Cannot publish a revision the store does not hold.');
+        }
+        const update = await run(['update-ref', ref, input.head, expected]);
+        if (update.exitCode !== 0) {
+          return conflicted();
+        }
+        return Object.freeze({
+          status: 'updated',
+          name: input.name,
+          previousHead: input.expectedHead,
+          head: input.head,
+        });
+      });
+      if (result.status === 'updated' && ref.startsWith(`${branchRefPrefix}/`)) {
+        await syncIndexes(ref, { head: input.expectedHead });
+      }
+      return result;
+    },
+
+    /* Symbolic, like Git's own HEAD: the file names a *branch*, so a turn
+     * recorded onto that branch moves the head with it and nothing is written
+     * twice (operator decisions 2026-09-09, question 11). */
+    readHead: async (): Promise<RevisionHead | undefined> => {
+      const result = await run(['symbolic-ref', '--quiet', 'HEAD']);
+      if (result.exitCode !== 0) {
+        return undefined;
+      }
+      const target = textDecoder.decode(result.stdout).trim();
+      const symbolic = target.startsWith(symbolicRefPrefix) ? target.slice(symbolicRefPrefix.length).trim() : target;
+      const branch = symbolic.startsWith(`${branchRefPrefix}/`) ? symbolic.slice(branchRefPrefix.length + 1) : '';
+      return branch === '' ? undefined : Object.freeze({ branch, head: await port.readRef(branch) });
+    },
+
+    setHead: async (branch: string): Promise<void> => {
+      /* The head the live worktree's index was read from, so staging into it survives the switch. */
+      const replaced = await refQueue.queueFor('HEAD', async () => {
+        const previous = await run(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+        await output(['symbolic-ref', 'HEAD', refOf(branch)]);
+        return previous.exitCode === 0 ? textDecoder.decode(previous.stdout).trim() : undefined;
+      });
+      await syncIndexes(refOf(branch), { head: replaced });
+    },
+
+    listRefs: async (prefix?: string): Promise<readonly RevisionRef[]> => {
+      /* Answered in the vocabulary it was asked in: a `refs/`-qualified prefix
+       * names a namespace and gets full names back, a bare one filters branch
+       * names as it always has. */
+      const qualified = prefix?.startsWith('refs/') === true;
+      const namespace = qualified ? prefix.replace(/\/+$/u, '') : branchRefPrefix;
+      const records = await text(['for-each-ref', '--format=%(refname)%00%(objectname)', `${namespace}/`]);
+      return Object.freeze(
+        records
+          .split('\n')
+          .filter((record) => record !== '')
+          .map((record) => {
+            const [ref, head] = record.split('\0');
+            return { name: qualified ? (ref ?? '') : (ref ?? '').slice(branchRefPrefix.length + 1), head: head ?? '' };
+          })
+          .filter((reference) => reference.name !== '' && (prefix === undefined || reference.name.startsWith(prefix)))
+          .toSorted((left, right) => left.name.localeCompare(right.name))
+          .map((reference) => Object.freeze({ name: reference.name, head: revisionId(reference.head) })),
+      );
+    },
+
+    /* One `cat-file` per commit, which is what keeps the walk tree-free —
+     * ponytail: `cat-file --batch` if a long history ever shows up hot. */
+    log: async (input?: RevisionLogInput): Promise<readonly RevisionLogEntry[]> => {
+      const references = input?.heads === undefined ? await port.listRefs() : undefined;
+      const heads = [...(input?.heads ?? (references ?? []).map((reference) => reference.head))];
+      /* The set in one `cat-file --batch`, the *order* still the walk's own
+       * (rule 20's log cost). `rev-list` answers which objects to read and nothing else: it
+       * never decides what is emitted or in what order, so a long history costs
+       * two processes rather than one per revision while the promised order
+       * stays a property of the graph (review 4 R12). */
+      const prefetched = await prefetchCommits(heads, input?.limit);
+      return Object.freeze(
+        await walkRevisionLog(
+          heads,
+          async (id) => {
+            const commit = prefetched.get(id) ?? (await readCommitObject(id));
+            return commit === undefined
+              ? undefined
+              : {
+                  parents: commit.parents.map((parent) => revisionId(parent)),
+                  seconds: commit.committer.seconds,
+                  entry: entryOf(id, commit),
+                };
+          },
+          input?.limit,
+        ),
+      );
+    },
+
+    /* Git's own merge-base walk: one process, and neither history is listed. */
+    divergence: async (input: RevisionDivergenceInput): Promise<RevisionDivergence> => {
+      await Promise.all([requireCommit(input.head), requireCommit(input.base)]);
+      const counts = await text(['rev-list', '--left-right', '--count', `${input.head}...${input.base}`]);
+      const [ahead, behind] = counts.split(/\s+/u).map(Number);
+      return Object.freeze({ ahead: ahead ?? 0, behind: behind ?? 0 });
+    },
+
+    /* One `diff-tree --stdin` for the whole set (rule 20's log cost): Git names
+     * each revision that changed something, then its paths; a revision that
+     * changed nothing, or is a root, prints nothing at all. */
+    firstParentChanges: async (ids: readonly RevisionId[]): Promise<ReadonlyMap<string, readonly string[]>> => {
+      const changes = new Map<string, string[]>();
+      if (ids.length === 0) {
+        return changes;
+      }
+      const wanted = new Set<string>(ids);
+      const records = textDecoder
+        .decode(
+          await output(['diff-tree', '--stdin', '-r', '-z', '--no-renames', '--name-only'], {
+            input: [textEncoder.encode(`${ids.join('\n')}\n`)],
+          }),
+        )
+        .split('\0')
+        .filter((record) => record !== '');
+      let paths: string[] | undefined;
+      for (const record of records) {
+        if (wanted.has(record) && !changes.has(record)) {
+          paths = [];
+          changes.set(record, paths);
+        } else {
+          paths?.push(record);
+        }
+      }
+      return changes;
+    },
+
+    diff: async (input: RevisionDiffInput): Promise<readonly RevisionDiffEntry[]> => {
+      await requireCommit(input.to);
+      if (input.from === undefined) {
+        const added = await listTree(input.to);
+        return Object.freeze([...added.keys()].sort().map((path) => frozenChange(path, 'added')));
+      }
+      await requireCommit(input.from);
+      const records = textDecoder
+        .decode(await output(['diff-tree', '-r', '-z', '--no-renames', '--name-status', input.from, input.to]))
+        .split('\0')
+        .filter((record) => record !== '');
+      const changes: RevisionDiffEntry[] = [];
+      for (let index = 0; index + 1 < records.length; index += 2) {
+        const kind = diffKind(records[index]!);
+        if (kind === undefined) {
+          throw new RevisionPortError('ENGINE_FAILED', 'Native Git reported an unsupported change kind.');
+        }
+        changes.push(frozenChange(records[index + 1]!, kind));
+      }
+      return Object.freeze(changes.toSorted((left, right) => left.path.localeCompare(right.path)));
+    },
+
+    listRemoteRefs: listRemoteReferences,
+
+    /**
+     * Bring the remote's refs into this store's remote-tracking half.
+     *
+     * A fetch never moves a branch: every ref lands under
+     * `refs/remotes/<remote>/…`, and the merge that follows is the ordinary one
+     * (A22). Clean named versions are also materialized under `refs/tags/*`,
+     * while a locally moved tag is preserved for its leased push. Unnamed, it
+     * takes everything the remote advertises that is not host-local — a remote
+     * may advertise whatever it likes, and the ones this host keeps to itself
+     * are simply not tracked.
+     *
+     * @param input - The remote, and optionally the refs to take.
+     * @returns The remote-tracking refs this store now holds.
+     */
+    fetch: async (input: RevisionFetchInput): Promise<RevisionFetchResult> => {
+      if (input.maximumTransferBytes !== undefined) {
+        if (!Number.isSafeInteger(input.maximumTransferBytes) || input.maximumTransferBytes <= 0) {
+          throw new RangeError('maximumTransferBytes must be a positive safe integer.');
+        }
+        throw new RevisionPortError('UNSUPPORTED_OPERATION', 'This Git host cannot enforce a fetch byte limit.');
+      }
+      guardTransportValue(input.remote, 'remote');
+      const advertised =
+        input.refs === undefined ? await listRemoteReferences(input.remote, { signal: input.signal }) : undefined;
+      const wanted = [
+        ...new Set(
+          advertised === undefined
+            ? (input.refs ?? [])
+            : advertised.map((reference) => reference.name).filter((ref) => !isHostLocalRef(ref)),
+        ),
+      ];
+      for (const ref of wanted) {
+        guardTransportValue(ref, 'ref', true);
+      }
+      if (wanted.length === 0) {
+        return Object.freeze({ refs: Object.freeze([]) });
+      }
+      const rawRef = async (name: string): Promise<string | undefined> => {
+        const oid = await text(['for-each-ref', '--format=%(objectname)', name]);
+        return oid === '' ? undefined : oid;
+      };
+      const previousTags = await Promise.all(
+        wanted
+          .filter((ref) => ref.startsWith(`${tagRefPrefix}/`))
+          .map(async (ref) => {
+            const tracked = remoteTrackingRef(input.remote, ref);
+            return { local: ref, tracked, localHead: await rawRef(ref), remoteHead: await rawRef(tracked) };
+          }),
+      );
+      /* Once per fetch (C73): `listRemotes` is `1 + 3R` processes on this leg. */
+      const configuredRemotes = await port.listRemotes();
+      // Large objects are not fetched here: a read fills them lazily (D16).
+      // Suppress the remote's configured refmap: explicit staging refspecs
+      // alone still allow Git to opportunistically update normal tracking refs.
+      const transaction = `${stagingRefPrefix}-fetch-${randomUUID()}`;
+      const references = await Promise.all(
+        wanted.map(async (ref, index) => {
+          const tracked = remoteTrackingRef(input.remote, ref);
+          return { ref, tracked, staged: `${transaction}/${index}`, previous: await rawRef(tracked) };
+        }),
+      );
+      try {
+        await output(
+          [
+            'fetch',
+            '--no-tags',
+            '--no-write-fetch-head',
+            '--refmap=',
+            '--',
+            input.remote,
+            ...references.map(({ ref, staged }) => `+${ref}:${staged}`),
+          ],
+          {
+            deadline: transferDeadline,
+            env: await remoteEnvironment(input.remote, configuredRemotes),
+            signal: input.signal,
+            remote: input.remote,
+          },
+        );
+        const zero = await zeroObjectId();
+        const updates = await Promise.all(
+          references.map(async ({ tracked, staged, previous }) => {
+            const fetched = await rawRef(staged);
+            if (fetched === undefined) {
+              throw new RevisionPortError('ENGINE_FAILED', 'Native Git did not return the requested ref.');
+            }
+            return `update ${tracked} ${fetched} ${previous ?? zero}\n`;
+          }),
+        );
+        input.signal?.throwIfAborted();
+        await output(['update-ref', '--stdin'], { input: [textEncoder.encode(updates.join(''))] });
+      } finally {
+        await output(['update-ref', '--stdin'], {
+          input: [textEncoder.encode(references.map(({ staged }) => `delete ${staged}\n`).join(''))],
+        });
+      }
+      await Promise.all(
+        previousTags.map(async ({ local, tracked, localHead, remoteHead }) => {
+          const fetchedHead = await rawRef(tracked);
+          if (fetchedHead === undefined || fetchedHead === localHead) {
+            return;
+          }
+          /* A local rename is kept for its leased push, unless the remote renamed
+           * the same version too: then the remote's name wins (B6, rule 19). */
+          if (
+            localHead !== undefined &&
+            localHead !== remoteHead &&
+            !(
+              remoteHead !== undefined &&
+              fetchedHead !== remoteHead &&
+              (await sameVersionObjects(localHead, fetchedHead))
+            )
+          ) {
+            return;
+          }
+          const updated = await run(['update-ref', local, fetchedHead, localHead ?? (await zeroObjectId())]);
+          if (updated.exitCode !== 0 && (await rawRef(local)) === localHead) {
+            throw new RevisionPortError('ENGINE_FAILED', `Native Git could not materialize the fetched tag ${local}.`);
+          }
+        }),
+      );
+      const tracked = await Promise.all(
+        wanted.map(async (ref) => {
+          const name = remoteTrackingRef(input.remote, ref);
+          const head = await resolve(name);
+          return head === undefined ? undefined : Object.freeze({ name, head: revisionId(head) });
+        }),
+      );
+      return Object.freeze({ refs: Object.freeze(tracked.filter((reference) => reference !== undefined)) });
+    },
+
+    /**
+     * Offer refs to the remote and report every one's outcome.
+     *
+     * `--atomic` is the caller's choice because the two push sets differ in
+     * exactly that (A39): the history set lands together or not at all, and the
+     * record set does not, so a chat ref the server refuses leaves `main`
+     * pushed. The command's own non-zero exit on a partial refusal is therefore
+     * not an error here — the porcelain table is the answer.
+     *
+     * @param input - The remote, the refs, and whether they are atomic.
+     * @returns One result per offered ref, in the order offered.
+     */
+    push: async (input: RevisionPushInput): Promise<RevisionPushResult> => {
+      guardTransportValue(input.remote, 'remote');
+      if (input.refs.length === 0) {
+        throw new RevisionPortError('INVALID_TRANSPORT', 'push requires at least one ref.');
+      }
+      for (const ref of input.refs) {
+        guardTransportValue(ref.name, 'ref', true);
+        if (ref.remoteName !== undefined) {
+          guardTransportValue(ref.remoteName, 'remote ref', true);
+        }
+        if (ref.expected !== undefined) {
+          guardTransportValue(ref.expected, 'lease');
+        }
+      }
+      /*
+       * P20, before `git push` is spawned — which is also before git-lfs's own
+       * `pre-push` hook can run, since that hook is `git push`'s. So *this* is
+       * what decides, on both legs, and no `GIT_LFS_SKIP_PUSH` is needed: a
+       * remote that cannot hold large objects is refused by name with the
+       * files, rather than the disk leg quietly succeeding through git-lfs's
+       * own transfer while the browser leg fails (A15, W12 review R3).
+       */
+      input.signal?.throwIfAborted();
+      const configuredRemotes = await port.listRemotes();
+      const configuredRemote = configuredRemotes.find((remote) => remote.name === input.remote);
+      // Pin the destination before any asynchronous preparation; never honor a different pushurl.
+      const destination = configuredRemote?.url ?? input.remote;
+      if (input.repositoryUrl !== undefined && destination !== input.repositoryUrl) {
+        throw new RevisionPortError(
+          'INVALID_TRANSPORT',
+          'The repository destination changed. Review it before pushing.',
+        );
+      }
+      const env = await remoteEnvironment(input.remote, configuredRemotes, true);
+      const rewrites = await run(['config', '--get-regexp', String.raw`^url\..*\.(insteadof|pushinsteadof)$`]);
+      if (
+        (input.repositoryUrl !== undefined ||
+          configuredRemote?.provider === 'github' ||
+          options.remoteCredential?.() !== undefined) &&
+        rewrites.exitCode === 0
+      ) {
+        const changesDestination = textDecoder
+          .decode(rewrites.stdout)
+          .split('\n')
+          .some((line) => {
+            const match = /^url\.(.+)\.(?:insteadof|pushinsteadof) (.*)$/iu.exec(line);
+            return (
+              match !== null &&
+              destination.startsWith(match[2]!) &&
+              `${match[1]}${destination.slice(match[2]!.length)}` !== destination
+            );
+          });
+        if (changesDestination) {
+          throw new RevisionPortError(
+            'INVALID_TRANSPORT',
+            'A Git URL rewrite changes this repository destination. Remove it before pushing.',
+          );
+        }
+      }
+      const large = await largeObjectPaths(input.refs);
+      /* An unconfigured name has no provider to ask, and no URL to push to either. */
+      if ((configuredRemote === undefined || !remoteCarriesLargeObjects(configuredRemote)) && large.length > 0) {
+        throw new RevisionPortError('LFS_REMOTE_UNSUPPORTED', lfsRemoteUnsupportedMessage(large));
+      } else if (large.length > 0) {
+        await fillPushedLargeObjects(input.refs, {
+          destination: input.remote,
+          configuredRemotes,
+          signal: input.signal,
+        });
+        const transfer = await run(['lfs', 'push', '--', destination, ...input.refs.map((ref) => ref.name)], {
+          deadline: transferDeadline,
+          env,
+          signal: input.signal,
+          remote: input.remote,
+        });
+        if (transfer.exitCode !== 0) {
+          /*
+           * C66: the over-quota **file list** policy Rule 13 requires, on the
+           * leg that could not produce it. `git lfs push` turned the API's 413
+           * batch refusal into `ENGINE_FAILED "Native Git failed lfs."`, so
+           * `remote.machine` never entered `quotaRefused` on desktop or the CLI
+           * and the Sync region had nothing to list — although the paths were
+           * computed one statement earlier, by `largeObjectPaths` above.
+           */
+          throw lfsTransferRefusal(textDecoder.decode(transfer.stderr), input.remote, large);
+        }
+      }
+      /* The lease, per ref (A32, S24, D14). `--force-with-lease=<dst>:<expect>`
+       * allows the non-fast-forward a rewritten history needs *only* while the
+       * remote ref is exactly where this host last saw it; an empty `<expect>`
+       * leases "must not exist". A ref whose lease is stale comes back as one
+       * `!` row and the remote ref is not touched — never a plain `--force`,
+       * which would overwrite whatever moved. */
+      input.signal?.throwIfAborted();
+      const leases = input.refs
+        .filter((ref) => 'expected' in ref)
+        .map((ref) => `--force-with-lease=${ref.remoteName ?? ref.name}:${ref.expected ?? ''}`);
+      /* What each ref names *before* the push is spawned (RV-W15): a mint that
+       * lands during or after it must not be reported as pushed, nor tracked
+       * as held by a remote that never received it. At worst the ref moved
+       * just before git read it, and the lease and tracking ref lag the remote,
+       * which the next fetch corrects; never the reverse. `oid` is unpeeled,
+       * as `fetch` would track it; `head` is peeled from that oid, not re-read. */
+      const offered = await Promise.all(
+        input.refs.map(async (ref) => {
+          const found = await run(['rev-parse', '--verify', '--quiet', ref.name]);
+          const oid = found.exitCode === 0 ? textDecoder.decode(found.stdout).trim() : undefined;
+          return Object.freeze({ name: ref.name, oid, head: oid === undefined ? undefined : await resolve(oid) });
+        }),
+      );
+      const result = await run(
+        [
+          'push',
+          '--porcelain',
+          ...(input.atomic === true ? ['--atomic'] : []),
+          ...leases,
+          '--',
+          destination,
+          ...input.refs.map((ref) => `${ref.name}:${ref.remoteName ?? ref.name}`),
+        ],
+        { deadline: transferDeadline, env, remote: input.remote, signal: input.signal },
+      );
+      const stdout = textDecoder.decode(result.stdout);
+      const stderr = textDecoder.decode(result.stderr);
+      const refused = remoteRefusalOf(stderr, input.remote);
+      /* A push that never reached the remote reports no table at all; one the
+       * remote refused in part reports every row and exits non-zero. Which of
+       * those it was is git's stderr to say, and it says it (C2). */
+      if (result.exitCode !== 0 && !stdout.includes('\t')) {
+        throw (
+          refused ??
+          new RevisionPortError(
+            'ENGINE_FAILED',
+            'The remote could not be reached.',
+            stderr.trim() === '' ? undefined : { cause: new Error(stderr.trim()) },
+          )
+        );
+      }
+      const results = parsePushPorcelain(
+        stdout,
+        offered,
+        /* The server's sideband sentence, which is where a `pre-receive`
+         * refusal says *why* — the per-ref table only says a hook declined.
+         * The ceiling and the plan quota are hook sentences too, and the
+         * scheduler files them as quota by their marker (FX1 N). */
+        refused?.code === 'REMOTE_REJECTED' || refused?.code === 'REMOTE_QUOTA_EXCEEDED' ? refused.message : undefined,
+        [...stderr.matchAll(/^remote: (?<said>.+)$/gmu)].map((match) => match.groups?.['said']?.trim() ?? ''),
+      );
+      /* Where `fetch` would have put every accepted ref, as the browser leg does:
+       * The destination is a pinned URL, so Git does not associate this push
+       * with the configured remote name. Track every accepted ref ourselves,
+       * using the oid offered before the push, never a newer local revision. */
+      const tracked = input.refs.flatMap((ref, index) => {
+        const destination = ref.remoteName ?? ref.name;
+        const oid = offered[index]?.oid;
+        return results[index]?.status === 'rejected' || oid === undefined
+          ? []
+          : [`update ${remoteTrackingRef(input.remote, destination)} ${oid}\n`];
+      });
+      if (tracked.length > 0) {
+        await output(['update-ref', '--stdin'], { input: [textEncoder.encode(tracked.join(''))] });
+      }
+      return Object.freeze({ refs: results });
+    },
+
+    listRemotes: async (): Promise<readonly Remote[]> => {
+      const result = await run(['config', '--get-regexp', String.raw`^remote\..*\.url$`]);
+      /* Exit code 1 is "no match", which is a project with no remote. */
+      if (result.exitCode !== 0) {
+        return Object.freeze([]);
+      }
+      const remotes = textDecoder
+        .decode(result.stdout)
+        .split('\n')
+        .map((line) => /^remote\.(?<name>.+)\.url (?<url>.+)$/u.exec(line.trim())?.groups)
+        .filter((groups) => groups?.['name'] !== undefined && groups['url'] !== undefined)
+        .map((groups) => ({ name: groups!['name']!, url: groups!['url']! }));
+      const records = await Promise.all(
+        remotes.map(async (remote) => {
+          const provider = await optionalConfig(`remote.${remote.name}.tauProvider`);
+          const repositoryId = await optionalConfig(`remote.${remote.name}.tauRepositoryId`);
+          const fetchOnly = await optionalConfig(`remote.${remote.name}.tauFetchOnly`);
+          return remoteOf(remote.name, remote.url, {
+            ...(provider === 'github' ? { provider } : {}),
+            ...(/^\d+$/u.test(repositoryId) ? { repositoryId } : {}),
+            ...(fetchOnly === 'true' ? { fetchOnly: true } : {}),
+          });
+        }),
+      );
+      return Object.freeze(records.toSorted((left, right) => left.name.localeCompare(right.name)));
+    },
+
+    setRemote: async (input: SetRevisionRemoteInput): Promise<void> => {
+      guardTransportValue(input.name, 'remote');
+      guardTransportValue(input.url, 'url');
+      let githubRepositoryId: string | undefined;
+      if (input.provider === 'github') {
+        if (input.repositoryId !== undefined && /^\d+$/u.test(input.repositoryId)) {
+          githubRepositoryId = input.repositoryId;
+        } else {
+          throw new TypeError('A GitHub remote requires a decimal repository id.');
+        }
+      }
+      const existing = await port.listRemotes();
+      await output([
+        'remote',
+        ...(existing.some((remote) => remote.name === input.name) ? ['set-url'] : ['add']),
+        input.name,
+        input.url,
+      ]);
+      if (githubRepositoryId === undefined) {
+        await run(['config', '--unset-all', `remote.${input.name}.tauProvider`]);
+        await run(['config', '--unset-all', `remote.${input.name}.tauRepositoryId`]);
+      } else {
+        await output(['config', `remote.${input.name}.tauProvider`, 'github']);
+        await output(['config', `remote.${input.name}.tauRepositoryId`, githubRepositoryId]);
+      }
+      await (input.fetchOnly === true
+        ? output(['config', `remote.${input.name}.tauFetchOnly`, 'true'])
+        : run(['config', '--unset-all', `remote.${input.name}.tauFetchOnly`]));
+    },
+
+    removeRemote: async (name: string): Promise<void> => {
+      guardTransportValue(name, 'remote');
+      /* Idempotent: removing a remote a project never had is not a failure. */
+      await run(['remote', 'remove', name]);
+    },
+
+    changeId: async (id: RevisionId): Promise<string | undefined> => {
+      const commit = await readCommitObject(id);
+      return commit?.changeId;
+    },
+
+    conflicts: async (id: RevisionId): Promise<RevisionConflict | undefined> => {
+      const commit = await readCommitObject(id);
+      return commit?.conflictedTrees === undefined
+        ? undefined
+        : Object.freeze({
+            trees: commit.conflictedTrees,
+            labels: commit.conflictLabels ?? Object.freeze([]),
+          });
+    },
+
+    listCheckouts: async (): Promise<readonly Checkout[]> => listWorktrees(),
+
+    /*
+     * The files stock Git leaves in a worktree's admin directory while an
+     * operation is stopped part-way, read without running Git so a poll costs
+     * a few stats. An operation outranks a detached head, since a rebase
+     * detaches one, and a held `index.lock` comes last: it is the shortest.
+     */
+    gitOperation: async (root?: string): Promise<RevisionGitOperation | undefined> => {
+      const admin = await adminDirectoryOf(root);
+      if (admin === undefined) {
+        return undefined;
+      }
+      const exists = async (name: string): Promise<boolean> => {
+        try {
+          await access(join(admin, name));
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      /* A todo that will run commands outranks every other marker, so a
+       * planted `MERGE_HEAD` cannot hide the warning (LP7, OD4). */
+      const todo = await readFile(join(admin, 'rebase-merge', 'git-rebase-todo'), 'utf8').catch(() => undefined);
+      if (todo !== undefined && rebaseExecLine.test(todo)) {
+        return Object.freeze({ kind: 'rebase', runsCommands: true });
+      }
+      const markers: ReadonlyArray<readonly [string, RevisionGitOperation['kind']]> = [
+        ['MERGE_HEAD', 'merge'],
+        ['CHERRY_PICK_HEAD', 'cherryPick'],
+        ['REVERT_HEAD', 'revert'],
+        ['rebase-merge', 'rebase'],
+        ['rebase-apply', 'rebase'],
+      ];
+      for (const [name, kind] of markers) {
+        // oxlint-disable-next-line no-await-in-loop -- in order: the first marker names the operation.
+        if (await exists(name)) {
+          return Object.freeze({ kind });
+        }
+      }
+      const head = await readFile(join(admin, 'HEAD'), 'utf8').catch(() => undefined);
+      if (head !== undefined && !head.startsWith(symbolicRefPrefix)) {
+        /* The way back: the branch Git's own log says this worktree left last. */
+        const previous = await run(
+          [...(root === undefined ? [] : ['-C', root]), 'rev-parse', '--symbolic-full-name', '@{-1}'],
+          root === undefined ? {} : { env: linkedGitEnvironment() },
+        );
+        const left = previous.exitCode === 0 ? textDecoder.decode(previous.stdout).trim() : '';
+        return Object.freeze({
+          kind: 'detached',
+          ...(left.startsWith(`${branchRefPrefix}/`) ? { branch: left.slice(branchRefPrefix.length + 1) } : {}),
+        });
+      }
+      return (await exists('index.lock')) ? Object.freeze({ kind: 'locked' }) : undefined;
+    },
+
+    /**
+     * One checkout per branch — the rule Git already enforces, refused here with
+     * the port's own code so both legs answer the same way.
+     *
+     * @param input - The branch, and where an unborn one starts.
+     * @returns The checkout that now holds that branch.
+     */
+    addCheckout: async (input: AddCheckoutInput): Promise<Checkout> => {
+      const { projectId, directory, withMutationAuthority } = requireCheckouts();
+      const existing = await listWorktrees();
+      if (existing.some((checkout) => checkout.branch === input.branch)) {
+        throw new RevisionPortError('CHECKOUT_CONFLICT', `Branch ${input.branch} already has a checkout.`);
+      }
+      const head = await port.readRef(input.branch);
+      const base = head ?? input.from;
+      if (base === undefined) {
+        throw new RevisionPortError(
+          'UNKNOWN_REVISION',
+          `Branch ${input.branch} is unborn; a checkout of it needs an explicit base revision.`,
+        );
+      }
+      /* Paths are all the check below reads, so a large object that has not arrived stays its pointer. */
+      const tree = await port.readTree(base, { largeObjects: 'local' });
+      if (tree === undefined) {
+        throw new RevisionPortError('UNKNOWN_REVISION', `The store holds no tree for revision ${base}.`);
+      }
+      assertMaterializableRevisionTree(tree);
+      const id = await checkoutIdOf(input.branch);
+      await mkdir(directory, { recursive: true });
+      const root = join(directory, id);
+      /* Large files are written as their pointers. Git-lfs's download filter
+       * would fetch any object that has not arrived without this port's
+       * credentials, and a refused download aborts the whole checkout; the
+       * host's fill brings those bytes afterwards from the store or the
+       * remote (D16). */
+      const add = async (): Promise<void> => {
+        await output(
+          [
+            'worktree',
+            'add',
+            ...(head === undefined ? ['-b', input.branch] : []),
+            root,
+            head === undefined ? base : input.branch,
+          ],
+          { env: withVariable(gitEnvironment(), 'GIT_LFS_SKIP_SMUDGE', '1') },
+        );
+        /* The index recorded each pointer's size, and Git reads a size that
+         * differs as modified without asking the filter, so once the fill writes
+         * the bytes `git status` would list every large file. `read-tree` leaves
+         * stat data zero, and Git compares contents on its next refresh (R14). */
+        await run(['-C', root, 'read-tree', 'HEAD'], { env: linkedGitEnvironment() });
+      };
+      await (withMutationAuthority?.(
+        {
+          operation: 'add',
+          repositoryRoot: repositoryPath,
+          parentRoot: directory,
+          targetPath: id,
+          targetRoot: root,
+        },
+        add,
+      ) ?? add());
+      return Object.freeze({ id, projectId, root, kind: 'linked', branch: input.branch, baseRevisionId: base });
+    },
+
+    removeCheckout: async (id: string): Promise<void> => {
+      const { withMutationAuthority } = requireCheckouts();
+      if (id === liveCheckoutId) {
+        /* Policy Rule 1: *live checkout* is an engineering term and this
+         * sentence is rendered verbatim by the pane and printed by the CLI. */
+        throw new RevisionPortError(
+          'CHECKOUT_CONFLICT',
+          'The project itself cannot be removed. Switch to another branch first.',
+        );
+      }
+      const worktrees = await listWorktrees();
+      const existing = worktrees.find((checkout) => checkout.id === id);
+      if (existing === undefined) {
+        throw new RevisionPortError('CHECKOUT_CONFLICT', `No checkout is registered as ${id}.`);
+      }
+      /* `--force` because git's own dirty check is not the judge here: Tau
+       * applies trees through the filesystem provider, never `git checkout`, and
+       * keeps the index only for stock Git's sake (R14), so an unforced remove
+       * can refuse over stat data or an untracked file Tau already judged. The
+       * real gate is one layer up — `removeCheckout` in `revision-effects.ts`
+       * compares the checkout's head tree against a live capture and refuses
+       * work that is not in a revision yet (a1 review R7). */
+      const parentRoot = dirname(existing.root);
+      const targetPath = basename(existing.root);
+      const remove = async (): Promise<void> => {
+        await output(['worktree', 'remove', '--force', existing.root]);
+      };
+      await (withMutationAuthority?.(
+        {
+          operation: 'remove',
+          repositoryRoot: repositoryPath,
+          parentRoot,
+          targetPath,
+          targetRoot: existing.root,
+        },
+        remove,
+      ) ?? remove());
+    },
+  });
+
+  return port;
+};

@@ -1,0 +1,344 @@
+-------------------------- MODULE MessageQueue --------------------------
+\* Presentation changes preserve admission, cancellation and command identity.
+\* Composer Stop and its shortcut retain Stop; removing the duplicate message
+\* button and its diagnostic origin does not change cancellation or queue delivery.
+\* Explicit reorder changes only the saved queue sequence under delivery exclusion.
+\* Enlarged-text reflow and readable busy labels retain the same disabled guards.
+\* Composer tray dividers, row padding and icon alignment are presentation only;
+\* queue edit, reorder, retry and targeted-send callbacks retain their guards and identity.
+\* Pending view actions remain serialized until settlement. Pointer cancellation,
+\* dropping outside the queue and unsaved inline edits further restrict Reorder.
+\* Failed steering retains its durable cancel identity; a removed item's view-only
+\* action error cannot offer a retry. Admission bridge hashing fences Prepare inputs.
+\* The executable queue event alphabet comes from its schemas; removing an unused
+\* duplicate TypeScript event union does not change these transitions or guards.
+\* Grok config discovery and host-owned session selection affect composer controls;
+\* queued admission, FIFO delivery and durable cancellation retain these owners.
+\* Relabelling Steer as Send now changes only presentation; Steer keeps its targeted
+\* durable cancel, and the next message's run waits on the stopped attempt in the host.
+\* The composer's mobile collapse tracks focus for layout only; submit, admission
+\* and queue delivery keep the same paths.
+\* A foreign segment rescan that ends unchanged re-presents the local transcript;
+\* it reads the projection only and leaves admission, delivery and the queue alone.
+\* Chat message-change wakes are throttled for React readers only; status wakes
+\* stay immediate, and admission, delivery and the queue never read either.
+\* A queued item's execution is the chat's intent with this device's own placement
+\* put back on it, and admission refuses an external agent this device cannot place
+\* before any host wait; queue delivery, persistence and cancellation are unchanged.
+\* A run another device holds disables submit like the existing disabled guards, and
+\* the host's `wait` refusal of a queued admission while it holds takes the existing
+\* refused-admission path; this device's placement is written on every change and
+\* read from the open session first. Queue transitions and guards are unchanged.
+\* A legacy device-relative placement is adopted once at a session's load, through
+\* the chat store's adopting write, before any queued item is admitted. A placement this
+\* tab cannot reach is held at load and the chat runs locally; queue paths unchanged.
+\* A held placement is applied once this tab can reach it and dropped when the person
+\* picks an execution elsewhere; admission, delivery and the queue never read it.
+\* The persistence context is the held placement's one copy, which the placement write reads.
+\* A half-finished legacy adoption is finished on a later open; queue paths are unchanged.
+\* A chat's load never waits on the origin probe or on finishing an adoption; queue paths unchanged.
+\* An adopted placement is written only after the chat record's drop commits; queue paths unchanged.
+\* A legacy host is adopted without leaving the synced record; a placement of unknown reach is applied
+\* at load and settled later, so admission waits for its host. Queue paths unchanged.
+\* Held placements are re-applied on one reachability signal (origin or loopback); queue paths unchanged.
+\* chat.json drops device-relative hosts in the chat store alone; queue paths unchanged.
+\* A late reach answer settles a load placement only while the chat still runs on it, and placements are read
+\* and written through one path; queue paths unchanged.
+\* A chat's open reads its placement through that one shared read too; queue paths unchanged.
+\* A placement held during a load is checked against reach once it is held; queue paths unchanged.
+\* Other devices' segments reach the projection with this device's read time, so a run held
+\* elsewhere goes stale by this device's clock; queue paths unchanged.
+\* Each segment also carries when it last changed on this device (its modification time), the one
+\* time the page and the agent host both measure a foreign run from; queue paths unchanged.
+\* That modification time comes from a metadata-only stat, which never reads segment content; queue paths unchanged.
+\* A foreign run goes stale only once this device's last pull, read beside the segments, came past
+\* the bound after that time with nothing newer, and the page asks for that pull; queue paths unchanged.
+\* That pull answers whether this device can pull the chat at all; where it cannot, a run quiet past the
+\* ask interval no longer disables submit, as the host's fence reads it; queue paths unchanged.
+\* QueuePlacement.tla separately checks host-local lost-ACK recovery and scoped
+\* legacy receipt rebasing; this module retains its single-host FIFO scope.
+\* Skipping observation of the registration probe, or of a chat this tab already
+\* crashed on, never enqueues, prepares or acknowledges; queue paths unchanged.
+\* Timing when a live run's first model text was shown (agent observability T10)
+\* only reads the projection and notifies the host; queue paths unchanged.
+\* Rating an ended run's reply (agent observability T12) only reads the ledger
+\* and notifies the host, once the run's lifecycle ended (a pause resumes); queue
+\* paths unchanged.
+\* Home's server-rendered composer input stays live until the rich composer hydrates; its edit
+\* enters the existing draft owner through one setDraftText, and that early input carries no submit
+\* path, so nothing enqueues, prepares or acknowledges before hydration; queue paths unchanged.
+\* Home and the library now host that early input themselves and fetch the rich composer on
+\* demand, so the composer's own module is no longer in the entry route's eager closure. The
+\* host withholds adoption until the composer is loaded, the composer receives the adopted
+\* snapshot as a prop instead of mounting its own early input, and no submit, admission,
+\* enqueue or acknowledgement path can run before it arrives; queue paths unchanged.
+\* A Tau turn's admission now waits for the page's skills catalog to settle, bounded the way it
+\* waits for the host probe, before it composes the turn's context (prompt-prefix identity I1);
+\* the wait sits inside Prepare, and submit, persistence, delivery, cancellation and the queue
+\* keep their paths and guards; queue paths unchanged.
+\* The composer now takes its toast from the shared UI package instead of the app's own sonner
+\* wrapper (ui-kit extraction); only an import moved, and queue paths unchanged.
+\* The queue store and the queue view moved into the chat-ui library (UI wave B) with no change
+\* to their code beyond import specifiers; queue paths unchanged.
+\* The session machine now holds the chat's automatic-resume wait and the run-elsewhere pull
+\* heartbeat as `after` delays the store drives (audit R5). A wait that ends sends a `continue`
+\* gesture, which never enters the queue; a gesture ends the wait. Submit, Prepare and delivery unchanged.
+\* Only a viewed chat with a published admission waits; the resumed plan stays in hand until its
+\* failure leaves, or the run returns to failed under it; neither touches the queue.
+\* The machines, the session store and the turn host take their xstate, privacy and observation
+\* helpers from the ui-core library (UI wave E) instead of the app's lib; only imports moved,
+\* and queue paths unchanged.
+\* The session store reads and persists the chat's kernel preference beside its active kernel
+\* (automatic kernel selection M4); queue delivery, persistence and placement are unchanged.
+\* The turn host passes the Auto kernel preference and owner to turn telemetry (automatic kernel
+\* selection AKS-10); admission, delivery and the queue barrier are unchanged.
+\* The app runtime builds the session store with its dependencies at construction (app state
+\* orchestration A2): the library's chat-record ports, and its record client and watch, taken again
+\* when the root worker is replaced. The closures it calls are the same; queue paths unchanged.
+\* A chat a sidebar row only observes answers unread from its observation's project, as an
+\* acquired chat answers from its session's; admission, delivery and the queue never read it.
+\* The session store reports its transcript's load state and the composer trays a chat remembers
+\* (app state orchestration A12, I21): read-only derivations of the applied transcript and a
+\* per-device memory, latched once the load settles (a refused read, or a chat this tab created
+\* empty, noted by the create paths); an empty log waits for the scan of other devices' history before
+\* it settles, and a refused or failed read waits for it too; a scan that fails or never reads
+\* latches, as does a chat refused before it was opened or whose watch closed after it read; a
+\* partial page never settles, and trays are remembered only once that scan has read and this
+\* device's log has answered; a chat opened after its foreign watch closed settles at once.
+\* Admission, delivery, persistence and the queue barrier are unchanged.
+\* A dispatched continue whose resumed attempt's running and failed rows fold into one read
+\* presents that attempt as running before its terminal, so the session settles as the run
+\* ended (Observe of a terminal run); delivery still waits for the same terminal observation.
+\* A7b: the store hears the focused project from the app runtime's focus rather than from a setter the
+\* session binding called, and binds that project's chats to its live session again each time focus
+\* arrives there, as the setter did. Admission, delivery, persistence and the queue barrier are unchanged.
+\* A7c: the store binds each live project's session from the registry's live set, which the app runtime hands it,
+\* rather than from a setter the session binding called, so a session is bound with nothing mounted and forgotten
+\* when the registry lets it go. Admission, delivery, persistence and the queue barrier are unchanged.
+\* A7c review: the store's members are reordered for lint and its session loop reads the map's keys directly; the
+\* binding, admission, delivery, persistence and the queue barrier are unchanged.
+\* PR-7: the turn host reads usage-metrics consent from the one telemetry consent rule; it gates only
+\* telemetry, so admission, delivery, persistence and the queue barrier are unchanged.
+\* Approval watch: a run watch or transcript read that fails on a dropped or replaced connection is
+\* retried a bounded number of times instead of latching the run; only presentation changes, so
+\* admission, delivery, persistence and the queue barrier are unchanged.
+\* Approval stop: the composer offers Stop while its run is paused on an approval or stopping, and the
+\* cancel goes through the one targeted host cancel it always used; the host cancel log line is JSON
+\* text. Only the control and logging change, so admission, delivery, persistence and the queue
+\* barrier are unchanged.
+\* PL1 (runtime entry cut): the store's per-chat SDK `Chat` loads on demand behind `DeferredChat`, an ordered
+\* queue that replays every send made before the load in order, rejects one past its bound rather than dropping
+\* it, and settles every queued send as failed when the load fails. Once loaded, a send runs synchronously as
+\* before. Delivery order, admission, persistence and the queue barrier are unchanged, so no action or verdict
+\* changes.
+\* PL6 (hand-off contract): the project composer adopts the native input the workspace placeholder served, moving
+\* its edit into the draft before the editor renders, and an Enter pressed there is one submit through the
+\* composer's existing Enter path once the editor holds the text. Submit, admission, delivery and the queue keep
+\* the same paths and guards. No action or verdict changes.
+\* PL6 review: the composer adopts only an input its own project's placeholder served, and the queued submit waits,
+\* still queued, until the composer's guards permit a send, then carries the editor's text through the same submit.
+\* The composer's guard refs update in a layout effect. No action or verdict changes.
+\* WP5 (composer image formats): the store and the composer draft provide the image step from the app's
+\* attachment image actor, and a queued image carries its declared type for the intake counter only; admission,
+\* delivery, persistence and the queue barrier are unchanged.
+\* Composer drop zone and converting slot: the chat pane and Home hero forward dropped files to the composer's
+\* existing drop handler, and the draft lists images still being converted as placeholder slots. Draft, admission,
+\* delivery, persistence and the queue barrier are unchanged. No action or verdict changes.
+\* SP2g (change-event netting): the store's watch of a chat's foreign segment directory also refolds on a
+\* summary of that directory or any ancestor (the project root included), as the coalescer now delivers scoped
+\* `directoryChanged` resets; a refold only re-reads segments, so admission, delivery, persistence and the queue
+\* barrier are unchanged.
+\* SP2h (chats before the whole download): the chats and the composer open once their records land, before a Tau
+\* Cloud open has written the files. A turn this document hosts waits inside its admission, as it already waits for
+\* the host probe, until the open's intent clears; the wait ends in a placement refusal when the open fails or this
+\* account may not continue it (re-read on an account switch), and with the stop's reason on Stop or the turn
+\* host's unmount, which is checked again after the catalog wait. The composer disables
+\* send meanwhile. Admission still decides once, so delivery order, persistence and the queue barrier are unchanged.
+\* A15d (early input, on PL6's hand-off): while the chat's record is unread (read through a selector, never a
+\* snapshot in the component), the composer takes a painted draft through `hydrateDraft`, which skips a touched draft.
+\* PL6's queued submit is shown until it is sent or cancelled, and Escape cancels it as an edit does. An Enter queued on
+\* a painted draft nobody edited waits for the composer's record (the chat's, or Home's own) and is replayed only when
+\* the record holds that text and nothing more;
+\* otherwise it is cancelled and never sent. A send still enters the queue only through the composer's submit, so
+\* admission, delivery, persistence and the queue barrier are unchanged, and no action or verdict changes.
+\* External-agent sign-in: the store answers which host a chat is attached to (a read of the observation it already
+\* keeps), so a login card can offer the sign-in where that host refused the turn, and an exit-0 sign-in retries the
+\* refused turn through the existing regenerate gesture. No action or verdict changes.
+\* DC-10 revisions-ui slice 2 (2026-11-18): `use-turn-admission.ts` takes the revision client registry from
+\* `@taucad/revisions-ui`; only the import moved. No action or verdict changes.
+\* revisions-ui slice 6 (2026-11-19): `use-turn-admission.ts` takes `subscribeRevisionSessionUser` from
+\* `@taucad/revisions-ui/lib/revision-actor`; only the import moved. No action or verdict changes.
+\* Tau Cloud naming audit (2026-11-18): `chat-session-store.ts` rewords the queue-updates error sentence; copy only.
+\* No action or verdict changes.
+\* DC-10 files-ui slice 9 (2026-11-19): `chat-session-store.ts` takes the `CommitCancelledDraftRestoreInput` type
+\* from `@taucad/files-ui`; only the import moved. No action or verdict changes.
+\* Adaptive app deployment mode C6 (2026-11-19): `chat-turn-host.tsx` rebuilds `snapshot.kernel` from the plan read at
+\* admission; delivery, persistence and the queue are untouched. No action or verdict changes.
+\* DC-10 chat-ui slice 1 (2026-11-19): `chat-message-queue.machine.ts` moves unchanged to `@taucad/chat-ui`, and
+\* `chat-session-store.ts`, `chat-message-queue.tsx`, `chat-textarea.tsx` and `use-chat.tsx` import it, the draft
+\* machine and the chat SDK loader from there; only paths moved. No action or verdict changes.
+EXTENDS Naturals, Sequences, FiniteSets, TLC
+CONSTANTS Messages, Tabs, Durable, QuietSubmit, StableIdentity,
+          ObserveBarrier, TargetedCancel, TerminalBeforeSend,
+          RequireTerminalIntent, CaptureTerminalAtSubmit
+VARIABLE s
+vars == <<s>>
+None == "none"
+Original == "original"
+Runs == Messages \cup {Original}
+Live(p) == p \in {"running", "paused"}
+Stopped(p) == p \in {"cancelled", "failed"}
+Terminal(p) == p = "completed" \/ Stopped(p)
+Members(q) == {q[i] : i \in 1..Len(q)}
+Remove(q, m) == SelectSeq(q, LAMBDA x : x # m)
+Accepted == {key[1] : key \in s.accepted}
+Chosen == IF s.steerItem # None THEN s.steerItem ELSE Head(s.queue)
+BarrierSeen(t) == ~ObserveBarrier \/ s.after = None \/ s.after \in s.observed[t].known
+Ready(t) == /\ BarrierSeen(t)
+            /\ IF s.steerItem = None
+                  THEN s.observed[t].phase = "completed"
+                       \/ (Stopped(s.observed[t].phase) /\
+                           (~RequireTerminalIntent \/ s.afterTerminal[Chosen] = s.observed[t].run))
+                  ELSE ~TerminalBeforeSend \/ Terminal(s.observed[t].phase)
+Init == s = [queue |-> <<>>, saved |-> <<>>, submitted |-> {}, prepared |-> None,
+             owner |-> None, alive |-> Tabs, after |-> None, active |-> Original,
+             pending |-> None, pendingTab |-> None,
+             capturedTerminal |-> [m \in Messages |-> None],
+             afterTerminal |-> [m \in Messages |-> None],
+             phase |-> [r \in Runs |-> IF r = Original THEN "running" ELSE "absent"],
+             known |-> {Original}, accepted |-> {}, counts |-> [m \in Messages |-> 0],
+             observed |-> [t \in Tabs |-> [run |-> Original, phase |-> "running", known |-> {Original}]],
+             earlyDelivery |-> FALSE, earlySteer |-> FALSE, outOfOrder |-> FALSE,
+             steerItem |-> None, target |-> None,
+             cancelPending |-> {}, wrongCancellation |-> FALSE, submitInterrupted |-> FALSE]
+\* Capture authorization at UI submit entry before attachment promotion, then
+\* forward the same intent through execution lookup and storage lock awaits.
+Submit(t, m) == /\ t \in s.alive /\ m \notin s.submitted /\ s.pending = None
+                /\ s' = [s EXCEPT !.pending = m, !.pendingTab = t,
+                    !.capturedTerminal[m] = IF Stopped(s.observed[t].phase)
+                                             THEN s.observed[t].run ELSE None,
+                    !.submitInterrupted = @ \/ (~QuietSubmit /\ Live(s.phase[s.active])),
+                    !.phase[s.active] = IF QuietSubmit THEN @ ELSE "cancelled"]
+Persist == LET m == s.pending IN
+           /\ m # None
+           /\ s' = [s EXCEPT !.queue = Append(@, m),
+                     !.saved = IF Durable THEN Append(@, m) ELSE @,
+                     !.submitted = @ \cup {m}, !.pending = None, !.pendingTab = None,
+                     !.afterTerminal[m] = IF CaptureTerminalAtSubmit THEN s.capturedTerminal[m]
+                       ELSE IF Stopped(s.observed[s.pendingTab].phase)
+                              THEN s.observed[s.pendingTab].run ELSE None]
+\* Explicit reorder changes only the durable sequence, never admission identity.
+MoveBefore(q, m, n) == LET rest == Remove(q, m)
+                           at == IF n = None THEN Len(rest) + 1
+                                 ELSE CHOOSE i \in 1..Len(rest) : rest[i] = n
+                       IN SubSeq(rest, 1, at - 1) \o <<m>> \o SubSeq(rest, at, Len(rest))
+Reorder(t, m, n) == /\ t \in s.alive /\ m \in Members(s.queue)
+                    /\ n \in (Members(s.queue) \ {m}) \cup {None}
+                    /\ s.owner = None /\ s.prepared = None /\ s.steerItem = None
+                    /\ s' = [s EXCEPT !.queue = MoveBefore(@, m, n),
+                              !.saved = IF Durable THEN MoveBefore(@, m, n) ELSE @]
+Observe(t) == /\ t \in s.alive
+              /\ s.observed[t] # [run |-> s.active, phase |-> s.phase[s.active], known |-> s.known]
+              /\ s' = [s EXCEPT !.observed[t] = [run |-> s.active, phase |-> s.phase[s.active], known |-> s.known]]
+Complete == /\ s.phase[s.active] = "running"
+            /\ s' = [s EXCEPT !.phase[s.active] = "completed"]
+Pause == /\ s.phase[s.active] = "running"
+         /\ s' = [s EXCEPT !.phase[s.active] = "paused"]
+\* Reattaching the SDK watch after ACP approval observes the same resumed run;
+\* it changes no admission identity and cannot release queued work while paused.
+Resume == /\ s.phase[s.active] = "paused"
+          /\ s' = [s EXCEPT !.phase[s.active] = "running"]
+Fail == /\ Live(s.phase[s.active])
+        /\ s' = [s EXCEPT !.phase[s.active] = "failed"]
+Stop == /\ Live(s.phase[s.active])
+        /\ s' = [s EXCEPT !.phase[s.active] = "cancelled"]
+Steer(t, m) == /\ t \in s.alive /\ m \in Members(s.queue)
+               /\ s.owner = None /\ s.prepared = None /\ s.steerItem = None
+               /\ s' = [s EXCEPT !.steerItem = m, !.target = s.observed[t].run]
+Cancel(t) == LET victim == IF TargetedCancel THEN s.target ELSE s.observed[t].run IN
+             /\ t \in s.alive /\ s.steerItem # None /\ s.prepared = None
+             /\ s.owner = None /\ BarrierSeen(t) /\ Live(s.observed[t].phase)
+             /\ (~TargetedCancel \/ s.observed[t].run = s.target)
+             /\ victim \notin s.cancelPending
+             /\ s' = [s EXCEPT !.cancelPending = @ \cup {victim},
+                       !.wrongCancellation = @ \/ (victim # s.target)]
+FinishCancel(r) == /\ r \in s.cancelPending /\ Live(s.phase[r])
+                   /\ s' = [s EXCEPT !.phase[r] = "cancelled"]
+Prepare(t) == /\ t \in s.alive /\ s.owner = None /\ Len(s.queue) > 0
+              /\ s.prepared = None /\ Ready(t)
+              /\ s' = [s EXCEPT !.owner = t, !.prepared = Chosen]
+Recover(t) == /\ t \in s.alive /\ s.owner = None /\ s.prepared # None
+              /\ s' = [s EXCEPT !.owner = t]
+Deliver(t) == LET m == s.prepared
+                  key == <<m, IF StableIdentity THEN 1 ELSE s.counts[m] + 1>>
+                  fresh == key \notin s.accepted
+                  accept == fresh /\ Terminal(s.phase[s.active])
+              IN /\ t = s.owner /\ m # None /\ s.counts[m] < 2
+                 /\ s' = [s EXCEPT
+                    !.counts[m] = @ + 1,
+                    !.earlyDelivery = @ \/ (m \notin Accepted /\
+                      IF s.steerItem = m THEN ~Terminal(s.phase[s.active])
+                      ELSE ~(s.phase[s.active] = "completed" \/
+                        (Stopped(s.phase[s.active]) /\ s.capturedTerminal[m] = s.active))),
+                    !.earlySteer = @ \/ (m \notin Accepted /\ s.steerItem = m /\
+                      s.target # None /\ ~Terminal(s.phase[s.target])),
+                    !.outOfOrder = @ \/ (m \notin Accepted /\ s.steerItem # m /\ m # Head(s.queue)),
+                    !.accepted = IF accept THEN @ \cup {key} ELSE @,
+                    !.active = IF accept THEN m ELSE @,
+                    !.phase[m] = IF accept THEN "running" ELSE @,
+                    !.known = IF accept THEN @ \cup {m} ELSE @]
+\* Accepted means durable host acceptance, not merely an applied response.
+\* A refused/not-applied response leaves the prepared item intact (stuttering).
+\* Local actor-live, abort and in-lock session guards further restrict runtime
+\* sends; deletion and optional filesystem watch availability are outside this
+\* retained-session safety model. See README for the runtime conformance slice.
+Acknowledge(t) == /\ t = s.owner /\ s.prepared # None /\ s.prepared \in Accepted
+                  /\ s' = [s EXCEPT !.queue = Remove(@, s.prepared),
+                     !.saved = IF Durable THEN Remove(@, s.prepared) ELSE @,
+                     !.after = s.prepared, !.prepared = None, !.owner = None,
+                     !.capturedTerminal[s.prepared] = None, !.afterTerminal[s.prepared] = None,
+                     !.counts[s.prepared] = 0,
+                     !.target = IF s.steerItem = s.prepared THEN None ELSE @,
+                     !.steerItem = IF s.steerItem = s.prepared THEN None ELSE @]
+LoseAck(t) == /\ t = s.owner /\ s.prepared \in Accepted
+              /\ s' = [s EXCEPT !.owner = None]
+\* The finite crash scenario begins only after a queue save has answered.
+Crash(t) == /\ t \in s.alive /\ s.pending = None
+            /\ s' = [s EXCEPT !.alive = @ \ {t},
+                 !.owner = IF @ = t THEN None ELSE @,
+                 !.queue = IF Durable THEN @ ELSE s.saved,
+                 !.prepared = IF Durable THEN @ ELSE None]
+Reopen(t) == /\ t \notin s.alive /\ s' = [s EXCEPT !.alive = @ \cup {t}]
+Next == Persist \/ Complete \/ Pause \/ Resume \/ Stop \/ Fail
+        \/ (\E t \in Tabs : Observe(t) \/ Prepare(t) \/ Recover(t) \/ Deliver(t)
+             \/ Acknowledge(t) \/ LoseAck(t) \/ Crash(t) \/ Reopen(t) \/ Cancel(t)
+             \/ (\E m \in Messages : Submit(t, m) \/ Steer(t, m)
+                 \/ (\E n \in Messages \cup {None} : Reorder(t, m, n))))
+        \/ (\E r \in Runs : FinishCancel(r))
+Spec == Init /\ [][Next]_vars
+TypeOK == /\ s.queue \in Seq(Messages) /\ s.saved \in Seq(Messages)
+          /\ s.submitted \subseteq Messages /\ s.active \in Runs
+          /\ s.owner \in Tabs \cup {None} /\ s.prepared \in Messages \cup {None}
+          /\ s.after \in Runs \cup {None} /\ s.alive \subseteq Tabs
+          /\ s.phase \in [Runs -> {"absent", "running", "paused", "completed", "cancelled", "failed"}]
+          /\ s.counts \in [Messages -> 0..2]
+          /\ s.pending \in Messages \cup {None}
+          /\ s.pendingTab \in Tabs \cup {None}
+          /\ s.capturedTerminal \in [Messages -> Runs \cup {None}]
+          /\ s.afterTerminal \in [Messages -> Runs \cup {None}]
+          /\ Len(s.queue) = Cardinality(Members(s.queue))
+PayloadSurvives == s.submitted \subseteq Members(s.queue) \cup Accepted
+PreparedPayloadSurvives == s.prepared = None \/ s.prepared \in Members(s.queue)
+AtMostOnceCharge == \A m \in Messages : Cardinality({key \in s.accepted : key[1] = m}) <= 1
+SubmitPreservesRun == ~s.submitInterrupted
+\* Permission is the immutable gesture-time observation, not a fact learned later.
+\* Monotone monitors are equivalent to requiring the predicate of every prior
+\* first delivery. They merge histories with identical safety outcomes without
+\* restricting any protocol action, including accepted-command retransmission.
+NoEarlyDelivery == ~s.earlyDelivery
+SteerWaitsForTerminal == ~s.earlySteer
+CancelTargetsObservedRun == ~s.wrongCancellation
+FIFOExceptExplicitSteer == ~s.outOfOrder
+Quiescent == s.pending = None /\ s.queue = <<>> /\ s.prepared = None /\ s.owner = None
+Symmetry == {messages @@ tabs : messages \in Permutations(Messages), tabs \in Permutations(Tabs)}
+=============================================================================

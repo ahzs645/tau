@@ -1,7 +1,6 @@
-/* eslint-disable @typescript-eslint/naming-convention -- localStorage keys use 'tau:flags' format */
 import { describe, expect, it, beforeEach } from 'vitest';
 import { isFeatureEnabled, getAllFlags, resetFlagCache, setFlagOverrides } from '#flags/feature-flags.js';
-import { featureFlagDefaults } from '#flags/flag.constants.js';
+import { featureFlagDefaults, resolveTauDebugDefault } from '#flags/flag.constants.js';
 
 function createMockStorage(initial?: Record<string, string>): Storage {
   const store = new Map<string, string>(Object.entries(initial ?? {}));
@@ -28,84 +27,158 @@ beforeEach(() => {
 });
 
 describe('isFeatureEnabled', () => {
+  it('keeps machines disabled despite saved or newly written local overrides', () => {
+    const storage = createMockStorage({ 'tau:flags': JSON.stringify({ machines: true }) });
+    expect(featureFlagDefaults.machines).toBe(false);
+    expect(isFeatureEnabled('machines', storage)).toBe(false);
+    setFlagOverrides({ machines: true }, storage);
+    expect(isFeatureEnabled('machines', storage)).toBe(false);
+  });
+  it('should keep code-only flags at their defaults even with stored overrides', () => {
+    const storage = createMockStorage({ 'tau:flags': JSON.stringify({ automaticReload: true }) });
+    expect(isFeatureEnabled('automaticReload', storage)).toBe(false);
+    setFlagOverrides({ automaticReload: true }, storage);
+    expect(isFeatureEnabled('automaticReload', storage)).toBe(false);
+  });
+
+  it.each(['webGpuShaderStacks', 'webGpuInspector', 'partsWarehouse', 'pluginsStore'] as const)(
+    'should let a stored override turn on the hidden %s flag',
+    (flag) => {
+      const storage = createMockStorage();
+      expect(isFeatureEnabled(flag, storage)).toBe(false);
+      setFlagOverrides({ [flag]: true }, storage);
+      expect(isFeatureEnabled(flag, storage)).toBe(true);
+    },
+  );
+
+  it('should honour a hidden flag written straight to tau:flags from the console', () => {
+    const storage = createMockStorage({ 'tau:flags': JSON.stringify({ pluginsStore: true }) });
+    expect(isFeatureEnabled('pluginsStore', storage)).toBe(true);
+  });
+
+  it('should prefer WebGPU by default and retain an explicit WebGL preference', () => {
+    const storage = createMockStorage();
+    expect(isFeatureEnabled('webGpu', storage)).toBe(true);
+    setFlagOverrides({ webGpu: false }, storage);
+    resetFlagCache();
+    expect(isFeatureEnabled('webGpu', storage)).toBe(false);
+    setFlagOverrides({ webGpu: true }, storage);
+    expect(isFeatureEnabled('webGpu', storage)).toBe(true);
+  });
+
   it('should return default value when no overrides exist', () => {
     const storage = createMockStorage();
-    expect(isFeatureEnabled('planMode', storage)).toBe(false);
+    expect(isFeatureEnabled('tauDebug', storage)).toBe(false);
   });
 
   it('should return overridden value when override is set to true', () => {
     const storage = createMockStorage({
-      'tau:flags': JSON.stringify({ planMode: true }),
+      'tau:flags': JSON.stringify({ tauDebug: true }),
     });
-    expect(isFeatureEnabled('planMode', storage)).toBe(true);
+    expect(isFeatureEnabled('tauDebug', storage)).toBe(true);
   });
 
   it('should return overridden value when override is set to false', () => {
     const storage = createMockStorage({
-      'tau:flags': JSON.stringify({ planMode: false }),
+      'tau:flags': JSON.stringify({ tauDebug: false }),
     });
-    expect(isFeatureEnabled('planMode', storage)).toBe(false);
+    expect(isFeatureEnabled('tauDebug', storage)).toBe(false);
   });
 
   it('should return default when storage has empty object', () => {
     const storage = createMockStorage({
       'tau:flags': JSON.stringify({}),
     });
-    expect(isFeatureEnabled('planMode', storage)).toBe(false);
+    expect(isFeatureEnabled('tauDebug', storage)).toBe(false);
   });
 
   it('should fall back to default for non-boolean override values', () => {
     const storage = createMockStorage({
-      'tau:flags': JSON.stringify({ planMode: 'yes' }),
+      'tau:flags': JSON.stringify({ tauDebug: 'yes' }),
     });
-    expect(isFeatureEnabled('planMode', storage)).toBe(false);
+    expect(isFeatureEnabled('tauDebug', storage)).toBe(false);
   });
 
   it('should ignore unknown flag keys and return default', () => {
     const storage = createMockStorage({
       'tau:flags': JSON.stringify({ unknownFlag: true }),
     });
-    expect(isFeatureEnabled('planMode', storage)).toBe(false);
+    expect(isFeatureEnabled('tauDebug', storage)).toBe(false);
   });
 
   it('should fall back to defaults for malformed JSON', () => {
     const storage = createMockStorage({
       'tau:flags': 'not-json',
     });
-    expect(isFeatureEnabled('planMode', storage)).toBe(false);
+    expect(isFeatureEnabled('tauDebug', storage)).toBe(false);
   });
 
   it('should return default when storage key is absent', () => {
     const storage = createMockStorage();
-    expect(isFeatureEnabled('planMode', storage)).toBe(false);
+    expect(isFeatureEnabled('tauDebug', storage)).toBe(false);
   });
 
   it('should fall back to defaults for array JSON', () => {
     const storage = createMockStorage({
       'tau:flags': JSON.stringify([true]),
     });
-    expect(isFeatureEnabled('planMode', storage)).toBe(false);
+    expect(isFeatureEnabled('tauDebug', storage)).toBe(false);
   });
 
   it('should fall back to defaults for primitive JSON values', () => {
     const storage = createMockStorage({
       'tau:flags': JSON.stringify(42),
     });
-    expect(isFeatureEnabled('planMode', storage)).toBe(false);
+    expect(isFeatureEnabled('tauDebug', storage)).toBe(false);
   });
 
   it('should fall back to default for numeric value instead of boolean', () => {
     const storage = createMockStorage({
-      'tau:flags': JSON.stringify({ planMode: 1 }),
+      'tau:flags': JSON.stringify({ tauDebug: 1 }),
     });
-    expect(isFeatureEnabled('planMode', storage)).toBe(false);
+    expect(isFeatureEnabled('tauDebug', storage)).toBe(false);
   });
 
   it('should fall back to default for null value', () => {
     const storage = createMockStorage({
-      'tau:flags': JSON.stringify({ planMode: null }),
+      'tau:flags': JSON.stringify({ tauDebug: null }),
     });
-    expect(isFeatureEnabled('planMode', storage)).toBe(false);
+    expect(isFeatureEnabled('tauDebug', storage)).toBe(false);
+  });
+});
+
+// Gates the e2e-only `SectionViewTestBridge` mount in stage.tsx. Off by
+// default ⇒ the bridge is never mounted/executed in prod; the e2e suite turns
+// it on via `TAU_DEBUG=true` (apps/ui-e2e/global-setup.ts).
+describe('tauDebug gate for SectionViewTestBridge', () => {
+  it('should be disabled by default so the test bridge is not mounted in prod', () => {
+    const storage = createMockStorage();
+    expect(isFeatureEnabled('tauDebug', storage)).toBe(false);
+  });
+
+  it('should be enabled when the debug override is set so the bridge mounts under e2e', () => {
+    const storage = createMockStorage({
+      'tau:flags': JSON.stringify({ tauDebug: true }),
+    });
+    expect(isFeatureEnabled('tauDebug', storage)).toBe(true);
+  });
+});
+
+describe('resolveTauDebugDefault', () => {
+  it('should default debug tools on for an undeployed TAU_DEBUG build (local dev, e2e)', () => {
+    expect(resolveTauDebugDefault({ isDebugEnvironment: true, deployContext: undefined })).toBe(true);
+  });
+
+  it.each(['production', 'deploy-preview', 'branch-deploy'])(
+    'should default debug tools off on a deployed site (%s) even when TAU_DEBUG is set',
+    (context) => {
+      expect(resolveTauDebugDefault({ isDebugEnvironment: true, deployContext: context })).toBe(false);
+    },
+  );
+
+  it('should default debug tools off without TAU_DEBUG', () => {
+    expect(resolveTauDebugDefault({ isDebugEnvironment: false, deployContext: undefined })).toBe(false);
+    expect(resolveTauDebugDefault({ isDebugEnvironment: undefined, deployContext: undefined })).toBe(false);
   });
 });
 
@@ -118,66 +191,86 @@ describe('getAllFlags', () => {
 
   it('should merge overrides with defaults', () => {
     const storage = createMockStorage({
-      'tau:flags': JSON.stringify({ planMode: true }),
+      'tau:flags': JSON.stringify({ tauDebug: true }),
     });
     const flags = getAllFlags(storage);
-    expect(flags).toStrictEqual({ ...featureFlagDefaults, planMode: true });
+    expect(flags).toStrictEqual({ ...featureFlagDefaults, tauDebug: true });
   });
 
   it('should ignore unknown keys in overrides', () => {
     const storage = createMockStorage({
-      'tau:flags': JSON.stringify({ planMode: true, somethingElse: false }),
+      'tau:flags': JSON.stringify({ tauDebug: true, somethingElse: false }),
     });
     const flags = getAllFlags(storage);
-    expect(flags).toStrictEqual({ ...featureFlagDefaults, planMode: true });
+    expect(flags).toStrictEqual({ ...featureFlagDefaults, tauDebug: true });
     expect(flags).not.toHaveProperty('somethingElse');
   });
 
   it('should coerce invalid values to defaults via zod', () => {
     const storage = createMockStorage({
-      'tau:flags': JSON.stringify({ planMode: 'not-a-boolean' }),
+      'tau:flags': JSON.stringify({ tauDebug: 'not-a-boolean' }),
     });
     const flags = getAllFlags(storage);
-    expect(flags.planMode).toBe(false);
+    expect(flags.tauDebug).toBe(false);
   });
 });
 
 describe('setFlagOverrides', () => {
+  it('does not persist unrelated defaults when changing a flag', () => {
+    const storage = createMockStorage();
+    setFlagOverrides({ tauDebug: true }, storage);
+    expect(JSON.parse(storage.getItem('tau:flags')!)).not.toHaveProperty('webGpu');
+  });
+
+  it('refreshes the legacy WebGPU default without losing debug or a subsequent explicit opt-out', () => {
+    const storage = createMockStorage({
+      'tau:flags': JSON.stringify({ ...featureFlagDefaults, webGpu: false, tauDebug: true }),
+    });
+    expect(getAllFlags(storage)).toMatchObject({ webGpu: true, tauDebug: true });
+    setFlagOverrides({ tauDebug: false }, storage);
+    expect(isFeatureEnabled('webGpu', storage)).toBe(true);
+    setFlagOverrides({ webGpu: false }, storage);
+    resetFlagCache();
+    expect(isFeatureEnabled('webGpu', storage)).toBe(false);
+    setFlagOverrides({ tauDebug: true }, storage);
+    expect(isFeatureEnabled('webGpu', storage)).toBe(false);
+  });
+
   it('should write overrides to storage', () => {
     const storage = createMockStorage();
-    setFlagOverrides({ planMode: true }, storage);
-    expect(isFeatureEnabled('planMode', storage)).toBe(true);
+    setFlagOverrides({ tauDebug: true }, storage);
+    expect(isFeatureEnabled('tauDebug', storage)).toBe(true);
   });
 
   it('should merge with existing overrides', () => {
     const storage = createMockStorage({
-      'tau:flags': JSON.stringify({ planMode: false }),
+      'tau:flags': JSON.stringify({ tauDebug: false }),
     });
-    setFlagOverrides({ planMode: true }, storage);
+    setFlagOverrides({ tauDebug: true }, storage);
 
     const raw = storage.getItem('tau:flags');
     expect(raw).toBeTruthy();
     const parsed = JSON.parse(raw!) as Record<string, unknown>;
-    expect(parsed['planMode']).toBe(true);
+    expect(parsed['tauDebug']).toBe(true);
   });
 
   it('should reset internal cache after writing', () => {
     const storage = createMockStorage();
 
-    expect(isFeatureEnabled('planMode', storage)).toBe(false);
-    setFlagOverrides({ planMode: true }, storage);
-    expect(isFeatureEnabled('planMode', storage)).toBe(true);
+    expect(isFeatureEnabled('tauDebug', storage)).toBe(false);
+    setFlagOverrides({ tauDebug: true }, storage);
+    expect(isFeatureEnabled('tauDebug', storage)).toBe(true);
   });
 });
 
 describe('resetFlagCache', () => {
   it('should allow re-reading from storage after reset', () => {
     const storage = createMockStorage();
-    expect(isFeatureEnabled('planMode', storage)).toBe(false);
+    expect(isFeatureEnabled('tauDebug', storage)).toBe(false);
 
-    storage.setItem('tau:flags', JSON.stringify({ planMode: true }));
+    storage.setItem('tau:flags', JSON.stringify({ tauDebug: true }));
     resetFlagCache();
-    expect(isFeatureEnabled('planMode', storage)).toBe(true);
+    expect(isFeatureEnabled('tauDebug', storage)).toBe(true);
   });
 });
 
@@ -197,6 +290,8 @@ describe('zod schema fallback', () => {
   it('should strip extra keys and keep only registered flags', () => {
     const storage = createMockStorage({
       'tau:flags': JSON.stringify({
+        marketingLanding: true,
+        tauDebug: true,
         planMode: true,
         extra: 'data',
         another: 42,
@@ -204,6 +299,8 @@ describe('zod schema fallback', () => {
     });
     const flags = getAllFlags(storage);
     expect(Object.keys(flags)).toStrictEqual(Object.keys(featureFlagDefaults));
-    expect(flags.planMode).toBe(true);
+    expect(flags).not.toHaveProperty('marketingLanding');
+    expect(flags).not.toHaveProperty('planMode');
+    expect(flags.tauDebug).toBe(true);
   });
 });

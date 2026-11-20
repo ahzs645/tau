@@ -1,0 +1,463 @@
+/** Host-selecting esbuild adapter backed by `@taucad/bundler-core`. */
+
+import type { BuildOptions, BuildResult, Loader, Message, OnLoadArgs, OnLoadResult, Plugin } from 'esbuild-wasm';
+import type * as NativeEsbuild from 'esbuild';
+import * as wasmEsbuild from 'esbuild-wasm';
+import type * as NodeFsPromises from 'node:fs/promises';
+import type * as NodeUrl from 'node:url';
+
+import { createBundlerSourceHost } from '@taucad/bundler-core';
+import type {
+  BundlerAcquisition,
+  BundlerSourceHost,
+  BundlerSourceIntent,
+  BundlerSourceResolution,
+  BundlerSourceSession,
+  PackageIssue,
+} from '@taucad/bundler-core';
+import type { BuiltinModule } from '@taucad/runtime/bundler';
+
+import { importBrowserModule } from '#vm/browser-module-import.js';
+import { esbuildNamespace } from '#vm/esbuild.constants.js';
+import { getEnvironment, isNode } from '#vm/environment.js';
+import { executeCodeInNode, importNodeModule } from '#vm/node-module-execution.js';
+import type { VmExecuteResult, VmFileSystem, VmIssue } from '#vm/types.js';
+
+/** Outcome of bundling a CAD script entry point. @public */
+export type BundleResult = {
+  code: string;
+  sourceMap?: string;
+  issues: VmIssue[];
+  success: boolean;
+  dependencies: string[];
+  unresolvedPaths: string[];
+};
+
+/** Configuration for the esbuild adapter. @public */
+export type BundlerOptions = {
+  filesystem: VmFileSystem;
+  builtinModules: Map<string, BuiltinModule>;
+  sourceMaps?: boolean;
+  autoExportNames?: string[];
+  acquisition?: BundlerAcquisition;
+};
+
+let esbuildInitialized = false;
+let initializationPromise: Promise<void> | undefined;
+let activeEsbuild: typeof wasmEsbuild = wasmEsbuild;
+
+/**
+ * Return the initialized host-appropriate esbuild API.
+ * @returns The active native or WASM esbuild API.
+ * @public
+ */
+export const getEsbuild = (): typeof wasmEsbuild => activeEsbuild;
+
+/**
+ * Whether Node's permission model refuses child processes here.
+ *
+ * Native esbuild and esbuild-wasm's Node build both run their service as a
+ * child process; `process.permission` exists only under `--permission`.
+ *
+ * @returns true when `--permission` runs without `--allow-child-process`.
+ */
+const childProcessesRefused = (): boolean =>
+  (process as { permission?: NodeJS.ProcessPermission }).permission?.has('child') === false;
+
+/**
+ * Start esbuild-wasm's browser build on this thread.
+ *
+ * Its in-thread service reads the host's globals through `self`, which Node
+ * does not define, so the realm gains a `self` alias for `globalThis` first —
+ * what a browser worker already has.
+ */
+const initializeInThreadEsbuild = async (): Promise<void> => {
+  const [browserEsbuild, { readFile }, { fileURLToPath }] = await Promise.all([
+    importNodeModule<typeof wasmEsbuild>('esbuild-wasm/esm/browser.js'),
+    importNodeModule<typeof NodeFsPromises>('node:fs/promises'),
+    importNodeModule<typeof NodeUrl>('node:url'),
+  ]);
+  const wasm = new Uint8Array(await readFile(fileURLToPath(import.meta.resolve('esbuild-wasm/esbuild.wasm'))));
+  (globalThis as { self?: typeof globalThis }).self ??= globalThis;
+  await browserEsbuild.initialize({ wasmModule: await WebAssembly.compile(wasm), worker: false });
+  activeEsbuild = browserEsbuild;
+};
+
+/**
+ * Initialize native esbuild on Node or esbuild-wasm elsewhere.
+ *
+ * A Node realm that may not start child processes runs esbuild-wasm on its own
+ * thread instead.
+ *
+ * @returns Completion after the selected engine is ready.
+ * @public
+ */
+export const initializeEsbuild = async (): Promise<void> => {
+  if (esbuildInitialized) {
+    return;
+  }
+  initializationPromise ??= (async () => {
+    try {
+      if (isNode() && childProcessesRefused()) {
+        await initializeInThreadEsbuild();
+        esbuildInitialized = true;
+        return;
+      }
+      if (isNode()) {
+        activeEsbuild = await importNodeModule<typeof NativeEsbuild>('esbuild');
+      }
+      if ((import.meta as ImportMeta & { readonly env?: { readonly SSR?: boolean } }).env?.SSR === true) {
+        await activeEsbuild.initialize({});
+      } else if (isNode()) {
+        await activeEsbuild.initialize({});
+      } else {
+        const { esbuildWasmUrl } = await import('#vm/esbuild-wasm-url.js');
+        // Inside a worker esbuild already runs off the main thread; its own nested worker would only add a realm.
+        await activeEsbuild.initialize(
+          getEnvironment() === 'worker' ? { wasmURL: esbuildWasmUrl, worker: false } : { wasmURL: esbuildWasmUrl },
+        );
+      }
+      esbuildInitialized = true;
+    } catch (error) {
+      initializationPromise = undefined;
+      throw error;
+    }
+  })();
+  return initializationPromise;
+};
+
+const loaders: Record<BundlerSourceIntent, Loader> = {
+  script: 'js',
+  json: 'json',
+  text: 'text',
+  binary: 'binary',
+  base64: 'base64',
+  dataurl: 'dataurl',
+  file: 'dataurl',
+};
+
+const scriptLoader = (path: string): Loader => {
+  const clean = path.split(/[?#]/u, 1)[0] ?? path;
+  if (clean.endsWith('.ts')) {
+    return 'ts';
+  }
+  if (clean.endsWith('.tsx')) {
+    return 'tsx';
+  }
+  if (clean.endsWith('.jsx')) {
+    return 'jsx';
+  }
+  if (clean.endsWith('.json')) {
+    return 'json';
+  }
+  return 'js';
+};
+
+const toNamespace = (resolution: BundlerSourceResolution): string => {
+  if (resolution.kind === 'builtin') {
+    return esbuildNamespace.builtin;
+  }
+  if (resolution.kind === 'remote') {
+    return esbuildNamespace.httpUrl;
+  }
+  return esbuildNamespace.vfs;
+};
+
+const importerId = (args: { readonly importer: string; readonly namespace: string }): string | undefined => {
+  if (args.importer.length === 0) {
+    return undefined;
+  }
+  if (args.namespace === esbuildNamespace.httpUrl) {
+    return args.importer;
+  }
+  return args.importer;
+};
+
+// Package refusals pass their PackageIssue as esbuild `detail`; it reaches the issue as `details`.
+const issueFromMessage = (message: Message, severity: 'error' | 'warning'): VmIssue => ({
+  message: message.text,
+  code: 'BUNDLER_FAILED',
+  ...(message.detail === undefined ? {} : { details: message.detail as unknown }),
+  type: 'compilation',
+  severity,
+  location:
+    message.location === null
+      ? undefined
+      : {
+          fileName: message.location.file.replace(/^vfs:\/?/u, ''),
+          startLineNumber: message.location.line,
+          startColumn: message.location.column,
+        },
+});
+
+const packageWarning = (issue: PackageIssue): VmIssue => ({
+  message: issue.message,
+  code: 'BUNDLER_FAILED',
+  type: 'compilation',
+  severity: 'warning',
+  details: issue,
+});
+
+const issuesFromError = (error: unknown): VmIssue[] => {
+  if (typeof error === 'object' && error !== null && 'errors' in error) {
+    const build = error as { readonly errors?: Message[]; readonly warnings?: Message[] };
+    return [
+      ...(build.errors ?? []).map((message) => issueFromMessage(message, 'error')),
+      ...(build.warnings ?? []).map((message) => issueFromMessage(message, 'warning')),
+    ];
+  }
+  return [
+    {
+      message: error instanceof Error ? error.message : String(error),
+      code: 'BUNDLER_FAILED',
+      type: 'compilation',
+      severity: 'error',
+    },
+  ];
+};
+
+const loadFromSession = async (
+  session: BundlerSourceSession,
+  args: OnLoadArgs,
+  detect: boolean,
+): Promise<OnLoadResult> => {
+  const resolution = args.pluginData as BundlerSourceResolution | undefined;
+  if (resolution === undefined) {
+    return { errors: [{ text: `Missing source resolution for '${args.path}'.` }] };
+  }
+  if (detect && 'intent' in resolution && resolution.intent !== 'script' && resolution.intent !== 'json') {
+    return { contents: '', loader: 'js' };
+  }
+  try {
+    const source = await session.load(resolution);
+    const loader = source.intent === 'script' ? scriptLoader(source.id) : loaders[source.intent];
+    return {
+      contents: source.bytes ?? source.text ?? '',
+      loader,
+      resolveDir: source.resolveDirectory,
+    };
+  } catch (error) {
+    return {
+      errors: [{ text: `Failed to load '${args.path}': ${error instanceof Error ? error.message : String(error)}` }],
+    };
+  }
+};
+
+const createSourcePlugin = (session: BundlerSourceSession, detect: boolean): Plugin => ({
+  name: detect ? `${esbuildNamespace.vfs}-detection` : esbuildNamespace.vfs,
+  setup(build) {
+    build.onResolve({ filter: /.*/ }, async (args) => {
+      try {
+        const resolution = await session.resolve({
+          specifier: args.path,
+          importer: importerId(args),
+          attributes: args.with,
+        });
+        if (resolution.kind === 'external') {
+          return { path: resolution.specifier, external: true };
+        }
+        if (resolution.kind === 'unsupported') {
+          return { errors: [{ text: resolution.message, detail: resolution.issue }] };
+        }
+        return {
+          path: resolution.id,
+          namespace: toNamespace(resolution),
+          pluginData: resolution,
+          ...(resolution.kind === 'project' && resolution.suffix.length > 0 ? { suffix: resolution.suffix } : {}),
+        };
+      } catch (error) {
+        return {
+          errors: [
+            { text: `Failed to resolve '${args.path}': ${error instanceof Error ? error.message : String(error)}` },
+          ],
+        };
+      }
+    });
+
+    for (const namespace of Object.values(esbuildNamespace)) {
+      build.onLoad({ filter: /.*/, namespace }, async (args) => loadFromSession(session, args, detect));
+    }
+  },
+});
+
+/**
+ * The script prelude a bundle starts with: one binding per built-in module global, in a fixed order.
+ *
+ * @param modules - The registered built-in modules.
+ * @param names - The module names to bind, or every registered module when omitted.
+ * @returns The banner source.
+ */
+const commonJsBanner = (modules: ReadonlyMap<string, BuiltinModule>, names?: readonly string[]): string => {
+  const selected = names === undefined ? undefined : new Set(names);
+  const globals = [...modules.entries()]
+    .filter(([name]) => selected === undefined || selected.has(name))
+    .map(([, module]) => module)
+    .filter((module) => module.globalName !== undefined && module.registryExpression !== undefined)
+    .map((module) => `const ${module.globalName} = ${module.registryExpression};`)
+    // Each line starts with its global's name, so this orders by name, not by registration.
+    .toSorted()
+    .join('\n');
+  return `${globals}\nconst exports = {};\nconst module = { exports };\n`;
+};
+
+/**
+ * Detach a settled build's output from its result object once the output has been read.
+ *
+ * esbuild-wasm's browser service (through 0.28.2) subscribes every call's `reject` to a promise that settles only
+ * when the service dies, so each call's promise, and the result it was fulfilled with, stays reachable for the life
+ * of the service. Emptying the result leaves that promise holding a shell instead of the output files, source map
+ * and metafile of every edit. Native esbuild does not retain results; there this only drops references early.
+ *
+ * @param result - The build result whose payload the caller has finished reading.
+ */
+const releaseBuildOutput = (result: BuildResult): void => {
+  Object.assign(result, { outputFiles: undefined, metafile: undefined, mangleCache: undefined });
+};
+
+/** Esbuild graph adapter using one compiler-neutral source host. @public */
+export class EsbuildBundler {
+  readonly #builtins: Map<string, BuiltinModule>;
+  readonly #host: BundlerSourceHost;
+  readonly #sourceMaps: boolean;
+
+  public constructor(options: BundlerOptions) {
+    this.#builtins = options.builtinModules;
+    this.#sourceMaps = options.sourceMaps ?? true;
+    this.#host = createBundlerSourceHost({
+      filesystem: options.filesystem,
+      autoExportNames: options.autoExportNames,
+      ...(options.acquisition === undefined ? {} : { acquisition: options.acquisition }),
+    });
+  }
+
+  public async initialize(): Promise<void> {
+    await initializeEsbuild();
+  }
+
+  public registerModule(name: string, module: BuiltinModule): void {
+    this.#builtins.set(name, module);
+    this.#host.registerBuiltin({ name, module });
+  }
+
+  public async detectImports(
+    entryPath: string,
+    signal = new AbortController().signal,
+  ): Promise<{ detectedModules: string[]; dependencies: string[] }> {
+    const session = this.#host.beginSession({ mode: 'detect', signal, entryPath });
+    const result = await getEsbuild().build({
+      entryPoints: [entryPath],
+      bundle: true,
+      write: false,
+      metafile: true,
+      format: 'esm',
+      target: 'es2022',
+      platform: 'browser',
+      plugins: [createSourcePlugin(session, true)],
+      logLevel: 'silent',
+    });
+    releaseBuildOutput(result);
+    const observation = session.complete();
+    return { detectedModules: observation.detectedModules, dependencies: observation.dependencies };
+  }
+
+  public async bundle(
+    entryPath: string,
+    signal = new AbortController().signal,
+    globals?: readonly string[],
+  ): Promise<BundleResult> {
+    const session = this.#host.beginSession({ mode: 'bundle', signal, entryPath });
+    try {
+      const options: BuildOptions = {
+        entryPoints: [entryPath],
+        bundle: true,
+        write: false,
+        format: 'esm',
+        target: 'es2022',
+        platform: 'browser',
+        sourcemap: this.#sourceMaps ? 'external' : false,
+        outdir: 'out',
+        plugins: [createSourcePlugin(session, false)],
+        logLevel: 'silent',
+        banner: { js: commonJsBanner(this.#builtins, globals) },
+      };
+      const result = await getEsbuild().build(options);
+      const output = result.outputFiles?.find((file) => file.path.endsWith('.js')) ?? result.outputFiles?.[0];
+      const sourceMap = result.outputFiles?.find((file) => file.path.endsWith('.js.map'))?.text;
+      releaseBuildOutput(result);
+      const observation = session.complete();
+      const issues = [
+        ...result.warnings.map((warning) => issueFromMessage(warning, 'warning')),
+        ...observation.issues.map(packageWarning),
+      ];
+      if (output === undefined) {
+        issues.push({
+          message: 'No output generated',
+          code: 'BUNDLER_FAILED',
+          type: 'compilation',
+          severity: 'error',
+        });
+      }
+      const code = output?.text ?? '';
+      return {
+        code,
+        sourceMap,
+        issues,
+        dependencies: observation.dependencies,
+        unresolvedPaths: observation.unresolvedPaths,
+        success: output !== undefined,
+      };
+    } catch (error) {
+      const observation = session.complete();
+      return {
+        code: '',
+        issues: [...issuesFromError(error), ...observation.issues.map(packageWarning)],
+        dependencies: observation.dependencies,
+        unresolvedPaths: observation.unresolvedPaths,
+        success: false,
+      };
+    }
+  }
+
+  public dispose(): void {
+    this.#host.dispose();
+  }
+}
+
+/** Execute bundled ESM and release its host-specific temporary resource. @public */
+export const executeCode = async <T = unknown>(
+  code: string,
+  signal = new AbortController().signal,
+): Promise<VmExecuteResult<T>> => {
+  try {
+    signal.throwIfAborted();
+    let moduleExports: unknown;
+    let entryUrl: string | undefined;
+    if (isNode()) {
+      const result = await executeCodeInNode(code);
+      moduleExports = result.value;
+      entryUrl = result.entryUrl;
+    } else {
+      const blobUrl = URL.createObjectURL(new Blob([code], { type: 'application/javascript' }));
+      entryUrl = blobUrl;
+      try {
+        moduleExports = await importBrowserModule(blobUrl);
+      } finally {
+        URL.revokeObjectURL(blobUrl);
+      }
+    }
+    signal.throwIfAborted();
+    return { success: true, value: moduleExports as T, entryUrl };
+  } catch (error) {
+    return {
+      success: false,
+      issues: [
+        {
+          message: error instanceof Error ? error.message : String(error),
+          code: 'RUNTIME',
+          type: 'runtime',
+          severity: 'error',
+        },
+      ],
+    };
+  }
+};

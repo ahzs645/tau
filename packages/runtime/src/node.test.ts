@@ -1,15 +1,52 @@
-/* eslint-disable @typescript-eslint/naming-convention -- file map keys are filesystem paths, not symbols */
-import { describe, it, expect } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+import parcelWatcher from '@parcel/watcher';
 import { createNodeClient } from '#node.js';
+import { defineKernelV2 as defineKernel } from '#types/runtime-kernel-v2.types.js';
+import { defineRuntime } from '#worker/runtime-definition.js';
+// oxlint-disable-next-line no-restricted-imports -- Runtime-private fixture stays outside the package build graph.
+import { createParameterDeclaration } from '../test/support/kernel-worker.fixture.js';
+
+const syntheticKernel = defineKernel({
+  id: 'synthetic',
+  extensions: ['mock'],
+  name: 'SyntheticKernel',
+  version: '1.0.0',
+  views: { preview: { title: 'Preview', mimeType: 'model/gltf-binary' } },
+  exports: {},
+  async initialize() {
+    return {};
+  },
+  async resolve({ entryPath }) {
+    return { resolved: [entryPath], unresolved: [] };
+  },
+  async describe() {
+    const declaration = createParameterDeclaration();
+    if (!declaration.success) {
+      return declaration;
+    }
+    return { success: true, data: { parameters: declaration.data }, issues: declaration.issues };
+  },
+  async evaluate() {
+    return { handle: {}, views: ['preview'] as const, exports: [] as const };
+  },
+  async render() {
+    return { content: new Uint8Array([1, 2, 3]) };
+  },
+});
+
+const runtime = defineRuntime({ kernels: [syntheticKernel()] });
+const createClient = async (projectPath?: string) => createNodeClient({ runtime, projectPath });
 
 describe('createNodeClient', () => {
-  it('should return a client with the v5 command surface', async () => {
-    const client = await createNodeClient();
+  it('returns a lazily connected client with the command surface', async () => {
+    const client = await createClient();
 
-    expect(client.openFile).toBeTypeOf('function');
-    expect(client.updateParameters).toBeTypeOf('function');
-    expect(client.setOptions).toBeTypeOf('function');
-    expect(client.export).toBeTypeOf('function');
+    expect(client.lifecycleState).toBe('unconnected');
+    expect(client.open).toBeTypeOf('function');
+    expect(client.setOperationTimeout).toBeTypeOf('function');
     expect(client.terminate).toBeTypeOf('function');
     expect(client.on).toBeTypeOf('function');
     expect(client.connect).toBeTypeOf('function');
@@ -17,89 +54,123 @@ describe('createNodeClient', () => {
     client.terminate();
   });
 
-  it('should accept a project path for filesystem-backed rendering', async () => {
-    const client = await createNodeClient('/tmp');
-
-    expect(client.openFile).toBeTypeOf('function');
-
-    client.terminate();
-  });
-
-  // `createNodeClient()` with no projectPath must return an inert client;
-  // an eager handshake here would flip lifecycleState to 'connected'.
-  it('returns a lazily-connected client when no projectPath is given', async () => {
-    const client = await createNodeClient();
-
-    expect(client.lifecycleState).toBe('unconnected');
-
-    client.terminate();
-  });
-
-  it('auto-connects on the first inline-code export', { timeout: 30_000 }, async () => {
-    const client = await createNodeClient();
-
-    expect(client.lifecycleState).toBe('unconnected');
-
-    const result = await client.export('glb', {
-      code: {
-        'main.ts': `
-          import { makeBaseBox } from 'replicad';
-          export default function main() {
-            return makeBaseBox(10, 20, 30);
-          }
-        `,
-      },
-      file: 'main.ts',
-    });
+  it('auto-connects on the first inline document evaluation and view', async () => {
+    const client = await createClient();
+    const document = client.open({ source: { files: { 'main.mock': 'fixture' } } });
+    const outcome = await document.evaluation();
 
     expect(client.lifecycleState).toBe('connected');
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.bytes).toBeInstanceOf(Uint8Array);
-      expect(result.data.bytes.byteLength).toBeGreaterThan(0);
-      expect(result.data.mimeType).toBe('model/gltf-binary');
+    expect(outcome.superseded).toBe(false);
+    if (!outcome.superseded) {
+      expect(outcome.evaluation.success, JSON.stringify(outcome.evaluation.issues)).toBe(true);
     }
+    const view = document.view('preview');
+    await expect(view.rendering()).resolves.toMatchObject({ superseded: false, rendering: { success: true } });
+    view.close();
+    document.close();
 
     client.terminate();
   });
 
-  it('settles repeated identical exports', { timeout: 10_000 }, async () => {
-    const client = await createNodeClient();
-    const input = {
-      code: {
-        'main.ts': `
-          import { makeBaseBox } from 'replicad';
-          export default function main() {
-            return makeBaseBox(10, 20, 30);
-          }
-        `,
-      },
-      file: 'main.ts',
-    };
-
-    const withSettlementLimit = async <T>(promise: Promise<T>): Promise<T> => {
-      let settlementTimer: ReturnType<typeof setTimeout> | undefined;
-      const limit = new Promise<never>((_, reject) => {
-        settlementTimer = setTimeout(() => {
-          reject(new Error('Repeated identical export did not settle'));
-        }, 2000);
+  it('closes the admitted native subscription before shutdown resolves for a path-backed client', async () => {
+    const projectDirectory = await mkdtemp(join(tmpdir(), 'taucad-node-client-'));
+    await writeFile(join(projectDirectory, 'main.mock'), 'fixture');
+    const nativeSubscribe = parcelWatcher.subscribe.bind(parcelWatcher);
+    const active = new Set<Awaited<ReturnType<typeof parcelWatcher.subscribe>>>();
+    const subscribe = vi.spyOn(parcelWatcher, 'subscribe').mockImplementation(async (...args) => {
+      const subscription = await nativeSubscribe(...args);
+      active.add(subscription);
+      const nativeUnsubscribe = subscription.unsubscribe.bind(subscription);
+      vi.spyOn(subscription, 'unsubscribe').mockImplementation(async () => {
+        await nativeUnsubscribe();
+        active.delete(subscription);
       });
+      return subscription;
+    });
+    let client: Awaited<ReturnType<typeof createClient>> | undefined;
+    let document: ReturnType<Awaited<ReturnType<typeof createClient>>['open']> | undefined;
+    try {
+      client = await createClient(projectDirectory);
+      document = client.open({ source: { path: 'main.mock' }, watch: true });
+      const outcome = await document.evaluation();
+      expect(outcome.superseded).toBe(false);
+      expect(subscribe).toHaveBeenCalled();
+      expect(active.size).toBeGreaterThan(0);
 
+      document.close();
+      // A worker thread may exit right after shutdown; native unsubscribe work
+      // still settling then aborts the process inside the addon.
+      await client.shutdown();
+      expect(active.size).toBe(0);
+    } finally {
+      document?.close();
+      client?.terminate();
+      subscribe.mockRestore();
+      await rm(projectDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps shutdown pending while a native admission is in flight for a path-backed client', async () => {
+    const projectDirectory = await mkdtemp(join(tmpdir(), 'taucad-node-client-'));
+    await writeFile(join(projectDirectory, 'main.mock'), 'fixture');
+    const admission = Promise.withResolvers<Awaited<ReturnType<typeof parcelWatcher.subscribe>>>();
+    const stopped = Promise.withResolvers<void>();
+    const nativeStop = vi.fn(async () => stopped.promise);
+    const subscribe = vi.spyOn(parcelWatcher, 'subscribe').mockReturnValue(admission.promise);
+    /** Whether `promise` settles before the event loop turns; its rejection propagates. */
+    const settled = async (promise: Promise<void>): Promise<boolean> => {
+      const settles = async (): Promise<boolean> => {
+        await promise;
+        return true;
+      };
+      const turns = new Promise<boolean>((resolve) => {
+        setImmediate(() => {
+          resolve(false);
+        });
+      });
+      return Promise.race([settles(), turns]);
+    };
+    /** Shutdown may interrupt the evaluation; only its settlement matters here. */
+    const settleEvaluation = async (evaluation: Promise<unknown>): Promise<void> => {
       try {
-        return await Promise.race([promise, limit]);
-      } finally {
-        if (settlementTimer) {
-          clearTimeout(settlementTimer);
-        }
+        await evaluation;
+      } catch {
+        /* Rejected by shutdown. */
       }
     };
+    let client: Awaited<ReturnType<typeof createClient>> | undefined;
+    let document: ReturnType<Awaited<ReturnType<typeof createClient>>['open']> | undefined;
+    try {
+      client = await createClient(projectDirectory);
+      document = client.open({ source: { path: 'main.mock' }, watch: true });
+      const outcome = settleEvaluation(document.evaluation());
+      await vi.waitFor(() => {
+        expect(subscribe).toHaveBeenCalledOnce();
+      });
 
-    const first = await withSettlementLimit(client.export('glb', input));
-    const second = await withSettlementLimit(client.export('glb', input));
+      // The GeoSpec pool terminates its worker thread as soon as shutdown settles,
+      // so shutdown must outlast the native subscribe still in flight and the stop
+      // its late admission triggers.
+      const shutdown = client.shutdown();
+      await expect(settled(shutdown)).resolves.toBe(false);
+      expect(nativeStop).not.toHaveBeenCalled();
 
-    expect(first.success).toBe(true);
-    expect(second.success).toBe(true);
+      admission.resolve({ unsubscribe: nativeStop });
+      await vi.waitFor(() => {
+        expect(nativeStop).toHaveBeenCalledOnce();
+      });
+      await expect(settled(shutdown)).resolves.toBe(false);
 
-    client.terminate();
+      stopped.resolve();
+      await expect(shutdown).resolves.toBeUndefined();
+      await outcome;
+    } finally {
+      admission.resolve({ unsubscribe: nativeStop });
+      stopped.resolve();
+      document?.close();
+      await client?.shutdown();
+      subscribe.mockRestore();
+      await rm(projectDirectory, { recursive: true, force: true });
+    }
   });
 });

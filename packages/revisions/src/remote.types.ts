@@ -1,0 +1,165 @@
+import type { RemoteKind, RemoteStorageRefusal } from '#revision-port.js';
+import type { SyncFailureReason } from '#sync.types.js';
+
+/**
+ * What a remote says this project stores against its plan (S35, C13).
+ *
+ * `retained` is the bytes of packs a compaction retired but still keeps for
+ * recovery (D18): shown beside `used`, never counted against `quota`.
+ *
+ * @public
+ */
+export type RemoteStorage = Readonly<{ used: number; quota: number; retained?: number }>;
+
+/**
+ * Where a host reads {@link RemoteStorage} from (C13, D18).
+ *
+ * The seam the browser worker, the disk host and the desktop host each supply
+ * (W8): not part of the git protocol, so a remote whose host cannot answer
+ * resolves `undefined` and the Sync region leaves the storage row out rather
+ * than drawing a meter nothing fills in.
+ *
+ * @param remote - The remote's name in git's config.
+ * @returns The usage, or `undefined` when this remote cannot say.
+ * @public
+ */
+export type RemoteStorageSupplier = (remote: string) => Promise<RemoteStorage | undefined>;
+
+/**
+ * A child's toast, routed through the root (L2-F8).
+ *
+ * `remote` and `resolution` emit toasts for a host that holds them, and no host
+ * does — it holds the root. Sent to the parent beside the emit, so one
+ * subscription on the root covers every child and a new child cannot be
+ * forgotten by a composition.
+ *
+ * @public
+ */
+export type RevisionChildToast = Readonly<{
+  type: 'childToast';
+  subject: 'remote' | 'resolution';
+  tone: 'info' | 'error';
+  message: string;
+}>;
+
+/** Which remote a project is connected to, and what it costs. @public */
+export type RemoteFacet = Readonly<{
+  kind: RemoteKind | 'none';
+  url: string | undefined;
+  /** Where the connection is, for the Sync row's own copy. */
+  phase: 'none' | 'connecting' | 'connected' | 'failed' | 'disconnecting' | 'reconnectRequired';
+  /** Bytes stored and allowed, when the remote reports them (S35). */
+  storage: RemoteStorage | undefined;
+  /** Files a refused push named as over the plan (D16, AC16). */
+  overQuota: readonly string[];
+  /**
+   * The numbers that came with that refusal, when the remote sent them (C13).
+   *
+   * Distinct from {@link RemoteFacet.storage}, which is a `{ used, quota }`
+   * pair no host has ever filled in: these are what the Tau API's LFS batch
+   * refusal actually carries, and they were parsed and then dropped one hop
+   * before the Sync region could render them.
+   */
+  quota: RemoteStorageRefusal | undefined;
+  /** The last failure, already safe to render. */
+  error: string | undefined;
+  /**
+   * What class of failure that was, from `sync.machine`'s own classifier.
+   *
+   * Rule 19 asks every surface showing a remote failure for exactly one action
+   * matching its class. Without this the *connect* path had only a sentence, so
+   * the `403 GIT_SYNC_NOT_ENTITLED` that opened this closeout could offer only
+   * *Retry* on connect where the identical refusal on a push offered *Upgrade*.
+   * `undefined` whenever {@link RemoteFacet.error} is, so a surface never shows
+   * a class with no sentence beside it.
+   */
+  reason: SyncFailureReason | undefined;
+  /** True when this project may fetch but must never push to the remote. */
+  fetchOnly: boolean;
+  provider: 'github' | undefined;
+  repositoryId: string | undefined;
+  /**
+   * The last replacement the new remote refused (R2).
+   *
+   * *Change backup* asks the new remote for its advertisement before it
+   * replaces this one, so a refusal leaves this remote recorded, still backing
+   * the project up, with the refusal beside it. Cleared by the next `connect`
+   * and by disconnecting.
+   */
+  refusedReplacement?: RemoteRefusedReplacement;
+  /**
+   * `true` while the remotes list is still being read, or its read is waiting to be asked again: whether a remote is
+   * recorded is not known yet, so {@link RemoteFacet.kind} `none` is not yet "no remote" (I7). Absent once it settles.
+   */
+  reading?: true;
+}>;
+
+/**
+ * A new remote that refused to replace the recorded one (R2).
+ *
+ * @public
+ */
+export type RemoteRefusedReplacement = Readonly<{
+  kind: RemoteKind;
+  /** The refused address; absent for Tau Cloud, which the host resolves. */
+  url?: string;
+  /** The remote's refusal, already safe to render. */
+  error: string;
+  /** Its class, from `sync.machine`'s classifier, for exactly one action (rule 19). */
+  reason: SyncFailureReason | undefined;
+  /**
+   * Which refusal this is, counting from 1 for this machine: the same refusal
+   * repeated by a second attempt is a new one, which its sentence alone cannot say.
+   */
+  attempt: number;
+}>;
+
+/** Events accepted by remoteMachine. @public */
+export type RemoteMachineEvent =
+  /** The user picked a kind. `'none'` disconnects whatever is connected. */
+  | Readonly<{
+      type: 'connect';
+      kind: RemoteKind | 'none';
+      url?: string;
+      provider?: 'github';
+      repositoryId?: string;
+      fetchOnly?: boolean;
+    }>
+  /**
+   * A host whose authorization finished out of band says so (P22).
+   *
+   * The browser does not send it: it takes consent in a pop-up *before* it
+   * sends `connect`, because a SharedWorker with no clients is terminable and
+   * the actor tree cannot be relied on to survive a redirect. The senders this
+   * seam exists for are the ones the architecture names — the desktop keychain
+   * actor and the CLI credential helper, whose `authorize` actor resolves out
+   * of band — and W13's Node remote wiring. It is also how
+   * `reconnectRequired` is retried without rewriting the remote.
+   */
+  | Readonly<{ type: 'authorized' }>
+  /** A host that validated the remote itself says so. */
+  | Readonly<{ type: 'validated'; storage?: RemoteStorage }>
+  | Readonly<{ type: 'disconnect' }>
+  | Readonly<{ type: 'cancel' }>
+  /**
+   * A push the remote refused for storage (D16).
+   *
+   * Not in the architecture's event list, and needed by it: the Sync region
+   * renders the over-quota file list, and the refusal happens during a push
+   * (`sync.machine`, W13), not during a connection.
+   */
+  | Readonly<{
+      type: 'quotaRefused';
+      paths: readonly string[];
+      used?: number;
+      quota?: number;
+      /** What the remote said about room, when it said anything (C13). */
+      storage?: RemoteStorageRefusal;
+    }>
+  /**
+   * A push put bytes on the remote (RV-W8 F9): the stored figure is stale, so
+   * a connected remote reads it again. Forwarded by `sync.machine`.
+   */
+  | Readonly<{ type: 'pushed' }>
+  /** The page's signed-in person changed (audit R6): what the last session read is read again. */
+  | Readonly<{ type: 'sessionChanged' }>;

@@ -1,17 +1,20 @@
+import { Heading } from '@taucad/ui/components/heading';
 import * as React from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { AlertCircle, RefreshCcw, RotateCcw } from 'lucide-react';
+import { AlertCircle, RefreshCcw, RotateCcw, SearchIcon } from 'lucide-react';
 import { cva } from 'class-variance-authority';
-import { cn } from '#utils/ui.utils.js';
-import { Button } from '#components/ui/button.js';
-import { PaneButton } from '#components/ui/pane-button.js';
-import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
-import { DrawerClose, DrawerHandle, useIsInsideDrawer } from '#components/ui/drawer.js';
-import { useIsMobile } from '#hooks/use-mobile.js';
-import { CollapsibleCodeBlock } from '#components/ui/collapsible-code-block.js';
-import { useAnalytics } from '#hooks/use-analytics.js';
-import type { Analytics } from '#hooks/use-analytics.js';
+import { cn } from '@taucad/ui/utils/cn';
+import { Button } from '@taucad/ui/components/button';
+import { PaneButton } from '@taucad/workbench-panes/components/pane-button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@taucad/ui/components/tooltip';
+import { DrawerClose, drawerActionClass, drawerGrabStrip, useIsInsideDrawer } from '@taucad/ui/components/drawer';
+import { useIsMobile } from '@taucad/ui/hooks/use-mobile';
+import { PaneSearchProvider, usePaneSearch } from '@taucad/ui/components/pane-search';
+import { CollapsibleCodeBlock } from '@taucad/editor-ui/components/ui/collapsible-code-block';
+import { reportUiError } from '#lib/error-reporting.js';
+import { reactErrorDetails } from '#lib/react-root-errors.js';
+import { isDesktopTarget } from '#lib/build-target.js';
 
 type Side = 'left' | 'right';
 type TooltipSide = 'left' | 'right' | 'top' | 'bottom';
@@ -29,8 +32,13 @@ const chainStopPropagation = <E extends React.SyntheticEvent>(
 const floatingPanelContentHeaderVariants = cva(
   cn(
     'group/floating-panel-content-header',
-    'flex h-7.75 shrink-0 max-md:h-10 items-center justify-between',
+    'flex shrink-0 items-center justify-between',
+    'h-9',
+    isDesktopTarget() ? '[app-region:drag] [&_button]:[app-region:no-drag]' : 'max-md:h-10',
     'border-b bg-sidebar py-0.5',
+    /* The header owns the fade its title may use (`fade-label`): the row widens the mask once its
+     * actions are reachable, and the actions' scrim resolves against this background. */
+    'fade-row [--fade-scrim-into:var(--sidebar-background)]',
     'text-sm font-medium text-muted-foreground',
   ),
   {
@@ -144,7 +152,6 @@ type FloatingPanelTriggerButtonProps = {
   readonly className?: string;
   readonly children?: React.ReactNode;
   readonly tooltipContent: React.ReactNode;
-  readonly ariaLabel?: string;
   readonly onClick: () => void;
 };
 
@@ -154,7 +161,6 @@ function FloatingPanelTriggerButton({
   className,
   children,
   tooltipContent,
-  ariaLabel,
   onClick,
 }: FloatingPanelTriggerButtonProps): React.JSX.Element {
   // Get context values
@@ -182,7 +188,6 @@ function FloatingPanelTriggerButton({
           variant='overlay'
           className={cn('text-muted-foreground', className)}
           data-slot='floating-panel-trigger'
-          aria-label={ariaLabel ?? (typeof tooltipContent === 'string' ? tooltipContent : undefined)}
           onClick={onClick}
         >
           <span className={cn('group-data-[state=open]/floating-panel:[&_svg]:text-primary')}>{renderIcon()}</span>
@@ -196,12 +201,20 @@ function FloatingPanelTriggerButton({
 
 type FloatingPanelCloseProps = {
   readonly icon: LucideIcon | React.ReactNode;
+  /** The accessible name; pass the words the tooltip shows, so name and tooltip agree (I6). */
+  readonly label?: string;
   readonly className?: string;
   readonly children?: React.ReactNode;
   readonly tooltipContent: (isOpen: boolean) => React.ReactNode;
 };
 
-function FloatingPanelClose({ icon, className, children, tooltipContent }: FloatingPanelCloseProps): React.JSX.Element {
+function FloatingPanelClose({
+  icon,
+  label = 'Close panel',
+  className,
+  children,
+  tooltipContent,
+}: FloatingPanelCloseProps): React.JSX.Element {
   const { isOpen, close } = useFloatingPanel();
   const isMobile = useIsMobile();
   const isInsideDrawer = useIsInsideDrawer();
@@ -215,16 +228,19 @@ function FloatingPanelClose({ icon, className, children, tooltipContent }: Float
     return <IconComponent />;
   };
 
+  const isDrawerAction = isMobile && isInsideDrawer;
+
   const button = (
     <FloatingPanelMenuButton
       tooltip={tooltipContent(isOpen)}
       tooltipSide='top'
+      // Inside a drawer the close is a solid DrawerAction; a translucent blur there reads as noise.
       className={cn(
         'text-muted-foreground',
-        'max-md:rounded-full max-md:border max-md:bg-background/70 max-md:backdrop-blur-lg',
+        !isDrawerAction && 'max-md:bg-background/70 max-md:backdrop-blur-lg',
         className,
       )}
-      aria-label='Close panel'
+      aria-label={label}
       onClick={close}
     >
       {renderIcon()}
@@ -232,11 +248,46 @@ function FloatingPanelClose({ icon, className, children, tooltipContent }: Float
     </FloatingPanelMenuButton>
   );
 
-  if (isMobile && isInsideDrawer) {
-    return <DrawerClose asChild>{button}</DrawerClose>;
+  if (isDrawerAction) {
+    return (
+      <>
+        <FloatingPanelSearchToggle />
+        <DrawerClose asChild>{button}</DrawerClose>
+      </>
+    );
   }
 
   return button;
+}
+
+/**
+ * The phone pane's search toggle, left of its Close: it shows the pane's filter row and focuses its field, or hides it.
+ * Renders nothing where the pane has no filter row or the row is always shown (desktop).
+ */
+function FloatingPanelSearchToggle(): React.ReactNode {
+  const search = usePaneSearch();
+  if (!search?.hasRegion) {
+    return null;
+  }
+
+  const label = search.isOpen ? 'Hide filter' : 'Show filter';
+  return (
+    <FloatingPanelMenuButton
+      tooltip={label}
+      tooltipSide='top'
+      aria-label={label}
+      aria-expanded={search.isOpen}
+      aria-controls={search.regionId}
+      data-slot='floating-panel-search-toggle'
+      className={cn('relative text-muted-foreground', (search.isOpen || search.hasHiddenQuery) && 'text-primary')}
+      onClick={search.toggle}
+    >
+      <SearchIcon />
+      {search.hasHiddenQuery ? (
+        <span aria-hidden className='absolute top-2 right-2 size-2 rounded-full bg-primary' />
+      ) : null}
+    </FloatingPanelMenuButton>
+  );
 }
 
 type FloatingPanelTriggerProps = {
@@ -246,7 +297,6 @@ type FloatingPanelTriggerProps = {
   readonly onClick: () => void;
   readonly children?: React.ReactNode;
   readonly tooltipSide?: TooltipSide;
-  readonly ariaLabel?: string;
 };
 
 function FloatingPanelTrigger({
@@ -256,7 +306,6 @@ function FloatingPanelTrigger({
   onClick,
   children,
   tooltipSide,
-  ariaLabel,
 }: FloatingPanelTriggerProps): React.JSX.Element {
   return (
     <FloatingPanelTriggerButton
@@ -264,7 +313,6 @@ function FloatingPanelTrigger({
       tooltipContent={tooltipContent}
       className={cn(className)}
       tooltipSide={tooltipSide}
-      ariaLabel={ariaLabel}
       onClick={onClick}
     >
       {children}
@@ -310,7 +358,6 @@ type FloatingPanelErrorBoundaryState = {
 class FloatingPanelErrorBoundary extends React.Component<
   {
     readonly children: ReactNode;
-    readonly analytics: Analytics;
     readonly fallback: (props: FloatingPanelErrorFallbackProps) => ReactNode;
   },
   FloatingPanelErrorBoundaryState
@@ -325,9 +372,10 @@ class FloatingPanelErrorBoundary extends React.Component<
   };
 
   public override componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
-    this.props.analytics.captureException(error, {
-      errorInfo,
-      context: { component: 'FloatingPanel' },
+    // SB4: one Sentry event per error, with its component stack; `onCaughtError` reporting it too is a no-op.
+    void reportUiError(error, {
+      ...reactErrorDetails(errorInfo),
+      tags: { boundary: 'floating-panel' },
     });
     console.error('FloatingPanel content error:', error, errorInfo);
   }
@@ -353,83 +401,65 @@ class FloatingPanelErrorBoundary extends React.Component<
   };
 }
 
+/** How many floating panel contents hold this one: a nested panel's header is never the one under a grabber. */
+const FloatingPanelContentDepthContext = React.createContext(0);
+
 function FloatingPanelContent({ children, className, errorFallback }: FloatingPanelContentProps): React.JSX.Element {
   const fallback = errorFallback ?? ((props) => <FloatingPanelErrorContent {...props} />);
-  const analytics = useAnalytics();
+  const depth = React.useContext(FloatingPanelContentDepthContext) + 1;
+  const isMobile = useIsMobile();
+  const isInsideDrawer = useIsInsideDrawer();
   return (
     <div className={cn('flex size-full flex-col bg-sidebar/50', className)} data-slot='floating-panel-content'>
-      <FloatingPanelErrorBoundary fallback={fallback} analytics={analytics}>
-        {children}
-      </FloatingPanelErrorBoundary>
+      <FloatingPanelContentDepthContext.Provider value={depth}>
+        {/* A phone sheet is short: the outermost pane folds its filter row behind a header toggle. Desktop keeps the
+            row, and a nested panel scopes the fold out so its row never answers the outer pane's toggle. */}
+        <PaneSearchProvider isEnabled={isMobile && isInsideDrawer && depth === 1}>
+          <FloatingPanelErrorBoundary fallback={fallback}>{children}</FloatingPanelErrorBoundary>
+        </PaneSearchProvider>
+      </FloatingPanelContentDepthContext.Provider>
     </div>
   );
 }
 
 /**
- * Override vaul's `[data-vaul-handle]` base CSS which forces the Handle into a
- * tiny 32 x 5 px gray drag-indicator pill.  Vaul injects these styles outside
- * Tailwind's `@layer`, so they beat layered utilities -- we must use
- * `!important` to win.
- *
- * The inner `<span data-vaul-handle-hitarea>` is also reset from its default
- * absolute-centered positioning to a normal flex wrapper so that header
- * children (title + actions) lay out properly.
+ * The panel's title row. In a phone sheet the outermost panel's header is the sheet's grab strip: the grabber's target
+ * reaches over it, so dragging the row moves the sheet, while its title menu and actions stay ordinary controls on top
+ * (I3, W1).
  */
-const drawerHandleOverrides = cn(
-  // Reset the outer handle div to a full-width flex row.
-  'flex! w-full! h-10! rounded-none! opacity-100! mx-0! bg-sidebar!',
-  // Reset the hitarea <span> from absolute-centered to a static flex wrapper.
-  '[&>[data-vaul-handle-hitarea]]:static!',
-  '[&>[data-vaul-handle-hitarea]]:inset-auto!',
-  '[&>[data-vaul-handle-hitarea]]:transform-none!',
-  '[&>[data-vaul-handle-hitarea]]:size-full!',
-  '[&>[data-vaul-handle-hitarea]]:flex',
-  '[&>[data-vaul-handle-hitarea]]:items-center',
-  '[&>[data-vaul-handle-hitarea]]:justify-between',
-);
-
 function FloatingPanelContentHeader({ children, className }: FloatingPanelContentHeaderProps): React.JSX.Element {
-  const { side } = useFloatingPanel();
+  const side = React.useContext(FloatingPanelContext)?.side ?? 'right';
   const isMobile = useIsMobile();
   const isInsideDrawer = useIsInsideDrawer();
-  const handleRef = React.useRef<HTMLDivElement>(null);
-
-  if (isMobile && isInsideDrawer) {
-    return (
-      <DrawerHandle
-        ref={handleRef}
-        className={cn('relative', floatingPanelContentHeaderVariants({ side }), drawerHandleOverrides, className)}
-        data-slot='floating-panel-content-header'
-        onClickCapture={(event: React.MouseEvent) => {
-          // Portaled content (e.g. nested drawer overlays from ComboBoxResponsive)
-          // lives inside the React tree but outside the real DOM subtree.
-          // Prevent such clicks from reaching vaul's handleStartCycle, which
-          // would cycle the parent drawer's snap points.
-          // DismissableLayer (which closes the nested drawer) uses native
-          // pointerdown events on the document, so stopping the React click
-          // here does not interfere with it.
-          if (handleRef.current && !handleRef.current.contains(event.target as Node)) {
-            const target = event.target instanceof HTMLElement ? event.target : null;
-            // Allow clicks on Radix portaled content (dropdown menus, popovers)
-            // to reach their event handlers. Propagation from these clicks is
-            // instead stopped at the DropdownMenuContent level so they never
-            // reach vaul's handleStartCycle.
-            if (target?.closest('[data-radix-popper-content-wrapper]')) {
-              return;
-            }
-            event.stopPropagation();
-          }
-        }}
-      >
-        {children}
-      </DrawerHandle>
-    );
-  }
-
+  // A header sits in its own content (depth 1); one in a panel nested in another's content is deeper.
+  const depth = React.useContext(FloatingPanelContentDepthContext);
+  const isGrabStrip = isMobile && isInsideDrawer && depth <= 1;
+  const headerRef = React.useRef<HTMLDivElement>(null);
   return (
     <div
-      className={cn('relative', floatingPanelContentHeaderVariants({ side }), className)}
+      ref={headerRef}
+      className={cn(
+        'relative',
+        floatingPanelContentHeaderVariants({ side }),
+        isMobile && 'h-10 pr-2',
+        // In a phone drawer the header is a drawer bar: 60px, its actions inset 16px, as every drawer's header is.
+        // `!`: the header's own `max-md:` height and inset come later in the sheet.
+        isMobile && isInsideDrawer && 'h-(--drawer-bar-height)! pr-4!',
+        className,
+        isGrabStrip && drawerGrabStrip.className,
+      )}
       data-slot='floating-panel-content-header'
+      data-drawer-grab-strip={isGrabStrip ? drawerGrabStrip['data-drawer-grab-strip'] : undefined}
+      onClickCapture={(event) => {
+        // A nested drawer's portaled overlay must not activate any ancestor surface. Its content (a sheet a header
+        // control opened, such as the chat switcher) and a popper's content keep their own clicks.
+        if (isMobile && isInsideDrawer && !headerRef.current?.contains(event.target as Node)) {
+          const target = event.target as Element;
+          if (!target.closest('[data-radix-popper-content-wrapper], [data-vaul-drawer]')) {
+            event.stopPropagation();
+          }
+        }
+      }}
     >
       {children}
     </div>
@@ -445,12 +475,19 @@ function FloatingPanelContentHeaderActions({
   children,
   className,
 }: FloatingPanelContentHeaderActionsProps): React.JSX.Element {
+  const isMobile = useIsMobile();
   return (
     <div
       className={cn(
-        'flex items-center pl-1 max-md:gap-1.5',
-        'md:opacity-0 md:transition-opacity md:duration-150 md:ease-in-out',
-        'group-hover/floating-panel:opacity-100',
+        // `gap-1` and no inset: the same spacing the Dockview pane-action rows use.
+        'flex items-center max-md:gap-1',
+        /* The trailing control of a `fade-row` header: `fade-action` paints the scrim that
+         * finishes a `fade-label` name's dissolve, over the row's own background. */
+        'fade-action relative bg-(--fade-scrim-into)',
+        'md:opacity-0',
+        // Keyboard focus reveals the slot too, or a tabbed-to action is an invisible focus ring.
+        'group-hover/floating-panel:opacity-100 md:focus-within:opacity-100',
+        isMobile && 'gap-1 opacity-100 md:opacity-100',
         className,
       )}
       data-slot='floating-panel-content-header-actions'
@@ -465,13 +502,13 @@ type FloatingPanelMenuButtonProps = React.ComponentProps<typeof PaneButton>;
 /**
  * Styled icon button for floating panel headers.
  *
- * Thin wrapper around the shared `PaneButton` that adds mobile-responsive
- * sizing (`max-md:size-8 max-md:rounded-md`) and the
- * `floating-panel-menu-button` data-slot for styling hooks.
+ * Thin wrapper around the shared `PaneButton` that adds the phone shape (a
+ * 32px circle with a single border, or in a phone drawer a 44px drawer action) and the `floating-panel-menu-button`
+ * data-slot for styling hooks.
  *
  * When rendered inside a mobile drawer, stops click and pointerDown
- * propagation at the button level so vaul's DrawerHandle doesn't cycle
- * snap points or initiate drag state. Propagation is stopped here (not on
+ * propagation at the button level so parent surfaces do not initiate
+ * drag state or respond to an action click. Propagation is stopped here (not on
  * the parent actions container) so that React Portal children like nested
  * drawer overlays are unaffected.
  */
@@ -488,7 +525,14 @@ function FloatingPanelMenuButton({
   return (
     <PaneButton
       data-slot='floating-panel-menu-button'
-      className={cn('max-md:size-8 max-md:rounded-md', className)}
+      className={cn(
+        'max-md:size-8 max-md:rounded-full max-md:border max-md:bg-background max-md:shadow-xs',
+        // An embedded phone surface is not a narrow viewport; `!` outranks the button's own radius there.
+        isMobile && 'size-8 rounded-full! border bg-background shadow-xs',
+        // In a phone drawer it is a drawer action, the same 44px circle as every drawer header's.
+        isDrawerHandle && drawerActionClass,
+        className,
+      )}
       onClick={isDrawerHandle ? chainStopPropagation(onClick) : onClick}
       onPointerDown={isDrawerHandle ? chainStopPropagation(onPointerDown) : onPointerDown}
       {...properties}
@@ -502,20 +546,15 @@ type FloatingPanelButtonGroupProps = {
 };
 
 /**
- * Groups action buttons into a pill-shaped bar with iOS glass styling on mobile.
- * On desktop the group is visually transparent (ghost buttons remain individually styled).
- * On mobile it renders as a frosted-glass pill.
+ * Groups action buttons. The group draws nothing itself: on desktop the ghost buttons stand alone, and on a phone each
+ * button is its own bordered circle, so a group never adds a second border around one.
  */
 function FloatingPanelButtonGroup({ children, className }: FloatingPanelButtonGroupProps): React.JSX.Element {
   return (
     <div
       role='group'
       data-slot='floating-panel-button-group'
-      className={cn(
-        'flex items-center',
-        'max-md:overflow-hidden max-md:rounded-full max-md:border max-md:bg-background/70 max-md:backdrop-blur-lg',
-        className,
-      )}
+      className={cn('flex items-center max-md:gap-1', className)}
     >
       {children}
     </div>
@@ -524,9 +563,14 @@ function FloatingPanelButtonGroup({ children, className }: FloatingPanelButtonGr
 
 function FloatingPanelContentTitle({ children, className }: FloatingPanelContentTitleProps): React.JSX.Element {
   return (
-    <h2 className={cn('text-sm font-medium text-nowrap', className)} data-slot='floating-panel-content-title'>
+    <Heading
+      level={2}
+      variant='label'
+      className={cn('text-nowrap', className)}
+      data-slot='floating-panel-content-title'
+    >
       {children}
-    </h2>
+    </Heading>
   );
 }
 
@@ -562,12 +606,14 @@ function FloatingPanelErrorContent({
     <div className={cn('flex h-full flex-col items-center justify-center gap-4 p-6', className)}>
       <div className='flex w-full max-w-sm flex-col items-center gap-3 text-center'>
         {/* Error Icon */}
-        <div className='flex size-12 items-center justify-center rounded-full bg-destructive/10'>
-          <AlertCircle className='size-6 text-destructive' />
+        <div className='flex size-12 items-center justify-center rounded-full bg-feature/10'>
+          <AlertCircle className='size-6 text-feature' />
         </div>
 
         {/* Error Title */}
-        <h3 className='text-lg font-semibold text-foreground'>{title}</h3>
+        <Heading level={3} variant='title' className='text-foreground'>
+          {title}
+        </Heading>
 
         {/* Description */}
         {displayDescription ? (
@@ -585,12 +631,12 @@ function FloatingPanelErrorContent({
             title={errorMessage ?? 'Error'}
             text={errorStack}
             collapsedLineCount={3}
-            className='text-left text-destructive/80'
+            className='text-left text-feature/80'
             containerClassName='w-full'
           />
         ) : errorMessage ? (
-          <div className='w-full rounded-md border border-destructive/20 bg-destructive/5 p-3 text-left'>
-            <p className='text-xs font-medium text-destructive/80'>{errorMessage}</p>
+          <div className='w-full rounded-md border border-feature/20 bg-feature/5 p-3 text-left'>
+            <p className='text-xs font-medium text-feature/80'>{errorMessage}</p>
           </div>
         ) : undefined}
       </div>

@@ -1,0 +1,776 @@
+import { describe, expect, it } from 'vitest';
+import {
+  emptyChatLedger,
+  foldChatLedger,
+  foldReadAnswer,
+  foldProjectionFacts,
+  gateRows,
+  replayedStartOutcome,
+  stampRows,
+} from '#log/chat-ledger.js';
+import type { ChatLedger, LogRowBody } from '#log/chat-ledger.js';
+import { classifyLogRow } from '#log/event-schema.js';
+import { projectLogRow } from '#log/projection-facts.js';
+import { abandonedTurnOf } from '#log/event-types.js';
+import type { AgentLogEvent } from '#log/event-types.js';
+
+/** Rows of one term, `e01` with epoch 1, numbered from 0 in order. */
+const term = (bodies: ReadonlyArray<Record<string, unknown>>, leaderEpoch = 'e01', epoch = 1): AgentLogEvent[] =>
+  bodies.map(
+    (body, sequence) =>
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- seeded rows over a closed body union.
+      ({
+        version: 1,
+        leaderEpoch,
+        epoch,
+        sequence,
+        recordedAt: '2026-09-26T00:00:00.000Z',
+        runId: 'run-1',
+        ...body,
+      }) as AgentLogEvent,
+  );
+
+const life = (state: string, extra: Record<string, unknown> = {}) => ({ type: 'run.lifecycle', state, ...extra });
+const failed = (code: string) => life('failed', { detail: { message: code, code } });
+const settled = (reason: string, extra: Record<string, unknown> = {}) => ({
+  type: 'turn.failed',
+  turnId: 'turn-1',
+  chatId: 'chat-1',
+  reason,
+  ...extra,
+});
+const committed = {
+  type: 'turn.history-projection-committed',
+  retainedMessageIds: [],
+  message: { id: 'turn-1', role: 'user', content: 'Hello.' },
+  context: { version: 1, systemPrompt: '', initialMessages: [], postCompactionMessages: [] },
+};
+
+const batch = (cursor: number, events: readonly AgentLogEvent[], endCursor = cursor + events.length) =>
+  ({ status: 'batch', cursor, nextCursor: cursor + events.length, endCursor, events }) as const;
+
+describe('turn change proof', () => {
+  it('should retain proof by attempt without changing lifecycle or transcript', () => {
+    const rows = term([
+      life('admitted'),
+      committed,
+      life('running', { attempt: 1 }),
+      { type: 'turn.changed', turnId: 'turn-1', chatId: 'chat-1', attempt: 1, checkoutId: 'live' },
+      failed('RUN_ABANDONED'),
+      life('running', { attempt: 2 }),
+    ]);
+    const ledger = foldChatLedger(emptyChatLedger, rows);
+    expect(ledger.runs['run-1']).toMatchObject({
+      attempt: 2,
+      lifecycle: 'running',
+      changes: { 1: { checkoutId: 'live' } },
+    });
+    const stamped = stampRows({
+      ledger,
+      leaderEpoch: 'e01',
+      recordedAt: 'now',
+      runId: 'run-1',
+      bodies: [{ type: 'turn.changed', turnId: 'turn-1', chatId: 'chat-1', attempt: 1, checkoutId: 'live' }],
+    });
+    expect(stamped[0]?.attempt).toBe(1);
+    expect(foldChatLedger(ledger, stamped).runs['run-1']?.changes?.[2]).toBeUndefined();
+  });
+
+  it('should refuse proof for another turn or a future attempt', () => {
+    const ledger = foldChatLedger(emptyChatLedger, term([life('admitted'), committed, life('running')]));
+    for (const [turnId, attempt] of [
+      ['foreign', 1],
+      ['turn-1', 2],
+    ] as const) {
+      expect(
+        gateRows(
+          ledger,
+          term([{ type: 'turn.changed', turnId, chatId: 'chat-1', attempt, checkoutId: 'live' }], 'proof', 2),
+        ),
+      ).toMatchObject({ ok: false, code: 'TURN_CHANGE_UNPLACED' });
+    }
+  });
+});
+
+describe('foldReadAnswer', () => {
+  for (const pageSize of [1, 16]) {
+    it(`selects only semantic raw rows at physical page size ${pageSize}`, () => {
+      const source = term([life('admitted'), { type: 'future.presentation' }, life('completed')]);
+      const physical = [source[0], null, source[1], source[0], source[1], source[2]];
+      const semanticPositions = [0, 2, 5];
+      let ledger = emptyChatLedger;
+      for (let cursor = 0; cursor < physical.length; cursor += pageSize) {
+        const events = physical.slice(cursor, cursor + pageSize);
+        const result = foldReadAnswer(ledger, {
+          status: 'batch',
+          cursor,
+          nextCursor: cursor + events.length,
+          endCursor: physical.length,
+          events,
+        });
+        expect(result.kind).toBe('folded');
+        if (result.kind !== 'folded') {
+          throw new Error('Expected aligned raw rows');
+        }
+        expect(result.semanticRowIndices).toEqual(
+          semanticPositions
+            .filter((index) => index >= cursor && index < cursor + events.length)
+            .map((index) => index - cursor),
+        );
+        ledger = result.ledger;
+      }
+      expect(ledger.position).toEqual({ cursor: physical.length, last: { leaderEpoch: 'e01', sequence: 2 } });
+      expect(ledger.historyIntact).toBe(false);
+      expect(ledger.runs['run-1']?.lifecycle).toBe('completed');
+      expect(foldReadAnswer(ledger, batch(physical.length, []))).toMatchObject({
+        kind: 'folded',
+        semanticRowIndices: [],
+      });
+      expect(foldReadAnswer(ledger, batch(99, []))).toEqual({ kind: 'stale' });
+      expect(foldReadAnswer(ledger, { status: 'refused', reason: 'identity-mismatch' })).toEqual({
+        kind: 'reset',
+        reason: 'identity-mismatch',
+      });
+      expect(foldReadAnswer(ledger, { status: 'refused', reason: 'owner-fenced' })).toEqual({
+        kind: 'refused',
+        reason: 'owner-fenced',
+      });
+    });
+
+    it(`selects known and opaque compact semantic rows at physical page size ${pageSize}`, () => {
+      const source = term([life('admitted'), { type: 'future.presentation' }, life('completed')]);
+      const facts = [source[0], source[1], source[0], source[1], source[2]].map((row) => {
+        const classified = classifyLogRow(row);
+        if (classified.class === 'quarantined') {
+          throw new Error('Expected kept fixture row');
+        }
+        return projectLogRow({ event: classified.event, opaque: classified.class === 'opaque' });
+      });
+      const semanticPositions = [0, 1, 4];
+      let ledger = emptyChatLedger;
+      for (let cursor = 0; cursor < facts.length; cursor += pageSize) {
+        const page = facts.slice(cursor, cursor + pageSize);
+        const result = foldProjectionFacts({
+          ledger,
+          answer: {
+            status: 'batch',
+            chatId: 'chat-1',
+            sourceGeneration: 'source-1',
+            cursor,
+            nextCursor: cursor + page.length,
+            endCursor: facts.length,
+            facts: page,
+          },
+        });
+        expect(result.kind).toBe('folded');
+        if (result.kind !== 'folded') {
+          throw new Error('Expected aligned compact facts');
+        }
+        expect(result.semanticRowIndices).toEqual(
+          semanticPositions
+            .filter((index) => index >= cursor && index < cursor + page.length)
+            .map((index) => index - cursor),
+        );
+        ledger = result.ledger;
+      }
+      expect(ledger.position).toEqual({
+        cursor: facts.length,
+        sourceGeneration: 'source-1',
+        last: { leaderEpoch: 'e01', sequence: 2 },
+      });
+      expect(ledger.runs['run-1']?.lifecycle).toBe('completed');
+      expect(
+        foldProjectionFacts({
+          ledger,
+          answer: {
+            status: 'batch',
+            chatId: 'chat-1',
+            sourceGeneration: 'source-1',
+            cursor: facts.length,
+            nextCursor: facts.length,
+            endCursor: facts.length,
+            facts: [],
+          },
+        }),
+      ).toMatchObject({ kind: 'folded', semanticRowIndices: [] });
+    });
+  }
+  const rows = term([life('admitted'), life('running'), life('completed')]);
+  const read = foldChatLedger(emptyChatLedger, rows);
+
+  it('keeps semantic ordering across a duplicate while advancing physical command positions', () => {
+    const first = term(
+      [
+        { type: 'snapshot-context.refreshed', messageId: 'm', content: [] },
+        { type: 'snapshot-context.refreshed', messageId: 'm', content: [], commandId: 'after-duplicate' },
+      ],
+      'first',
+      1,
+    );
+    const second = term([{ type: 'snapshot-context.refreshed', messageId: 'm', content: [] }], 'second', 2);
+    const physical = [first[0]!, second[0]!, first[0]!, first[1]!];
+
+    const folded = foldReadAnswer(emptyChatLedger, batch(0, physical));
+
+    expect(folded.kind).toBe('folded');
+    if (folded.kind !== 'folded') {
+      throw new Error('Expected an aligned physical batch');
+    }
+    expect(folded.ledger.anomalies).toEqual(foldChatLedger(emptyChatLedger, physical).anomalies);
+    expect(folded.ledger.anomalies).toContainEqual({ kind: 'order', row: { leaderEpoch: 'first', sequence: 1 } });
+    expect(folded.ledger.position).toEqual({ cursor: 4, last: { leaderEpoch: 'first', sequence: 1 } });
+    expect(folded.ledger.applied['after-duplicate']?.cursor).toBe(3);
+
+    const endingAtDuplicate = foldReadAnswer(emptyChatLedger, batch(0, physical.slice(0, 3)));
+    expect(endingAtDuplicate).toMatchObject({
+      kind: 'folded',
+      ledger: { position: { cursor: 3, last: { leaderEpoch: 'first', sequence: 0 } } },
+    });
+  });
+
+  it('keeps a closed semantic term closed when a duplicate ends the previous physical page', () => {
+    const first = term(
+      [
+        { type: 'snapshot-context.refreshed', messageId: 'm', content: [] },
+        { type: 'snapshot-context.refreshed', messageId: 'm', content: [], commandId: 'after-duplicate' },
+      ],
+      'first',
+      1,
+    );
+    const second = term([{ type: 'snapshot-context.refreshed', messageId: 'm', content: [] }], 'second', 2);
+    const prefix = foldReadAnswer(emptyChatLedger, batch(0, [first[0]!, second[0]!, first[0]!], 4));
+    if (prefix.kind !== 'folded') {
+      throw new Error('Expected an aligned prefix');
+    }
+    expect(prefix.ledger.position).toEqual({ cursor: 3, last: { leaderEpoch: 'first', sequence: 0 } });
+
+    const suffix = foldReadAnswer(prefix.ledger, batch(3, [first[1]!]));
+    expect(suffix).toMatchObject({
+      kind: 'folded',
+      ledger: {
+        position: { cursor: 4, last: { leaderEpoch: 'first', sequence: 1 } },
+        anomalies: [{ kind: 'order', row: { leaderEpoch: 'first', sequence: 1 } }],
+        applied: { 'after-duplicate': { cursor: 3 } },
+      },
+    });
+  });
+
+  // CL-A4, T5
+  it('should report a clamped read from a v1 server', () => {
+    // A v1 server whose log holds one row answers a cursor of 3 at its end: 1, not 3.
+    expect(foldReadAnswer(read, batch(1, [], 1))).toEqual({ kind: 'reset', reason: 'clamped' });
+  });
+
+  it('should reset on an identity mismatch', () => {
+    expect(foldReadAnswer(read, { status: 'refused', reason: 'identity-mismatch' })).toEqual({
+      kind: 'reset',
+      reason: 'identity-mismatch',
+    });
+    expect(foldReadAnswer(read, { status: 'refused', reason: 'cursor-ahead' })).toEqual({
+      kind: 'reset',
+      reason: 'cursor-ahead',
+    });
+    expect(foldReadAnswer(read, { status: 'refused', reason: 'owner-fenced' })).toEqual({
+      kind: 'refused',
+      reason: 'owner-fenced',
+    });
+  });
+
+  it('should discard a batch that does not start at the reader cursor as stale', () => {
+    expect(foldReadAnswer(read, batch(1, rows.slice(1)))).toEqual({ kind: 'stale' });
+    expect(foldReadAnswer(emptyChatLedger, batch(0, rows))).toMatchObject({ kind: 'folded' });
+  });
+});
+
+describe('foldChatLedger', () => {
+  // CL-A5, T6, I5
+  it('should fold identically under any chunking and skip redelivered rows', () => {
+    const rows = term([
+      life('admitted'),
+      committed,
+      life('running'),
+      failed('RATE_LIMITED'),
+      settled('first'),
+      life('running'),
+      life('completed'),
+      settled('second'),
+    ]);
+    const whole = foldChatLedger(emptyChatLedger, rows);
+
+    for (let size = 1; size <= rows.length; size++) {
+      let chunked: ChatLedger = emptyChatLedger;
+      for (let at = 0; at < rows.length; at += size) {
+        const answer = foldReadAnswer(chunked, batch(at, rows.slice(at, at + size), rows.length));
+        expect(answer.kind).toBe('folded');
+        chunked = answer.kind === 'folded' ? answer.ledger : chunked;
+      }
+      expect(chunked).toEqual(whole);
+    }
+    // S5 D7: a redelivered prefix changes nothing.
+    expect(foldChatLedger(whole, rows.slice(2, 6))).toBe(whole);
+  });
+
+  // CL-A6, T4, I10
+  it('should reopen only an attempt that failed resumably', () => {
+    const resumable = foldChatLedger(
+      emptyChatLedger,
+      term([life('admitted'), life('running'), failed('RATE_LIMITED'), settled('first'), life('running')]),
+    );
+    const fatal = foldChatLedger(
+      emptyChatLedger,
+      term([life('admitted'), life('running'), failed('FATAL_TEST'), settled('first')]),
+    );
+
+    const unsettled = foldChatLedger(
+      emptyChatLedger,
+      term([life('admitted'), life('running'), failed('RATE_LIMITED'), life('running')]),
+    );
+
+    expect(resumable.runs['run-1']).toMatchObject({ attempt: 2, lifecycle: 'running', appendState: 'open' });
+    // W7.r1 finding 1 (ChatRunSlot.tla:327, Att(T)+1): a resume without placement opens attempt 2 as well, so a stale
+    // driver of attempt 1 can never pass for the resumed one.
+    expect(unsettled.runs['run-1']).toMatchObject({ attempt: 2, lifecycle: 'running' });
+    // S5 D2: the gate refuses the reopening row of a fatal failure, and a second settlement of attempt 1.
+    const reopen = stampRows({
+      ledger: fatal,
+      leaderEpoch: 'e02',
+      runId: 'run-1',
+      recordedAt: '2026-09-26T00:00:01.000Z',
+      bodies: [{ type: 'run.lifecycle', state: 'running' }],
+    });
+    expect(gateRows(fatal, reopen)).toMatchObject({ ok: false, code: 'RUN_ID_TAKEN' });
+    const second = stampRows({
+      ledger: fatal,
+      leaderEpoch: 'e02',
+      runId: 'run-1',
+      recordedAt: '2026-09-26T00:00:01.000Z',
+      bodies: [settled('second') as LogRowBody],
+    });
+    expect(gateRows(fatal, second)).toMatchObject({ ok: false, code: 'SETTLEMENT_CONFLICT' });
+  });
+
+  it('should keep a settlement recorded before the running row', () => {
+    // S5 D3: a settlement that lands while the attempt runs survives the attempt's own `running` row.
+    const ledger = foldChatLedger(
+      emptyChatLedger,
+      term([life('admitted'), settled('early'), life('running'), life('completed')]),
+    );
+
+    expect(ledger.runs['run-1']).toMatchObject({ attempt: 1, appendState: 'settled' });
+    expect(ledger.runs['run-1']?.settlements).toHaveLength(1);
+  });
+
+  // CL-A7, L2a D6
+  it('should answer recover for an admitted run with no commit', () => {
+    const admitted = foldChatLedger(emptyChatLedger, term([life('admitted')]));
+    const running = foldChatLedger(emptyChatLedger, term([life('admitted'), committed, life('running')]));
+    const ended = foldChatLedger(emptyChatLedger, term([life('admitted'), committed, life('completed')]));
+
+    expect(replayedStartOutcome(admitted, 'run-1')).toBe('recover');
+    expect(replayedStartOutcome(running, 'run-1')).toBe('resume');
+    expect(replayedStartOutcome(ended, 'run-1')).toBe('settled');
+    expect(replayedStartOutcome(ended, 'run-2')).toBe('admit');
+  });
+
+  // CL-A20
+  it('should survive a JSON round trip unchanged', () => {
+    const ledger = foldChatLedger(
+      emptyChatLedger,
+      term([
+        life('admitted'),
+        committed,
+        life('running', { placement: { checkoutId: 'checkout-1', mode: 'direct' } }),
+        { type: 'model.invocation-prepared', attemptId: 'attempt-1', purpose: 'generation', modelId: 'm' },
+        { type: 'interrupt.recorded', interruptId: 'interrupt-1', phase: 'requested', reason: 'ask' },
+        failed('RATE_LIMITED'),
+        settled('first', { commandId: 'command-1' }),
+        { type: 'future.fact', note: 'opaque' },
+      ]),
+    );
+
+    // The ledger must survive a JSON round trip, which `structuredClone` does not test.
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- The JSON round trip is the property under test.
+    expect(JSON.parse(JSON.stringify(ledger))).toEqual(ledger);
+  });
+
+  // CL-A21
+  it('should close an open invocation on its settled row', () => {
+    const ledger = foldChatLedger(
+      emptyChatLedger,
+      term([
+        life('admitted'),
+        { type: 'model.invocation-prepared', attemptId: 'attempt-1', purpose: 'generation', modelId: 'm' },
+        {
+          type: 'model.invocation-settled',
+          attemptId: 'attempt-1',
+          outcome: 'released',
+          operationId: 'operation-1',
+          chargedCreditAtoms: '0',
+        },
+      ]),
+    );
+
+    expect(ledger.runs['run-1']?.openInvocation).toBeUndefined();
+    expect(ledger.invocations['attempt-1']?.settled).toMatchObject({ outcome: 'released', chargedCreditAtoms: '0' });
+  });
+
+  it('should not count a failure message as a shown reply', () => {
+    const reply = (stopReason: string) => ({
+      type: 'message.appended',
+      message: {
+        id: `reply-${stopReason}`,
+        role: 'assistant',
+        content: 'x',
+        metadata: { stopReason, tauInternal: { kind: 'billing-invocation', attemptId: 'attempt-1' } },
+      },
+    });
+    const prepared = { type: 'model.invocation-prepared', attemptId: 'attempt-1', purpose: 'generation', modelId: 'm' };
+    const failedReply = foldChatLedger(emptyChatLedger, term([life('admitted'), prepared, reply('error')]));
+    const shownReply = foldChatLedger(emptyChatLedger, term([life('admitted'), prepared, reply('stop')]));
+
+    expect(failedReply.invocations['attempt-1']?.shown).toBe(false);
+    expect(failedReply.runs['run-1']?.openInvocation).toBe('attempt-1');
+    expect(shownReply.invocations['attempt-1']?.shown).toBe(true);
+    expect(shownReply.runs['run-1']?.openInvocation).toBeUndefined();
+  });
+
+  // CL-A22
+  it('should close an interrupt on a resolved row whatever its payload', () => {
+    const ledger = foldChatLedger(
+      emptyChatLedger,
+      term([
+        life('admitted'),
+        { type: 'interrupt.recorded', interruptId: 'interrupt-1', phase: 'requested', reason: 'ask' },
+        { type: 'interrupt.recorded', interruptId: 'interrupt-1', phase: 'resolved', reason: 'answered', payload: 7 },
+      ]),
+    );
+
+    expect(ledger.runs['run-1']?.pendingInterrupts).toEqual({});
+    expect(ledger.runs['run-1']?.lastResolution).toBeUndefined();
+  });
+
+  it('should refuse a second resolution of one interrupt', () => {
+    const rows = term([
+      life('admitted'),
+      { type: 'interrupt.recorded', interruptId: 'interrupt-1', phase: 'requested', reason: 'ask' },
+      { type: 'interrupt.recorded', interruptId: 'interrupt-1', phase: 'resolved', reason: 'approved' },
+      { type: 'interrupt.recorded', interruptId: 'interrupt-2', phase: 'requested', reason: 'ask' },
+      { type: 'interrupt.recorded', interruptId: 'interrupt-2', phase: 'resolved', reason: 'approved' },
+      { type: 'interrupt.recorded', interruptId: 'interrupt-1', phase: 'resolved', reason: 'denied' },
+    ]);
+    expect(gateRows(emptyChatLedger, rows)).toMatchObject({ ok: false, code: 'INTERRUPT_ALREADY_RESOLVED', row: 5 });
+  });
+
+  // CL-A23
+  it('should take the placement of record from the running row of attempt 1', () => {
+    const placement = (checkoutId: string) => ({ placement: { checkoutId, mode: 'candidate' } });
+    const ledger = foldChatLedger(
+      emptyChatLedger,
+      term([
+        life('admitted'),
+        life('running', placement('first')),
+        life('paused'),
+        life('running', placement('second')),
+        failed('RATE_LIMITED'),
+        settled('first'),
+        life('running', placement('third')),
+      ]),
+    );
+
+    expect(ledger.runs['run-1']).toMatchObject({ attempt: 3, placement: { checkoutId: 'first' } });
+  });
+
+  it('should read a settlement without attempt as the attempt its position implies', () => {
+    const ledger = foldChatLedger(
+      emptyChatLedger,
+      term([
+        life('admitted'),
+        life('running'),
+        failed('RATE_LIMITED'),
+        settled('first'),
+        life('running'),
+        life('completed'),
+        settled('second'),
+      ]),
+    );
+
+    expect(ledger.runs['run-1']?.settlements.map((settlement) => settlement.attempt)).toEqual([1, 2]);
+  });
+
+  it('should key pending interrupts and the last terminal row by row', () => {
+    const ledger = foldChatLedger(
+      emptyChatLedger,
+      term([
+        life('admitted'),
+        { type: 'interrupt.recorded', interruptId: 'interrupt-1', phase: 'requested', reason: 'ask' },
+        life('cancelled'),
+      ]),
+    );
+
+    expect(ledger.runs['run-1']?.pendingInterrupts).toEqual({ 'interrupt-1': { leaderEpoch: 'e01', sequence: 1 } });
+    expect(ledger.lastTerminal).toEqual({
+      runId: 'run-1',
+      outcome: 'cancelled',
+      row: { leaderEpoch: 'e01', sequence: 2 },
+    });
+  });
+});
+
+// EQ1, RV1-F3: no re-prepare while any generation invocation of the run is unresolved. A compaction's own
+// invocation closes on `history.compacted`, but the generation it interrupted stays open (seed
+// prepare-compaction-while-open).
+describe('gateRows invocations', () => {
+  const prepared = (attemptId: string, purpose: 'generation' | 'compaction') => ({
+    type: 'model.invocation-prepared',
+    attemptId,
+    purpose,
+    modelId: 'm',
+  });
+  const compacted = {
+    type: 'history.compacted',
+    evictedMessageIds: ['m0'],
+    summary: { id: 's1', role: 'user', content: 'summary' },
+  };
+
+  it('should refuse a generation prepare while an earlier generation of the run is unresolved', () => {
+    const rows = term([
+      life('admitted'),
+      life('running'),
+      prepared('run-1:1:1', 'generation'),
+      prepared('run-1:1:2', 'compaction'),
+      compacted,
+      prepared('run-1:1:3', 'generation'),
+    ]);
+    const open = foldChatLedger(emptyChatLedger, rows.slice(0, 5));
+
+    expect(gateRows(open, rows.slice(5))).toMatchObject({ ok: false, code: 'INVOCATION_UNRESOLVED' });
+  });
+});
+
+describe('intentional cancellation retention', () => {
+  it('should reopen a committed USER_STOPPED cancellation and retire its marker', () => {
+    const rows = term([
+      life('admitted'),
+      life('running'),
+      committed,
+      life('cancelled', { detail: { code: 'USER_STOPPED', message: 'Stopped.' } }),
+      settled('stop'),
+      life('running'),
+    ]);
+    const ledger = foldChatLedger(emptyChatLedger, rows);
+    expect(ledger.runs['run-1']).toMatchObject({ attempt: 2, lifecycle: 'running', appendState: 'open' });
+    expect(ledger.runs['run-1']?.failure).toBeUndefined();
+  });
+});
+
+describe('a copy of an external agent’s turn (XD3)', () => {
+  /* The copy keeps its marker for the handoff; the ledger reads it as the run's turn said, never as an external run. */
+  it('should read the copy as the run’s committed turn without making the run external', () => {
+    const words = {
+      id: 'turn-1',
+      role: 'user',
+      content: 'Hello.',
+      metadata: {
+        tauInternal: { kind: 'external-agent', runKind: 'acp', agentId: 'claude', acpPromptedRequestId: 'run-1:1' },
+      },
+    } as const;
+    const ledger = foldChatLedger(
+      emptyChatLedger,
+      term([{ type: 'message.appended', message: abandonedTurnOf(words) }]),
+    );
+
+    expect(ledger.runs['run-1']).toMatchObject({ kind: 'tau', committed: true });
+    expect(ledger.runs['run-1']?.externalPrompted).toBeUndefined();
+  });
+});
+
+describe('agent-loop decisions (R9)', () => {
+  const nudge = (safeguardId: string) => ({
+    type: 'safeguard.recorded',
+    safeguardId,
+    action: 'nudge',
+    reason: 'Stop repeating the call.',
+    message: { id: `tau:safeguard:${safeguardId}`, role: 'user', content: 'Stop repeating the call.' },
+  });
+  const trace = (lane: string, tier: string, extra: Record<string, unknown> = {}) => ({
+    lane,
+    tier,
+    tokensBefore: 10,
+    tokensAfter: 5,
+    cleared: 1,
+    evicted: 0,
+    summarizerAttempts: 0,
+    summarizerUsage: null,
+    ...extra,
+  });
+  const rows = term([
+    life('admitted'),
+    committed,
+    life('running'),
+    nudge('read_file:abc:any-result'),
+    { type: 'safeguard.recorded', safeguardId: 'ping_pong:a:b', action: 'terminate', reason: 'Looping.' },
+    {
+      type: 'message.envelope-replaced',
+      messageId: 'tool-1',
+      replacement: { id: 'tool-1', role: 'user', content: 'cleared' },
+      details: trace('start_of_turn', 'tool_result_clearing'),
+    },
+    {
+      type: 'message.envelope-replaced',
+      messageId: 'tool-2',
+      replacement: { id: 'tool-2', role: 'user', content: 'cleared' },
+    },
+    {
+      type: 'history.compacted',
+      evictedMessageIds: ['turn-1'],
+      summary: { id: 'summary-1', role: 'user', content: 'Summary.' },
+      details: trace('overflow', 'summarization', { summary: 'placeholder' }),
+    },
+    life('completed'),
+  ]);
+
+  it('should record each safeguard intervention by pattern and action, and each compaction decision once', () => {
+    const run = foldChatLedger(emptyChatLedger, rows).runs['run-1'];
+    expect(run?.safeguards).toEqual([
+      { pattern: 'identical_call', action: 'nudge' },
+      { pattern: 'ping_pong', action: 'terminate' },
+    ]);
+    expect(run?.compactions).toEqual([
+      { lane: 'start_of_turn', tier: 'tool_result_clearing', outcome: 'cleared' },
+      { lane: 'overflow', tier: 'summarization', outcome: 'placeholder' },
+    ]);
+  });
+
+  it('should fold the same decisions from compact facts and skip a redelivery', () => {
+    const whole = foldChatLedger(emptyChatLedger, rows);
+    expect(foldChatLedger(whole, rows.slice(3, 8))).toBe(whole);
+    const facts = rows.map((row) => {
+      const classified = classifyLogRow(row);
+      if (classified.class === 'quarantined') {
+        throw new Error('Expected kept fixture row');
+      }
+      return projectLogRow({ event: classified.event, opaque: classified.class === 'opaque' });
+    });
+    const compact = foldProjectionFacts({
+      ledger: emptyChatLedger,
+      answer: {
+        status: 'batch',
+        chatId: 'chat-1',
+        sourceGeneration: 'source-1',
+        cursor: 0,
+        nextCursor: facts.length,
+        endCursor: facts.length,
+        facts,
+      },
+    });
+    expect(compact.kind === 'folded' ? compact.ledger.runs['run-1'] : undefined).toEqual(whole.runs['run-1']);
+  });
+});
+
+describe('prefix breaks (provider reasoning replay contract P1)', () => {
+  const stamp = { digest: 'd', system: 's', tools: 't', settings: 'high' };
+  type Extra = { internal?: Record<string, unknown>; usage?: { input: number; cacheRead: number; cacheWrite: number } };
+  const reply = (id: string, prefix: Record<string, unknown>, { internal, usage }: Extra = {}) => ({
+    id,
+    role: 'assistant',
+    content: [{ type: 'text', text: 'Done.' }],
+    metadata: {
+      provider: 'anthropic',
+      prefix,
+      ...(internal === undefined ? {} : { tauInternal: internal }),
+      ...(usage === undefined
+        ? {}
+        : {
+            usage: {
+              ...usage,
+              output: 1,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+          }),
+    },
+  });
+  const rows = term([
+    life('admitted'),
+    committed,
+    life('running'),
+    /* A stream checkpoint carries no stamp; the final row that replaces it carries the reply's. */
+    {
+      type: 'message.appended',
+      message: reply('reply-1', {}, { internal: { kind: 'stream-checkpoint', streamState: 'checkpoint' } }),
+    },
+    {
+      type: 'message.envelope-replaced',
+      messageId: 'reply-1',
+      replacement: reply(
+        'reply-1',
+        { ...stamp, break: 'clearing', dropped: 9 },
+        { usage: { input: 40, cacheRead: 0, cacheWrite: 900 } },
+      ),
+    },
+    { type: 'message.appended', message: reply('reply-2', stamp) },
+    { type: 'message.appended', message: reply('reply-3', { ...stamp, break: 'settings' }) },
+    { type: 'message.appended', message: reply('reply-4', { ...stamp, break: 'not-a-cause' }) },
+    /* The provider left out two replayed blocks whose prefix had changed: blocks the replay rule should have. */
+    (() => {
+      const message = reply('reply-5', stamp);
+      return {
+        type: 'message.appended',
+        message: { ...message, metadata: { ...message.metadata, reasoningDroppedByProvider: 2 } },
+      };
+    })(),
+    life('completed'),
+  ]);
+
+  it('should record each break a reply carries once, with its provider and the reasoning it left out', () => {
+    expect(foldChatLedger(emptyChatLedger, rows).runs['run-1']?.prefixBreaks).toEqual([
+      { cause: 'clearing', provider: 'anthropic', dropped: 9, cache: 'miss' },
+      { cause: 'settings', provider: 'anthropic', dropped: 0 },
+      /* Nothing the client knows explains a block the provider had to leave out: it counts as a defect. */
+      { cause: 'unsanctioned', provider: 'anthropic', dropped: 2 },
+    ]);
+  });
+
+  it.each([
+    ['hit', { input: 10, cacheRead: 500, cacheWrite: 490 }],
+    ['partial', { input: 10, cacheRead: 499, cacheWrite: 491 }],
+    ['miss', { input: 10, cacheRead: 0, cacheWrite: 990 }],
+    [undefined, { input: 0, cacheRead: 0, cacheWrite: 0 }],
+  ] as const)('should read the breaking request as a cache %s from its reply usage', (cache, usage) => {
+    const broken = term([
+      life('admitted'),
+      committed,
+      life('running'),
+      { type: 'message.appended', message: reply('reply-1', { ...stamp, break: 'tools' }, { usage }) },
+      life('completed'),
+    ]);
+    expect(foldChatLedger(emptyChatLedger, broken).runs['run-1']?.prefixBreaks).toEqual([
+      { cause: 'tools', provider: 'anthropic', dropped: 0, ...(cache === undefined ? {} : { cache }) },
+    ]);
+  });
+
+  it('should fold the same breaks from compact facts', () => {
+    const facts = rows.map((row) => {
+      const classified = classifyLogRow(row);
+      if (classified.class === 'quarantined') {
+        throw new Error('Expected kept fixture row');
+      }
+      return projectLogRow({ event: classified.event, opaque: classified.class === 'opaque' });
+    });
+    const compact = foldProjectionFacts({
+      ledger: emptyChatLedger,
+      answer: {
+        status: 'batch',
+        chatId: 'chat-1',
+        sourceGeneration: 'source-1',
+        cursor: 0,
+        nextCursor: facts.length,
+        endCursor: facts.length,
+        facts,
+      },
+    });
+    expect(compact.kind === 'folded' ? compact.ledger.runs['run-1'] : undefined).toEqual(
+      foldChatLedger(emptyChatLedger, rows).runs['run-1'],
+    );
+  });
+});

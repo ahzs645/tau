@@ -1,0 +1,97 @@
+# =============================================================================
+# Dockerfile-specific production build context rules.
+#
+# Patterns are relative to the repo-root context, not this file. Builds use COPY . . to ingest
+# the full Nx monorepo, so only exclude items that the build doesn't need.
+# =============================================================================
+
+# -- Version control ----------------------------------------------------------
+# The root `.gitignore` stays: Nx hashes it (with `nx.json`) into every task, and builds by it which
+# files exist, so without it no task hashed here matched a CI cache entry (CI audit 2026-11-12, F5)
+# and the API targets, run after their dependencies, also hashed those dependencies' `dist` output.
+.git
+.gitattributes
+
+# -- External dependency repos (86 GB locally, gitignored but not dockerignored) --
+repos
+
+# -- Generated reports and artifacts ------------------------------------------
+/out
+
+# -- E2E test projects (not needed in the API production image) ---------------
+apps/ui-e2e
+apps/api-e2e
+# The root tsconfig.json references both. `@oxc-node/core` drops the whole tsconfig when a
+# reference is missing and falls back to a target without top-level await, so a build script
+# such as `cli:stage-acp` fails to load. Each solution file has no sources and adds no project.
+!apps/ui-e2e/tsconfig.json
+!apps/api-e2e/tsconfig.json
+
+# -- Documentation (not needed at build time) ---------------------------------
+docs
+
+# -- CI / tooling / editor config ---------------------------------------------
+# `scripts` stays in the context: it is an Nx project that `runtime-e2e` lists
+# as an implicit dependency, and the project graph fails without it.
+.github
+# `build-image.mts` runs every Nx call through CI's Nx guard and remote cache relay.
+!.github/actions/setup-nx/nx-guard.ts
+.claude/worktrees
+.cursor
+.vscode
+.idea
+.editorconfig
+.eslintcache
+.oxlintcache
+.prettierrc*
+.lintstagedrc*
+tools/git-hooks
+
+# -- Nx caches and workspace data --------------------------------------------
+**/.nx/cache
+**/.nx/workspace-data
+
+# -- Build artifacts (produced locally, not needed in fresh Docker build) ------
+**/build
+**/dist
+**/out-tsc
+**/*.tsbuildinfo
+
+# -- Dependencies (installed fresh inside Docker) -----------------------------
+**/node_modules
+
+# -- Environment variables (secrets, never ship) ------------------------------
+**/.env
+**/.env.*
+# The tracked placeholder templates are inputs of `api:build` on CI, so the image hashes them too.
+# They hold no values, and only the build stage sees them: the runtime images copy `pnpm deploy`
+# output, which is each package's `files`.
+!**/.env.example
+!**/.env.test
+
+# -- Test files stay in the context ------------------------------------------
+# Nx infers each project's npm dependencies from every source file, tests included, and hashes
+# them into the project's tasks, so a context without tests hashed a different graph than CI. The
+# runtime images never see them: they copy only `pnpm deploy` output.
+# -- Vite timestamp files ----------------------------------------------------
+**/vite.config.*.timestamp*
+
+# -- Fly.io config (injected via --config flag, not COPY) ---------------------
+fly.*.toml
+
+# -- Miscellaneous ------------------------------------------------------------
+**/.cache
+**/pruned
+**/.next
+**/.netlify
+**/stats.html
+*.md
+LICENSE
+CODEOWNERS
+docker-compose.yml
+infra
+# The API image seeds the public bucket's two default images at boot (`apps/api/vite.config.ts` copies them).
+!infra/seed
+
+# Package builds copy this generated inventory into published distributions.
+!docs/licensing/third-party-licenses.md

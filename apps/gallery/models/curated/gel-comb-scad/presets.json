@@ -1,0 +1,20 @@
+[
+  {
+    "name": "Dense",
+    "parameters": {
+      "tooth_count": 36,
+      "tooth_width": 2.4,
+      "tooth_gap": 1.1,
+      "show_side_hooks": true
+    }
+  },
+  {
+    "name": "Wide teeth",
+    "parameters": {
+      "tooth_count": 20,
+      "tooth_width": 4,
+      "tooth_gap": 2,
+      "show_side_hooks": false
+    }
+  }
+]

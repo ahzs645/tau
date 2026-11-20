@@ -1,0 +1,22 @@
+# CAD runtime
+
+`@taucad/runtime` owns authoring contracts, runtime/client lifecycle, transport-neutral orchestration, rooted-filesystem adapters, artifact finalization, and plugin registration. Concrete kernels, transcoders, bundlers, and middleware live under `packages/plugins`. Follow `docs/policy/runtime-architecture-policy.md`, `docs/policy/runtime-api-policy.md`, `docs/policy/library-api-policy.md`, `docs/policy/filesystem-policy.md`, and `docs/policy/event-fanout-policy.md`.
+
+## Runtime invariants
+
+- Transports own wire capabilities, filesystem handles, shared-memory delivery, and worker URLs. Runtime core consumes behavioral transport contracts without branching on diagnostic capability descriptors.
+- Expose framework worker/host helpers and package metadata through explicit package-export subpaths. The application owns its executable worker module URL and passes `createWorker` or `url`; do not hide a bundler-specific default URL in the library graph.
+- A connected `RuntimeClient` owns timeout control through synchronous `setOperationTimeout`; document/view/export options remain operation data and timeout updates never enter the worker protocol.
+- Runtime-client production event fan-out composes `Topic<E>`. Keep document/view evaluation, rendering, progress and status events and client log, telemetry and capability events typed and scoped to their owner.
+- Supply runtime code one opaque writable rooted filesystem with local paths. Trusted filesystem composition owns global routes and authorization.
+- For a kernel that declares a GLB model view, an intentional geometry-free rendering succeeds with the canonical zero-mesh GLB from `@taucad/geometry-core`. A kernel may instead offer no views and only exports. Reserve `NO_RENDER_GEOMETRY` for an adapter that fails to emit a required public artifact.
+- Preserve schema inference from plugin authoring through render and export. Shared geometry naming and GLB writing live in `packages/core/geometry`; reusable black-box tests live in `packages/runtime-testing`. The former `src/utils/export-glb.ts` and `@taucad/runtime/testing` surfaces are gone.
+- Kernel authors declare keyed views and exports, then implement `resolve`, `describe`, `evaluate`, `render` for views, and `export` for exports. Evaluation returns a handle and ordered offered IDs; rendering must not mutate that handle. Keep route schemas, content declarations, MIME types, instances and nonempty export files exact. Middleware wraps the four operations with v2 names and selects content by view MIME or export extension. Bundle and transcoder teardown uses `onDispose`; do not revive removed plugin-side geometry hook names or `reportProgress`.
+- Public `RuntimeClient.open()` returns one document; its `view(id)` and `export(target)` select offered outputs for that document. Keep evaluation and committed export pins distinct and preserve exact operation freshness across notifications and materialization.
+- Derive manifest and result data from one canonical schema or source, and do not add compatibility shims for consumers that do not exist.
+- Keep asyncness visible: value-less async methods return `Promise<void>`; avoid promise-consuming IIFEs, settled-value `Promise.resolve` wrappers, and unused `void` expressions. Give module-scope callbacks names when they carry domain meaning.
+- Runtime SSR asset discovery is package-root scoped, bounded before literal stripping, and never scans or rewrites application TypeScript.
+- Several clients can share one JavaScript realm: hold module-scope library backends through `services.realm`, register built-ins with the worker-scoped `registerKernelModule`, and never read or write `globalThis` registry state from a plugin or bundler.
+- Keep the runtime ESM-only. Put environment-selected module identifiers in named `taucad:` constants rather than scattering string literals.
+
+Validate with `pnpm nx lint runtime`, `pnpm nx test runtime --watch=false`, `pnpm nx typecheck runtime`, `pnpm nx build runtime`, and `pnpm nx run runtime:audit-public-surface` when exports change.

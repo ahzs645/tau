@@ -1,37 +1,38 @@
-import { useCallback, useState } from 'react';
-import { useActorRef } from '@xstate/react';
-import { exportFromGlb } from '@taucad/converter';
-import type { SupportedImportFormat, SupportedExportFormat } from '@taucad/converter';
+import { useCallback, useId, useState } from 'react';
+import type { ExportFile } from '@taucad/types';
 import { Download } from 'lucide-react';
-import { Button } from '#components/ui/button.js';
-import { toast } from '#components/ui/sonner.js';
-import { Checkbox } from '#components/ui/checkbox.js';
-import { Label } from '#components/ui/label.js';
-import { asBuffer, downloadBlob } from '@taucad/utils/file';
+import { Button } from '@taucad/ui/components/button';
+import { Loader } from '@taucad/ui/components/loader';
+import { toast } from '@taucad/ui/components/sonner';
+import { Checkbox } from '@taucad/ui/components/checkbox';
+import { Label } from '@taucad/ui/components/label';
+import { downloadBlob } from '@taucad/utils/file';
 import { FormatSelector } from '#components/geometry/converter/format-selector.js';
 import { ConverterFileTree } from '#components/geometry/converter/converter-file-tree.js';
-import { formatDisplayName, getExtensionForFormat } from '#components/geometry/converter/converter-utils.js';
-import { zipMachine } from '#machines/zip.machine.js';
-import { cn } from '#utils/ui.utils.js';
+import { formatDisplayName } from '#components/geometry/converter/converter-utils.js';
+import { cn } from '@taucad/ui/utils/cn';
+import { createExportArtifactZip } from '@taucad/ui-core/utils/export-artifact-set.utils';
+import type { ConverterExportFormat, ConverterImportFormat } from '@taucad/converter/runtime';
 
 type UploadedFileInfo = {
   readonly name: string;
-  readonly format: SupportedImportFormat;
+  readonly format: ConverterImportFormat;
   readonly size: number;
 };
 
 export type ExportedFile = {
   readonly filename: string;
   readonly content: Uint8Array<ArrayBuffer>;
-  readonly format: SupportedExportFormat;
+  readonly format: ConverterExportFormat;
 };
 
 type ConverterProperties = {
-  readonly getGlbData: () => Promise<Uint8Array<ArrayBuffer>>;
-  readonly selectedFormats: SupportedExportFormat[];
+  readonly availableFormats: readonly ConverterExportFormat[];
+  readonly exportFormat: (format: ConverterExportFormat) => Promise<ExportFile[]>;
+  readonly selectedFormats: ConverterExportFormat[];
   readonly shouldUseZipForMultiple: boolean;
   readonly uploadedFile?: UploadedFileInfo;
-  readonly onFormatToggle: (format: SupportedExportFormat) => void;
+  readonly onFormatToggle: (format: ConverterExportFormat) => void;
   readonly onClearSelection: () => void;
   readonly onZipToggle: (useZip: boolean) => void;
   readonly onExport?: (files: ExportedFile[]) => void;
@@ -43,7 +44,8 @@ type ConverterProperties = {
 };
 
 export function Converter({
-  getGlbData,
+  availableFormats,
+  exportFormat,
   selectedFormats,
   shouldUseZipForMultiple,
   uploadedFile,
@@ -54,15 +56,14 @@ export function Converter({
   formatSelectorProperties,
   className,
 }: ConverterProperties): React.JSX.Element {
+  const zipId = useId();
+  const locationId = useId();
+  const projectId = useId();
   const [isExporting, setIsExporting] = useState(false);
   const [shouldChooseLocation, setShouldChooseLocation] = useState(false);
   const [shouldSaveToProject, setShouldSaveToProject] = useState(false);
 
-  // Create zip machine instance
   const zipFilename = uploadedFile ? uploadedFile.name.replace(/\.[^.]+$/, '-converted.zip') : 'converted-models.zip';
-  const zipActorRef = useActorRef(zipMachine, {
-    input: { zipFilename },
-  });
 
   // Check if File System Access API is supported
   const isFileSystemAccessSupported =
@@ -94,236 +95,82 @@ export function Converter({
       return;
     }
 
-    let data: Uint8Array<ArrayBuffer>;
-
-    try {
-      // Lazily fetch GLB data when download is triggered
-      data = await getGlbData();
-    } catch {
-      toast.error('Failed to get GLB data');
-      return;
-    } finally {
-      setIsExporting(false);
-    }
-
     setIsExporting(true);
 
     try {
-      if (selectedFormats.length === 1) {
-        // Single file download
-        const format = selectedFormats[0];
-        if (!format) {
+      const operation = (async () => {
+        const results = await Promise.all(
+          selectedFormats.map(async (format) => ({
+            format,
+            files: await exportFormat(format),
+          })),
+        );
+        for (const { format, files } of results) {
+          if (files.length === 0) {
+            throw new Error(`${formatDisplayName(format)} export returned no artifacts`);
+          }
+        }
+
+        const exportedFiles = results.flatMap(({ format, files }) =>
+          files.map((file) => ({
+            filename: selectedFormats.length === 1 ? file.name : `${format}/${file.name}`,
+            content: file.bytes,
+            format,
+          })),
+        );
+        if (onExport && shouldSaveToProject) {
+          onExport(exportedFiles);
+        }
+
+        const requiresZip =
+          (shouldUseZipForMultiple && results.length > 1) || results.some(({ files }) => files.length > 1);
+        if (requiresZip) {
+          const blob = await createExportArtifactZip(
+            results.map(({ format, files }) => ({
+              ...(results.length > 1 ? { directory: format } : {}),
+              files,
+            })),
+          );
+          if (shouldChooseLocation) {
+            await saveFileWithPicker(blob, zipFilename);
+          } else {
+            downloadBlob(blob, zipFilename);
+          }
           return;
         }
 
-        toast.promise(
-          (async () => {
-            const files = await exportFromGlb(data, format);
-            const file = files[0];
-            if (!file) {
-              throw new Error('No file returned from export');
-            }
+        for (const { files } of results) {
+          const file = files[0]!;
+          const blob = new Blob([file.bytes], { type: file.mimeType });
+          if (shouldChooseLocation) {
+            // oxlint-disable-next-line no-await-in-loop -- Sequential file picker dialogs are intentional.
+            await saveFileWithPicker(blob, file.name);
+          } else {
+            downloadBlob(blob, file.name);
+          }
+        }
+      })();
 
-            const extension = getExtensionForFormat(format);
-            const filename = uploadedFile
-              ? uploadedFile.name.replace(/\.[^.]+$/, `.${extension}`)
-              : `model.${extension}`;
-
-            const blob = new Blob([asBuffer(file.bytes.buffer)]);
-
-            if (shouldChooseLocation) {
-              await saveFileWithPicker(blob, filename);
-            } else {
-              downloadBlob(blob, filename);
-            }
-
-            // Call onExport callback if provided and enabled
-            if (onExport && shouldSaveToProject) {
-              onExport([{ filename, content: file.bytes, format }]);
-            }
-          })(),
-          {
-            loading: `Exporting to ${formatDisplayName(format)}...`,
-            success: `Downloaded ${formatDisplayName(format)} file`,
-            error(error: unknown) {
-              // Check if user cancelled the save dialog
-              if (error instanceof Error && error.name === 'AbortError') {
-                return 'Export cancelled';
-              }
-
-              let message = `Failed to export to ${formatDisplayName(format)}`;
-              if (error instanceof Error) {
-                message = `${message}: ${error.message}`;
-              } else if (typeof error === 'string') {
-                message = `${message}: ${error}`;
-              }
-
-              return message;
-            },
-          },
-        );
-      } else if (shouldUseZipForMultiple) {
-        // Multiple files - create zip using zip machine
-        toast.promise(
-          (async () => {
-            // Reset zip machine
-            zipActorRef.send({ type: 'reset' });
-
-            // Export all formats in parallel
-            const results = await Promise.all(
-              selectedFormats.map(async (format) => {
-                const files = await exportFromGlb(data, format);
-                return { format, files };
-              }),
-            );
-
-            // Add all files to zip machine
-            const filesToZip: Array<{
-              filename: string;
-              content: Uint8Array<ArrayBuffer>;
-            }> = [];
-            const exportedFiles: ExportedFile[] = [];
-            for (const { format, files } of results) {
-              for (const file of files) {
-                const extension = getExtensionForFormat(format);
-                const filename = uploadedFile
-                  ? uploadedFile.name.replace(/\.[^.]+$/, `.${extension}`)
-                  : `model.${extension}`;
-                filesToZip.push({
-                  filename,
-                  content: file.bytes,
-                });
-                exportedFiles.push({
-                  filename,
-                  content: file.bytes,
-                  format,
-                });
-              }
-            }
-
-            zipActorRef.send({ type: 'addFiles', files: filesToZip });
-            zipActorRef.send({ type: 'generate' });
-
-            // Wait for the zip to be ready
-            const blob = await new Promise<Blob>((resolve, reject) => {
-              const subscription = zipActorRef.subscribe((state) => {
-                if (state.matches('ready') && state.context.zipBlob) {
-                  subscription.unsubscribe();
-                  resolve(state.context.zipBlob);
-                } else if (state.matches('error')) {
-                  subscription.unsubscribe();
-                  reject(state.context.error ?? new Error('Failed to generate ZIP'));
-                }
-              });
-            });
-
-            // Call onExport callback if provided and enabled
-            if (onExport && shouldSaveToProject) {
-              onExport(exportedFiles);
-            }
-
-            return blob;
-          })(),
-          {
-            loading: `Exporting ${selectedFormats.length} formats...`,
-            async success(blob) {
-              if (shouldChooseLocation) {
-                await saveFileWithPicker(blob, zipFilename);
-              } else {
-                downloadBlob(blob, zipFilename);
-              }
-
-              return `Downloaded ${selectedFormats.length} files in zip`;
-            },
-            error(error: unknown) {
-              // Check if user cancelled the save dialog
-              if (error instanceof Error && error.name === 'AbortError') {
-                return 'Export cancelled';
-              }
-
-              let message = 'Failed to export files';
-              if (error instanceof Error) {
-                message = `${message}: ${error.message}`;
-              } else if (typeof error === 'string') {
-                message = `${message}: ${error}`;
-              }
-
-              return message;
-            },
-          },
-        );
-      } else {
-        // Multiple files - download individually
-        toast.promise(
-          (async () => {
-            // Export all formats in parallel
-            const results = await Promise.all(
-              selectedFormats.map(async (format) => {
-                const files = await exportFromGlb(data, format);
-                return { format, files };
-              }),
-            );
-
-            // Download each file individually
-            const exportedFiles: ExportedFile[] = [];
-            for (const { format, files } of results) {
-              for (const file of files) {
-                const extension = getExtensionForFormat(format);
-                const filename = uploadedFile
-                  ? uploadedFile.name.replace(/\.[^.]+$/, `.${extension}`)
-                  : `model.${extension}`;
-                const blob = new Blob([asBuffer(file.bytes.buffer)]);
-
-                if (shouldChooseLocation) {
-                  // oxlint-disable-next-line no-await-in-loop -- Sequential file picker dialogs are intentional
-                  await saveFileWithPicker(blob, filename);
-                } else {
-                  downloadBlob(blob, filename);
-                }
-
-                exportedFiles.push({
-                  filename,
-                  content: file.bytes,
-                  format,
-                });
-              }
-            }
-
-            // Call onExport callback if provided and enabled
-            if (onExport && shouldSaveToProject) {
-              onExport(exportedFiles);
-            }
-          })(),
-          {
-            loading: `Exporting ${selectedFormats.length} formats...`,
-            success: `Downloaded ${selectedFormats.length} files`,
-            error(error: unknown) {
-              // Check if user cancelled the save dialog
-              if (error instanceof Error && error.name === 'AbortError') {
-                return 'Export cancelled';
-              }
-
-              let message = 'Failed to export files';
-              if (error instanceof Error) {
-                message = `${message}: ${error.message}`;
-              } else if (typeof error === 'string') {
-                message = `${message}: ${error}`;
-              }
-
-              return message;
-            },
-          },
-        );
-      }
+      toast.promise(operation, {
+        loading: `Exporting ${selectedFormats.length} format(s)...`,
+        success: `Exported ${selectedFormats.length} format(s)`,
+        error(error: unknown) {
+          if (error instanceof Error && error.name === 'AbortError') {
+            return 'Export cancelled';
+          }
+          return error instanceof Error ? `Failed to export files: ${error.message}` : 'Failed to export files';
+        },
+      });
+      await operation;
+    } catch {
+      // The toast owns export errors, including a cancelled native save dialog.
     } finally {
       setIsExporting(false);
     }
   }, [
-    getGlbData,
+    exportFormat,
     selectedFormats,
-    uploadedFile,
     shouldUseZipForMultiple,
-    zipActorRef,
     zipFilename,
     shouldChooseLocation,
     saveFileWithPicker,
@@ -332,101 +179,111 @@ export function Converter({
   ]);
 
   return (
-    <div data-slot='converter' className={cn('@container/converter flex flex-col gap-6', className)}>
+    <div data-slot='converter' className={cn('@container/converter flex flex-col gap-5', className)}>
       <FormatSelector
+        formats={availableFormats}
         selectedFormats={selectedFormats}
         onFormatToggle={onFormatToggle}
         onClearSelection={onClearSelection}
         {...formatSelectorProperties}
       />
 
-      <div className='flex flex-col gap-2'>
+      <div className='flex flex-col gap-3'>
         <Button
+          aria-busy={isExporting}
           disabled={selectedFormats.length === 0 || isExporting}
           className='h-auto w-full whitespace-normal'
           onClick={handleDownload}
         >
-          <Download className='size-4 shrink-0' />
+          {isExporting ? <Loader /> : <Download className='size-4 shrink-0' />}
           <span className='min-w-0 wrap-break-word'>
             {selectedFormats.length === 0
               ? 'Select formats to download'
               : selectedFormats.length === 1
-                ? 'Download'
+                ? `Download ${selectedFormats[0]?.toUpperCase()}`
                 : shouldUseZipForMultiple
                   ? `Download ${selectedFormats.length} formats as ZIP`
                   : `Download ${selectedFormats.length} formats`}
           </span>
         </Button>
 
-        {/* Save to project toggle */}
-        {onExport ? (
-          <div className='flex items-center space-x-2'>
-            <Checkbox
-              id='save-to-project'
-              checked={shouldSaveToProject}
-              onCheckedChange={(checked) => {
-                setShouldSaveToProject(checked === true);
-              }}
-            />
-            <Label
-              htmlFor='save-to-project'
-              className='cursor-pointer text-sm leading-none font-normal peer-disabled:cursor-not-allowed peer-disabled:opacity-70'
-            >
-              Save exported files to project
-            </Label>
-          </div>
-        ) : undefined}
-
         {selectedFormats.length > 1 ? (
           <div className='flex items-center space-x-2'>
             <Checkbox
-              id='use-zip'
+              id={zipId}
               checked={shouldUseZipForMultiple}
               onCheckedChange={(checked) => {
                 onZipToggle(checked === true);
               }}
             />
             <Label
-              htmlFor='use-zip'
-              className='cursor-pointer text-sm leading-none font-normal peer-disabled:cursor-not-allowed peer-disabled:opacity-70'
+              htmlFor={zipId}
+              className='cursor-action rounded-sm text-sm leading-none font-normal transition-colors peer-disabled:cursor-not-allowed peer-disabled:opacity-70 hover:bg-accent'
             >
               Download as ZIP file
             </Label>
           </div>
         ) : undefined}
 
-        {/* Custom download location toggle */}
-        {isFileSystemAccessSupported ? (
-          <div className='flex flex-col gap-2'>
-            <div className='flex items-center space-x-2'>
-              <Checkbox
-                id='choose-location'
-                checked={shouldChooseLocation}
-                onCheckedChange={(checked) => {
-                  setShouldChooseLocation(checked === true);
-                }}
-              />
-              <Label
-                htmlFor='choose-location'
-                className='cursor-pointer text-sm leading-none font-normal peer-disabled:cursor-not-allowed peer-disabled:opacity-70'
-              >
-                Choose download location
-              </Label>
-            </div>
-            <p className='pl-6 text-xs text-muted-foreground'>
-              {shouldChooseLocation
-                ? 'You will be prompted to choose where to save each file'
-                : 'Downloads to your default downloads folder'}
-            </p>
-          </div>
-        ) : undefined}
+        <details className='text-xs text-muted-foreground'>
+          <summary className='w-fit rounded-xs select-none focus-visible:focus-outline-outside'>
+            Download options
+          </summary>
+          <div className='mt-3 space-y-3'>
+            <p>Formats with supporting files download together as ZIP.</p>
+            {/* Save to project toggle */}
+            {onExport ? (
+              <div className='flex items-center space-x-2'>
+                <Checkbox
+                  id={projectId}
+                  checked={shouldSaveToProject}
+                  onCheckedChange={(checked) => {
+                    setShouldSaveToProject(checked === true);
+                  }}
+                />
+                <Label
+                  htmlFor={projectId}
+                  className='cursor-action rounded-sm text-sm leading-none font-normal transition-colors peer-disabled:cursor-not-allowed peer-disabled:opacity-70 hover:bg-accent'
+                >
+                  Save exported files to project
+                </Label>
+              </div>
+            ) : undefined}
 
-        {/* File tree preview */}
-        <ConverterFileTree
-          selectedFormats={selectedFormats}
-          fileName={uploadedFile?.name}
-          asZip={shouldUseZipForMultiple}
-        />
+            {/* Custom download location toggle */}
+            {isFileSystemAccessSupported ? (
+              <div className='flex flex-col gap-2'>
+                <div className='flex items-center space-x-2'>
+                  <Checkbox
+                    id={locationId}
+                    checked={shouldChooseLocation}
+                    onCheckedChange={(checked) => {
+                      setShouldChooseLocation(checked === true);
+                    }}
+                  />
+                  <Label
+                    htmlFor={locationId}
+                    className='cursor-action rounded-sm text-sm leading-none font-normal transition-colors peer-disabled:cursor-not-allowed peer-disabled:opacity-70 hover:bg-accent'
+                  >
+                    Choose download location
+                  </Label>
+                </div>
+                <p className='pl-6 text-xs text-muted-foreground'>
+                  {shouldChooseLocation
+                    ? 'You will be prompted to choose where to save each file'
+                    : 'Downloads to your default downloads folder'}
+                </p>
+              </div>
+            ) : undefined}
+
+            {/* File tree preview */}
+            <ConverterFileTree
+              selectedFormats={selectedFormats}
+              fileName={uploadedFile?.name}
+              asZip={shouldUseZipForMultiple}
+            />
+          </div>
+        </details>
       </div>
     </div>
   );

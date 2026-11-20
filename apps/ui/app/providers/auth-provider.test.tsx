@@ -1,0 +1,293 @@
+import * as Cookies from 'es-cookie';
+// @vitest-environment jsdom
+
+// oxlint-disable-next-line import/no-unassigned-import -- registers DOM matchers for this test module
+import '@testing-library/jest-dom/vitest';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  AnonymousSessionPurge,
+  AppEntryPreference,
+  AuthConfigLink,
+  DesktopAuthBridge,
+  desktopAuthAction,
+} from '#providers/auth-provider.js';
+import type { TauDesktopAuthBridge } from '#providers/auth-provider.js';
+import { FinancialSessionProvider } from '@taucad/billing-ui/providers/financial-session-provider';
+
+const mocks = vi.hoisted(() => ({
+  routerLink: vi.fn(),
+  resolvedAuth: vi.fn(() => 'indeterminate' as 'authed' | 'anonymous' | 'indeterminate'),
+  purgeSavedUsage: vi.fn(async () => undefined),
+}));
+const { routerLink } = mocks;
+
+vi.mock('#hooks/use-resolved-auth.js', () => ({ useResolvedAuth: mocks.resolvedAuth }));
+vi.mock('@taucad/billing-ui/db/billing-snapshot-database', () => ({ purgeSavedUsage: mocks.purgeSavedUsage }));
+
+vi.mock('react-router', () => ({
+  Link: ({ to, children, ...rest }: { readonly to: string } & React.ComponentProps<'a'>) => {
+    routerLink(to);
+    return (
+      <a {...rest} rel='noreferrer' href={to}>
+        {children}
+      </a>
+    );
+  },
+  useNavigate: () => vi.fn(),
+}));
+
+vi.mock('#lib/auth-client.js', () => ({
+  authClient: {},
+}));
+
+const createBridge = () => {
+  const listeners: Array<() => void> = [];
+  const unsubscribe = vi.fn();
+  const bridge: TauDesktopAuthBridge = {
+    signIn: vi.fn().mockResolvedValue(undefined),
+    signOut: vi.fn().mockResolvedValue(undefined),
+    onAuthChanged: vi.fn((listener: () => void) => {
+      listeners.push(listener);
+      return unsubscribe;
+    }),
+  };
+  const emit = (): void => {
+    for (const listener of listeners) {
+      listener();
+    }
+  };
+  return { bridge, unsubscribe, emit };
+};
+
+const renderBridge = (queryClient: QueryClient): ReturnType<typeof render> =>
+  render(
+    <QueryClientProvider client={queryClient}>
+      <FinancialSessionProvider>
+        <DesktopAuthBridge />
+      </FinancialSessionProvider>
+    </QueryClientProvider>,
+  );
+
+describe('DesktopAuthBridge', () => {
+  let queryClient: QueryClient;
+  let invalidate: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    invalidate = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.clearAllMocks();
+    delete globalThis.window.tauAuth;
+  });
+
+  it('invalidates the shared session cache when the desktop shell reports an auth change', () => {
+    vi.stubEnv('TAU_TARGET', 'desktop');
+    const { bridge, emit } = createBridge();
+    globalThis.window.tauAuth = bridge;
+    queryClient.setQueryData(['billing', 'credits'], { stale: true });
+
+    renderBridge(queryClient);
+    emit();
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['auth'] });
+    expect(queryClient.getQueryData(['billing', 'credits'])).toBeUndefined();
+  });
+
+  it('unsubscribes from the shell on unmount', () => {
+    vi.stubEnv('TAU_TARGET', 'desktop');
+    const { bridge, unsubscribe } = createBridge();
+    globalThis.window.tauAuth = bridge;
+
+    renderBridge(queryClient).unmount();
+
+    expect(unsubscribe).toHaveBeenCalled();
+  });
+
+  it('never subscribes in the web build', () => {
+    // No TAU_TARGET define: `undefined === 'desktop'` is false.
+    const { bridge } = createBridge();
+    globalThis.window.tauAuth = bridge;
+
+    renderBridge(queryClient);
+
+    expect(bridge.onAuthChanged).not.toHaveBeenCalled();
+  });
+
+  it('tolerates a desktop build whose preload has not exposed the bridge yet', () => {
+    vi.stubEnv('TAU_TARGET', 'desktop');
+
+    expect(() => renderBridge(queryClient)).not.toThrow();
+  });
+
+  it('tolerates a focused mount outside a QueryClientProvider', () => {
+    vi.stubEnv('TAU_TARGET', 'desktop');
+    const { bridge, emit } = createBridge();
+    globalThis.window.tauAuth = bridge;
+
+    expect(() => {
+      render(<DesktopAuthBridge />);
+      emit();
+    }).not.toThrow();
+  });
+});
+
+describe('AnonymousSessionPurge', () => {
+  const renderPurge = (queryClient: QueryClient): void => {
+    render(
+      <QueryClientProvider client={queryClient}>
+        <FinancialSessionProvider>
+          <AnonymousSessionPurge />
+        </FinancialSessionProvider>
+      </QueryClientProvider>,
+    );
+  };
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('clears the local billing selection on a confirmed anonymous session', () => {
+    mocks.resolvedAuth.mockReturnValue('anonymous');
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(['billing', 'usage'], { snapshot: 'old' });
+
+    renderPurge(queryClient);
+
+    expect(queryClient.getQueryData(['billing', 'usage'])).toBeUndefined();
+    expect(mocks.purgeSavedUsage).toHaveBeenCalledWith(undefined);
+  });
+
+  it.each(['indeterminate', 'authed'] as const)('keeps saved usage while the session is %s', (resolved) => {
+    mocks.resolvedAuth.mockReturnValue(resolved);
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(['billing', 'usage'], { snapshot: 'kept' });
+
+    renderPurge(queryClient);
+
+    expect(queryClient.getQueryData(['billing', 'usage'])).toEqual({ snapshot: 'kept' });
+    expect(mocks.purgeSavedUsage).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Regression cover for review finding MAJOR 6: `window.tauAuth.signIn()` and
+ * `signOut()` had no callers, so the desktop shell's interactive sign-in was
+ * dead UI-side and only the `TAU_DESKTOP_TOKEN` seed produced a session.
+ *
+ * Both seams that decide "the user must sign in" are props this provider owns:
+ * `navigate` (better-auth-ui's programmatic bounce, e.g. `useAuthenticate`) and
+ * `Link` (the user-button's menu items). Both route through `desktopAuthAction`.
+ */
+describe('desktopAuthAction', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    ['/auth/sign-in', 'signIn'],
+    ['/auth/sign-up', 'signIn'],
+    ['/auth/sign-out', 'signOut'],
+    ['/auth/sign-in?redirectTo=%2Fprojects', 'signIn'],
+  ])('routes %s to the desktop shell', (to, action) => {
+    vi.stubEnv('TAU_TARGET', 'desktop');
+
+    expect(desktopAuthAction(to)).toBe(action);
+  });
+
+  it.each(['/auth/forgot-password', '/auth/desktop', '/projects', '/auth/sign-in/evil'])(
+    'leaves %s to in-app routing',
+    (to) => {
+      vi.stubEnv('TAU_TARGET', 'desktop');
+
+      expect(desktopAuthAction(to)).toBeUndefined();
+    },
+  );
+
+  it('never diverts anything in the web build', () => {
+    expect(desktopAuthAction('/auth/sign-in')).toBeUndefined();
+    expect(desktopAuthAction('/auth/sign-out')).toBeUndefined();
+  });
+});
+
+describe('AuthConfigLink', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    delete globalThis.window.tauAuth;
+  });
+
+  it('hands a desktop sign-in click to the shell instead of navigating (MAJOR 6)', async () => {
+    vi.stubEnv('TAU_TARGET', 'desktop');
+    const { bridge } = createBridge();
+    globalThis.window.tauAuth = bridge;
+
+    render(<AuthConfigLink href='/auth/sign-in'>Sign in</AuthConfigLink>);
+    await userEvent.click(screen.getByText('Sign in'));
+
+    expect(bridge.signIn).toHaveBeenCalled();
+    expect(bridge.signOut).not.toHaveBeenCalled();
+  });
+
+  it('hands a desktop sign-out click to the shell so main drops its token', async () => {
+    vi.stubEnv('TAU_TARGET', 'desktop');
+    const { bridge } = createBridge();
+    globalThis.window.tauAuth = bridge;
+
+    render(<AuthConfigLink href='/auth/sign-out'>Sign out</AuthConfigLink>);
+    await userEvent.click(screen.getByText('Sign out'));
+
+    expect(bridge.signOut).toHaveBeenCalled();
+  });
+
+  it('never routes a shell-owned destination in-app when the desktop bridge is missing', async () => {
+    vi.stubEnv('TAU_TARGET', 'desktop');
+
+    render(<AuthConfigLink href='/auth/sign-in'>Sign in</AuthConfigLink>);
+    await userEvent.click(screen.getByText('Sign in'));
+
+    expect(routerLink).not.toHaveBeenCalled();
+  });
+
+  it('renders an ordinary router link in the web build', () => {
+    render(<AuthConfigLink href='/auth/sign-in'>Sign in</AuthConfigLink>);
+
+    expect(screen.getByText('Sign in').closest('a')).toHaveAttribute('href', '/auth/sign-in');
+    expect(routerLink).toHaveBeenCalled();
+  });
+});
+
+describe('AppEntryPreference', () => {
+  beforeEach(() => {
+    Cookies.remove('tau-entry', { path: '/' });
+    vi.unstubAllEnvs();
+  });
+  it('should remember confirmed login and preserve it through API uncertainty', () => {
+    mocks.resolvedAuth.mockReturnValue('authed');
+    const view = render(<AppEntryPreference />);
+    expect(document.cookie).toContain('tau-entry=app');
+    mocks.resolvedAuth.mockReturnValue('indeterminate');
+    view.rerender(<AppEntryPreference />);
+    expect(document.cookie).toContain('tau-entry=app');
+    mocks.resolvedAuth.mockReturnValue('anonymous');
+    view.rerender(<AppEntryPreference />);
+    expect(document.cookie).toContain('tau-entry=app');
+  });
+  it('should preserve explicit website choice and leave desktop cookies alone', () => {
+    Cookies.set('tau-entry', 'website', { path: '/' });
+    mocks.resolvedAuth.mockReturnValue('authed');
+    const view = render(<AppEntryPreference />);
+    expect(document.cookie).toContain('tau-entry=website');
+    view.unmount();
+    Cookies.remove('tau-entry', { path: '/' });
+    vi.stubEnv('TAU_TARGET', 'desktop');
+    render(<AppEntryPreference />);
+    expect(document.cookie).not.toContain('tau-entry=');
+    vi.unstubAllEnvs();
+  });
+});

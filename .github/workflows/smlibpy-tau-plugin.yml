@@ -1,0 +1,39 @@
+# SMLibPy's registry-native closure, checked and golden-recorded by the shared Python kernel workflow: `--check` on
+# pull requests, and on every target a sealed closure, its golden receipt and the Python tests (the worker, the
+# documented smlibpy surface, the agent skill's models and the examples). tau-plugin.golden.json stays `{}` until a
+# maintainer commits the receipts a run reports.
+name: SMLibPy tau-plugin
+
+on:
+  pull_request:
+    # `ready_for_review` so a draft, which requests no macOS runner, gets its macOS targets once it is ready.
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - packages/plugins/smlibpy/python/**
+      - packages/plugins/smlibpy/tau-plugin*.json
+      - packages/plugins/smlibpy/project/**
+      - packages/plugins/smlibpy/agent/**
+      - libs/tau-examples/src/kernels/smlibpy/**
+      - packages/core/python-kernel/python/**
+      - packages/core/python-kernel/scripts/**
+      - packages/core/python-kernel/src/{generator,template}.ts
+      - .github/workflows/smlibpy-tau-plugin.yml
+      - .github/workflows/python-kernel-tau-plugin.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a pull request's head branch cancels its outdated run; a dispatch is never cancelled.
+concurrency:
+  group: smlibpy-tau-plugin-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  tau-plugin:
+    if: ${{ github.repository == 'taucad/tau' }}
+    uses: ./.github/workflows/python-kernel-tau-plugin.yml
+    with:
+      package: packages/plugins/smlibpy
+      project: smlibpy
+      test-python: true

@@ -1,0 +1,575 @@
+{
+  "title": "tau-storage-integrity",
+  "interval": 60,
+  "rules": [
+    {
+      "uid": "storage-dependency-deleted",
+      "title": "P0: Dependency Object Deleted",
+      "condition": "dependency_deleted_threshold",
+      "data": [
+        {
+          "refId": "dependency_deleted_logs",
+          "queryType": "range",
+          "relativeTimeRange": {
+            "from": 600,
+            "to": 0
+          },
+          "datasourceUid": "loki",
+          "model": {
+            "expr": "sum(count_over_time({service_name=\"tau-r2-audit\"} | json | event=\"r2_audit.dependency_deleted\" [10m]))",
+            "intervalMs": 15000,
+            "maxDataPoints": 43200,
+            "queryType": "range",
+            "refId": "dependency_deleted_logs"
+          }
+        },
+        {
+          "refId": "dependency_deleted_reduce",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "type": "reduce",
+            "reducer": "last",
+            "expression": "dependency_deleted_logs",
+            "refId": "dependency_deleted_reduce"
+          }
+        },
+        {
+          "refId": "dependency_deleted_threshold",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "type": "threshold",
+            "expression": "dependency_deleted_reduce",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [0]
+                },
+                "operator": {
+                  "type": "and"
+                }
+              }
+            ],
+            "refId": "dependency_deleted_threshold"
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "Error",
+      "for": "0s",
+      "annotations": {
+        "runbook_url": "docs/handbooks/cloud/playbooks/object-integrity.md",
+        "summary": "An R2 event notification reported an object-delete (DeleteObject or LifecycleDeletion) on the locked dependency bucket in the last 10 minutes, so the bucket lock failed or was removed. The line names the bucket, key and eTag; notifications carry no actor, so read the Data Access Logs (r2 dataset) for who."
+      },
+      "labels": {
+        "severity": "critical",
+        "service": "tau-r2-audit",
+        "component": "dependencies"
+      }
+    },
+    {
+      "uid": "storage-dependency-overwritten",
+      "title": "P0: Dependency Object Overwritten",
+      "condition": "dependency_overwritten_threshold",
+      "data": [
+        {
+          "refId": "dependency_overwritten_logs",
+          "queryType": "range",
+          "relativeTimeRange": {
+            "from": 600,
+            "to": 0
+          },
+          "datasourceUid": "loki",
+          "model": {
+            "expr": "sum(count_over_time({service_name=\"tau-r2-audit\"} | json | event=~\"r2_audit.dependency_overwritten|r2_audit.dependency_layout_breach\" [10m]))",
+            "intervalMs": 15000,
+            "maxDataPoints": 43200,
+            "queryType": "range",
+            "refId": "dependency_overwritten_logs"
+          }
+        },
+        {
+          "refId": "dependency_overwritten_reduce",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "type": "reduce",
+            "reducer": "last",
+            "expression": "dependency_overwritten_logs",
+            "refId": "dependency_overwritten_reduce"
+          }
+        },
+        {
+          "refId": "dependency_overwritten_threshold",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "type": "threshold",
+            "expression": "dependency_overwritten_reduce",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [0]
+                },
+                "operator": {
+                  "type": "and"
+                }
+              }
+            ],
+            "refId": "dependency_overwritten_threshold"
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "Error",
+      "for": "0s",
+      "annotations": {
+        "runbook_url": "docs/handbooks/cloud/playbooks/object-integrity.md",
+        "summary": "An R2 event notification reported an object-create on the dependency bucket for a key the audit Worker had already recorded (an overwrite the lock should refuse; previousEtag is the first eTag), or for a key outside blobs/sha256/<64 hex> (a layout breach), in the last 10 minutes."
+      },
+      "labels": {
+        "severity": "critical",
+        "service": "tau-r2-audit",
+        "component": "dependencies"
+      }
+    },
+    {
+      "uid": "storage-dependency-bulk-delete",
+      "title": "P0: Dependency Bulk Delete Attempted",
+      "condition": "dependency_bulk_delete_threshold",
+      "data": [
+        {
+          "refId": "dependency_bulk_delete_logs",
+          "queryType": "range",
+          "relativeTimeRange": {
+            "from": 600,
+            "to": 0
+          },
+          "datasourceUid": "loki",
+          "model": {
+            "expr": "sum(count_over_time({service_name=\"tau-r2-audit\"} | json | event=\"r2_audit.dependency_delete_attempt\" [10m]))",
+            "intervalMs": 15000,
+            "maxDataPoints": 43200,
+            "queryType": "range",
+            "refId": "dependency_bulk_delete_logs"
+          }
+        },
+        {
+          "refId": "dependency_bulk_delete_reduce",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "type": "reduce",
+            "reducer": "last",
+            "expression": "dependency_bulk_delete_logs",
+            "refId": "dependency_bulk_delete_reduce"
+          }
+        },
+        {
+          "refId": "dependency_bulk_delete_threshold",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "type": "threshold",
+            "expression": "dependency_bulk_delete_reduce",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [0]
+                },
+                "operator": {
+                  "type": "and"
+                }
+              }
+            ],
+            "refId": "dependency_bulk_delete_threshold"
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "Error",
+      "for": "0s",
+      "annotations": {
+        "runbook_url": "docs/handbooks/cloud/playbooks/object-integrity.md",
+        "summary": "R2 Data Access Logs show DeleteObjects or DeleteObjectsByPrefix on the dependency bucket. The lock refuses each key inside a 200 response, so the attempt is logged where a refused single delete (409) is not; the line names the actor's accessKeyId, interface and scriptName."
+      },
+      "labels": {
+        "severity": "critical",
+        "service": "tau-r2-audit",
+        "component": "dependencies"
+      }
+    },
+    {
+      "uid": "storage-unexpected-writer",
+      "title": "P0: Unexpected R2 Writer",
+      "condition": "unexpected_writer_threshold",
+      "data": [
+        {
+          "refId": "unexpected_writer_logs",
+          "queryType": "range",
+          "relativeTimeRange": {
+            "from": 600,
+            "to": 0
+          },
+          "datasourceUid": "loki",
+          "model": {
+            "expr": "sum(count_over_time({service_name=\"tau-r2-audit\"} | json | event=\"r2_audit.unexpected_writer\" [10m]))",
+            "intervalMs": 15000,
+            "maxDataPoints": 43200,
+            "queryType": "range",
+            "refId": "unexpected_writer_logs"
+          }
+        },
+        {
+          "refId": "unexpected_writer_reduce",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "type": "reduce",
+            "reducer": "last",
+            "expression": "unexpected_writer_logs",
+            "refId": "unexpected_writer_reduce"
+          }
+        },
+        {
+          "refId": "unexpected_writer_threshold",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "type": "threshold",
+            "expression": "unexpected_writer_reduce",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [0]
+                },
+                "operator": {
+                  "type": "and"
+                }
+              }
+            ],
+            "refId": "unexpected_writer_threshold"
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "Error",
+      "for": "0s",
+      "annotations": {
+        "runbook_url": "docs/handbooks/cloud/playbooks/object-integrity.md",
+        "summary": "R2 Data Access Logs show a write or delete (PutObject, CopyObject, CompleteMultipartUpload, DeleteObject, DeleteObjects, DeleteObjectsByPrefix) whose accessKeyId, interface or scriptName is not in the bucket's expected writers (AUDIT_EXPECTED_WRITERS), or any interface = API write. reason is api-interface, unknown-bucket or unknown-actor."
+      },
+      "labels": {
+        "severity": "critical",
+        "service": "tau-r2-audit",
+        "component": "r2"
+      }
+    },
+    {
+      "uid": "storage-audit-silent",
+      "title": "R2 Audit Worker Silent",
+      "condition": "audit_silent_threshold",
+      "data": [
+        {
+          "refId": "audit_silent_logs",
+          "queryType": "range",
+          "relativeTimeRange": {
+            "from": 900,
+            "to": 0
+          },
+          "datasourceUid": "loki",
+          "model": {
+            "expr": "sum(count_over_time({service_name=\"tau-r2-audit\"} | json | event=\"r2_audit.heartbeat\" | pass=\"scheduled\" [15m]))",
+            "intervalMs": 15000,
+            "maxDataPoints": 43200,
+            "queryType": "range",
+            "refId": "audit_silent_logs"
+          }
+        },
+        {
+          "refId": "audit_silent_reduce",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "type": "reduce",
+            "reducer": "last",
+            "expression": "audit_silent_logs",
+            "refId": "audit_silent_reduce"
+          }
+        },
+        {
+          "refId": "audit_silent_threshold",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "type": "threshold",
+            "expression": "audit_silent_reduce",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "lt",
+                  "params": [1]
+                },
+                "operator": {
+                  "type": "and"
+                }
+              }
+            ],
+            "refId": "audit_silent_threshold"
+          }
+        }
+      ],
+      "noDataState": "Alerting",
+      "execErrState": "Error",
+      "for": "0s",
+      "annotations": {
+        "runbook_url": "docs/handbooks/cloud/playbooks/object-integrity.md",
+        "summary": "No scheduled heartbeat from the tau-r2-audit Worker for 15 minutes (it writes one every 5). The write alarms are blind: check the Worker, its cron trigger and the Workers Observability OTLP logs destination. A heartbeat with poll=skipped means the Data Access Log poll has no query token; poll=failed carries pollDetail. Paused in local Grafana, which has no audit Worker; Tau Cloud's rule policy sets the hosted pause state."
+      },
+      "labels": {
+        "severity": "warning",
+        "service": "tau-r2-audit",
+        "component": "r2"
+      },
+      "isPaused": true
+    },
+    {
+      "uid": "storage-audit-degraded",
+      "title": "R2 Audit Worker Degraded",
+      "condition": "audit_degraded_threshold",
+      "data": [
+        {
+          "refId": "audit_degraded_logs",
+          "queryType": "range",
+          "relativeTimeRange": {
+            "from": 900,
+            "to": 0
+          },
+          "datasourceUid": "loki",
+          "model": {
+            "expr": "sum(count_over_time({service_name=\"tau-r2-audit\"} | json | event=\"r2_audit.heartbeat\" | pass=\"scheduled\" | poll!=\"ok\" or truncated=\"true\" or expectedWritersValid=\"false\" or foreignBucketsValid=\"false\" [15m]))",
+            "intervalMs": 15000,
+            "maxDataPoints": 43200,
+            "queryType": "range",
+            "refId": "audit_degraded_logs"
+          }
+        },
+        {
+          "refId": "audit_degraded_reduce",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "type": "reduce",
+            "reducer": "last",
+            "expression": "audit_degraded_logs",
+            "refId": "audit_degraded_reduce"
+          }
+        },
+        {
+          "refId": "audit_degraded_threshold",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "type": "threshold",
+            "expression": "audit_degraded_reduce",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [1]
+                },
+                "operator": {
+                  "type": "and"
+                }
+              }
+            ],
+            "refId": "audit_degraded_threshold"
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "Error",
+      "for": "0s",
+      "annotations": {
+        "runbook_url": "docs/handbooks/cloud/playbooks/object-integrity.md",
+        "summary": "More than one scheduled heartbeat of the tau-r2-audit Worker in 15 minutes reported a degraded pass: poll skipped (no query token) or failed (pollDetail says why), truncated=true (the Data Access Log page was full, so events past it were not checked), or expectedWritersValid=false or foreignBucketsValid=false (AUDIT_EXPECTED_WRITERS or AUDIT_FOREIGN_BUCKETS did not parse). Heartbeats still arrive, so storage-audit-silent stays green while storage-unexpected-writer and storage-dependency-bulk-delete are blind or wrong. One failed poll does not fire."
+      },
+      "labels": {
+        "severity": "warning",
+        "service": "tau-r2-audit",
+        "component": "r2"
+      }
+    },
+    {
+      "uid": "storage-audit-no-events",
+      "title": "R2 Audit Logs Deliver Nothing",
+      "condition": "audit_no_events_threshold",
+      "data": [
+        {
+          "refId": "audit_no_events_logs",
+          "queryType": "range",
+          "relativeTimeRange": {
+            "from": 3600,
+            "to": 0
+          },
+          "datasourceUid": "loki",
+          "model": {
+            "expr": "sum(sum_over_time({service_name=\"tau-r2-audit\"} | json | event=\"r2_audit.heartbeat\" | pass=\"scheduled\" | poll=\"ok\" | unwrap eventsSeen [1h]))",
+            "intervalMs": 15000,
+            "maxDataPoints": 43200,
+            "queryType": "range",
+            "refId": "audit_no_events_logs"
+          }
+        },
+        {
+          "refId": "audit_no_events_reduce",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "type": "reduce",
+            "reducer": "last",
+            "expression": "audit_no_events_logs",
+            "refId": "audit_no_events_reduce"
+          }
+        },
+        {
+          "refId": "audit_no_events_threshold",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "type": "threshold",
+            "expression": "audit_no_events_reduce",
+            "conditions": [
+              {
+                "type": "query",
+                "evaluator": {
+                  "type": "lt",
+                  "params": [1]
+                },
+                "operator": {
+                  "type": "and"
+                }
+              }
+            ],
+            "refId": "audit_no_events_threshold"
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "Error",
+      "for": "0s",
+      "annotations": {
+        "runbook_url": "docs/handbooks/cloud/playbooks/object-integrity.md",
+        "summary": "Scheduled heartbeats of the tau-r2-audit Worker with poll=ok saw no write or delete event in the R2 Data Access Logs for an hour. eventsSeen is account-wide and has never been near zero (hourly sum at least 423 in the six days to 2026-11-15), so the poll works but logging delivers nothing: Data Access Logs were turned off or stopped for the account, and storage-unexpected-writer is blind. It does not detect one bucket's toggle; the 90-day settings read does. No data (no ok heartbeat) is storage-audit-degraded's or storage-audit-silent's case."
+      },
+      "labels": {
+        "severity": "warning",
+        "service": "tau-r2-audit",
+        "component": "r2"
+      }
+    },
+    {
+      "uid": "storage-public-objects-dropped",
+      "title": "Public Bucket Objects Dropped",
+      "condition": "public_objects_dropped",
+      "data": [
+        {
+          "refId": "public_objects_dropped",
+          "queryType": "",
+          "relativeTimeRange": {
+            "from": 86400,
+            "to": 0
+          },
+          "datasourceUid": "prometheus",
+          "model": {
+            "instant": true,
+            "range": false,
+            "expr": "(1 - max by (app) (tau_r2_objects{app=~\".*\",service_name=\"tau-api\",tau_r2_bucket=\"public\"}) / max by (app) (max_over_time(tau_r2_objects{app=~\".*\",service_name=\"tau-api\",tau_r2_bucket=\"public\"}[24h])) > 0.2) and max by (app) (max_over_time(tau_r2_objects{app=~\".*\",service_name=\"tau-api\",tau_r2_bucket=\"public\"}[24h])) - max by (app) (tau_r2_objects{app=~\".*\",service_name=\"tau-api\",tau_r2_bucket=\"public\"}) > 20",
+            "intervalMs": 15000,
+            "maxDataPoints": 20,
+            "refId": "public_objects_dropped"
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "Error",
+      "for": "0s",
+      "annotations": {
+        "runbook_url": "docs/handbooks/cloud/playbooks/object-integrity.md",
+        "summary": "The public R2 bucket (tau_r2_objects, tau_r2_bucket=public, from the API's hourly storage accounting) holds more than 20% and more than 20 objects fewer than its own 24-hour maximum; it stays firing until that maximum leaves the window. Publication blobs are deleted by the API and the maintenance credential, which the per-event write alarms expect, so this aggregate is the only alarm on a mass delete by an expected writer. A mass unpublish followed by collect-blobs also fires it: read the maintenance log first. The trailing 20 is the threshold Tau Cloud's rule policy can override."
+      },
+      "labels": {
+        "severity": "warning",
+        "service": "tau-api",
+        "component": "r2"
+      }
+    }
+  ]
+}

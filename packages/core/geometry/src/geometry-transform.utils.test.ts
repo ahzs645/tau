@@ -1,0 +1,233 @@
+import { describe, it, expect } from 'vitest';
+import {
+  compactTriangleIndices,
+  createVertexTransform,
+  transformNormalArray,
+  transformVectorArrayChecked,
+  transformVertexArray,
+} from '#geometry-transform.utils.js';
+
+const transformVerticesGltf = createVertexTransform({ coordinateSystem: 'y-up', unit: { length: 'meter' } });
+
+describe('transformVerticesGltf', () => {
+  it('should transform z-up millimeters to y-up meters correctly', () => {
+    // Test basic transformation: [x, y, z] in mm -> [x/1000, z/1000, -y/1000] in m
+    const input: [number, number, number] = [1000, 2000, 3000]; // 1m, 2m, 3m in mm
+    const result = transformVerticesGltf(input);
+
+    // Expected: x' = x/1000, y' = z/1000, z' = -y/1000
+    expect(result).toEqual([1, 3, -2]); // [1m, 3m, -2m]
+  });
+
+  it('should handle zero coordinates', () => {
+    const input: [number, number, number] = [0, 0, 0];
+    const result = transformVerticesGltf(input);
+
+    expect(result).toEqual([0, 0, 0]);
+  });
+
+  it('should handle negative coordinates', () => {
+    const input: [number, number, number] = [-1000, -2000, -3000];
+    const result = transformVerticesGltf(input);
+
+    expect(result).toEqual([-1, -3, 2]); // Note: -y becomes positive z
+  });
+
+  it('should convert coordinate system correctly for unit cube', () => {
+    // Test corners of a unit cube (1000mm = 1m) in z-up system
+    const corners = [
+      [0, 0, 0], // Origin
+      [1000, 0, 0], // +X
+      [0, 1000, 0], // +Y (forward in z-up)
+      [0, 0, 1000], // +Z (up in z-up)
+    ] as const;
+
+    const transformed = corners.map((corner) => transformVerticesGltf(corner));
+
+    expect(transformed).toEqual([
+      [0, 0, 0], // Origin stays at origin
+      [1, 0, 0], // +X stays +X (scaled to meters)
+      [0, 0, -1], // +Y becomes -Z (forward becomes backward)
+      [0, 1, 0], // +Z becomes +Y (up stays up, different axis)
+    ]);
+  });
+
+  it('should maintain precision for small values', () => {
+    const input: [number, number, number] = [1, 2, 3]; // 1mm, 2mm, 3mm
+    const result = transformVerticesGltf(input);
+
+    expect(result).toEqual([0.001, 0.003, -0.002]); // 0.001m, 0.003m, -0.002m
+  });
+
+  it('should normalize signed zero to regular zero', () => {
+    // Test that the function handles JavaScript's signed zero quirk
+    const input: [number, number, number] = [0, 0, 0];
+    const result = transformVerticesGltf(input);
+
+    // Verify no signed zeros in the result
+    expect(Object.is(result[0], 0)).toBe(true); // Not -0
+    expect(Object.is(result[1], 0)).toBe(true); // Not -0
+    expect(Object.is(result[2], 0)).toBe(true); // Not -0
+  });
+});
+
+describe('transformVertexArray', () => {
+  it('should transform all vertices in a flat array', () => {
+    const vertices = [1000, 2000, 3000, 0, 0, 0];
+    const result = transformVertexArray(vertices);
+
+    expect(result[0]).toBeCloseTo(1, 5);
+    expect(result[1]).toBeCloseTo(3, 5);
+    expect(result[2]).toBeCloseTo(-2, 5);
+    expect(result[3]).toBe(0);
+    expect(result[4]).toBe(0);
+    expect(result[5]).toBe(0);
+  });
+
+  it('should skip vertices with undefined coordinates in transformVertexArray', () => {
+    // Array with length not divisible by 3 -- trailing element treated as incomplete vertex
+    const vertices = [1000, 2000, 3000, 500];
+    const result = transformVertexArray(vertices);
+
+    expect(result[0]).toBeCloseTo(1, 5);
+    expect(result[1]).toBeCloseTo(3, 5);
+    expect(result[2]).toBeCloseTo(-2, 5);
+    expect(result[3]).toBe(0);
+  });
+});
+
+describe('compactTriangleIndices', () => {
+  it('removes zero-area triangles and rewrites face-group ranges', () => {
+    const compacted = compactTriangleIndices({
+      positions: [0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0, 0],
+      indices: [0, 1, 2, 0, 1, 3],
+      groups: [
+        { start: 0, count: 3, faceId: 1 },
+        { start: 3, count: 3, faceId: 2 },
+      ],
+    });
+
+    expect([...compacted.indices]).toEqual([0, 1, 2]);
+    expect(compacted.groups).toEqual([{ start: 0, count: 3, faceId: 1 }]);
+    expect(compacted.removed).toBe(1);
+  });
+
+  it('removes an exact repeated face with distinct vertex indices', () => {
+    const compacted = compactTriangleIndices({
+      positions: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0],
+      indices: [0, 1, 2, 3, 4, 5],
+    });
+
+    expect([...compacted.indices]).toEqual([0, 1, 2]);
+    expect(compacted.removed).toBe(1);
+  });
+});
+
+describe('createVertexTransform', () => {
+  it('should keep z-up millimeter coordinates unscaled for canonical GeoSpec exports', () => {
+    const transform = createVertexTransform({ coordinateSystem: 'z-up', unit: { length: 'millimeter' } });
+
+    expect(transform([50, 25, 10])).toEqual([50, 25, 10]);
+  });
+
+  it('should transform to y-up millimeters without applying meter scale', () => {
+    const transform = createVertexTransform({ coordinateSystem: 'y-up', unit: { length: 'millimeter' } });
+
+    expect(transform([50, 25, 10])).toEqual([50, 10, -25]);
+  });
+
+  it('should transform flat vertex arrays using requested coordinate and length units', () => {
+    const result = transformVertexArray([50, 25, 10], {
+      coordinateSystem: 'z-up',
+      unit: { length: 'millimeter' },
+    });
+
+    expect([...result]).toEqual([50, 25, 10]);
+  });
+
+  it('should rotate normals without scaling them', () => {
+    const result = transformNormalArray([0, 0, 1], { coordinateSystem: 'y-up' });
+
+    expect([...result]).toEqual([0, 1, 0]);
+  });
+});
+
+describe('transformVectorArrayChecked', () => {
+  it('rotates and scales in the same pass the trust boundary is checked in', () => {
+    const positions = transformVectorArrayChecked({
+      vectors: [1000, 2000, 3000],
+      kind: 'position',
+      invalidMessage: 'bad mesh',
+    });
+    const directions = transformVectorArrayChecked({
+      vectors: [0, 1, 0],
+      kind: 'direction',
+      invalidMessage: 'bad mesh',
+    });
+
+    // The same mapping the unchecked helpers produce: a kernel validating its worker's bytes should
+    // not have to restate the rotation to get one pass over the array.
+    expect([...positions]).toEqual([...transformVertexArray([1000, 2000, 3000])]);
+    expect([...directions]).toEqual([...transformNormalArray([0, 1, 0])]);
+  });
+
+  it('matches the unchecked helpers bit for bit on signed zero, denormals and both units', () => {
+    // RV3 Q2: the fused pass may not change a single output bit. Signed zero and denormals are the
+    // two places a rewritten loop drifts, and the mm -> m scale is the only arithmetic it adds.
+    const edgeCases = [
+      0,
+      -0,
+      1,
+      -1,
+      Number.MIN_VALUE,
+      -Number.MIN_VALUE,
+      5e-324,
+      1.175e-38,
+      -1.175e-38,
+      1000,
+      -1000,
+      0.1,
+      -0.1,
+      Number.MAX_SAFE_INTEGER,
+      -Number.MAX_SAFE_INTEGER,
+    ];
+
+    for (const options of [
+      {},
+      { coordinateSystem: 'z-up' } as const,
+      { unit: { length: 'millimeter' } } as const,
+      { coordinateSystem: 'z-up', unit: { length: 'meter' } } as const,
+    ]) {
+      const positions = transformVectorArrayChecked({
+        vectors: edgeCases,
+        kind: 'position',
+        options,
+        invalidMessage: 'bad mesh',
+      });
+      const directions = transformVectorArrayChecked({
+        vectors: edgeCases,
+        kind: 'direction',
+        options,
+        invalidMessage: 'bad mesh',
+      });
+
+      // Compared as bytes: `toEqual` on numbers would let a -0 through.
+      expect([...new Uint8Array(positions.buffer)]).toEqual([
+        ...new Uint8Array(transformVertexArray(edgeCases, options).buffer),
+      ]);
+      expect([...new Uint8Array(directions.buffer)]).toEqual([
+        ...new Uint8Array(transformNormalArray(edgeCases, options).buffer),
+      ]);
+    }
+  });
+
+  it('rejects a non-finite component with the caller\u2019s own message', () => {
+    expect(() =>
+      transformVectorArrayChecked({
+        vectors: [0, Number.NaN, 0],
+        kind: 'position',
+        invalidMessage: 'PicoGK component "hull" contains invalid mesh values.',
+      }),
+    ).toThrow('PicoGK component "hull" contains invalid mesh values.');
+  });
+});

@@ -1,20 +1,23 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { getGitHubClient } from '#lib/github-api.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { GitHubTreeTruncatedError, RepositoryRequestError, getGitHubClient } from '#lib/github-api.js';
 
-vi.mock('#environment.config.js', () => {
-  /* eslint-disable @typescript-eslint/naming-convention -- mock env object shape */
-  const mock = {
-    ENV: { GITHUB_API_TOKEN: undefined },
-  };
-  /* eslint-enable @typescript-eslint/naming-convention -- mock env object shape */
-  return mock;
-});
+const originalClientEnvironment = globalThis.window.ENV;
 
 describe('GitHubApiClient', () => {
   let client: ReturnType<typeof getGitHubClient>;
 
   beforeEach(() => {
+    globalThis.window.ENV = {
+      ...originalClientEnvironment,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- browser environment keys are uppercase by contract.
+      TAU_API_URL: 'https://api.tau.test',
+    };
     client = getGitHubClient();
+  });
+
+  afterEach(() => {
+    globalThis.window.ENV = originalClientEnvironment;
+    vi.restoreAllMocks();
   });
 
   // ---------------------------------------------------------------------------
@@ -22,26 +25,43 @@ describe('GitHubApiClient', () => {
   // ---------------------------------------------------------------------------
 
   describe('getArchiveUrl', () => {
-    it('should return a proxied URL with fully qualified ref', () => {
+    it('should return a typed proxied URL', () => {
       const url = client.getArchiveUrl({ owner: 'myorg', repo: 'myrepo', ref: 'main' });
 
-      expect(url).toContain('/api/import?url=');
-      expect(url).toContain(encodeURIComponent('refs/heads/main'));
-      expect(url).toContain(encodeURIComponent('myorg'));
-      expect(url).toContain(encodeURIComponent('myrepo'));
+      expect(url).toBe('https://api.tau.test/v1/repositories/archive?provider=github&owner=myorg&repo=myrepo&ref=main');
+    });
+
+    it('should remove the API base trailing slash', () => {
+      globalThis.window.ENV = {
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- browser environment keys are uppercase by contract.
+        TAU_API_URL: 'https://api.tau.test/',
+      };
+
+      expect(client.getArchiveUrl({ owner: 'myorg', repo: 'myrepo', ref: 'main' })).toBe(
+        'https://api.tau.test/v1/repositories/archive?provider=github&owner=myorg&repo=myrepo&ref=main',
+      );
+    });
+
+    it('should reject a missing API URL before returning an archive URL', () => {
+      globalThis.window.ENV = {};
+
+      expect(() => client.getArchiveUrl({ owner: 'myorg', repo: 'myrepo', ref: 'main' })).toThrow(
+        'Missing TAU_API_URL: the host must inject it through window.ENV before app-module evaluation.',
+      );
     });
 
     it('should preserve refs/ prefix when already present', () => {
       const url = client.getArchiveUrl({ owner: 'o', repo: 'r', ref: 'refs/tags/v1.0' });
 
-      expect(url).toContain(encodeURIComponent('refs/tags/v1.0'));
-      expect(url).not.toContain(encodeURIComponent('refs/heads/refs/tags/v1.0'));
+      expect(url).toContain('ref=refs%2Ftags%2Fv1.0');
     });
 
     it('should encode special characters in owner and repo', () => {
       const url = client.getArchiveUrl({ owner: 'my org', repo: 'my repo', ref: 'main' });
 
-      expect(url).toContain(encodeURIComponent('my%20org'));
+      const parsed = new URL(url, 'https://tau.new');
+      expect(parsed.searchParams.get('owner')).toBe('my org');
+      expect(parsed.searchParams.get('repo')).toBe('my repo');
     });
   });
 
@@ -65,6 +85,95 @@ describe('GitHubApiClient', () => {
     it('should return a non-empty User-Agent', () => {
       const headers = client.getAuthHeaders();
       expect(headers['User-Agent']!.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // listBranches — delegates to the server route so the token stays server-side
+  // ---------------------------------------------------------------------------
+
+  describe('listBranches', () => {
+    const branchesPayload = {
+      branches: [{ name: 'main', sha: 'abc123', updatedAt: 1 }],
+      hasMore: false,
+      endCursor: undefined,
+    };
+
+    const mockFetch = (response: Partial<Response>) =>
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- only the fields under test are stubbed
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(response as Response);
+
+    it('should request the server route rather than GitHub directly', async () => {
+      const fetchSpy = mockFetch({
+        ok: true,
+        json: async () => branchesPayload,
+      });
+
+      const result = await client.listBranches({ owner: 'taucad', repo: 'tau' });
+
+      expect(result).toStrictEqual(branchesPayload);
+      expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining('https://api.tau.test/v1/repositories/branches?'));
+      expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining('owner=taucad'));
+      expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining('repo=tau'));
+      // The token lives server-side now — the browser must not reach GitHub directly.
+      expect(fetchSpy).not.toHaveBeenCalledWith(expect.stringContaining('api.github.com'));
+    });
+
+    it('should forward the pagination cursor when provided', async () => {
+      const fetchSpy = mockFetch({
+        ok: true,
+        json: async () => branchesPayload,
+      });
+
+      await client.listBranches({ owner: 'o', repo: 'r', cursor: 'cursor-1' });
+
+      expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining('cursor=cursor-1'));
+    });
+
+    it('should throw the route error text so the import flow can degrade', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response('Bad Gateway: Branches list unavailable.', { status: 502 }),
+      );
+
+      await expect(client.listBranches({ owner: 'o', repo: 'r' })).rejects.toThrow('Branches list unavailable');
+    });
+
+    it('should carry the refusal status and code so the import flow can explain it', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        Response.json(
+          {
+            error: 'Service Unavailable',
+            code: 'GITHUB_API_TOKEN_UNAVAILABLE',
+            statusCode: 503,
+            message: 'GitHub branch listing is not configured on this server.',
+          },
+          { status: 503 },
+        ),
+      );
+
+      const error: unknown = await client.listBranches({ owner: 'o', repo: 'r' }).catch((error: unknown) => error);
+
+      expect(error).toBeInstanceOf(RepositoryRequestError);
+      expect(error).toMatchObject({
+        status: 503,
+        code: 'GITHUB_API_TOKEN_UNAVAILABLE',
+        message: 'GitHub branch listing is not configured on this server.',
+      });
+    });
+  });
+
+  describe('listFiles', () => {
+    it('should explain a truncated tree to the person importing, without developer advice', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        Response.json({ sha: 'a'.repeat(40), truncated: true, tree: [{ path: 'main.scad', type: 'blob', size: 1 }] }),
+      );
+
+      const error: unknown = await client.listFiles('o', 'r', 'main').catch((error: unknown) => error);
+
+      expect(error).toBeInstanceOf(GitHubTreeTruncatedError);
+      expect((error as Error).message).toBe(
+        'This repository has too many files for GitHub to list, so Tau cannot preview its files.',
+      );
     });
   });
 });

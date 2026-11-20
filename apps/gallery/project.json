@@ -1,0 +1,53 @@
+{
+  "name": "gallery",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/gallery/src",
+  "projectType": "application",
+  "tags": ["scope:ui", "type:app", "layer:feature"],
+  "targets": {
+    "build": {
+      "dependsOn": ["^copy-assets"],
+      "inputs": ["production", "^production", { "env": "VITE_COMMIT_SHA" }],
+      "outputs": ["{projectRoot}/dist"]
+    },
+    "dev": {
+      "dependsOn": ["^copy-assets"]
+    },
+    "lint": {
+      "options": {
+        "files": "src scripts e2e *.ts"
+      }
+    },
+    "verify-models": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node --import tsx apps/gallery/scripts/verify-models.ts",
+        "cwd": "."
+      }
+    },
+    "verify-browser": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "playwright test --config apps/gallery/playwright.config.ts",
+        "cwd": "."
+      }
+    },
+    "verify-runtime": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "parallel": false,
+        "cwd": ".",
+        "commands": [
+          "corepack pnpm --dir packages/plugins/opencascade exec vitest run src/opencascade.gallery-schema.test.ts --maxWorkers=1",
+          "corepack pnpm --dir packages/plugins/replicad exec vitest run src/replicad.gallery-schema.test.ts --maxWorkers=1",
+          "corepack pnpm --dir packages/plugins/openrscad exec vitest run src/openrscad.gallery-assets.test.ts --maxWorkers=1",
+          "corepack pnpm --dir apps/gallery exec vitest run --config vitest.integration.config.ts --maxWorkers=1",
+          "corepack pnpm --dir packages/plugins/assimp exec vitest run src/assimp.split-primitives.test.ts --maxWorkers=1"
+        ]
+      }
+    }
+  }
+}

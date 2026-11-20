@@ -1,0 +1,1827 @@
+/**
+ * Differential test of the log core against the Lean model `specs/lean/ChatLedger.lean` (S5; FM-R10; W3 SC3).
+ *
+ * Each corpus is regenerated from its seed and byte-compared with the committed
+ * `specs/lean/corpus/<corpus>.trace`; the real appender, `foldChatLedger`, `foldReadAnswer`, `gateRows`,
+ * the host's `appendChatRows` (M1's append), `readBatch`, `mergeLogSegments` and the legality tables then run it, and their output must equal
+ * the committed Lean goldens `<corpus>.expected` line by line. The Lean tier (`agent-host:formal:lean`) regenerates the
+ * goldens with the oracle and fails on stale ones, so this test needs no Lean. `formal update packages/agent-host`
+ * rewrites the traces (this test, with `FORMAL_UPDATE=1`) and then the goldens.
+ *
+ * Line format v2 (the oracle's header in `ChatLedgerOracle.lean` is the reference):
+ *
+ * - A row is `<term> <seq> <run> <kind> <arg> <ms> <epoch> <attempt>`; `epoch` and `attempt` 0 mean absent.
+ * - Kinds: `L` lifecycle, `S` settlement, `H` turn commit, `O`/`R` interrupt requested/resolved, `P` invocation
+ *   prepared, `V` invocation settled, `M` assistant reply, `U` opaque (only written raw), `W` a person's turn said as its
+ *   run settled (`abandonedTurnOf`, id `w-<arg>`), `C` that turn as its run's own device said it, `K` a rewind that
+ *   retains nothing (`C` and `K` in merge traces only).
+ * - Commands: `E` append through the appender, `W` another writer's row, `WJ` a junk line, `TEAR` a torn tail,
+ *   `RELOAD`, `LEDGER`, `SETTLE`, `LIFE`, `RESOLVE`, `PREP`, `BATCH`, `READER`, `READ`, `DELIVER`, `DELIVER1`, `RLEDGER`, `SEG`,
+ *   `ROW`, `MERGE`, `MERGEB`, `MH`, `TABLES`, `ADMIT`, `TERMOF`, `TERMS`, `XADMIT`, `CARRY`, `PLAN`, `PLANT`, `RESUMEB`, `APPENDM`, `REFRESHM`, `STAND` (and `PULL`, which the
+ *   revisions package's `notePull` answers from `corpus/pull-records.trace`).
+ */
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+import {
+  appendChatRows,
+  carriedAfterAnswer,
+  carriedAfterRow,
+  carriedBy,
+  chatTermOf,
+  commandAdmission,
+  rowsTermOf,
+  termAdmission,
+  termsAfterAnswer,
+  termsAfterWrite,
+  termWriteOf,
+} from '#host/tau-agent-host.js';
+import type { CarriedTurns, ChatTerms, PassedRun, TermWrite } from '#host/tau-agent-host.js';
+import type { ChatRunRow } from '#host/chat-run-events.js';
+import { carriedPlace, historyAfter, historyWellFormed, openToolCalls } from '#host/run-history.js';
+import {
+  chatRunState,
+  emptyChatLedger,
+  foldChatLedger,
+  foldReadAnswer,
+  gateRows,
+  replayedStartOutcome,
+  stampRows,
+  unsettledAttempts,
+} from '#log/chat-ledger.js';
+import type { ChatLedger, LogRowBody } from '#log/chat-ledger.js';
+import { createEventLogAppender } from '#log/event-log-appender.js';
+import type { EventLogAppender } from '#log/event-log-appender.js';
+import { memoryEventLogStorage } from '#log/event-log-storage.fixture.js';
+import { classifyLogRow } from '#log/event-schema.js';
+import { abandonedTurnOf } from '#log/event-types.js';
+import type { AgentLogEvent, ProviderMessage, RowKey } from '#log/event-types.js';
+import lifecycleTable from '#log/run-lifecycle.legality.json' with { type: 'json' };
+import operationTable from '#log/run-operation.legality.json' with { type: 'json' };
+import settlementTable from '#log/run-settlement.legality.json' with { type: 'json' };
+import { foreignRunStanding } from '#log/foreign-runs.js';
+import { createEventLogReducer } from '#log/reducer.js';
+import { mergeLogSegments, mergeSegmentsUpTo, parseLogSegments } from '#log/segments.js';
+import { serializeLogEventBytes } from '#log/serialization.js';
+
+const corpusDirectory = fileURLToPath(new URL('../../specs/lean/corpus/', import.meta.url));
+const freshDirectory = fileURLToPath(
+  new URL('../../../../out/test-results/formal/packages/agent-host/lean/', import.meta.url),
+);
+const updating = process.env['FORMAL_UPDATE'] === '1';
+/** Under update, each corpus's TypeScript output is written here, for diffing against the oracle's. */
+const outputDirectory = fileURLToPath(
+  new URL('../../../../out/test-results/formal/packages/agent-host/lean-corpus/', import.meta.url),
+);
+/**
+ * Nightly: this many fresh-seed traces for `formal nightly` to run through the oracle (FM-R10), split over the
+ * generators.
+ */
+const freshTraces = Number(process.env['FORMAL_FRESH_TRACES'] ?? 0);
+// ponytail: 20000 per generator over eight generators outran the mutant harness's 600 s bound, which inherits this
+// env; two base generators' worth, 40000 in all, keeps the v1 budget. Restore it once the harness strips the env.
+const freshPerGenerator = (generators: number): number => Math.ceil((freshTraces * 2) / generators);
+
+// ponytail: mulberry32; a new generator rewrites every corpus.
+/* eslint-disable no-bitwise -- mulberry32 is bit mixing */
+const randomOf = (seed: number) => {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d_2b_79_f5) >>> 0;
+    let mixed = state;
+    mixed = Math.imul(mixed ^ (mixed >>> 15), mixed | 1);
+    mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61);
+    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4_294_967_296;
+  };
+};
+/* eslint-enable no-bitwise -- end of mulberry32 */
+type Random = ReturnType<typeof randomOf>;
+const below = (random: Random, bound: number) => Math.floor(random() * bound);
+const pick = <T>(random: Random, items: readonly T[]): T => items[below(random, items.length)]!;
+
+type Kind = 'L' | 'S' | 'H' | 'O' | 'R' | 'P' | 'V' | 'M' | 'U' | 'W' | 'C' | 'K';
+/** `undefinedKeys`: the row object carries optional keys set to `undefined`, invisible to the oracle and to the bytes. */
+type Row = {
+  term: number;
+  seq: number;
+  run: number;
+  kind: Kind;
+  argument: number;
+  ms: number;
+  epoch: number;
+  attempt: number;
+  undefinedKeys?: boolean;
+};
+
+const base = Date.UTC(2026, 8, 1);
+const termId = (term: number) => `e${String(term).padStart(2, '0')}`;
+const lifeStates = [
+  'admitted',
+  'running',
+  'paused',
+  'completed',
+  'failed',
+  'failed',
+  'cancelled',
+  'cancelled',
+  'failed',
+  'failed',
+] as const;
+/** The Lean `Fail` class of each generated failure code. */
+const failClass = new Map([
+  ['FATAL_TEST', 'f'],
+  ['RATE_LIMITED', 'g'],
+  ['RUN_ABANDONED', 'a'],
+  ['EXTERNAL_AGENT_FAILED', 's'],
+]);
+const settledOutcomes = ['settled', 'released', 'absorbed', 'voided'] as const;
+type Settlement = Extract<LogRowBody, { readonly type: 'turn.finalized' | 'turn.conflicted' | 'turn.failed' }>;
+
+const settlementBody = (content: number): Settlement =>
+  content % 3 === 0
+    ? { type: 'turn.failed', turnId: 't', chatId: 'chat', reason: `reason-${content}` }
+    : content % 3 === 1
+      ? {
+          type: 'turn.finalized',
+          turnId: 't',
+          chatId: 'chat',
+          projectId: 'p',
+          changedPaths: [`f${content}`],
+          trigger: 'turn',
+          runIds: [],
+        }
+      : { type: 'turn.conflicted', turnId: `t${content}`, chatId: 'chat' };
+
+/** A row's body: every field but the envelope. */
+const bodyOf = (row: Pick<Row, 'term' | 'seq' | 'run' | 'kind' | 'argument'>): Record<string, unknown> => {
+  const { argument } = row;
+  switch (row.kind) {
+    case 'L': {
+      return {
+        type: 'run.lifecycle',
+        state: lifeStates[argument]!,
+        ...(argument === 4 ? { detail: { message: 'fatal', code: 'FATAL_TEST' } } : {}),
+        ...(argument === 5 ? { detail: { message: 'rate', code: 'RATE_LIMITED' } } : {}),
+        ...(argument === 7 ? { detail: { message: 'stopped', code: 'USER_STOPPED' } } : {}),
+        ...(argument === 8 ? { detail: { message: 'gone', code: 'RUN_ABANDONED' } } : {}),
+        ...(argument === 9
+          ? {
+              detail: {
+                message: 'agent',
+                code: 'EXTERNAL_AGENT_FAILED',
+                details: { failure: { category: 'agent', actions: ['retry'] } },
+              },
+            }
+          : {}),
+      };
+    }
+    case 'S': {
+      return settlementBody(argument);
+    }
+    case 'H': {
+      // 3 and 4: an external agent's turn marker, 4 once its prompt was issued (`externalPrompted`).
+      const external =
+        argument >= 3
+          ? {
+              metadata: {
+                tauInternal: {
+                  kind: 'external-agent',
+                  ...(argument === 4 ? { acpPromptedRequestId: `r${row.run}:1` } : {}),
+                },
+              },
+            }
+          : {};
+      return {
+        type: 'turn.history-projection-committed',
+        retainedMessageIds: [],
+        message: { id: `u-${row.term}-${row.seq}-${argument}`, role: 'user', content: 'x', ...external },
+        context: { version: 1, systemPrompt: '', initialMessages: [], postCompactionMessages: [] },
+      };
+    }
+    case 'O':
+    case 'R': {
+      return {
+        type: 'interrupt.recorded',
+        interruptId: `i${argument}`,
+        phase: row.kind === 'O' ? 'requested' : 'resolved',
+        reason: 'x',
+        ...(row.kind === 'R' ? { payload: { outcome: 'approved' } } : {}),
+      };
+    }
+    case 'P': {
+      return {
+        type: 'model.invocation-prepared',
+        attemptId: `a${argument % 4}`,
+        purpose: argument < 4 ? 'generation' : 'compaction',
+        modelId: 'm',
+      };
+    }
+    case 'V': {
+      const outcome = settledOutcomes[Math.floor(argument / 4) % 4]!;
+      return {
+        type: 'model.invocation-settled',
+        attemptId: `a${argument % 4}`,
+        outcome,
+        ...(outcome === 'voided' ? {} : { operationId: 'op', chargedCreditAtoms: outcome === 'settled' ? '5' : '0' }),
+      };
+    }
+    case 'M': {
+      return {
+        type: 'message.appended',
+        message: {
+          id: `m-${row.term}-${row.seq}`,
+          role: 'assistant',
+          content: 'reply',
+          metadata: {
+            stopReason: argument < 4 ? 'stop' : 'error',
+            tauInternal: { kind: 'billing-invocation', attemptId: `a${argument % 4}` },
+          },
+        },
+      };
+    }
+    case 'W': {
+      return {
+        type: 'message.appended',
+        message: abandonedTurnOf({ id: `w-${argument}`, role: 'user', content: 'x' }),
+      };
+    }
+    case 'C': {
+      return { type: 'message.appended', message: { id: `w-${argument}`, role: 'user', content: 'x' } };
+    }
+    case 'K': {
+      return { type: 'history.rewound', trigger: 'retry', retainedMessageIds: [] };
+    }
+    case 'U': {
+      // A newer build's rows: an unknown type, a history row of a newer version, an unknown lifecycle state.
+      return argument === 0
+        ? { type: 'future.fact', note: 'x' }
+        : argument === 1
+          ? { type: 'message.appended', message: { id: `v2-${row.term}-${row.seq}`, role: 'user', content: 'x' } }
+          : { type: 'run.lifecycle', state: 'suspended' };
+    }
+  }
+};
+
+const eventOf = (row: Row): AgentLogEvent =>
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- opaque rows are rows this build cannot type.
+  ({
+    version: row.kind === 'U' && row.argument === 1 ? 2 : 1,
+    leaderEpoch: termId(row.term),
+    ...(row.epoch === 0 ? {} : { epoch: row.epoch }),
+    sequence: row.seq,
+    recordedAt: new Date(base + row.ms).toISOString(),
+    runId: `r${row.run}`,
+    ...(row.attempt === 0 ? {} : { attempt: row.attempt }),
+    ...(row.undefinedKeys === true ? { storageDurability: undefined, payload: undefined, checkoutId: undefined } : {}),
+    ...bodyOf(row),
+  }) as AgentLogEvent;
+
+const rowLine = (row: Row) =>
+  `${row.term} ${row.seq} ${row.run} ${row.kind} ${row.argument} ${row.ms} ${row.epoch} ${row.attempt}`;
+const termOf = (leaderEpoch: string) => Number(leaderEpoch.slice(1));
+const keyText = (key: RowKey | undefined) => (key === undefined ? '-' : `${termOf(key.leaderEpoch)}:${key.sequence}`);
+const listText = (items: readonly string[]) => (items.length === 0 ? '-' : items.join(','));
+const runOf = (runId: string) => runId.slice(1);
+
+/**
+ * Merge rows print as `<term>:<seq>:<run>:O<arg>:<ms>`, whatever their kind: an interrupt's `i<arg>`, a turn's `w-<arg>`,
+ * a rewind's 0.
+ */
+const mergedText = (event: AgentLogEvent) => {
+  const argument =
+    event.type === 'message.appended'
+      ? event.message.id.slice('w-'.length)
+      : event.type === 'history.rewound'
+        ? '0'
+        : (event as Extract<AgentLogEvent, { type: 'interrupt.recorded' }>).interruptId.slice(1);
+  return `${termOf(event.leaderEpoch)}:${event.sequence}:${runOf(event.runId)}:O${argument}:${Date.parse(event.recordedAt) - base}`;
+};
+
+/** The ledger, projected onto what the Lean model keeps. */
+const ledgerLines = (ledger: ChatLedger, prefix = ''): string[] => {
+  const lines = Object.entries(ledger.runs).map(([runId, entry]) => {
+    const life =
+      entry.lifecycle === 'failed'
+        ? `failed:${failClass.get(entry.failure?.code ?? '') ?? '?'}`
+        : entry.lifecycle === 'cancelled' && entry.failure?.code === 'USER_STOPPED'
+          ? 'cancelled:u'
+          : (entry.lifecycle ?? '-');
+    const settlements = entry.settlements.map((settlement) => `${settlement.attempt}@${keyText(settlement.row)}`);
+    const pending = Object.keys(entry.pendingInterrupts).toSorted();
+    return [
+      'R',
+      runOf(runId),
+      life,
+      entry.kind === 'external' ? (entry.externalPrompted === true ? 'xp' : 'x') : 't',
+      entry.attempt,
+      entry.appendState,
+      Number(entry.committed),
+      Number(entry.opaque),
+      listText(settlements),
+      listText(pending),
+      entry.openInvocation ?? '-',
+      replayedStartOutcome(ledger, runId),
+    ].join(' ');
+  });
+  for (const [attemptId, invocation] of Object.entries(ledger.invocations)) {
+    lines.push(
+      `I ${attemptId} ${runOf(invocation.runId)} ${invocation.attempt} ${invocation.purpose[0]} ${Number(invocation.shown)} ${invocation.settled?.outcome ?? '-'}`,
+    );
+  }
+  const terminal = ledger.lastTerminal;
+  lines.push(
+    `C ${ledger.currentRunId === undefined ? '-' : runOf(ledger.currentRunId)} ${chatRunState(ledger)} ${terminal === undefined ? '-' : `${runOf(terminal.runId)}:${terminal.outcome}`}`,
+    `P ${ledger.position.cursor} ${keyText(ledger.position.last)} ${ledger.maxEpoch} ${Number(ledger.historyIntact)}`,
+    `N ${listText(ledger.anomalies.map((anomaly) => `${anomaly.kind}@${keyText(anomaly.row)}`))}`,
+    `U ${listText(unsettledAttempts(ledger).map((attempt) => `${runOf(attempt.runId)}:${attempt.attempt}`))}`,
+  );
+  return lines.map((line) => `${prefix}${line}`);
+};
+
+const encoder = new TextEncoder();
+const rowBytes = (row: Row) => encoder.encode(`${JSON.stringify(eventOf(row))}\n`);
+/** The appender's measure: its serializer for a known row, `JSON.stringify` for an opaque one. */
+const sizeOf = (event: AgentLogEvent) =>
+  classifyLogRow(event).class === 'known'
+    ? serializeLogEventBytes(event).byteLength
+    : encoder.encode(`${JSON.stringify(event)}\n`).byteLength;
+const tornFragment = '{"version":';
+
+const codeOf = (error: unknown) => String((error as { code?: string }).code ?? (error as Error).message);
+
+/** The host's append (`appendChatRows`, M1's writer) of one settlement row, under a new term, on a copy of `bytes`. */
+const hostSettle = async (
+  bytes: Uint8Array<ArrayBuffer>,
+  settle: { readonly run: number; readonly content: number },
+): Promise<string> => {
+  const copy = await createEventLogAppender(memoryEventLogStorage(new Uint8Array(bytes)).storage);
+  const initial = await copy.read();
+  try {
+    await appendChatRows({
+      chatId: 'chat',
+      log: copy,
+      ledger: foldChatLedger(emptyChatLedger, initial),
+      leaderEpoch: 'e99',
+      recordedAt: new Date(base + 999_999).toISOString(),
+      rows: [{ runId: `r${settle.run}`, body: settlementBody(settle.content) }],
+    });
+    const after = await copy.read();
+    return after.length > initial.length ? 'appended' : 'skipped';
+  } catch (error) {
+    return codeOf(error);
+  }
+};
+
+/** The pure gate on one body, stamped as a new writer's term would be. */
+const gateOne = (ledger: ChatLedger, run: number, body: LogRowBody): string => {
+  const rows = stampRows({
+    ledger,
+    leaderEpoch: 'e99',
+    runId: `r${run}`,
+    recordedAt: new Date(base).toISOString(),
+    bodies: [body],
+  });
+  const answer = gateRows(ledger, rows);
+  return answer.ok ? 'ok' : answer.code;
+};
+
+type Trace = { readonly text: string[]; readonly expected: string[] };
+
+/** Which commands a log trace draws, and how often. */
+type Profile = {
+  /** Row kinds `E` appends, with weights. */
+  readonly appendKinds: readonly Kind[];
+  /** Row kinds `W` writes. */
+  readonly rawKinds: readonly Kind[];
+  readonly undefinedKeys: boolean;
+  /** Probability a new term is legacy (no integer epoch). */
+  readonly legacy: number;
+  /** Probability a lifecycle or settlement row states an attempt. */
+  readonly attempts: number;
+  /** Probability of each other-writer command per step. */
+  readonly raw: number;
+  readonly reader: boolean;
+  readonly queries: boolean;
+};
+
+const lifeArgs = [0, 1, 1, 1, 2, 3, 3, 4, 5, 6, 7, 8, 9] as const;
+
+const logTrace = async (random: Random, name: string, profile: Profile): Promise<Trace> => {
+  const text = [`T ${name}`];
+  const expected = [`T ${name}`];
+  const file = memoryEventLogStorage();
+  let tornLength = 0;
+  let appender: EventLogAppender = await createEventLogAppender(file.storage);
+  let reader: ChatLedger = emptyChatLedger;
+  const committed: Row[] = [];
+  let term = 0;
+  let nextSeq = below(random, 10) === 0 ? 1 + below(random, 3) : 0;
+  let termEpoch = random() < profile.legacy ? 0 : 1;
+  let maxTerm = 0;
+  let maxEpoch = termEpoch;
+  let clock = 0;
+  const flag = (): Pick<Row, 'undefinedKeys'> =>
+    profile.undefinedKeys && random() < 0.4 ? { undefinedKeys: true } : {};
+  const body = (kinds: readonly Kind[]): Pick<Row, 'kind' | 'argument' | 'attempt'> => {
+    const kind = pick(random, kinds);
+    const argument =
+      kind === 'L'
+        ? pick(random, lifeArgs)
+        : kind === 'S'
+          ? below(random, 4)
+          : kind === 'U'
+            ? below(random, 3)
+            : kind === 'P' || kind === 'V' || kind === 'M'
+              ? below(random, kind === 'V' ? 16 : 8)
+              : below(random, kind === 'H' ? 5 : 3);
+    const attempt = (kind === 'L' || kind === 'S') && random() < profile.attempts ? 1 + below(random, 3) : 0;
+    return { kind, argument, attempt };
+  };
+  const nextRow = (kinds: readonly Kind[]): Row => {
+    const draw = random();
+    const run = 1 + below(random, 3);
+    if (draw < 0.66 || committed.length === 0) {
+      return { term, seq: nextSeq, run, ...body(kinds), ms: clock, epoch: termEpoch, ...flag() };
+    }
+    if (draw < 0.78) {
+      maxTerm++;
+      const legacy = random() < profile.legacy;
+      // Mostly the claim a writer makes (one above every epoch), sometimes a stale or repeated claim.
+      const epoch = legacy ? 0 : random() < 0.85 ? maxEpoch + 1 : below(random, maxEpoch + 1);
+      return {
+        term: maxTerm,
+        seq: below(random, 8) === 0 ? 1 + below(random, 3) : 0,
+        run,
+        ...body(kinds),
+        ms: clock,
+        epoch,
+      };
+    }
+    if (draw < 0.86) {
+      const { undefinedKeys: _dropped, ...prior } = pick(random, committed);
+      return { ...prior, ...flag() };
+    }
+    if (draw < 0.91) {
+      const prior = pick(random, committed);
+      return { ...prior, argument: prior.kind === 'L' ? (prior.argument + 1) % lifeStates.length : prior.argument + 1 };
+    }
+    if (draw < 0.96) {
+      return { term, seq: nextSeq + 1 + below(random, 2), run, ...body(kinds), ms: clock, epoch: termEpoch };
+    }
+    const old = pick(random, committed);
+    return { term: old.term, seq: nextSeq + below(random, 3), run, ...body(kinds), ms: clock, epoch: old.epoch };
+  };
+  const adopt = (row: Row) => {
+    committed.push(row);
+    term = row.term;
+    termEpoch = row.epoch;
+    nextSeq = row.seq + 1;
+    maxEpoch = Math.max(maxEpoch, row.epoch);
+  };
+  /** Another writer's bytes: it repairs a torn tail first, as its own guarded append would. */
+  const writeRaw = async (bytes: Uint8Array<ArrayBuffer>) => {
+    if (tornLength > 0) {
+      await file.storage.truncate(file.bytes().byteLength - tornLength);
+      tornLength = 0;
+    }
+    await file.storage.append(bytes);
+  };
+  const server = async () => createEventLogAppender(memoryEventLogStorage(new Uint8Array(file.bytes())).storage);
+
+  const steps = 4 + below(random, 28);
+  let fenced = false;
+  // Each step depends on the previous outcome, so the steps run in order.
+  for (let index = 0; index < steps; index++) {
+    clock += below(random, 5);
+    // A fenced writer reopens (D5): usually at once, sometimes after more refused appends.
+    if (random() < (fenced ? 0.6 : 0.08)) {
+      fenced = false;
+      text.push('RELOAD');
+      // oxlint-disable-next-line no-await-in-loop -- the seeded stream is consumed in order.
+      await appender.close();
+      // oxlint-disable-next-line no-await-in-loop -- the seeded stream is consumed in order.
+      appender = await createEventLogAppender(file.storage);
+      // oxlint-disable-next-line no-await-in-loop -- the seeded stream is consumed in order.
+      const anomalies = await appender.anomalies();
+      const count = (kind: string) => anomalies.filter((anomaly) => anomaly.kind === kind).length;
+      expected.push(`O ${count('quarantined')} ${count('order')} ${count('conflict')} ${count('history')}`);
+    }
+    if (random() < profile.raw) {
+      const draw = random();
+      if (draw < 0.6) {
+        const row = nextRow(profile.rawKinds);
+        text.push(`W ${rowLine(row)}`);
+        // oxlint-disable-next-line no-await-in-loop -- the seeded stream is consumed in order.
+        await writeRaw(rowBytes(row));
+        // This writer continues from the other writer's row once it reopens.
+        adopt(row);
+      } else if (draw < 0.8) {
+        text.push('WJ');
+        // oxlint-disable-next-line no-await-in-loop -- the seeded stream is consumed in order.
+        await writeRaw(encoder.encode('junk\n'));
+      } else {
+        text.push('TEAR');
+        // oxlint-disable-next-line no-await-in-loop -- the seeded stream is consumed in order.
+        await file.storage.append(encoder.encode(tornFragment));
+        tornLength += tornFragment.length;
+      }
+    }
+    const row = nextRow(profile.appendKinds);
+    text.push(`E ${rowLine(row)}`);
+    let outcome: string;
+    try {
+      // oxlint-disable-next-line no-await-in-loop -- the seeded stream is consumed in order.
+      const appended = await appender.append(eventOf(row));
+      outcome = appended.appended ? 'appended' : 'duplicate';
+    } catch (error) {
+      outcome = codeOf(error);
+    }
+    expected.push(`A ${index} ${outcome}`);
+    fenced = outcome === 'LOG_FENCED';
+    if (outcome === 'appended') {
+      tornLength = 0;
+      adopt(row);
+    }
+    if (random() < 0.2) {
+      text.push('LEDGER');
+      // oxlint-disable-next-line no-await-in-loop -- the seeded stream is consumed in order.
+      expected.push(...ledgerLines(foldChatLedger(emptyChatLedger, await appender.read())));
+    }
+    if (profile.reader && random() < 0.35) {
+      const draw = random();
+      // oxlint-disable-next-line no-await-in-loop -- the seeded stream is consumed in order.
+      const log = await server();
+      // oxlint-disable-next-line no-await-in-loop -- the seeded stream is consumed in order.
+      const physical = await log.read();
+      const limit = 1 + below(random, 4);
+      let answer: Parameters<typeof foldReadAnswer>[1];
+      if (draw < 0.1) {
+        text.push('READER');
+        reader = emptyChatLedger;
+      }
+      if (draw < 0.55) {
+        text.push(`READ ${limit}`);
+        // oxlint-disable-next-line no-await-in-loop -- the seeded stream is consumed in order.
+        answer = await log.readBatch({ cursor: reader.position.cursor, limit, last: reader.position.last });
+      } else if (draw < 0.85) {
+        const cursor = below(random, physical.length + 2);
+        text.push(`DELIVER ${cursor} ${limit}`);
+        // oxlint-disable-next-line no-await-in-loop -- the seeded stream is consumed in order.
+        answer = await log.readBatch({ cursor, limit });
+      } else {
+        // A version-1 server clamps a cursor past the end instead of refusing it: here the writer's own view,
+        // which lags the file while another writer's rows are unread.
+        // oxlint-disable-next-line no-await-in-loop -- the seeded stream is consumed in order.
+        const view = await appender.read();
+        const requested = below(random, view.length + 3);
+        text.push(`DELIVER1 ${requested} ${limit}`);
+        const at = Math.min(requested, view.length);
+        const events = view.slice(at, at + limit);
+        answer = { status: 'batch', cursor: at, nextCursor: at + events.length, endCursor: view.length, events };
+      }
+      // oxlint-disable-next-line no-await-in-loop -- the seeded stream is consumed in order.
+      await log.close();
+      const folded = foldReadAnswer(reader, answer);
+      expected.push(`D ${folded.kind}${'reason' in folded ? `:${folded.reason}` : ''}`);
+      if (folded.kind === 'folded') {
+        reader = folded.ledger;
+      } else if (folded.kind === 'reset') {
+        reader = emptyChatLedger;
+      }
+      if (random() < 0.4) {
+        text.push('RLEDGER');
+        expected.push(...ledgerLines(reader, 'r'));
+      }
+    }
+  }
+  text.push('LEDGER');
+  // Every appender's view folds to one ledger (host path).
+  const ledger = foldChatLedger(emptyChatLedger, await appender.read());
+  expected.push(...ledgerLines(ledger));
+  if (profile.queries) {
+    for (let query = 0; query < 3; query++) {
+      const settle = { run: 1 + below(random, 4), content: below(random, 4) };
+      text.push(`SETTLE ${settle.run} ${settle.content}`);
+      // oxlint-disable-next-line no-await-in-loop -- the seeded stream is consumed in order.
+      expected.push(`QS ${await hostSettle(file.bytes(), settle)}`);
+    }
+    for (let query = 0; query < 2; query++) {
+      const run = 1 + below(random, 4);
+      const state = below(random, lifeStates.length);
+      text.push(`LIFE ${run} ${state}`);
+      expected.push(
+        `QL ${gateOne(ledger, run, bodyOf({ term: 99, seq: 0, run, kind: 'L', argument: state }) as LogRowBody)}`,
+      );
+    }
+    if (profile.appendKinds.includes('P') || profile.rawKinds.includes('P')) {
+      for (let query = 0; query < 2; query++) {
+        const run = 1 + below(random, 4);
+        const argument = below(random, 8);
+        text.push(`PREP ${run} ${argument}`);
+        expected.push(
+          `QP ${gateOne(ledger, run, bodyOf({ term: 99, seq: 0, run, kind: 'P', argument }) as LogRowBody)}`,
+        );
+      }
+    }
+    const events = await appender.read();
+    const sizes = events.map((event) => sizeOf(event));
+    for (let query = 0; query < 3; query++) {
+      const cursor = below(random, events.length + 3);
+      const limit = 1 + below(random, 6);
+      const maxBytes = random() < 0.4 ? undefined : 100 + below(random, 1200);
+      const lastDraw = random();
+      const prior = cursor > 0 ? events[cursor - 1] : undefined;
+      const other = events.length === 0 ? undefined : pick(random, events);
+      const last = lastDraw < 0.4 ? undefined : lastDraw < 0.8 ? prior : other;
+      const lastKey = last === undefined ? undefined : { leaderEpoch: last.leaderEpoch, sequence: last.sequence };
+      text.push(`BATCH ${cursor} ${limit} ${maxBytes ?? '-'} ${keyText(lastKey)} ${listText(sizes.map(String))}`);
+      // oxlint-disable-next-line no-await-in-loop -- the seeded stream is consumed in order.
+      const answer = await appender.readBatch({ cursor, limit, maxBytes, last: lastKey });
+      expected.push(
+        answer.status === 'batch'
+          ? `QB batch ${answer.cursor} ${answer.nextCursor} ${answer.endCursor} ${listText(answer.events.map((event) => keyText(event)))}`
+          : `QB refused ${answer.reason} ${answer.expected.endCursor} ${keyText(answer.expected.last)}`,
+      );
+    }
+  }
+  if (profile.reader) {
+    // Catch the reader up: a complete reader folds to the ledger of the whole log (T6), up to its cursor.
+    const log = await server();
+    for (let round = 0; round < 64; round++) {
+      text.push('READ 4');
+      // oxlint-disable-next-line no-await-in-loop -- the reader loop is sequential.
+      const answer = await log.readBatch({ cursor: reader.position.cursor, limit: 4, last: reader.position.last });
+      const folded = foldReadAnswer(reader, answer);
+      expected.push(`D ${folded.kind}${'reason' in folded ? `:${folded.reason}` : ''}`);
+      if (folded.kind === 'reset') {
+        reader = emptyChatLedger;
+        continue;
+      }
+      if (folded.kind !== 'folded' || folded.ledger === reader) {
+        break;
+      }
+      reader = folded.ledger;
+    }
+    await log.close();
+    text.push('RLEDGER');
+    expected.push(...ledgerLines(reader, 'r'));
+  }
+  await appender.close();
+  text.push('X');
+  expected.push('X');
+  return { text, expected };
+};
+
+type MergeRow = Omit<Row, 'kind'> & { kind: 'O' | 'W' | 'C' | 'K' };
+const segmentBytes = (rows: readonly MergeRow[]): Uint8Array<ArrayBuffer> =>
+  encoder.encode(rows.map((row) => `${JSON.stringify(eventOf(row))}\n`).join(''));
+
+/** Devices with skewed clocks, segments read twice, and terms copied, sometimes altered, into other segments. */
+const mergeSegmentsOf = (random: Random, duplicates: boolean): Array<{ device: number; rows: MergeRow[] }> => {
+  const devices = 1 + below(random, 3);
+  let nextTerm = 0;
+  const segments = Array.from({ length: devices }, (_unused, device) => {
+    const rows: MergeRow[] = [];
+    let clock = below(random, 60);
+    for (let index = 0, terms = 1 + below(random, 3); index < terms; index++) {
+      const term = nextTerm++;
+      clock = random() < 0.3 ? Math.max(0, clock - below(random, 60)) : clock + below(random, 20);
+      for (let seq = 0, count = 1 + below(random, 3); seq < count; seq++) {
+        rows.push({ term, seq, run: 1, kind: 'O', argument: below(random, 3), ms: clock, epoch: term + 1, attempt: 0 });
+        clock += below(random, 4);
+      }
+    }
+    return { device, rows };
+  });
+  for (let copy = 0, copies = duplicates ? 1 + below(random, 3) : 1; copy < copies; copy++) {
+    if (random() < (duplicates ? 0.6 : 0.3)) {
+      const source = pick(random, segments);
+      segments.push({ device: random() < 0.5 ? source.device : devices, rows: [...source.rows] });
+    }
+    if (random() < (duplicates ? 0.6 : 0.35) && segments.length > 1) {
+      const [from, to] = [pick(random, segments), pick(random, segments)];
+      const { term } = pick(random, from.rows);
+      const copied = from.rows.filter((row) => row.term === term).slice(0, 1 + below(random, 3));
+      to.rows.push(
+        ...copied.map((row) =>
+          random() < 0.2
+            ? { ...row, argument: row.argument + 7 }
+            : { ...row, ms: Math.max(0, row.ms + below(random, 3) - 1) },
+        ),
+      );
+    }
+  }
+  for (let index = segments.length - 1; index > 0; index--) {
+    const other = below(random, index + 1);
+    [segments[index], segments[other]] = [segments[other]!, segments[index]!];
+  }
+  return segments;
+};
+
+/**
+ * Devices whose terms start in the same millisecond (`ties`: the order breaks the tie on the writer, never a segment
+ * id), or a device whose id changed and left its old file, a prefix of its new one, beside it (`overlap`).
+ */
+const layoutSegmentsOf = (random: Random, layout: 'ties' | 'overlap'): Array<{ device: number; rows: MergeRow[] }> => {
+  const devices = 2 + below(random, 2);
+  const at = 10 + below(random, 30);
+  /* Device ids drawn apart from term order, so a tie broken on the id and one broken on the writer disagree. */
+  const ids = Array.from({ length: devices }, (_unused, index) => index + 1);
+  for (let index = ids.length - 1; index > 0; index--) {
+    const other = below(random, index + 1);
+    [ids[index], ids[other]] = [ids[other]!, ids[index]!];
+  }
+  let nextTerm = 0;
+  const segments = Array.from({ length: devices }, (_unused, device) => {
+    const rows: MergeRow[] = [];
+    let clock = layout === 'ties' ? at : below(random, 60);
+    for (let index = 0, terms = 1 + below(random, 3); index < terms; index++) {
+      const term = nextTerm++;
+      if (index > 0) {
+        clock =
+          random() < (layout === 'overlap' ? 0.6 : 0.3)
+            ? Math.max(0, clock - below(random, 60))
+            : clock + below(random, 3);
+      }
+      for (let seq = 0, count = 1 + below(random, 3); seq < count; seq++) {
+        rows.push({ term, seq, run: 1, kind: 'O', argument: below(random, 3), ms: clock, epoch: term + 1, attempt: 0 });
+      }
+    }
+    return { device: ids[device]!, rows };
+  });
+  if (layout === 'overlap') {
+    const source = pick(random, segments);
+    const kept = 1 + below(random, source.rows.length);
+    /* The old file's id may sort before or after the new one's. */
+    segments.push({ device: random() < 0.5 ? 0 : devices + 1, rows: source.rows.slice(0, kept) });
+  }
+  for (let index = segments.length - 1; index > 0; index--) {
+    const other = below(random, index + 1);
+    [segments[index], segments[other]] = [segments[other]!, segments[index]!];
+  }
+  return segments;
+};
+
+/**
+ * Devices taking turns on one chat with skewed clocks, each stamping its rows after every row it has read (the
+ * clock `stampAfterRead` keeps when no term is dated past its bound): a device that writes a turn first reads every row
+ * written before it.
+ */
+const skewedSegmentsOf = (random: Random): Array<{ device: number; rows: MergeRow[] }> => {
+  const devices = 2 + below(random, 2);
+  const skew = Array.from({ length: devices }, () => below(random, 120));
+  const files: MergeRow[][] = Array.from({ length: devices }, () => []);
+  let newest = -1;
+  for (let turn = 0, turns = 2 + below(random, 4); turn < turns; turn++) {
+    const device = below(random, devices);
+    const clock = skew[device]! + turn * below(random, 5);
+    const at = Math.max(clock, newest + 1);
+    const term = turn;
+    for (let seq = 0, count = 1 + below(random, 3); seq < count; seq++) {
+      files[device]!.push({
+        term,
+        seq,
+        run: 1,
+        kind: 'O',
+        argument: below(random, 3),
+        ms: at + seq,
+        epoch: term + 1,
+        attempt: 0,
+      });
+      newest = Math.max(newest, at + seq);
+    }
+  }
+  return files.flatMap((rows, device) => (rows.length === 0 ? [] : [{ device, rows }]));
+};
+
+/**
+ * Devices that each say people's turns as runs settle (`W`, round 16): the same turn, said under different terms by
+ * different devices, between interrupt rows, and sometimes the run's own row of it (`C`), before or after a copy. The
+ * history folds every copy of one turn, and the run's own row after a copy, as one message. With `rewinds`, rewinds
+ * that retain nothing (`K`, round 17) fall between them, over two turns and two runs: a run's turn taken from a copy and
+ * rewound stays removed whatever row of that run's turn merges later, and another run's row of it is the message again.
+ */
+const wordsSegmentsOf = (random: Random, rewinds = false): Array<{ device: number; rows: MergeRow[] }> => {
+  const devices = 2 + below(random, 2);
+  let nextTerm = 0;
+  return Array.from({ length: devices }, (_unused, device) => {
+    const rows: MergeRow[] = [];
+    let clock = below(random, 60);
+    for (let index = 0, terms = 1 + below(random, 3); index < terms; index++) {
+      const term = nextTerm++;
+      clock += below(random, 20);
+      for (let seq = 0, count = 1 + below(random, 3); seq < count; seq++) {
+        const draw = random();
+        const kind = rewinds
+          ? draw < 0.4
+            ? 'W'
+            : draw < 0.6
+              ? 'C'
+              : draw < 0.8
+                ? 'K'
+                : 'O'
+          : draw < 0.5
+            ? 'W'
+            : draw < 0.65
+              ? 'C'
+              : 'O';
+        const argument = kind === 'K' ? 0 : below(random, rewinds ? 2 : 4);
+        /* With rewinds, a later run's row of a turn sometimes re-admits it, as a Retry does. */
+        const run = rewinds ? 1 + below(random, 2) : 1;
+        rows.push({ term, seq, run, kind, argument, ms: clock, epoch: term + 1, attempt: 0 });
+        clock += below(random, 4);
+      }
+    }
+    return { device, rows };
+  });
+};
+
+/** `foreignClockAheadMilliseconds`, in the model's milliseconds. */
+const clockAhead = 100;
+
+/**
+ * Devices taking turns with skewed clocks, one of them sometimes far ahead (a future-dated row) and sometimes put right
+ * again (its next term clamped up to the future one), each stamping by the bounded hybrid clock (`stampAfterRead`, round 16): after the newest start among the terms it keeps, never following
+ * one dated more than {@link clockAhead} past its own wall clock. Readers at several walls fold `mergeUpTo`.
+ */
+const boundedSegmentsOf = (
+  random: Random,
+): Readonly<{ segments: Array<{ device: number; rows: MergeRow[] }>; bounds: number[] }> => {
+  const devices = 2 + below(random, 2);
+  const skew = Array.from({ length: devices }, () => 200 + below(random, 60));
+  const fast = random() < 0.7 ? below(random, devices) : undefined;
+  if (fast !== undefined) {
+    skew[fast] = 600 + below(random, 3000);
+  }
+  const files: MergeRow[][] = Array.from({ length: devices }, () => []);
+  const starts: number[] = [];
+  const walls: number[] = [];
+  for (let turn = 0, turns = 2 + below(random, 5); turn < turns; turn++) {
+    const device = below(random, devices);
+    /* The fast clock is sometimes put right: its next term starts before its last, and the merge clamps it there. */
+    if (device === fast && random() < 0.4) {
+      skew[device] = 200 + below(random, 60);
+    }
+    const wall = skew[device]! + turn * below(random, 5);
+    walls.push(wall);
+    const kept = starts.filter((start) => start <= wall + clockAhead);
+    const at = Math.max(wall, kept.length === 0 ? 0 : Math.max(...kept) + 1);
+    starts.push(at);
+    for (let seq = 0, count = 1 + below(random, 3); seq < count; seq++) {
+      files[device]!.push({
+        term: turn,
+        seq,
+        run: 1,
+        kind: 'O',
+        argument: below(random, 3),
+        ms: at + seq,
+        epoch: turn + 1,
+        attempt: 0,
+      });
+    }
+  }
+  const bounds = [...new Set([...walls.map((wall) => wall + clockAhead), Math.min(...skew) + clockAhead])].toSorted(
+    (left, right) => left - right,
+  );
+  return { segments: files.flatMap((rows, device) => (rows.length === 0 ? [] : [{ device, rows }])), bounds };
+};
+
+/** The segments of every merge shape but `bounded`, which also draws the bounds its readers fold at. */
+const unboundedSegmentsOf = (
+  random: Random,
+  layout: 'ties' | 'overlap' | 'skewed' | 'words' | 'rewinds' | undefined,
+  duplicates: boolean,
+): Array<{ device: number; rows: MergeRow[] }> => {
+  if (layout === undefined) {
+    return mergeSegmentsOf(random, duplicates);
+  }
+  if (layout === 'skewed') {
+    return skewedSegmentsOf(random);
+  }
+  if (layout === 'words' || layout === 'rewinds') {
+    return wordsSegmentsOf(random, layout === 'rewinds');
+  }
+  return layoutSegmentsOf(random, layout);
+};
+
+const mergeTrace = (
+  random: Random,
+  name: string,
+  shape: Readonly<{ duplicates: boolean; layout?: 'ties' | 'overlap' | 'skewed' | 'words' | 'rewinds' | 'bounded' }>,
+): Trace => {
+  const { duplicates, layout } = shape;
+  const bounded = layout === 'bounded' ? boundedSegmentsOf(random) : undefined;
+  const segments = bounded?.segments ?? (layout === 'bounded' ? [] : unboundedSegmentsOf(random, layout, duplicates));
+  const text = [`T ${name}`];
+  for (const segment of segments) {
+    text.push(`SEG ${segment.device}`, ...segment.rows.map((row) => `ROW ${rowLine(row)}`));
+  }
+  const conflicts: string[] = [];
+  const merged = mergeLogSegments(
+    segments.map((segment) => ({ deviceId: `d${segment.device}`, bytes: segmentBytes(segment.rows) })),
+    {
+      onConflict: ({ key, keptDeviceId, droppedDeviceId }) => {
+        conflicts.push(`${keyText(key)}:${keptDeviceId.slice(1)}:${droppedDeviceId.slice(1)}`);
+      },
+    },
+  );
+  text.push('MERGE');
+  const expected = [
+    `T ${name}`,
+    `M ${merged.map((event) => mergedText(event)).join(',')}`,
+    `MC ${listText(conflicts)}`,
+  ];
+  for (const bound of bounded?.bounds ?? []) {
+    const parsed = parseLogSegments(
+      segments.map((segment) => ({ deviceId: `d${segment.device}`, bytes: segmentBytes(segment.rows) })),
+    );
+    text.push(`MERGEB ${bound}`);
+    expected.push(`MB ${listText(mergeSegmentsUpTo(parsed, base + bound).rows.map((event) => keyText(event)))}`);
+  }
+  if (layout === 'words' || layout === 'rewinds') {
+    const history = createEventLogReducer('history');
+    for (const event of merged) {
+      history.replay(event);
+    }
+    const intact = history.historyIntact();
+    text.push('MH');
+    expected.push(`MH ${intact ? 1 : 0} ${intact ? listText(history.messages().map((message) => message.id)) : '-'}`);
+  }
+  text.push('X');
+  expected.push('X');
+  return { text, expected };
+};
+
+/** The three legality tables, every cell (T8). */
+const tablesTrace = (): Trace => {
+  const expected = ['T tables'];
+  for (const [state, row] of Object.entries(operationTable.table)) {
+    for (const [operation, code] of Object.entries(row)) {
+      expected.push(`TO ${state} ${operation} ${code}`);
+    }
+  }
+  for (const [state, row] of Object.entries(settlementTable.table)) {
+    for (const [operation, code] of Object.entries(row)) {
+      expected.push(`TS ${state} ${operation} ${code}`);
+    }
+  }
+  for (const [state, row] of Object.entries(lifecycleTable.table)) {
+    for (const [operation, code] of Object.entries(row)) {
+      expected.push(`TL ${state} ${operation} ${code}`);
+    }
+  }
+  expected.push('X');
+  return { text: ['T tables', 'TABLES', 'X'], expected };
+};
+
+const interruptResolutionTrace = (): Trace => {
+  const rows: Row[] = [
+    { term: 0, seq: 0, run: 1, kind: 'L', argument: 0, ms: 0, epoch: 1, attempt: 0 },
+    { term: 0, seq: 1, run: 1, kind: 'O', argument: 1, ms: 1, epoch: 1, attempt: 0 },
+    { term: 0, seq: 2, run: 1, kind: 'R', argument: 1, ms: 2, epoch: 1, attempt: 0 },
+  ];
+  const ledger = foldChatLedger(
+    emptyChatLedger,
+    rows.map((row) => eventOf(row)),
+  );
+  return {
+    text: ['T interrupt-resolved-twice', ...rows.map((row) => `E ${rowLine(row)}`), 'RESOLVE 1 1', 'X'],
+    expected: [
+      'T interrupt-resolved-twice',
+      'A 0 appended',
+      'A 1 appended',
+      'A 2 appended',
+      `QR ${gateOne(ledger, 1, bodyOf(rows[2]!) as LogRowBody)}`,
+      'X',
+    ],
+  };
+};
+
+/** The host's admission of a start, a Resume and an approval across devices, every input (T10, round 17). */
+const admissionTrace = (): Trace => {
+  const text = ['T admissions'];
+  const expected = ['T admissions'];
+  for (const verb of ['start', 'resume', 'approve'] as const) {
+    for (const takenOver of [false, true]) {
+      for (const foreignWrote of [false, true]) {
+        text.push(`ADMIT ${verb} ${takenOver ? 1 : 0} ${foreignWrote ? 1 : 0}`);
+        const admitted = termAdmission(verb, { takenOver, foreignWrote });
+        expected.push(`QA ${admitted}`);
+        /* Round 18: the slot the incarnation holds is no input to the term; both are asked to show it changes nothing. */
+        for (const slotHeld of [0, 1]) {
+          text.push(`TERMOF ${admitted} ${slotHeld}`);
+          expected.push(`QT ${rowsTermOf(admitted, 'held', () => 'fresh')}`);
+        }
+      }
+    }
+  }
+  text.push('X');
+  expected.push('X');
+  return { text, expected };
+};
+
+/** One batch of a run's rows for the term and carry traces: a lone heartbeat, or a row that is none. */
+const batchOf = (run: string, heartbeat: string): ChatRunRow[] => [
+  {
+    runId: `r${run}`,
+    body: (heartbeat === '1' ? { type: 'run.heartbeat' } : { type: 'run.lifecycle', state: 'running' }) as LogRowBody,
+  },
+];
+
+/**
+ * A chat's terms on this host over every sequence of up to four steps (T12, rounds 19 and 20): an admitted command
+ * proposing a term for its run's rows, a batch of a run's rows or a heartbeat written, a command answered applied or
+ * not, and a batch's write split around the steps that run off the chat's chain while it is written (`b` begins it,
+ * `e` ends it). Each trace says the terms the writes went under, the chat's term after, and the term a heartbeat would
+ * write under.
+ */
+const termsTrace = (): Trace => {
+  const text = ['T terms'];
+  const expected = ['T terms'];
+  const steps = ['p1.1.2', 'p2.2.3', 'w1.0', 'w1.1', 'w2.0', 'w3.0', 'a1.0', 'a1.1', 'a2.0'];
+  /* Every sequence of up to three steps, and the four-step ones that open with two proposals (two commands racing). */
+  const sequences: string[][] = [[]];
+  for (let length = 1; length <= 4; length++) {
+    for (const prefix of sequences.filter((sequence) => sequence.length === length - 1)) {
+      if (length < 4 || (prefix[0]?.startsWith('p') === true && prefix[1]?.startsWith('p') === true)) {
+        sequences.push(...steps.map((step) => [...prefix, step]));
+      }
+    }
+  }
+  /* Round 20: a write begun with or without a proposal for its run, while proposals are made and withdrawn. */
+  const beside = ['p1.1.2', 'p2.1.3', 'a1.0', 'a2.0', 'a1.1'];
+  for (const opening of [[], ['p1.1.2'], ['p2.2.3'], ['p1.1.2', 'p2.1.3']]) {
+    for (const begin of ['b1.0', 'b1.1', 'b2.0']) {
+      for (const first of [undefined, ...beside]) {
+        for (const second of first === undefined ? [undefined] : [undefined, ...beside]) {
+          const middle = [first, second].filter((step) => step !== undefined);
+          sequences.push([...opening, begin, ...middle, 'e', 'w1.0']);
+        }
+      }
+    }
+  }
+  for (const wroteFirst of [0, 1]) {
+    for (const sequence of sequences) {
+      text.push(`TERMS ${String(wroteFirst)} ${sequence.length === 0 ? '-' : sequence.join(',')}`);
+      let terms: ChatTerms = {};
+      let wrote = wroteFirst === 1 ? 't1' : undefined;
+      let writing: TermWrite | undefined;
+      const written: string[] = [];
+      for (const step of sequence) {
+        const [a, b, c] = step.slice(1).split('.');
+        if (step.startsWith('p')) {
+          terms = {
+            ...terms,
+            proposed: [
+              ...(terms.proposed ?? []),
+              { replaces: 't1', leaderEpoch: `t${c!}`, admission: Number(a), runId: `r${b!}` },
+            ],
+          };
+        } else if (step.startsWith('w') || step.startsWith('b')) {
+          writing = termWriteOf(terms, 't1', batchOf(a!, b!));
+          written.push(writing.leaderEpoch.slice(1));
+        } else if (step !== 'e') {
+          terms = termsAfterAnswer(terms, Number(a), b === '1');
+        }
+        /* A `w` ends at once; a `b` ends at its `e`. */
+        if (writing !== undefined && !step.startsWith('b') && (step === 'e' || step.startsWith('w'))) {
+          terms = termsAfterWrite(terms, writing);
+          wrote = writing.leaderEpoch;
+          writing = undefined;
+        }
+      }
+      const term = chatTermOf(terms, 't1');
+      expected.push(
+        `QM ${written.length === 0 ? '-' : written.join(',')} ${term.slice(1)} ${wrote === term ? term.slice(1) : '-'}`,
+      );
+    }
+  }
+  text.push('X');
+  expected.push('X');
+  return { text, expected };
+};
+
+/**
+ * The one admission of a start, a Resume and an approval past other devices' runs (T13, round 20): every verb and fact,
+ * over foreign runs live or abandoned, said or not, with or without known words.
+ */
+const crossAdmissionTrace = (): Trace => {
+  const text = ['T cross-admissions'];
+  const expected = ['T cross-admissions'];
+  const runs = ['1:0:0:1', '1:1:0:1', '1:1:1:1', '1:1:0:0'];
+  const lists: string[][] = [[], ...runs.map((run) => [run]), ['1:1:0:1', '2:1:0:1'], ['1:1:0:1', '2:0:0:1']];
+  for (const verb of ['start', 'resume', 'approve'] as const) {
+    for (const takenOver of [false, true]) {
+      for (const foreignWrote of [false, true]) {
+        for (const list of lists) {
+          text.push(
+            `XADMIT ${verb} ${takenOver ? 1 : 0} ${foreignWrote ? 1 : 0} ${list.length === 0 ? '-' : list.join(',')}`,
+          );
+          const foreign = list.map((run): PassedRun => {
+            const [runId, abandoned, said, words] = run.split(':');
+            return { runId: runId!, abandoned: abandoned === '1', said: said === '1', words: words === '1' };
+          });
+          const admitted = commandAdmission(verb, { takenOver, foreignWrote, foreign });
+          expected.push(
+            'refused' in admitted
+              ? `QX ${admitted.refused === 'RUN_TAKEN_OVER' ? 'taken-over' : 'held'}`
+              : `QX ${admitted.admitted} ${admitted.says.length === 0 ? '-' : admitted.says.join(',')}`,
+          );
+        }
+      }
+    }
+  }
+  text.push('X');
+  expected.push('X');
+  return { text, expected };
+};
+
+/**
+ * What admitted commands' runs' first batches carry over every sequence of up to three steps (T13, rounds 20 and 22):
+ * an admission carrying turns for its run, a batch of a run's rows or a heartbeat written, a row settling a run, an
+ * admission answered applied or not. Each trace says the turns each write said.
+ */
+const carryTrace = (): Trace => {
+  const text = ['T carried'];
+  const expected = ['T carried'];
+  const steps = ['c1.1.5+6', 'c2.1.7', 'c3.2.-', 'w1.0', 'w1.1', 'w2.0', 'h1', 's1', 's2', 'a1.0', 'a1.1', 'a2.0'];
+  const sequences: string[][] = [[]];
+  for (let length = 1; length <= 3; length++) {
+    for (const prefix of sequences.filter((sequence) => sequence.length === length - 1)) {
+      sequences.push(...steps.map((step) => [...prefix, step]));
+    }
+  }
+  for (const sequence of sequences) {
+    text.push(`CARRY ${sequence.length === 0 ? '-' : sequence.join(',')}`);
+    let carried: readonly CarriedTurns[] = [];
+    const said: string[] = [];
+    for (const step of sequence) {
+      const [a, b, c] = step.slice(1).split('.');
+      if (step.startsWith('c')) {
+        const says = c === '-' ? [] : c!.split('+');
+        carried = [
+          ...carried,
+          {
+            admission: Number(a),
+            runId: `r${b!}`,
+            says: says.map((run): ChatRunRow => ({ runId: run, body: { type: 'run.heartbeat' } })),
+          },
+        ];
+      } else if (step.startsWith('w') || step.startsWith('h')) {
+        /* `h`: a batch written while the history leaves a call open everywhere in it (round 21): no place. */
+        const held = step.startsWith('h');
+        const batch = batchOf(a!, held ? '0' : b!);
+        const entry = carriedBy(carried, batch);
+        const place =
+          entry === undefined
+            ? undefined
+            : carriedPlace(
+                held ? [planMessage('c1', 0)] : [],
+                batch.map((row) => row.body),
+              );
+        for (const row of batch) {
+          carried = carriedAfterRow(carried, place === undefined ? undefined : entry, {
+            runId: row.runId,
+            ...row.body,
+          });
+        }
+        said.push(
+          place === undefined || entry!.says.length === 0 ? '-' : entry!.says.map((row) => row.runId).join('+'),
+        );
+      } else if (step.startsWith('s')) {
+        /* Round 22: a row settles the run, as a Stop's does while the approved call is open. */
+        carried = carriedAfterRow(carried, undefined, { runId: `r${a!}`, type: 'run.lifecycle', state: 'cancelled' });
+      } else {
+        carried = carriedAfterAnswer(carried, Number(a), b === '1');
+      }
+    }
+    expected.push(`QC ${said.length === 0 ? '-' : said.join(',')}`);
+  }
+  text.push('X');
+  expected.push('X');
+  return { text, expected };
+};
+
+/**
+ * One history message of a `PLAN` line (round 21): `c<calls, + apart|->` an assistant turn calling those tools, `o<call>`
+ * a tool's output, `s<id>` a person's words; `at` keeps the ids of calls and outputs apart.
+ */
+const planMessage = (token: string, at: number): ProviderMessage => {
+  const rest = token.slice(1);
+  if (token.startsWith('c')) {
+    const calls = rest === '-' ? [] : rest.split('+');
+    return {
+      id: `m${String(at)}`,
+      role: 'assistant',
+      content:
+        calls.length === 0
+          ? [{ type: 'text', text: 'reply' }]
+          : calls.map((call) => ({ type: 'toolCall', id: `x${call}`, name: 'read_file', arguments: {} })),
+      metadata: { stopReason: calls.length === 0 ? 'stop' : 'toolUse' },
+    };
+  }
+  if (token.startsWith('o')) {
+    return {
+      id: `o${String(at)}`,
+      role: 'tool-output',
+      toolCallId: `x${rest}`,
+      toolName: 'read_file',
+      content: 'ok',
+      isError: false,
+    };
+  }
+  return { id: `s${rest}`, role: 'user', content: 'words' };
+};
+
+/**
+ * Where a batch's carried turns go and the history it leaves (T14, round 21; `carriedPlace`, `openToolCalls`,
+ * `historyWellFormed`): histories with calls open, answered, or followed by another message, and batches of outputs,
+ * rewinds, turn commits (round 24: `p<keep>`, the one row that keeps what it names and says the run's turn) and other
+ * rows, each with no, one or two carried turns, and each with its run's person's turn still ahead past it or not (round
+ * 23).
+ */
+const planTrace = (): Trace => {
+  const text = ['T plans'];
+  const expected = ['T plans'];
+  const histories = ['-', 's0', 's0,c1', 's0,c1+2', 's0,c1+2,o1', 's0,c1,o1', 's0,c1,s5,c-', 's0,c-', 's0,c1,o2'];
+  const batches = [
+    '-',
+    'l',
+    'l,s7',
+    'o1',
+    'o1,o2',
+    'l,o1,s7',
+    'l,k1',
+    'l,k1,s7',
+    'l,k1,o1',
+    'c3',
+    'c3,o3',
+    'l,o2,o1',
+    's7,k0',
+    /* Round 24: a turn's commit keeps what it names and says the turn at once, one row. */
+    'p1',
+    'l,p2',
+    'l,k1,p1,c3',
+  ];
+  for (const history of histories) {
+    for (const batch of batches) {
+      for (const [says, ahead] of ['-', '9', '8+9'].flatMap((said) => [
+        [said, false] as const,
+        [said, true] as const,
+      ])) {
+        /* `PLANT` (round 23): the batch's run says its person's turn next, past the batch. */
+        text.push(`${ahead ? 'PLANT' : 'PLAN'} ${history} ${says} ${batch}`);
+        const before = history === '-' ? [] : history.split(',').map((token, at) => planMessage(token, at));
+        /* The batch as it is built: a rewind names the messages it keeps then, before anything is carried. */
+        let building: readonly ProviderMessage[] = before;
+        const bodies = (batch === '-' ? [] : batch.split(',')).map((token, at): LogRowBody => {
+          const kept = building.slice(0, Number(token.slice(1))).map((message) => message.id);
+          const body: LogRowBody = token.startsWith('k')
+            ? { type: 'history.rewound', trigger: 'retry', retainedMessageIds: kept }
+            : token.startsWith('p')
+              ? {
+                  type: 'turn.history-projection-committed',
+                  retainedMessageIds: kept,
+                  message: { id: 's1000', role: 'user', content: 'words' },
+                  context: { version: 1, systemPrompt: '', initialMessages: [], postCompactionMessages: [] },
+                }
+              : token === 'l'
+                ? { type: 'run.lifecycle', state: 'running' }
+                : { type: 'message.appended', message: planMessage(token, 100 + at) };
+          building = historyAfter(building, body);
+          return body;
+        });
+        const carried = (says === '-' ? [] : says.split('+')).map(
+          (id): LogRowBody => ({
+            type: 'message.appended',
+            message: { id: `s${id}`, role: 'user', content: 'carried' },
+          }),
+        );
+        const place = carriedPlace(before, bodies, ahead);
+        const planned = place === undefined ? bodies : [...bodies.slice(0, place), ...carried, ...bodies.slice(place)];
+        let after: readonly ProviderMessage[] = before;
+        for (const body of planned) {
+          after = historyAfter(after, body);
+        }
+        const open = openToolCalls(before).map((call) => call.toolCallId.slice(1));
+        const survive =
+          place !== undefined &&
+          carried.every((body) => body.type === 'message.appended' && after.some((m) => m.id === body.message.id));
+        expected.push(
+          `QW ${open.length === 0 ? '-' : open.join(',')} ${place === undefined ? '-' : String(place)} ${
+            historyWellFormed(after) ? 1 : 0
+          } ${survive ? 1 : 0}`,
+        );
+      }
+    }
+  }
+  text.push('X');
+  expected.push('X');
+  return { text, expected };
+};
+
+/**
+ * A Resume's batch over a history whose last message it rewinds or keeps (T14, round 21; `openToolCalls`): it closes the
+ * calls the history it keeps leaves open, and only those, then says a reminder, and the history after is well formed.
+ */
+const resumeBatchTrace = (): Trace => {
+  const text = ['T resume-batches'];
+  const expected = ['T resume-batches'];
+  const histories = ['-', 's0', 's0,c1', 's0,c1+2', 's0,c1+2,o1', 's0,c1,o1', 's0,c1,s5,c-', 's0,c-', 's0,c1,c2'];
+  for (const history of histories) {
+    for (const cut of [false, true]) {
+      text.push(`RESUMEB ${history} ${cut ? 1 : 0}`);
+      const before = history === '-' ? [] : history.split(',').map((token, at) => planMessage(token, at));
+      const kept = cut ? before.slice(0, -1) : before;
+      const closed = openToolCalls(kept);
+      const after = [
+        ...kept,
+        ...closed.map(
+          (call, at): ProviderMessage => ({
+            id: `r${String(at)}`,
+            role: 'tool-output',
+            toolCallId: call.toolCallId,
+            toolName: call.toolName,
+            content: 'disconnected',
+            isError: true,
+          }),
+        ),
+        ...(closed.length === 0 ? [] : [{ id: 's7', role: 'user', content: 'reminder' } satisfies ProviderMessage]),
+      ];
+      expected.push(
+        `QZ ${listText(closed.map((call) => call.toolCallId.slice(1)))} ${historyWellFormed(after) ? 1 : 0}`,
+      );
+    }
+  }
+  text.push('X');
+  expected.push('X');
+  return { text, expected };
+};
+
+/**
+ * The merged rows after one device appends a row (T14, round 21; the appender's incremental append): a row under the
+ * merge's latest term extends it, and one under an older term, or a newer term written earlier, lands where a fresh
+ * merge of the segments puts it.
+ */
+const appendMergeTrace = (): Trace[] => {
+  const row = (term: number, seq: number, ms: number): MergeRow => ({
+    term,
+    seq,
+    run: 1,
+    kind: 'O',
+    argument: 0,
+    ms,
+    epoch: term + 1,
+    attempt: 0,
+  });
+  const cases: ReadonlyArray<{ segments: Array<{ device: number; rows: MergeRow[] }>; device: number; row: MergeRow }> =
+    [
+      {
+        segments: [
+          { device: 0, rows: [row(1, 0, 10)] },
+          { device: 1, rows: [row(2, 0, 20)] },
+        ],
+        device: 0,
+        row: row(1, 1, 30),
+      },
+      {
+        segments: [
+          { device: 0, rows: [row(1, 0, 10)] },
+          { device: 1, rows: [row(2, 0, 20)] },
+        ],
+        device: 1,
+        row: row(2, 1, 30),
+      },
+      {
+        segments: [
+          { device: 0, rows: [row(1, 0, 10)] },
+          { device: 1, rows: [row(2, 0, 20)] },
+        ],
+        device: 0,
+        row: row(3, 0, 40),
+      },
+      {
+        segments: [
+          { device: 0, rows: [row(1, 0, 10)] },
+          { device: 1, rows: [row(3, 0, 20)] },
+        ],
+        device: 0,
+        row: row(2, 0, 15),
+      },
+      {
+        segments: [
+          { device: 0, rows: [row(1, 0, 10), row(4, 0, 40)] },
+          { device: 1, rows: [row(2, 0, 20)] },
+          { device: 2, rows: [row(3, 0, 30)] },
+        ],
+        device: 1,
+        row: row(2, 1, 50),
+      },
+      { segments: [{ device: 0, rows: [row(1, 0, 10)] }], device: 0, row: row(1, 1, 11) },
+    ];
+  return cases.map(({ segments, device, row: appended }, index) => {
+    const name = `append-merge-${String(index)}`;
+    const text = [`T ${name}`];
+    for (const segment of segments) {
+      text.push(`SEG ${segment.device}`, ...segment.rows.map((each) => `ROW ${rowLine(each)}`));
+    }
+    text.push(`APPENDM ${device} ${rowLine(appended)}`, 'X');
+    const merged = mergeLogSegments(
+      segments.map((segment) => ({
+        deviceId: `d${segment.device}`,
+        bytes: segmentBytes(segment.device === device ? [...segment.rows, appended] : segment.rows),
+      })),
+    );
+    return { text, expected: [`T ${name}`, `MA ${listText(merged.map((event) => keyText(event)))}`, 'X'] };
+  });
+};
+
+/**
+ * The merged rows the appender folds after a refresh reads a row another segment brought (T14, round 26; the
+ * appender's `extendsMerged`): a later segment's smaller copy of a row in the middle of a term replaces it, so the
+ * fold is the whole new merge, as it is when the row extends the merge's last term or merges before a later term.
+ */
+const refreshMergeTrace = (): Trace[] => {
+  const row = (term: number, seq: number, ms: number): MergeRow => ({
+    term,
+    seq,
+    run: 1,
+    kind: 'O',
+    argument: 0,
+    ms,
+    epoch: term + 1,
+    attempt: 0,
+  });
+  const held = [
+    { device: 0, rows: [row(1, 0, 10), { ...row(1, 1, 11), argument: 5 }, row(1, 2, 12)] },
+    { device: 1, rows: [row(2, 0, 20)] },
+  ];
+  const cases: ReadonlyArray<{ segments: Array<{ device: number; rows: MergeRow[] }>; device: number; row: MergeRow }> =
+    [
+      /* A new device's smaller copy of a row mid-term: neither the term's first row nor the last one held. */
+      { segments: held, device: 2, row: row(1, 1, 11) },
+      /* A larger copy: the held row stays. */
+      { segments: held, device: 2, row: { ...row(1, 1, 11), argument: 9 } },
+      /* A row that extends the merge's last term. */
+      { segments: held, device: 1, row: row(2, 1, 21) },
+      /* A row under an older term, which merges before the later term. */
+      { segments: held, device: 0, row: row(1, 3, 30) },
+    ];
+  return cases.map(({ segments, device, row: brought }, index) => {
+    const name = `refresh-merge-${String(index)}`;
+    const text = [`T ${name}`];
+    for (const segment of segments) {
+      text.push(`SEG ${segment.device}`, ...segment.rows.map((each) => `ROW ${rowLine(each)}`));
+    }
+    text.push(`REFRESHM ${device} ${rowLine(brought)}`, 'X');
+    const next = segments.some((segment) => segment.device === device)
+      ? segments.map((segment) => (segment.device === device ? { device, rows: [...segment.rows, brought] } : segment))
+      : [...segments, { device, rows: [brought] }];
+    const merged = mergeLogSegments(
+      next.map((segment) => ({ deviceId: `d${segment.device}`, bytes: segmentBytes(segment.rows) })),
+    );
+    return { text, expected: [`T ${name}`, `MR ${merged.map((event) => mergedText(event)).join(',')}`, 'X'] };
+  });
+};
+
+/**
+ * Where another device's run stands on this device, over every case of the evidence rule (T11, rounds 18 and 19): when
+ * its segment last changed here, this device's clock (behind that included), the quiet its pulls found (or none), a
+ * takeover, and whether this device can pull the chat at all (round 27).
+ */
+const standingTrace = (): Trace => {
+  const text = ['T standings'];
+  const expected = ['T standings'];
+  const bound = 600;
+  const ask = 120;
+  for (const changed of [0, 1000]) {
+    for (const now of [changed - 1, changed, changed + ask, changed + ask + 1, changed + 7200].filter(
+      (at) => at >= 0,
+    )) {
+      for (const quiet of [undefined, 0, bound, bound + 1, 7200]) {
+        for (const takenOver of [false, true]) {
+          for (const pulls of [true, false]) {
+            text.push(`STAND ${bound} ${ask} ${changed} ${now} ${quiet ?? '-'} ${takenOver ? 1 : 0} ${pulls ? 1 : 0}`);
+            const standing = foreignRunStanding(
+              { observedAt: changed, pulledQuiet: quiet, ...(takenOver ? { takenOver: true } : {}) },
+              now,
+              { bound, ask, pulls },
+            );
+            expected.push(
+              standing.abandoned
+                ? 'QF abandoned'
+                : standing.awaitsPull
+                  ? 'QF awaits-pull'
+                  : `QF holds ${String(standing.changesAt)}`,
+            );
+          }
+        }
+      }
+    }
+  }
+  text.push('X');
+  expected.push('X');
+  return { text, expected };
+};
+
+const historyKinds: readonly Kind[] = ['L', 'L', 'L', 'L', 'S', 'S', 'S', 'H', 'O'];
+const baseProfile: Profile = {
+  appendKinds: historyKinds,
+  rawKinds: historyKinds,
+  undefinedKeys: false,
+  legacy: 0,
+  attempts: 0,
+  raw: 0,
+  reader: false,
+  queries: true,
+};
+
+type Corpus = {
+  readonly name: string;
+  readonly seed: number;
+  readonly count: number;
+  readonly profile?: Profile;
+  /** Merge traces instead of log traces; `true` draws duplicated and conflicting segments. */
+  readonly merge?: boolean;
+  readonly duplicates?: boolean;
+  /**
+   * Merge traces of one shape: terms tied at one millisecond across devices, a file overlapping its old copy, devices
+   * with skewed clocks, people's turns said by more than one device (with rewinds between them, or not), or a clock far
+   * ahead read at a bound.
+   */
+  readonly layout?: 'ties' | 'overlap' | 'skewed' | 'words' | 'rewinds' | 'bounded';
+};
+
+/** The tables, then `count` traces of the corpus's kind, from one seeded stream. */
+const generate = async (corpus: Corpus, seed = corpus.seed): Promise<Trace[]> => {
+  const random = randomOf(seed);
+  const traces: Trace[] = [tablesTrace()];
+  for (let index = 0; index < corpus.count; index++) {
+    traces.push(
+      corpus.merge === true
+        ? mergeTrace(random, `merge-${index}`, {
+            duplicates: corpus.duplicates === true,
+            ...(corpus.layout === undefined ? {} : { layout: corpus.layout }),
+          })
+        : // oxlint-disable-next-line no-await-in-loop -- one trace at a time keeps the seeded stream reproducible.
+          await logTrace(random, `log-${index}`, corpus.profile ?? baseProfile),
+    );
+  }
+  if (corpus.name === 'invocations') {
+    traces.push(interruptResolutionTrace());
+  }
+  if (corpus.name === 'base') {
+    traces.push(
+      admissionTrace(),
+      termsTrace(),
+      crossAdmissionTrace(),
+      carryTrace(),
+      planTrace(),
+      resumeBatchTrace(),
+      ...appendMergeTrace(),
+      ...refreshMergeTrace(),
+      standingTrace(),
+    );
+  }
+  return traces;
+};
+
+const traceText = (traces: readonly Trace[]) => `${traces.flatMap((trace) => trace.text).join('\n')}\n`;
+
+/** Splits a flat output into traces by their `T` header. */
+const byTrace = (lines: readonly string[]): Map<string, string[]> => {
+  const traces = new Map<string, string[]>();
+  let current: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith('T ')) {
+      current = [];
+      traces.set(line.slice(2), current);
+    }
+    current.push(line);
+  }
+  return traces;
+};
+
+/** Each trace whose output differs from the goldens, with its first differing line. */
+const mismatches = (traces: readonly Trace[], goldens: string): string[] => {
+  const lean = byTrace(goldens.split('\n').filter((line) => line.length > 0));
+  return traces.flatMap((trace) => {
+    const name = trace.expected[0]!.slice(2);
+    const actual = lean.get(name) ?? [];
+    const index = trace.expected.findIndex((line, position) => line !== actual[position]);
+    const at = index === -1 && actual.length !== trace.expected.length ? trace.expected.length : index;
+    return at === -1
+      ? []
+      : [`${name}: typescript ${JSON.stringify(trace.expected[at])}, lean ${JSON.stringify(actual[at])}`];
+  });
+};
+
+const corpora: readonly Corpus[] = [
+  { name: 'base', seed: 20_260_925, count: 200 },
+  { name: 'undefined-keys', seed: 20_260_926, count: 200, profile: { ...baseProfile, undefinedKeys: true } },
+  {
+    name: 'redelivery',
+    seed: 20_260_927,
+    count: 120,
+    profile: { ...baseProfile, raw: 0.15, reader: true, queries: false },
+  },
+  { name: 'duplicate-segments', seed: 20_260_928, count: 150, merge: true, duplicates: true },
+  { name: 'merge-ties', seed: 20_261_023, count: 120, merge: true, layout: 'ties' },
+  { name: 'overlapping-segments', seed: 20_261_024, count: 120, merge: true, layout: 'overlap' },
+  { name: 'skewed-clocks', seed: 20_261_025, count: 120, merge: true, layout: 'skewed' },
+  { name: 'shared-turns', seed: 20_261_026, count: 120, merge: true, layout: 'words' },
+  { name: 'rewound-turns', seed: 20_261_029, count: 120, merge: true, layout: 'rewinds' },
+  { name: 'future-rows', seed: 20_261_027, count: 120, merge: true, layout: 'bounded' },
+  {
+    name: 'abandoned-turns',
+    seed: 20_261_028,
+    count: 120,
+    profile: { ...baseProfile, appendKinds: [...historyKinds, 'W', 'W'], rawKinds: [...historyKinds, 'W'], raw: 0.15 },
+  },
+  { name: 'legacy-epochs', seed: 20_260_929, count: 120, profile: { ...baseProfile, legacy: 0.5, attempts: 0.3 } },
+  {
+    name: 'opaque-rows',
+    seed: 20_260_930,
+    count: 120,
+    profile: { ...baseProfile, rawKinds: [...historyKinds, 'U', 'U', 'U'], raw: 0.35, reader: true },
+  },
+  {
+    name: 'stale-append',
+    seed: 20_260_931,
+    count: 120,
+    profile: { ...baseProfile, raw: 0.3, attempts: 0.2 },
+  },
+  {
+    name: 'invocations',
+    seed: 20_260_932,
+    count: 120,
+    profile: {
+      ...baseProfile,
+      appendKinds: ['L', 'L', 'S', 'H', 'P', 'P', 'V', 'V', 'M', 'M', 'O', 'R'],
+      rawKinds: ['P', 'V', 'M'],
+      raw: 0.15,
+      attempts: 0.3,
+    },
+  },
+];
+
+/**
+ * Nightly: `FORMAL_FRESH_PART=<k>/<n>` writes only part `k` of the fresh-seed corpora, so `n` processes write them
+ * side by side (`agent-host:formal:nightly:fresh`). Every part derives the same seed and the same traces per
+ * generator; the generators are dealt to the parts by their measured cost, so the parts together write every
+ * generator's traces once, as one process does. Default `1/1`: every generator.
+ */
+const freshPart = (() => {
+  const text = process.env['FORMAL_FRESH_PART'] ?? '1/1';
+  const match = /^(\d+)\/(\d+)$/.exec(text);
+  const index = Number(match?.[1]);
+  const count = Number(match?.[2]);
+  if (!match || count < 1 || index < 1 || index > count) {
+    throw new Error(`FORMAL_FRESH_PART must be k/n with 1 <= k <= n, got ${text}`);
+  }
+  return { index, count };
+})();
+
+/**
+ * Milliseconds each generator took for 534 fresh traces on a shared 4-core machine (2026-11-17): the log
+ * generators dominate, the merge generators are cheap. Only the deal reads it; an unlisted generator weighs 1000.
+ */
+const freshCost: Readonly<Record<string, number>> = {
+  base: 15_912,
+  'undefined-keys': 10_856,
+  redelivery: 8537,
+  'duplicate-segments': 111,
+  'merge-ties': 80,
+  'overlapping-segments': 92,
+  'skewed-clocks': 85,
+  'shared-turns': 231,
+  'rewound-turns': 309,
+  'future-rows': 386,
+  'abandoned-turns': 8823,
+  'legacy-epochs': 11_229,
+  'opaque-rows': 18_667,
+  'stale-append': 8983,
+  invocations: 8468,
+};
+
+/**
+ * Deals the generators to `count` parts, heaviest first, each to the least-loaded part (ties by name, then to the
+ * lowest part); then numbers the parts lightest first, because part 1 also runs the committed-corpus tests.
+ */
+const dealFreshParts = (names: readonly string[], count: number): string[][] => {
+  const weight = (name: string): number => freshCost[name] ?? 1000;
+  const parts = Array.from({ length: count }, () => ({ load: 0, names: [] as string[] }));
+  for (const name of names.toSorted((left, right) => weight(right) - weight(left) || (left < right ? -1 : 1))) {
+    const loads = parts.map((part) => part.load);
+    const lightest = parts[loads.indexOf(Math.min(...loads))]!;
+    lightest.load += weight(name);
+    lightest.names.push(name);
+  }
+  return parts.toSorted((left, right) => left.load - right.load).map((part) => part.names);
+};
+
+const tracesByCorpus = new Map<string, Trace[]>();
+const tracesOf = async (corpus: Corpus): Promise<Trace[]> => {
+  const cached = tracesByCorpus.get(corpus.name);
+  if (cached) {
+    return cached;
+  }
+  const traces = await generate(corpus);
+  tracesByCorpus.set(corpus.name, traces);
+  return traces;
+};
+
+const corpusFile = (corpus: Corpus, extension: 'trace' | 'expected') => `${corpusDirectory}${corpus.name}.${extension}`;
+
+describe('ChatLedger differential (Lean goldens)', () => {
+  for (const corpus of corpora) {
+    it(`should regenerate the committed ${corpus.name} corpus from seed ${corpus.seed}`, async () => {
+      const text = traceText(await tracesOf(corpus));
+      if (updating) {
+        writeFileSync(corpusFile(corpus, 'trace'), text);
+        mkdirSync(outputDirectory, { recursive: true });
+        const traces = await tracesOf(corpus);
+        writeFileSync(
+          `${outputDirectory}${corpus.name}.typescript`,
+          `${traces.flatMap((trace) => trace.expected).join('\n')}\n`,
+        );
+      }
+
+      expect(text).toBe(readFileSync(corpusFile(corpus, 'trace'), 'utf8'));
+    }, 120_000);
+  }
+
+  // CL-A11, SC3: every generator, 0 mismatches. `undefined-keys` is S5 D1 (W0.1, CL-S1): the mutant
+  // `undefined-key-skip` removes the skip and this test catches it (RV6-F2).
+  it.skipIf(updating)(
+    'should match the Lean goldens on every corpus',
+    async () => {
+      const found: string[] = [];
+      for (const corpus of corpora) {
+        expect(existsSync(corpusFile(corpus, 'expected')), corpus.name).toBe(true);
+        // oxlint-disable-next-line no-await-in-loop -- corpora are generated one at a time.
+        found.push(...mismatches(await tracesOf(corpus), readFileSync(corpusFile(corpus, 'expected'), 'utf8')));
+      }
+
+      expect(found.slice(0, 5)).toEqual([]);
+    },
+    240_000,
+  );
+
+  it.runIf(freshTraces > 0)(
+    'should write fresh-seed corpora and their TypeScript output for the nightly oracle',
+    async () => {
+      const seed = Number(process.env['FORMAL_SEED'] ?? Math.floor(Math.random() * 2_147_483_647));
+      const mine = dealFreshParts(
+        corpora.map((corpus) => corpus.name),
+        freshPart.count,
+      )[freshPart.index - 1]!;
+      process.stdout.write(
+        `chat-ledger fresh differential: seed ${seed}, ${freshPerGenerator(corpora.length)} traces per generator (replay with FORMAL_SEED=${seed})${freshPart.count > 1 ? `; part ${freshPart.index}/${freshPart.count}: ${mine.join(', ')}` : ''}\n`,
+      );
+      // Clear the directory of everything another part does not write: alone, that is everything.
+      const others = new Set(corpora.map((corpus) => corpus.name).filter((name) => !mine.includes(name)));
+      mkdirSync(freshDirectory, { recursive: true });
+      for (const entry of readdirSync(freshDirectory)) {
+        if (!others.has(entry.replace(/-\d+\.(?:trace|typescript)$/, ''))) {
+          rmSync(`${freshDirectory}${entry}`, { recursive: true, force: true });
+        }
+      }
+      for (const corpus of corpora.filter((candidate) => mine.includes(candidate.name))) {
+        // oxlint-disable-next-line no-await-in-loop -- one generator at a time bounds memory.
+        const traces = await generate({ ...corpus, count: freshPerGenerator(corpora.length) }, seed);
+        writeFileSync(`${freshDirectory}${corpus.name}-${seed}.trace`, traceText(traces));
+        writeFileSync(
+          `${freshDirectory}${corpus.name}-${seed}.typescript`,
+          `${traces.flatMap((trace) => trace.expected).join('\n')}\n`,
+        );
+      }
+
+      expect(mine.filter((name) => !existsSync(`${freshDirectory}${name}-${seed}.typescript`))).toEqual([]);
+    },
+    1_800_000,
+  );
+
+  it('should deal every generator to exactly one fresh part, cheapest part first', () => {
+    const names = corpora.map((corpus) => corpus.name);
+    for (const count of [1, 2, 4, 15, 20]) {
+      const parts = dealFreshParts(names, count);
+      expect(parts).toHaveLength(count);
+      expect(parts.flat().toSorted()).toEqual(names.toSorted());
+    }
+    expect(dealFreshParts(names, 1)).toEqual([
+      names.toSorted((left, right) => (freshCost[right] ?? 0) - (freshCost[left] ?? 0)),
+    ]);
+    const costOf = (part: readonly string[]): number => {
+      let total = 0;
+      for (const name of part) {
+        total += freshCost[name] ?? 0;
+      }
+      return total;
+    };
+    const loads = dealFreshParts(names, 4).map((part) => costOf(part));
+    expect(loads).toEqual(loads.toSorted((left, right) => left - right));
+    // One process writes all of them; four write them in under a third of the time.
+    expect(Math.max(...loads)).toBeLessThan(costOf(Object.keys(freshCost)) / 3);
+  });
+});

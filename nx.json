@@ -9,10 +9,10 @@
       "plugin": "./tools/copy-files-from-to.plugin.ts"
     },
     {
-      "plugin": "./tools/generate-cjs-dts.plugin.ts"
+      "plugin": "./tools/pkgcheck.plugin.ts"
     },
     {
-      "plugin": "./tools/pkgcheck.plugin.ts"
+      "plugin": "./tools/formal.plugin.ts"
     },
     {
       "plugin": "@nx/react/router-plugin",
@@ -26,12 +26,6 @@
       }
     },
     {
-      "plugin": "@nx/playwright/plugin",
-      "options": {
-        "targetName": "e2e"
-      }
-    },
-    {
       "plugin": "@nx/vite/plugin",
       "options": {
         "buildTargetName": "build",
@@ -40,28 +34,16 @@
         "serveTargetName": "serve",
         "serveStaticTargetName": "serve-static",
         "outputPath": "dist"
-      }
+      },
+      "exclude": ["examples/**", "apps/react-e2e/apps/**"]
     },
     {
       "plugin": "@nx/eslint/plugin",
       "options": {
         "targetName": "lint",
         "eslintConfig": "eslint.config.mjs"
-      }
-    },
-    {
-      "plugin": "@nx/js/typescript",
-      "options": {
-        "typecheck": {
-          "targetName": "typecheck-tsc"
-        },
-        "build": {
-          "targetName": "typebuild",
-          "configName": "tsconfig.lib.json",
-          "buildDepsName": "build-deps",
-          "watchDepsName": "watch-deps"
-        }
-      }
+      },
+      "exclude": ["libs/oxlint/src/rules/fixtures/**"]
     },
     {
       "plugin": "./tools/tsgo.plugin.ts",
@@ -73,21 +55,36 @@
       "plugin": "@nx/vitest",
       "options": {
         "testTargetName": "test"
-      }
+      },
+      "exclude": ["examples/**", "apps/react-e2e/apps/**"]
     }
   ],
   "targetDefaults": {
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "inputs": ["default", "^production"],
+      "options": {
+        "forwardAllArgs": false
+      }
+    },
+    "test": {
+      "dependsOn": ["copy-assets", "^copy-assets"],
+      "inputs": ["default", "^production", "serviceEnvironment"]
+    },
+    "build": {
+      "inputs": ["production", "^production"]
+    },
     "lint": {
       "options": {
-        "command": "oxlint -c $NX_WORKSPACE_ROOT/.oxlintrc.json {args.files} && eslint {args.files}",
+        "command": "oxlint --no-error-on-unmatched-pattern {args.files} && eslint {args.files}",
         "forwardAllArgs": false
       },
       "inputs": [
         "default",
-        "^default",
+        "^production",
         "{workspaceRoot}/eslint.config.mjs",
         "{workspaceRoot}/.oxlintrc.json",
-        "{workspaceRoot}/libs/oxlint/src/**/*",
+        "{workspaceRoot}/libs/oxlint/src/**/*.js",
         {
           "externalDependencies": ["eslint", "oxlint"]
         }
@@ -107,6 +104,79 @@
       "options": {
         "cwd": "."
       }
+    },
+    "nx-release-publish": {
+      "dependsOn": ["pkgcheck"]
+    },
+    "formal:tla": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node tools/formal/src/cli.ts check --tier pr {projectRoot}"
+      },
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/specs/**/*",
+        "!{projectRoot}/specs/lean/**/*",
+        "{projectRoot}/src/**/*.legality.json",
+        "{workspaceRoot}/tools/formal/src/**/*",
+        "{workspaceRoot}/tools/formal/toolchain.lock",
+        { "runtime": "node tools/formal/src/cli.ts toolchain-id" }
+      ],
+      "outputs": ["{workspaceRoot}/out/reports/formal/{projectRoot}/pr"]
+    },
+    "formal:lean": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node tools/formal/src/cli.ts check --tier lean {projectRoot}"
+      },
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/specs/lean/**/*",
+        "{workspaceRoot}/tools/formal/src/**/*",
+        "{workspaceRoot}/tools/formal/toolchain.lock",
+        { "runtime": "node tools/formal/src/cli.ts toolchain-id" }
+      ],
+      "outputs": ["{workspaceRoot}/out/reports/formal/{projectRoot}/lean"]
+    },
+    "formal:nightly": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node tools/formal/src/cli.ts nightly {projectRoot}"
+      },
+      "cache": false
+    },
+    "formal:nightly:mutants": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node tools/formal/src/cli.ts nightly --mutants-only {projectRoot}"
+      },
+      "cache": false
+    },
+    "formal:nightly:check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node tools/formal/src/cli.ts check --tier nightly {projectRoot}"
+      },
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/specs/**/*",
+        "!{projectRoot}/specs/lean/**/*",
+        "{projectRoot}/src/**/*.json",
+        "{workspaceRoot}/tools/formal/src/**/*",
+        "{workspaceRoot}/tools/formal/toolchain.lock",
+        "{workspaceRoot}/tools/formal/run-seconds.json",
+        {
+          "runtime": "node tools/formal/src/cli.ts toolchain-id"
+        }
+      ],
+      "outputs": ["{workspaceRoot}/out/reports/formal/{projectRoot}/nightly"]
+    },
+    "formal:logs": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node tools/formal/src/cli.ts logs {projectName}"
+      },
+      "cache": false
     }
   },
   "generators": {
@@ -117,6 +187,7 @@
     }
   },
   "nxCloudId": "687b39d7852b9a43a8bba201",
+  "neverConnectToCloud": true,
   "sync": {
     "applyChanges": true
   },
@@ -124,33 +195,50 @@
     "enabled": false
   },
   "namedInputs": {
-    "default": ["{projectRoot}/**/*"],
+    "sharedGlobals": ["{workspaceRoot}/tools/typescript/base.json", { "runtime": "node --version" }],
+    "serviceEnvironment": [
+      { "env": "TAU_API_URL" },
+      { "env": "TAU_WEBSOCKET_URL" },
+      { "env": "TAU_FRONTEND_URL" },
+      { "env": "DATABASE_URL" },
+      { "env": "BILLING_TEST_DATABASE_URL" },
+      { "env": "REDIS_URL" },
+      { "env": "TAU_S3_CONFORMANCE_ENDPOINT" },
+      { "env": "TAU_S3_CONFORMANCE_BUCKET" }
+    ],
+    "reactEventLayer": ["{workspaceRoot}/libs/oxlint/src/react-event-layer.ts"],
+    "default": ["{projectRoot}/**/*", "sharedGlobals"],
     "production": [
       "default",
-      "!{projectRoot}/**/*.{spec,test}.{ts,tsx,js,jsx,mts,mjs}",
-      "!{projectRoot}/README.md",
-      "!{projectRoot}/CHANGELOG.md",
-      "!{projectRoot}/docs/**/*",
-      "!{projectRoot}/coverage/**/*",
-      "!{projectRoot}/out-tsc/**/*",
-      "!{projectRoot}/**/*.tsbuildinfo",
-      "!{projectRoot}/.react-router/types/**/*",
-      "!{projectRoot}/public/version.json",
-      "!{projectRoot}/public/version.js"
+      "!{projectRoot}/**/*.test.*",
+      "!{projectRoot}/**/*.spec.*",
+      "!{projectRoot}/**/*.test-d.*",
+      "!{projectRoot}/vitest.config.*",
+      "!{projectRoot}/**/*.md",
+      "!{projectRoot}/specs/**/*",
+      "!{projectRoot}/**/react-event-layer.ceiling.json"
     ]
   },
   "release": {
-    "projects": ["packages/*"],
+    "projects": ["tag:type:package"],
+    "projectsRelationship": "fixed",
     "versionPlans": {
-      "ignorePatternsForPlanCheck": ["**/*.spec.ts", "**/*.test.ts", "**/*.md"]
+      "ignorePatternsForPlanCheck": [
+        "**/*.spec.ts",
+        "**/*.test.ts",
+        "**/*.md",
+        "packages/plugins/picogk/browser-host.pin.json",
+        "**/react-event-layer.ceiling.json"
+      ]
     },
     "version": {
-      "preVersionCommand": "pnpm nx run-many -t build --projects=packages/*",
-      "conventionalCommits": true
+      "preVersionCommand": "pnpm nx run-many -t build --projects=tag:type:package",
+      "currentVersionResolver": "git-tag",
+      "fallbackCurrentVersionResolver": "disk"
     },
     "changelog": {
       "workspaceChangelog": {
-        "file": "CHANGELOG.md",
+        "file": "docs/releases/CHANGELOG.md",
         "renderOptions": {
           "authors": true,
           "commitReferences": true,
@@ -170,7 +258,12 @@
       "pattern": "v{version}"
     },
     "git": {
-      "commitMessage": "chore(release): v{version}"
+      "commitMessage": "chore(root): Release the npm packages as v{version}"
+    }
+  },
+  "pluginsConfig": {
+    "@nx/js": {
+      "projectsAffectedByDependencyUpdates": "auto"
     }
   },
   "analytics": true

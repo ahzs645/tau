@@ -1,17 +1,22 @@
 import { Clock, Unplug, WifiOff, TriangleAlert, CircleStop, SearchX, OctagonAlert } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { ToolExecutionError } from '@taucad/chat';
-import { getToolErrorTitle, getToolErrorDescription, parseToolErrorText } from '@taucad/chat/utils';
+import {
+  getToolErrorTitle,
+  getToolErrorDescription,
+  parseToolErrorEnvelope,
+  parseToolErrorText,
+} from '@taucad/chat/utils';
 import {
   ChatToolCard,
   ChatToolCardHeader,
   ChatToolCardIcon,
   ChatToolCardTitle,
   ChatToolCardContent,
-} from '#components/chat/chat-tool-card.js';
-import { ChatToolDescription } from '#components/chat/chat-tool-text.js';
-import { ChatToolLabel } from '#components/chat/chat-tool-label.js';
-import { CodeBlockContent, Pre } from '#components/code/code-block.js';
+} from '@taucad/chat-ui/components/chat-tool-card';
+import { ChatToolDescription } from '@taucad/chat-ui/components/chat-tool-text';
+import { ChatToolLabel } from '@taucad/chat-ui/components/chat-tool-label';
+import { CodeBlockContent, Pre } from '@taucad/editor-ui/components/code/code-block';
 
 /** Verb used when {@link parseToolErrorText} cannot parse the error payload. */
 const unparseableErrorVerb = 'Attempted';
@@ -27,6 +32,8 @@ type ChatToolErrorProps = {
    */
   readonly noun: string;
   readonly className?: string;
+  readonly isOpen?: boolean;
+  readonly onOpenChange?: (open: boolean) => void;
 };
 
 const errorIcons = {
@@ -46,6 +53,8 @@ const errorIcons = {
   USER_INTERRUPTED: CircleStop,
   // eslint-disable-next-line @typescript-eslint/naming-convention -- error code
   STREAM_ERROR: OctagonAlert,
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- error code
+  ORPHANED_TOOL_CALL: OctagonAlert,
   // eslint-disable-next-line @typescript-eslint/naming-convention -- error code
   TOOL_NO_RESULTS: SearchX,
 } as const;
@@ -79,13 +88,32 @@ function ToolErrorHeader({ icon, verb, noun }: ToolErrorHeaderProps): React.JSX.
  * present). The same header shape is used for parsed and unparseable
  * `errorText`.
  */
-export function ChatToolError({ errorText, icon, noun, className }: ChatToolErrorProps): React.JSX.Element {
+export function ChatToolError({
+  errorText,
+  icon,
+  noun,
+  className,
+  isOpen,
+  onOpenChange,
+}: ChatToolErrorProps): React.JSX.Element {
   const error = parseToolErrorText(errorText);
 
   if (!error) {
+    const code = parseToolErrorEnvelope(errorText)?.errorCode;
     return (
-      <ChatToolCard variant='minimal' status='error' isDefaultOpen={false} className={className}>
-        <ToolErrorHeader icon={icon} verb={unparseableErrorVerb} noun={noun} />
+      <ChatToolCard
+        variant='minimal'
+        status='error'
+        isDefaultOpen={false}
+        className={className}
+        isOpen={isOpen}
+        onOpenChange={onOpenChange}
+      >
+        <ToolErrorHeader
+          icon={icon}
+          verb={code?.replaceAll('_', ' ').toLowerCase() ?? unparseableErrorVerb}
+          noun={noun}
+        />
         <ChatToolCardContent>
           <div className='space-y-2 px-2 py-2 text-xs'>
             <CodeBlockContent>
@@ -97,16 +125,32 @@ export function ChatToolError({ errorText, icon, noun, className }: ChatToolErro
     );
   }
 
-  return <StructuredToolErrorBody error={error} noun={noun} className={className} />;
+  return (
+    <StructuredToolErrorBody
+      error={error}
+      noun={noun}
+      className={className}
+      isOpen={isOpen}
+      onOpenChange={onOpenChange}
+    />
+  );
 }
 
 type StructuredToolErrorBodyProps = {
   readonly error: ToolExecutionError;
   readonly noun: string;
   readonly className?: string;
+  readonly isOpen?: boolean;
+  readonly onOpenChange?: (open: boolean) => void;
 };
 
-function StructuredToolErrorBody({ error, noun, className }: StructuredToolErrorBodyProps): React.JSX.Element {
+function StructuredToolErrorBody({
+  error,
+  noun,
+  className,
+  isOpen,
+  onOpenChange,
+}: StructuredToolErrorBodyProps): React.JSX.Element {
   const headerIcon = errorIcons[error.errorCode];
   const verb = getToolErrorTitle(error.errorCode);
   const description = error.message || getToolErrorDescription(error.errorCode);
@@ -119,7 +163,14 @@ function StructuredToolErrorBody({ error, noun, className }: StructuredToolError
   const cardStatus = isMuted ? 'warning' : 'error';
 
   return (
-    <ChatToolCard variant='minimal' status={cardStatus} isDefaultOpen={false} className={className}>
+    <ChatToolCard
+      variant='minimal'
+      status={cardStatus}
+      isDefaultOpen={false}
+      className={className}
+      isOpen={isOpen}
+      onOpenChange={onOpenChange}
+    >
       <ToolErrorHeader icon={headerIcon} verb={verb} noun={noun} />
       <ChatToolCardContent>
         <div className='space-y-2 px-2 py-2 text-xs'>
@@ -140,7 +191,7 @@ function StructuredToolErrorBody({ error, noun, className }: StructuredToolError
           ) : undefined}
           {hasValidationDetails && error.rawOutput !== undefined ? (
             <details className='text-xs'>
-              <summary className='cursor-pointer text-muted-foreground hover:text-foreground'>Raw Output</summary>
+              <summary className='text-muted-foreground hover:text-foreground'>Raw Output</summary>
               <CodeBlockContent className='mt-2'>
                 <Pre language='json' className='max-h-40 overflow-auto text-xs'>
                   {JSON.stringify(error.rawOutput, null, 2)}

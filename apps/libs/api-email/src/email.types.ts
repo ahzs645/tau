@@ -1,0 +1,132 @@
+export type EmailTemplateKind =
+  | 'magic-link'
+  | 'reset-password'
+  | 'password-changed'
+  | 'verify-email'
+  | 'account-exists'
+  | 'publication-invite'
+  | 'project-invite'
+  | 'payment-failed'
+  | 'auto-reload-disabled'
+  | 'auto-reload-action-required';
+
+export type EmailMessage = {
+  readonly to: string;
+  readonly subject?: string;
+  readonly template: EmailTemplate;
+};
+
+export type MagicLinkEmailTemplate = {
+  readonly kind: 'magic-link';
+  readonly email: string;
+  readonly url: string;
+  /** Coarse request-context label such as `Safari on macOS`; the row is dropped when absent. */
+  readonly device?: string;
+};
+
+export type ResetPasswordEmailTemplate = {
+  readonly kind: 'reset-password';
+  readonly email: string;
+  readonly url: string;
+  readonly device?: string;
+};
+
+export type PasswordChangedEmailTemplate = {
+  readonly kind: 'password-changed';
+  readonly email: string;
+  /** Pre-formatted timestamp; the email module does not format dates. */
+  readonly changedAt: string;
+  /** Forgot-password link for a recipient who did not make the change. */
+  readonly url: string;
+  readonly device?: string;
+};
+
+export type VerifyEmailTemplate = {
+  readonly kind: 'verify-email';
+  readonly email: string;
+  readonly url: string;
+};
+
+/** Someone signed up with an address that already has a verified account (email readiness R10). */
+export type AccountExistsEmailTemplate = {
+  readonly kind: 'account-exists';
+  readonly email: string;
+  /** Sign-in page. */
+  readonly url: string;
+  /** Forgot-password page, for an owner who no longer knows the password. */
+  readonly resetUrl: string;
+  readonly device?: string;
+};
+
+export type PublicationInviteEmailTemplate = {
+  readonly kind: 'publication-invite';
+  readonly recipientEmail: string;
+  readonly ownerName: string;
+  readonly publicationTitle: string;
+  readonly url: string;
+};
+
+/** An owner invited someone to work on a project with them (stable cloud link blueprint E2). */
+export type ProjectInviteEmailTemplate = {
+  readonly kind: 'project-invite';
+  readonly recipientEmail: string;
+  readonly ownerName: string;
+  readonly projectName: string;
+  /** The role the invitation grants. */
+  readonly role: 'read' | 'write';
+  /** Pre-formatted expiry date; the email module does not format dates. */
+  readonly expiresAt: string;
+  /** The one-time `/invitations/<token>` link on the frontend origin. */
+  readonly url: string;
+};
+
+export type PaymentFailedEmailTemplate = {
+  readonly kind: 'payment-failed';
+  readonly email: string;
+  /** Billing-settings deep link where the card can be updated. */
+  readonly billingUrl: string;
+  // Pre-formatted strings; the email module formats neither money nor dates. Each row is dropped when absent.
+  readonly plan?: string;
+  readonly amount?: string;
+  readonly nextAttemptAt?: string;
+  readonly paymentMethodSummary?: string;
+};
+
+/** Automatic credit reload could not charge the saved card and turned itself off. */
+export type AutoReloadDisabledEmailTemplate = {
+  readonly kind: 'auto-reload-disabled';
+  readonly email: string;
+  /** Billing-settings deep link where reload can be set up again. */
+  readonly billingUrl: string;
+};
+
+/** The card's bank asked the customer to confirm an automatic credit reload before it is charged. */
+export type AutoReloadActionRequiredEmailTemplate = {
+  readonly kind: 'auto-reload-action-required';
+  readonly email: string;
+  /** Billing-settings deep link where the payment is finished. */
+  readonly billingUrl: string;
+};
+
+export type EmailTemplate =
+  | MagicLinkEmailTemplate
+  | ResetPasswordEmailTemplate
+  | PasswordChangedEmailTemplate
+  | VerifyEmailTemplate
+  | AccountExistsEmailTemplate
+  | PublicationInviteEmailTemplate
+  | ProjectInviteEmailTemplate
+  | PaymentFailedEmailTemplate
+  | AutoReloadDisabledEmailTemplate
+  | AutoReloadActionRequiredEmailTemplate;
+
+/**
+ * What `EmailService.send` did: handed the email to the provider, or rendered it
+ * and stopped because no provider is configured (`RESEND_API_KEY` unset).
+ */
+export type EmailSendOutcome = 'sent' | 'disabled';
+
+export type RenderedEmail = {
+  readonly html: string;
+  readonly text: string;
+};

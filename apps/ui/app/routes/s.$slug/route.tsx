@@ -1,0 +1,445 @@
+import { Heading } from '@taucad/ui/components/heading';
+import { SharedProjectPassword } from '@taucad/publish-ui/components/share/shared-project-password';
+import { useEffect, useMemo, useState } from 'react';
+import type { MetaFunction } from 'react-router';
+import { useLoaderData, useLocation, useParams } from 'react-router';
+import {
+  getActiveGroupValues,
+  parameterEntryPath,
+  parseProjectManifestBytes,
+  convertLegacyProjectManifestBytes,
+  serializeProjectManifest,
+} from '@taucad/types';
+import type { ProjectManifest } from '@taucad/types';
+import { findBuiltinProject } from '#lib/builtin-projects.js';
+import { requireParameterRecord } from '@taucad/parameters';
+import type { ShareOpenedArtifact } from '@taucad/share/artifact';
+import { parseShareSlug, parseShareUrl } from '@taucad/share/locator';
+import { isShareError, ShareError } from '@taucad/share/provider';
+import type { ShareProtection } from '@taucad/share/provider';
+import type { ShareProjectSnapshot, ShareSnapshotFileRole } from '@taucad/share/snapshot';
+import { Loader } from '@taucad/ui/components/loader';
+import type { Handle } from '#types/matches.types.js';
+import PublicationViewRoute, {
+  ErrorBoundary as PublicationErrorBoundary,
+  PublicationInteractiveSurface,
+  loadPublication as publicationLoader,
+} from '#components/share/tau-publication.js';
+import { publicationMeta } from '@taucad/publish-ui/components/share/tau-publication';
+import type { PublicationRouteLoaderData } from '@taucad/publish-ui/components/share/tau-publication';
+import type { ParsedPublication } from '@taucad/publish-ui/components/share/parsed-publication';
+import { GithubGistManagement } from '@taucad/publish-ui/components/share/github-gist-management';
+import { GithubGistServicesProvider } from '@taucad/publish-ui/components/share/github-gist-services';
+import { githubGistServices } from '#components/share/github-gist-services.js';
+import { OpenInDesktop } from '#components/desktop/open-in-desktop.js';
+import { shareProviderRegistry, withBrowserShareProviderContext } from '#lib/share-providers.js';
+import type { Route } from './+types/route.js';
+
+export const handle: Handle = { enablePageWrapper: false };
+
+type ShareRouteLoaderData =
+  | { readonly kind: 'tau' }
+  | {
+      readonly kind: 'portable';
+      readonly builtin?: {
+        readonly title: string;
+        readonly description: string;
+        readonly thumbnail?: string;
+      };
+    };
+
+const sha256 = async (content: Uint8Array<ArrayBuffer>): Promise<string> => {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', content));
+  return [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+};
+
+const snapshotRole = (path: string, entryPath: string): ShareSnapshotFileRole => {
+  if (path === entryPath) {
+    return 'entry';
+  }
+  if (path === 'tau.json' || path === 'package.json' || path.startsWith('.tau/parameters/')) {
+    return 'project-metadata';
+  }
+  return 'kernel-dependency';
+};
+
+const collectOpenedSnapshot = async (
+  files: Readonly<Record<string, Readonly<{ content: Uint8Array<ArrayBuffer> }>>>,
+  entryPath: string,
+): Promise<ShareProjectSnapshot> => ({
+  entryPath,
+  files: await Promise.all(
+    Object.entries(files).map(async ([path, file]) => ({
+      ...file,
+      path,
+      sha256: await sha256(file.content),
+      role: snapshotRole(path, entryPath),
+    })),
+  ),
+  warnings: [],
+});
+
+/** Resolve one portable artifact without rewriting parameter record bytes. */
+export const resolvePortableArtifact = (
+  artifact: ShareOpenedArtifact,
+):
+  | Readonly<{
+      manifest: ProjectManifest;
+      parameters: Record<string, unknown>;
+      parameterDiagnostic: string | undefined;
+      files: Record<string, Readonly<{ content: Uint8Array<ArrayBuffer> }>>;
+    }>
+  | undefined => {
+  const manifestFile = artifact.files.find(({ path }) => path === 'tau.json');
+  if (!manifestFile) {
+    return undefined;
+  }
+  const parsed = parseProjectManifestBytes(manifestFile.content);
+  const legacy = parsed.success ? undefined : convertLegacyProjectManifestBytes(manifestFile.content);
+  const manifest = parsed.success ? parsed.data : legacy?.success ? legacy.data.manifest : undefined;
+  const entryPath = manifest?.assets.main?.entryPath;
+  if (!manifest || entryPath === undefined || !artifact.files.some(({ path }) => path === entryPath)) {
+    return undefined;
+  }
+  const parameterFile = artifact.files.find(({ path }) => path === parameterEntryPath(entryPath));
+  let parameters: Record<string, unknown> = {};
+  let parameterDiagnostic: string | undefined;
+  if (parameterFile) {
+    // The shared record policy: an unusable record is reported, never replaced by defaults silently.
+    try {
+      parameters = getActiveGroupValues(requireParameterRecord(parameterFile.content));
+    } catch (error) {
+      parameterDiagnostic = error instanceof Error ? error.message : String(error);
+    }
+  }
+  return {
+    manifest,
+    parameters,
+    parameterDiagnostic,
+    files: Object.fromEntries(
+      artifact.files.map((file) => [
+        file.path,
+        {
+          content: file.path === 'tau.json' && legacy?.success ? serializeProjectManifest(manifest) : file.content,
+        },
+      ]),
+    ),
+  };
+};
+
+export const loader = async (arguments_: Route.LoaderArgs): Promise<unknown> => {
+  const { slug } = arguments_.params;
+  if (!slug) {
+    // oxlint-disable-next-line typescript-eslint/only-throw-error -- route loaders use Response for HTTP status control.
+    throw new Response('Not found', { status: 404 });
+  }
+  const locator = parseShareSlug(slug);
+  if (locator.providerId === 'builtin') {
+    const example = locator.reference ? findBuiltinProject(locator.reference) : undefined;
+    if (!example) {
+      // oxlint-disable-next-line typescript-eslint/only-throw-error -- route loaders use Response for HTTP status control.
+      throw new Response('Not found', { status: 404 });
+    }
+    return {
+      kind: 'portable',
+      builtin: {
+        title: example.manifest.name,
+        description: example.manifest.description,
+        ...(example.thumbnailUrl
+          ? {
+              thumbnail: new URL(example.thumbnailUrl, arguments_.url).toString(),
+            }
+          : {}),
+      },
+    } satisfies ShareRouteLoaderData;
+  }
+  if (locator.providerId !== 'tau') {
+    return { kind: 'portable' } satisfies ShareRouteLoaderData;
+  }
+  return publicationLoader({
+    ...arguments_,
+    params: { ...arguments_.params, id: locator.reference },
+  });
+};
+
+export const meta: MetaFunction<typeof loader> = (arguments_) => {
+  const loaderData = arguments_.loaderData as ShareRouteLoaderData | PublicationRouteLoaderData | undefined;
+  if (loaderData && !('kind' in loaderData)) {
+    return publicationMeta(arguments_ as Parameters<typeof publicationMeta>[0]);
+  }
+  if (loaderData?.kind === 'portable' && loaderData.builtin) {
+    return [
+      { title: `${loaderData.builtin.title} · Tau` },
+      { name: 'description', content: loaderData.builtin.description },
+      { property: 'og:title', content: loaderData.builtin.title },
+      { property: 'og:description', content: loaderData.builtin.description },
+      ...(loaderData.builtin.thumbnail ? [{ property: 'og:image', content: loaderData.builtin.thumbnail }] : []),
+    ];
+  }
+  return [
+    { title: 'Shared Tau project' },
+    { name: 'robots', content: 'noindex, nofollow' },
+    { name: 'referrer', content: 'no-referrer' },
+  ];
+};
+
+/**
+ * Every share a provider resolves in the browser: `direct`, a Gist, a builtin.
+ *
+ * Exported for the desktop module of this same route
+ * (`s.$slug/desktop-route.tsx`), which serves these slugs identically — the
+ * surface never consults the server, so the SPA needs no second copy of it.
+ *
+ * @returns The password prompt, the failure panel, or the shared workbench.
+ */
+export const PortableShareSurface = (): React.JSX.Element => {
+  const { slug = '' } = useParams();
+  const location = useLocation();
+  const [artifact, setArtifact] = useState<ShareOpenedArtifact>();
+  const [error, setError] = useState<string>();
+  const [sourceUrl, setSourceUrl] = useState<string>();
+  const [sourceLabel, setSourceLabel] = useState('Shared project');
+  const [needsPassword, setNeedsPassword] = useState(false);
+  const [password, setPassword] = useState('');
+  const [submittedPassword, setSubmittedPassword] = useState<string>();
+  const [passwordError, setPasswordError] = useState<string>();
+  const [opening, setOpening] = useState(true);
+  const [protection, setProtection] = useState<ShareProtection>({
+    kind: 'none',
+  });
+  const [unpublished, setUnpublished] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    const resolve = async (): Promise<void> => {
+      setOpening(true);
+      setArtifact(undefined);
+      setUnpublished(false);
+      setError(undefined);
+      try {
+        setSourceUrl(globalThis.location.href);
+        const parsed = parseShareUrl({ slug, fragment: location.hash });
+        const provider = await shareProviderRegistry.load(parsed.locator.providerId);
+        controller.signal.throwIfAborted();
+        const providerResolve = provider.resolve;
+        if (!providerResolve) {
+          throw new ShareError('SHARE_PROVIDER_UNAVAILABLE', 'This sharing method cannot resolve projects.');
+        }
+        const opened = await withBrowserShareProviderContext(async (context) =>
+          providerResolve(
+            {
+              locator: parsed.locator,
+              secrets: submittedPassword ? { ...parsed.secrets, p: submittedPassword } : parsed.secrets,
+              signal: controller.signal,
+            },
+            context,
+          ),
+        );
+        if (!cancelled) {
+          setArtifact(opened);
+          setNeedsPassword(false);
+          setPasswordError(undefined);
+          const passwordProtected =
+            parsed.locator.providerId === 'direct'
+              ? Boolean(parsed.secrets['jwe'])
+              : Boolean(parsed.secrets['p'] ?? submittedPassword);
+          const resolvedPassword = parsed.secrets['p'] ?? submittedPassword;
+          setProtection(
+            passwordProtected && resolvedPassword
+              ? {
+                  kind: 'password',
+                  password: resolvedPassword,
+                  includePassword: Boolean(parsed.secrets['p']),
+                }
+              : { kind: 'none' },
+          );
+          setSourceLabel(`${provider.descriptor.label}${passwordProtected ? ' · Password-protected' : ''}`);
+          if (passwordProtected) {
+            globalThis.history.replaceState(
+              globalThis.history.state,
+              '',
+              `${globalThis.location.pathname}${globalThis.location.search}`,
+            );
+          }
+        }
+      } catch (error) {
+        if (!cancelled) {
+          if (isShareError(error) && error.code === 'SHARE_PASSWORD_REQUIRED') {
+            setNeedsPassword(true);
+            setPasswordError(undefined);
+          } else if (submittedPassword && isShareError(error) && error.code === 'SHARE_ARTIFACT_INVALID') {
+            setNeedsPassword(true);
+            setPasswordError('That password could not open this project.');
+          } else {
+            setError(error instanceof Error ? error.message : 'This share link could not be opened.');
+          }
+        }
+      } finally {
+        if (!cancelled) {
+          setOpening(false);
+        }
+      }
+    };
+    void resolve();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [location.hash, slug, submittedPassword]);
+
+  const resolved = useMemo(() => (artifact ? resolvePortableArtifact(artifact) : undefined), [artifact]);
+
+  if (unpublished) {
+    return (
+      <main className='flex min-h-dvh items-center justify-center bg-background p-6'>
+        <div className='max-w-md rounded-xl border bg-card p-6 text-center'>
+          <Heading level={1} variant='title'>
+            Gist deleted
+          </Heading>
+          <p className='mt-2 text-sm text-muted-foreground'>
+            The Gist is gone from GitHub, so this link and its GitHub link no longer open.
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  if (error !== undefined || (artifact !== undefined && !resolved)) {
+    return (
+      <main className='flex min-h-dvh items-center justify-center bg-background p-6'>
+        <div className='max-w-md rounded-xl border bg-card p-6 text-center'>
+          <Heading level={1} variant='title'>
+            Unable to open this shared project
+          </Heading>
+          <p className='mt-2 text-sm text-muted-foreground'>
+            {error ?? 'The project manifest or entry file is invalid.'}
+          </p>
+        </div>
+      </main>
+    );
+  }
+  if (needsPassword && !artifact) {
+    return (
+      <SharedProjectPassword
+        password={password}
+        isOpening={opening}
+        passwordError={passwordError}
+        onPasswordChange={(value) => {
+          setPassword(value);
+          setPasswordError(undefined);
+        }}
+        onSubmit={setSubmittedPassword}
+      />
+    );
+  }
+  if (!artifact || !resolved) {
+    return (
+      <main
+        role='status'
+        aria-busy='true'
+        className='flex min-h-dvh flex-col items-center justify-center gap-3 bg-background text-muted-foreground'
+      >
+        <Loader className='size-8' />
+        <p className='text-sm'>Opening shared project…</p>
+      </main>
+    );
+  }
+
+  const publication: ParsedPublication = {
+    id: `share:${slug}`,
+    title: resolved.manifest.name,
+    description: resolved.manifest.description,
+    visibility: 'private',
+    viewerRole: 'public',
+    // Resolution admits only a manifest whose main entry is in the artifact.
+    entryPath: resolved.manifest.assets.main?.entryPath ?? '',
+    ownerSnapshot: null,
+    forkCount: 0,
+    viewCount: 0,
+    createdAt: new Date(0).toISOString(),
+  };
+  const data: PublicationRouteLoaderData = {
+    publication: publication as unknown as Record<string, unknown>,
+    viewerRole: 'public',
+    urls: { view: '', share: '', og: '', thumbnail: '' },
+    manifest: {
+      version: 1,
+      projectId: publication.id,
+      entryPath: publication.entryPath,
+      files: {},
+      kernels: [],
+      runtime: 'portable',
+      parameters: resolved.parameters,
+      createdAt: publication.createdAt,
+    },
+    files: {},
+  };
+  return (
+    <PublicationInteractiveSurface
+      data={data}
+      publication={publication}
+      archive={artifact.archive}
+      shouldTrackView={false}
+      hydratedFiles={resolved.files}
+      shareUrl={sourceUrl}
+      sourceLabel={resolved.parameterDiagnostic ?? sourceLabel}
+      managementActions={
+        parseShareSlug(slug).providerId === 'github-gist' ? (
+          <GithubGistServicesProvider value={githubGistServices}>
+            <GithubGistManagement
+              locator={parseShareSlug(slug)}
+              protection={protection}
+              collectSnapshot={async () => collectOpenedSnapshot(resolved.files, publication.entryPath)}
+              shareUrl={sourceUrl}
+              onRepublished={(url) => {
+                globalThis.location.assign(url);
+              }}
+              onUnpublished={() => {
+                setUnpublished(true);
+              }}
+            />
+          </GithubGistServicesProvider>
+        ) : undefined
+      }
+    />
+  );
+};
+
+/**
+ * The desktop app, offered over whatever `/s/:slug` is showing (R4).
+ *
+ * Never a gate: the shared workbench is what this link is for, and the app is
+ * the second way to it. The workbench is full-bleed, so there is no column to
+ * put the card in and it floats instead.
+ *
+ * `OpenInDesktop` renders nothing on the desktop build and nothing for a slug
+ * the shell's parser would refuse, so in both of those cases this is an empty
+ * box that takes no pointer events and paints nothing.
+ *
+ * Its inset matches the viewer controls: the workbench's p-2 frame, its
+ * 1px border, and the controls' inset-2 spacing. Shown from
+ * `lg`, fixed in the bottom-right corner over the workbench.
+ * Phones and tablets have no desktop app to open.
+ *
+ * @returns The offer's corner.
+ */
+const ShareDesktopOffer = (): React.JSX.Element => (
+  <div className='pointer-events-none fixed right-[calc(var(--spacing)*4+1px)] bottom-[calc(var(--spacing)*4+1px)] z-50 hidden lg:block'>
+    <div className='pointer-events-auto [&>[data-slot=card]]:shadow-xs'>
+      <OpenInDesktop continueLabel='Continue in the browser' />
+    </div>
+  </div>
+);
+
+export default function ShareRoute(): React.JSX.Element {
+  const data = useLoaderData<ShareRouteLoaderData | PublicationRouteLoaderData>();
+  return (
+    <>
+      {'kind' in data && data.kind === 'portable' ? <PortableShareSurface /> : <PublicationViewRoute />}
+      <ShareDesktopOffer />
+    </>
+  );
+}
+
+export const ErrorBoundary = (): React.JSX.Element => <PublicationErrorBoundary />;

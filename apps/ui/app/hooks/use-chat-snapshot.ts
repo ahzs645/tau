@@ -1,54 +1,245 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useSelector } from '@xstate/react';
-import type { ChatSnapshot } from '@taucad/chat';
-import type { FileTreeEntry } from '@taucad/types';
+import type { ChatSnapshot, SnapshotKernel } from '@taucad/chat';
+import { buildSnapshotKernel } from '@taucad/chat/prompts';
+import type { KernelOwner, KernelRoutingProfile } from '@taucad/chat/prompts';
+import type { KernelPreference } from '@taucad/types/constants';
+import type { WorkbenchEntries, WorkbenchNode, WorkbenchTab, WorkbenchView } from '@taucad/workbench';
+import type { FileEntry } from '@taucad/types';
+import { cadReferenceFromGeometryComponent, maxCadReferences } from '@taucad/chat/references';
+import { maxSnapshotFileTreeEntries } from '@taucad/chat';
+import type { CadReference } from '@taucad/chat/references';
+import { buildGeometryComponentReference } from '@taucad/viewer/graphics/metadata/geometry-component-reference';
+import type {
+  ModelInteractionContext,
+  ModelInteractionUnitState,
+} from '@taucad/viewer/machines/model-interaction.machine';
 import { useProject } from '#hooks/use-project.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useCookie } from '#hooks/use-cookie.js';
-import { cookieName } from '#constants/cookie.constants.js';
+import { cookieName } from '@taucad/ui-core/constants/cookie.constants';
+import { useProjectWorkspace } from '#routes/w.$workspace.$project/project-workspace-context.js';
+import type { WorkbenchLayoutSnapshot } from '#routes/w.$workspace.$project/workbench-layout-controller.js';
+import { viewName } from '#workbench-records/view-titles.js';
+import { useFeature } from '#flags/use-feature.js';
+import { useRoutingKernelProfile } from '#hooks/use-routing-kernel-profile.js';
+import { useProjectKernelOwner } from '#hooks/use-project-kernel-owner.js';
+
+const emptyLayoutSnapshot = (): undefined => undefined;
+const emptyLayoutSubscribe = (): (() => void) => () => undefined;
+
+const activeTabs = (node: WorkbenchNode): WorkbenchTab[] =>
+  node.kind === 'group'
+    ? node.tabs.length === 0
+      ? []
+      : [node.tabs[node.active ?? node.tabs.length - 1]!]
+    : node.children.flatMap(activeTabs);
+
+/** Portable, bounded facts from the page's applied record state. */
+export const projectWorkbenchSnapshot = ({
+  current,
+  viewRecords,
+  entriesRecord,
+  isTauDebugEnabled,
+}: Readonly<{
+  current: WorkbenchLayoutSnapshot | undefined;
+  viewRecords: ReadonlyMap<string, WorkbenchView> | undefined;
+  entriesRecord: WorkbenchEntries | undefined;
+  isTauDebugEnabled: boolean;
+}>): ChatSnapshot['workbench'] => {
+  if (!current) {
+    return undefined;
+  }
+  const { layout, refused, layoutDigest } = current;
+  const views = [...(viewRecords ?? new Map<string, WorkbenchView>())].slice(0, 16).map(([id, view]) => ({
+    id,
+    name: viewName(view),
+    entryPath: view.entryPath,
+    camera: view.camera.kind === 'preset' ? view.camera.preset : view.camera.kind,
+  }));
+  const entries = Object.entries(entriesRecord?.entries ?? {})
+    .slice(0, 16)
+    .map(([path, settings]) => ({
+      path,
+      ...(settings.renderTimeout === undefined ? {} : { renderTimeout: settings.renderTimeout }),
+      hidden: settings.components?.hidden.length ?? 0,
+    }));
+  const visible = [...activeTabs(layout.viewer), ...(layout.lanes.workbench ? activeTabs(layout.workbench) : [])].slice(
+    0,
+    32,
+  );
+  const boundedRefused = refused.slice(0, 16);
+  const unavailable: NonNullable<ChatSnapshot['workbench']>['unavailable'] = isTauDebugEnabled
+    ? []
+    : ['kernel', 'console'];
+  return { layoutDigest, lanes: layout.lanes, visible, views, entries, unavailable, refused: boundedRefused };
+};
+
+const sourceUnitPrefix = 'file:';
+
+const selectedReferences = (unit: ModelInteractionUnitState): CadReference[] => {
+  const { manifest } = unit;
+  if (!manifest) {
+    return [];
+  }
+  return unit.selectedComponentIds.slice(0, maxCadReferences).flatMap((componentId) => {
+    const node = manifest.nodesById[componentId];
+    const reference = node ? buildGeometryComponentReference(manifest, node) : undefined;
+    return reference ? [cadReferenceFromGeometryComponent(reference)] : [];
+  });
+};
+
+/**
+ * The viewer's selection as structured references (blueprint D6): the selected components of one source file's
+ * model, preferring the entry the editor shows when several files have a selection. Geometry without a source file
+ * (`geometry:<hash>` units) cannot be referenced and is skipped.
+ */
+export const projectViewerSelection = (
+  context: Pick<ModelInteractionContext, 'unitsById' | 'unitOrder'>,
+  preferredPath: string | undefined,
+): ChatSnapshot['viewerSelection'] => {
+  const candidates = context.unitOrder.flatMap((unitId) => {
+    const unit = context.unitsById[unitId];
+    if (!unitId.startsWith(sourceUnitPrefix) || !unit || unit.selectedComponentIds.length === 0) {
+      return [];
+    }
+    const selected = selectedReferences(unit);
+    return selected.length === 0 ? [] : [{ entryPath: unitId.slice(sourceUnitPrefix.length), selected }];
+  });
+  return candidates.find((candidate) => candidate.entryPath === preferredPath) ?? candidates[0];
+};
+
+/**
+ * The snapshot's `kernel` object (AKS-7): the facts an external agent reads to keep or choose a kernel, rendered from
+ * the same state the Tau agent's kernel text is.
+ */
+export const projectSnapshotKernel = (
+  input: Readonly<{ preference: KernelPreference; owner: KernelOwner | undefined; profile: KernelRoutingProfile }>,
+): SnapshotKernel =>
+  buildSnapshotKernel({
+    preference: input.preference,
+    ...(input.owner === undefined ? {} : { owner: input.owner }),
+    profile: input.profile,
+  });
 
 /**
  * Hook to get the current chat snapshot for message context.
  * This provides the LLM with awareness of what the user is currently working on.
  *
  * The snapshot includes:
- * - fileTree: Complete project file tree via `getCachedFileItems()` (memoized, invalidated on tree change)
+ * - fileTree: Cached/partial project file tree via `getCachedFileItems()` (memoized, invalidated on tree change)
  * - activeFile: The file currently being rendered by the CAD engine
  * - openFiles: The files currently open in editor tabs
+ * - viewerSelection: The components selected in the viewer, as structured references
  *
- * Each component can be toggled via user preferences (cookies).
+ * - kernel: The kernel preference, owner, availability and rendered kernel text (always sent)
  *
- * @returns ChatSnapshot object or undefined if no context is enabled/available
+ * Each other component can be toggled via user preferences (cookies).
+ *
+ * @returns ChatSnapshot object
  */
-export function useChatSnapshot(): ChatSnapshot | undefined {
+/**
+ * The project's files as the snapshot tells them to the model.
+ *
+ * Only the project's own rows: the pane composes read-only overlays into the
+ * same tree (W2), and advertising several hundred system skill bundle files as
+ * project context is exactly the noise the Exclusion Matrix keeps out. A text
+ * file's kind travels with its line count, which the wire requires beside it;
+ * a text row a head listing has not counted yet goes without either.
+ *
+ * @param entries - The file tree's rows.
+ * @returns The snapshot's `fileTree`.
+ */
+export const projectFileTree = (entries: Iterable<FileEntry>): NonNullable<ChatSnapshot['fileTree']> =>
+  [...entries]
+    .filter(
+      (entry): entry is Extract<FileEntry, { type: 'file' }> =>
+        entry.type === 'file' && (entry.provenance === undefined || entry.provenance.source === 'project'),
+    )
+    .map((item): NonNullable<ChatSnapshot['fileTree']>[number] => {
+      const name = item.path.split('/').pop() ?? item.path;
+      if (item.contentKind === 'binary') {
+        return { path: item.path, name, type: 'file', size: item.size, contentKind: 'binary' };
+      }
+      return item.lineCount === undefined
+        ? { path: item.path, name, type: 'file', size: item.size }
+        : { path: item.path, name, type: 'file', size: item.size, contentKind: 'text', lineCount: item.lineCount };
+    })
+    .sort(byDepthThenPath);
+
+const depthOf = (path: string): number => path.split('/').length;
+/* Shallowest first, then by path in code-unit order: the same tree always yields the same snapshot. */
+function byDepthThenPath(left: { path: string }, right: { path: string }): number {
+  const depth = depthOf(left.path) - depthOf(right.path);
+  if (depth !== 0) {
+    return depth;
+  }
+  return left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
+}
+
+/**
+ * The snapshot's bounded file tree (D18): {@link projectFileTree}'s rows cut
+ * at {@link maxSnapshotFileTreeEntries}, with how many the cut left out.
+ *
+ * @param entries - The file tree's rows.
+ * @returns The listed rows, and the count omitted when the bound cut any.
+ */
+export const boundedProjectFileTree = (
+  entries: Iterable<FileEntry>,
+): Pick<ChatSnapshot, 'fileTree' | 'fileTreeOmitted'> & { fileTree: NonNullable<ChatSnapshot['fileTree']> } => {
+  const rows = projectFileTree(entries);
+  return rows.length <= maxSnapshotFileTreeEntries
+    ? { fileTree: rows }
+    : {
+        fileTree: rows.slice(0, maxSnapshotFileTreeEntries),
+        fileTreeOmitted: rows.length - maxSnapshotFileTreeEntries,
+      };
+};
+
+export function useChatSnapshot(preference: KernelPreference): ChatSnapshot | undefined {
   const projectContext = useProject({ enableNoContext: true });
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- chat can mount without the project workspace provider.
+  const layoutController = useProjectWorkspace({ enableNoContext: true })?.layoutController;
+  const layoutSnapshot = useSyncExternalStore(
+    layoutController?.subscribe ?? emptyLayoutSubscribe,
+    layoutController?.snapshot ?? emptyLayoutSnapshot,
+    emptyLayoutSnapshot,
+  );
+  const isTauDebugEnabled = useFeature('tauDebug');
   const editorRef = projectContext?.editorRef;
   const { treeService } = useFileManager();
 
-  const [fileTree, setFileTree] = useState<FileTreeEntry[] | undefined>();
+  const [bounded, setBounded] = useState<ReturnType<typeof boundedProjectFileTree> | undefined>();
+  const fileTree = bounded?.fileTree;
 
   useEffect(() => {
     if (!treeService) {
       return;
     }
 
+    /* One rebuild per frame however many change sets land in it. */
+    let frame: number | undefined;
     const sync = (): void => {
-      const items = treeService.getCachedFileItems();
-      setFileTree(
-        items.map((item) => ({
-          path: item.path,
-          name: item.path.split('/').pop() ?? item.path,
-          type: 'file',
-          size: item.size,
-        })),
-      );
+      frame = undefined;
+      setBounded(boundedProjectFileTree(treeService.getTreeSnapshot().values()));
+    };
+    const schedule = (): void => {
+      frame ??= requestAnimationFrame(sync);
     };
 
     sync();
-    const unsubscribe = treeService.subscribeTree(sync);
+    const unsubscribe = treeService.subscribeTree(schedule);
 
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      if (frame !== undefined) {
+        cancelAnimationFrame(frame);
+      }
+    };
   }, [treeService]);
+
+  const routingProfile = useRoutingKernelProfile();
+  const owner = useProjectKernelOwner();
 
   const editorState = useSelector(
     editorRef,
@@ -69,42 +260,100 @@ export function useChatSnapshot(): ChatSnapshot | undefined {
       previous.openFiles.every((file, index) => file.path === next.openFiles[index]?.path),
   );
 
+  const viewerSelection = useSelector(
+    projectContext?.modelInteractionRef,
+    (state) => (state ? projectViewerSelection(state.context, editorState.activeFilePath) : undefined),
+    (previous, next) => JSON.stringify(previous) === JSON.stringify(next),
+  );
+
   const [includeFileSystem] = useCookie(cookieName.chatCtxFs, true);
   const [includeActiveFile] = useCookie(cookieName.chatCtxActive, true);
   const [includeOpenFiles] = useCookie(cookieName.chatCtxOpen, true);
 
   return useMemo((): ChatSnapshot | undefined => {
     const snapshot: ChatSnapshot = {};
+    const fileByPath = new Map(
+      (fileTree ?? []).map((entry): [string, NonNullable<ChatSnapshot['fileTree']>[number]] => [entry.path, entry]),
+    );
+    const enrichFileReference = (path: string, fallbackName: string): NonNullable<ChatSnapshot['activeFile']> => {
+      const entry = fileByPath.get(path);
+      if (entry?.type !== 'file') {
+        return { path, name: fallbackName };
+      }
+      if (!('contentKind' in entry)) {
+        return { path, name: fallbackName };
+      }
+      return entry.contentKind === 'text'
+        ? {
+            path,
+            name: fallbackName,
+            size: entry.size,
+            contentKind: 'text',
+            lineCount: entry.lineCount,
+          }
+        : {
+            path,
+            name: fallbackName,
+            size: entry.size,
+            contentKind: 'binary',
+          };
+    };
 
-    if (includeFileSystem && fileTree) {
-      snapshot.fileTree = fileTree;
+    if (includeFileSystem && bounded) {
+      snapshot.fileTree = bounded.fileTree;
+      if (bounded.fileTreeOmitted !== undefined) {
+        snapshot.fileTreeOmitted = bounded.fileTreeOmitted;
+      }
     }
 
     if (includeActiveFile && editorState.activeFilePath) {
-      snapshot.activeFile = {
-        path: editorState.activeFilePath,
-        name: editorState.activeFilePath.split('/').pop() ?? editorState.activeFilePath,
-      };
+      snapshot.activeFile = enrichFileReference(
+        editorState.activeFilePath,
+        editorState.activeFilePath.split('/').pop() ?? editorState.activeFilePath,
+      );
     }
 
     if (includeOpenFiles && editorState.openFiles.length > 0) {
-      snapshot.openFiles = editorState.openFiles.map((file) => ({
-        path: file.path,
-        name: file.name,
-      }));
+      snapshot.openFiles = editorState.openFiles.map((file) => enrichFileReference(file.path, file.name));
     }
 
-    if (Object.keys(snapshot).length === 0) {
-      return undefined;
+    const workbench = projectWorkbenchSnapshot({
+      current: layoutSnapshot,
+      viewRecords: projectContext?.viewRecords,
+      entriesRecord: projectContext?.entriesRecord,
+      isTauDebugEnabled,
+    });
+    if (workbench) {
+      snapshot.workbench = workbench;
     }
+
+    if (viewerSelection) {
+      snapshot.viewerSelection = viewerSelection;
+    }
+
+    /* Not a context toggle: the kernel facts decide what an external agent may write, so they always travel. */
+    snapshot.kernel = projectSnapshotKernel({
+      preference,
+      owner,
+      profile: routingProfile,
+    });
 
     return snapshot;
   }, [
     includeFileSystem,
+    bounded,
     fileTree,
     includeActiveFile,
     editorState.activeFilePath,
     includeOpenFiles,
     editorState.openFiles,
+    layoutSnapshot,
+    projectContext?.viewRecords,
+    projectContext?.entriesRecord,
+    isTauDebugEnabled,
+    viewerSelection,
+    preference,
+    owner,
+    routingProfile,
   ]);
 }

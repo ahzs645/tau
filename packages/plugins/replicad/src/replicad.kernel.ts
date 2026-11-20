@@ -1,0 +1,1632 @@
+/**
+ * Replicad Kernel Module
+ *
+ * Full defineKernel implementation for the Replicad kernel.
+ * Uses runtime.bundler for JS/TS bundling and runtime.execute for evaluation.
+ * Registers replicad as a built-in module and loads OpenCASCADE WASM for geometry.
+ *
+ * @see docs/policy/es-module-policy.md
+ */
+
+import type { OpenCascadeInstance } from 'replicad-opencascadejs';
+import type { AnyShape } from 'replicad';
+import type * as ReplicadModule from 'replicad';
+import { createExportFile } from '@taucad/runtime/types';
+import type { GeometrySvg, RuntimeSpanTracer, KernelIssue, KernelStackFrame } from '@taucad/runtime/types';
+import { SourceMapConsumer } from 'source-map-js';
+import type { RawSourceMap } from 'source-map-js';
+import {
+  asBuffer,
+  jsonSchemaFromJson,
+  defineKernel,
+  isRecordObject,
+  extractDefaultParameters,
+  registerKernelModule,
+  toVmEntryPath,
+  convertRawIssuesToKernelIssues,
+  loadBinaryFile,
+  createKernelLibraryTracer,
+  defineLibraryTracePolicy,
+  createKernelError,
+  createKernelSuccess,
+  createKernelParameterDeclaration,
+  nonemptyExportFiles,
+  applyLibrarySourceMaps,
+  createRealmGroup,
+  preserveExportNames,
+  demangleStackFrames,
+  classifyLibraryFrames,
+  named,
+} from '@taucad/runtime/kernel';
+import type {
+  KernelServices,
+  RuntimeLogger,
+  KernelLibraryTraceHandle,
+  KernelLibraryTraceMode,
+  RealmHold,
+} from '@taucad/runtime/kernel';
+
+import { replicadOptionsSchema, replicadRenderSchema, replicadExportSchemas } from '#replicad.schemas.js';
+
+import {
+  detectMultiThreadSupport,
+  initOcct,
+  activateOccParallelism,
+  formatOcRuntimeError,
+  runOcMain,
+  resolveOcctModuleFactory,
+  wrapOcWithTracing,
+  wrapOcForExceptions,
+  occtExplicitTessellationDefaults,
+} from '@taucad/occt-core';
+import type { OcctModuleFactory, OcErrorContext, OcRunMainResult, OcTracingSummary } from '@taucad/occt-core';
+
+import {
+  isDrawingShape,
+  normalizeRenderShapes,
+  render,
+  renderTessellated,
+  resolveReplicadTessellation,
+} from '#utils/render-output.js';
+import * as tauReplicadAnnotations from '#annotations/index.js';
+import { exportSTEP } from '#export/interface-export.js';
+import { drawingFaces, isClosedDrawing } from '#utils/drawing-faces.js';
+import { resolveEntryInterfaces, rotateNativeEntryToYup } from '#interface-resolution.js';
+import type { NativeHandleEntry } from '#interface-resolution.js';
+import type { GlbResources } from '@taucad/geometry-core';
+
+import { convertReplicadGeometriesToGltf } from '#utils/replicad-to-gltf.js';
+import { installNativeUserBreak } from '#utils/native-user-break.js';
+import { createLiveTier, installOperationTier } from '#live-tier/live-tier.js';
+import { createReplicadMeshMemo } from '#utils/mesh-memo.js';
+import { meterOperations, tierBuildReport } from '#utils/operation-cost.js';
+import type { OperationMeter } from '#utils/operation-cost.js';
+import type { ReplicadMeshMemo } from '#utils/mesh-memo.js';
+import type { LiveTier } from '#live-tier/live-tier.js';
+import { createHandleEpochs, isUseAfterReleaseMessage } from '#build-epochs.js';
+import type { CollectorGroup, HandleEpochs } from '#build-epochs.js';
+
+import type { GeometryReplicad } from '#replicad.types.js';
+import { replicadDetectPattern } from '#replicad.constants.js';
+import { loadReplicadSingleWasm } from '#replicad-wasm-single-loader.js';
+import { loadReplicadMultiWasm } from '#replicad-wasm-multi-loader.js';
+import {
+  createEmptyGlb,
+  createEmptyGltf,
+  resolveShapeName,
+  validateGlbResources,
+  readMechanismExport,
+} from '@taucad/geometry-core';
+
+/**
+ * Live Replicad native handle: the shapes `main` returned, the model's GLB resources and the entry module's
+ * `mechanism` export, normalised to plain JSON. All are export-facing evidence, so all survive a snapshot.
+ */
+type NativeHandle = GlbResources & { shapes: NativeHandleEntry[]; mechanism?: unknown };
+
+/**
+ * Advertise the views and exports supported by one retained model. A drawing-only model has no mesh to
+ * export; when every drawing bounds closed profiles it offers STEP, which writes the drawing's region faces
+ * on the XY plane, and otherwise it offers no export.
+ * @param handle - Evaluated Replicad shapes.
+ * @returns Ordered view and export offers with stable authored drawing instances.
+ * @internal
+ */
+export const offersFor = (
+  handle: NativeHandle,
+): {
+  views: ReadonlyArray<'model' | 'drawing'>;
+  exports: ReadonlyArray<'glb' | 'gltf' | 'step'> | undefined;
+  instances?: { drawing: ReadonlyArray<{ id: string; title: string }> };
+} => {
+  const drawings = handle.shapes.filter(({ shape }) => isDrawingShape(shape));
+  const hasModel = handle.shapes.some(({ shape }) => !isDrawingShape(shape));
+  const names = new Map<string, number>();
+  for (const { name } of drawings) {
+    if (name) {
+      names.set(name, (names.get(name) ?? 0) + 1);
+    }
+  }
+  const instances = drawings.flatMap(({ name }) => (name && names.get(name) === 1 ? [{ id: name, title: name }] : []));
+  return {
+    views: hasModel || drawings.length === 0 ? (drawings.length > 0 ? ['model', 'drawing'] : ['model']) : ['drawing'],
+    exports: hasModel
+      ? undefined
+      : drawings.length === 0
+        ? ['glb', 'gltf']
+        : drawings.every(({ shape }) => isClosedDrawing(shape))
+          ? ['step']
+          : [],
+    ...(drawings.length > 0 ? { instances: { drawing: instances } } : {}),
+  };
+};
+
+const tracedStep = <T>(tracer: RuntimeSpanTracer, label: string, operation: () => T): T => {
+  const span = tracer.startSpan(label);
+  try {
+    return operation();
+  } finally {
+    span.end();
+  }
+};
+
+const tracedPhase = async <T>(
+  tracer: RuntimeSpanTracer,
+  label: string,
+  operation: () => Promise<T> | T,
+): Promise<T> => {
+  const span = tracer.startSpan(label);
+  try {
+    return await operation();
+  } finally {
+    span.end();
+  }
+};
+
+/** `replicad` binds OpenCASCADE at module scope, so every kernel in a realm shares one instance (I2). */
+const replicadOcct = createRealmGroup<OpenCascadeInstance>('replicad-occt');
+
+const geistRegularUrl = new URL('fonts/Geist-Regular.ttf', import.meta.url).href;
+const replicadSourceMapUrl = new URL('sourcemaps/replicad.js.map', import.meta.url).href;
+const replicadSingleWasmUrl = new URL(import.meta.resolve('replicad-opencascadejs/wasm')).href;
+const replicadMultiWasmUrl = new URL(import.meta.resolve('replicad-opencascadejs/multi/wasm')).href;
+
+// =============================================================================
+// WASM variant selection
+// =============================================================================
+
+type WasmVariant = 'single' | 'multi';
+
+// =============================================================================
+// WASM resolution (two-tier dynamic import pattern)
+// =============================================================================
+
+/** Emscripten module factory returning the replicad-flavoured OpenCascade instance. */
+type OpenCascadeModuleFactory = OcctModuleFactory<OpenCascadeInstance>;
+
+type ResolvedWasm = {
+  wasmUrl?: string;
+  bindingsFactory: OpenCascadeModuleFactory;
+  variant: WasmVariant | 'custom';
+};
+
+type WasmOption = 'auto' | 'single' | 'multi' | { wasmUrl: string; wasmBindingsUrl: string };
+
+/**
+ * Resolve the WASM variant into a concrete URL and loaded bindings factory.
+ *
+ * - **`'auto'`** (default): pick `'multi'` when SAB + cross-origin isolation
+ *   are available, otherwise fall back to `'single'`.
+ * - **`'single'`** / **`'multi'`**: pin the variant explicitly. Uses static
+ *   loader imports plus exported package URLs for the raw `.wasm`
+ *   binary so browser bundlers can see and emit the built-in assets.
+ * - **Custom config** (`{ wasmUrl, wasmBindingsUrl }`): variable `import()` with
+ *   `@vite-ignore` to bypass bundler analysis. Works in Node for any module format.
+ *
+ * @param wasm - variant tag or custom URL pair
+ * @param logger - kernel logger (used for the auto-selection log line)
+ * @param tracer - optional span tracer
+ * @returns the resolved WASM URL, bindings factory, and concrete variant.
+ */
+async function resolveWasm(wasm: WasmOption, logger: RuntimeLogger, tracer?: RuntimeSpanTracer): Promise<ResolvedWasm> {
+  const span = tracer?.startSpan('replicad.resolve-bindings', {
+    variant: typeof wasm === 'string' ? wasm : 'custom',
+  });
+
+  try {
+    if (typeof wasm !== 'string') {
+      // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- dynamic import() with variable URL returns any
+      const module_: Record<string, unknown> = await import(
+        /* webpackIgnore: true */
+        /* @vite-ignore */
+        wasm.wasmBindingsUrl
+      );
+      return {
+        wasmUrl: wasm.wasmUrl,
+        bindingsFactory: resolveOcctModuleFactory<OpenCascadeInstance>(module_),
+        variant: 'custom',
+      };
+    }
+
+    let variant: WasmVariant;
+    if (wasm === 'auto') {
+      const detection = detectMultiThreadSupport();
+      variant = detection.supported ? 'multi' : 'single';
+      logger.log(`Replicad WASM variant auto-selected: ${variant} (${detection.reason})`);
+    } else {
+      variant = wasm;
+    }
+
+    if (variant === 'multi') {
+      return {
+        wasmUrl: replicadMultiWasmUrl,
+        bindingsFactory: await loadReplicadMultiWasm(),
+        variant: 'multi',
+      };
+    }
+
+    return {
+      wasmUrl: replicadSingleWasmUrl,
+      bindingsFactory: await loadReplicadSingleWasm(),
+      variant: 'single',
+    };
+  } finally {
+    span?.end();
+  }
+}
+
+// =============================================================================
+// Types
+// =============================================================================
+
+type ReplicadContext = {
+  openCascade: OpenCascadeInstance;
+  /** This kernel's share of the realm's one OpenCASCADE instance. */
+  occt: RealmHold<OpenCascadeInstance>;
+  replicadLibrary: ReplicadLibrary;
+  tessellationInstancing: boolean;
+  replicadInitialised: boolean;
+  librarySourceMapCache: Map<string, SourceMapConsumer | undefined>;
+  exportNameMap: Map<string, string>;
+  libraryExportNames: Set<string>;
+  tracingSummary?: OcTracingSummary;
+  libraryTrace: KernelLibraryTraceHandle<ReplicadLibrary>;
+  /** The live tier; undefined when compute reuse is switched off for this kernel. */
+  liveTier: LiveTier<BuiltModel> | undefined;
+  /** Build and module epochs: what each delivered handle owns, deleted when the runtime releases it (E12). */
+  epochs: HandleEpochs;
+  /**
+   * Release fallback, first stage: the entry path of each module that returned or used a value its epochs had
+   * deleted, mapped to that module's bundled code and the collector group of its fresh instance. Builds of that code
+   * leave their handles to the collector. When the entry's bundle code changes, the entry is dropped and its group
+   * retired (the old instance never runs again but stays in the module map, so its memo is deleted, not collected),
+   * and the edited module starts with deterministic release again.
+   */
+  collectorModules: Map<string, { readonly code: string; readonly group: CollectorGroup }>;
+  /**
+   * Release fallback, second stage: a module's fresh instance used a deleted value again (state kept outside the
+   * bundle, such as `globalThis`). Every later build in this worker leaves its handles to the collector.
+   */
+  collectorWorker: boolean;
+  /** Meshes and boxes kept across renders (E7, N2); made by the first render with the live tier, never without it. */
+  meshMemo?: ReplicadMeshMemo;
+};
+
+/** What one build delivers: the native handle and the offers derived from it. */
+type BuiltModel = { handle: NativeHandle; issues?: KernelIssue[] } & ReturnType<typeof offersFor>;
+
+/** Handles of builds delivered with the live tier installed, and of scene-table revisits (see `serializeHandle`). */
+const tierBuiltHandles = new WeakSet<NativeHandle>();
+
+type ReplicadLibrary = typeof ReplicadModule;
+
+/**
+ * The installed `replicad` dependency's own `name` and `version`: Tau runs the `@taulabs/replicad`
+ * fork under the `replicad` import name. The fork exports no `./package.json`, and a built kernel
+ * cannot read an unexported manifest, so this pins it; `replicad-package-identity.test.ts` fails
+ * when it differs from the installed package.
+ */
+const replicadPackage = { name: '@taulabs/replicad', version: '1.2.0-beta.2' } as const;
+
+// Match both the public package name (`replicad/`) and the aliased pnpm path
+// (`@taulabs/replicad/`) — the package.json aliases `replicad` to the Tau fork,
+// so the actual on-disk file lives at `node_modules/.pnpm/.../@taulabs/replicad/dist/replicad.js`
+// while still being importable as `replicad`. Both patterns map to the `replicad`
+// display name so source-mapped paths render as `replicad/src/...`.
+const libraryPatterns = [
+  { pattern: '@taulabs/replicad/', moduleName: 'replicad' },
+  { pattern: 'node_modules/replicad/', moduleName: 'replicad' },
+];
+
+const replicadLibraryTracePolicy = defineLibraryTracePolicy({
+  library: 'replicad',
+  spanPrefix: 'replicad.library',
+  summarySpanName: 'replicad.library.summary',
+  traceCall(context) {
+    if (context.scope !== 'user-main') {
+      return { type: 'ignore' };
+    }
+
+    return { type: 'trace' };
+  },
+  shouldWrapValue(context) {
+    return typeof context.value === 'function' || context.scope === 'user-main';
+  },
+});
+
+// =============================================================================
+// Error enrichment helpers
+// =============================================================================
+
+function resolveLibraryFrames(frames: KernelStackFrame[], context: ReplicadContext): KernelStackFrame[] {
+  const mapped = applyLibrarySourceMaps(frames, libraryPatterns, (moduleName) => {
+    return context.librarySourceMapCache.get(moduleName);
+  });
+  const demangled = demangleStackFrames(mapped, context.exportNameMap);
+  return classifyLibraryFrames(demangled, context.libraryExportNames);
+}
+
+function buildErrorContext(
+  context: ReplicadContext,
+  options: { bundleSourceMap?: string; entryUrl?: string },
+): OcErrorContext {
+  return {
+    bundleSourceMap: options.bundleSourceMap,
+    entryUrl: options.entryUrl,
+    applySecondarySourceMaps: (frames) => resolveLibraryFrames(frames, context),
+  };
+}
+
+async function loadReplicadSourceMap(): Promise<SourceMapConsumer | undefined> {
+  try {
+    const json = await loadTextFile(replicadSourceMapUrl);
+    if (!json) {
+      return undefined;
+    }
+
+    const rawMap: unknown = JSON.parse(json);
+    if (
+      !isRecordObject(rawMap) ||
+      !Array.isArray(rawMap['sources']) ||
+      !rawMap['sources'].every((source) => typeof source === 'string') ||
+      !Array.isArray(rawMap['names']) ||
+      !rawMap['names'].every((name) => typeof name === 'string') ||
+      typeof rawMap['mappings'] !== 'string'
+    ) {
+      return undefined;
+    }
+    const sourceMap: RawSourceMap = {
+      version: String(rawMap['version']),
+      sources: rawMap['sources'],
+      names: rawMap['names'],
+      mappings: rawMap['mappings'],
+      ...(typeof rawMap['file'] === 'string' ? { file: rawMap['file'] } : {}),
+      ...(typeof rawMap['sourceRoot'] === 'string' ? { sourceRoot: rawMap['sourceRoot'] } : {}),
+      ...(Array.isArray(rawMap['sourcesContent']) &&
+      rawMap['sourcesContent'].every((source) => typeof source === 'string')
+        ? { sourcesContent: rawMap['sourcesContent'] }
+        : {}),
+    };
+    return new SourceMapConsumer(sourceMap);
+  } catch {
+    return undefined;
+  }
+}
+
+async function loadTextFile(url: string): Promise<string | undefined> {
+  const bytes = await loadBinaryFile(url);
+  return bytes === undefined ? undefined : new TextDecoder().decode(bytes);
+}
+
+// =============================================================================
+// Module registration helpers
+// =============================================================================
+
+function registerReplicadModule(runtime: KernelServices, replicadLibrary: ReplicadLibrary): void {
+  registerKernelModule(runtime, {
+    name: 'replicad',
+    exports: replicadLibrary,
+    package: replicadPackage,
+    globalName: 'replicad',
+  });
+  registerKernelModule(runtime, {
+    name: '@taucad/replicad/annotations',
+    exports: { ...tauReplicadAnnotations },
+    // Tau-owned: no npm identity (npm's `@taucad/replicad` is an older replicad fork, not this plugin).
+    version: replicadPackage.version,
+    globalName: 'tauReplicadAnnotations',
+  });
+}
+
+// =============================================================================
+// Module execution helpers
+// =============================================================================
+
+function extractDefaultName(module: unknown): string | undefined {
+  if (!isRecordObject(module)) {
+    return undefined;
+  }
+
+  return typeof module['defaultName'] === 'string' ? module['defaultName'] : undefined;
+}
+
+// =============================================================================
+// Options schema
+// =============================================================================
+
+/**
+ * Custom WASM configuration for injecting non-standard builds at runtime.
+ * Primarily used for Node.js tooling (benchmarks, CI) via `file://` URLs.
+ * @public
+ */
+export type ReplicadWasmConfig = {
+  /** Absolute URL to the `.wasm` binary (typically `file://` in Node.js). */
+  wasmUrl: string;
+  /** Absolute URL to the Emscripten JS glue module (typically `file://` in Node.js). */
+  wasmBindingsUrl: string;
+};
+
+/**
+ * Configuration for the Replicad kernel, controlling WASM variant, OC tracing, and edge rendering.
+ * @public
+ */
+export type ReplicadOptions = {
+  /**
+   * WASM build variant or custom build configuration.
+   *
+   * - `'auto'` (default) -- pick `'multi'` when `SharedArrayBuffer` is usable
+   *   (Node 22+, or browsers with `crossOriginIsolated=true`); fall back to
+   *   `'single'` otherwise.
+   * - `'single'` -- pthread-free build; works without COOP/COEP headers.
+   * - `'multi'` -- pthread-enabled build; requires SAB + cross-origin isolation.
+   * - `ReplicadWasmConfig` -- custom WASM/JS URLs for runtime injection (Node tooling).
+   *
+   * @default 'auto'
+   */
+  wasm?: 'auto' | 'single' | 'multi' | ReplicadWasmConfig;
+  /** OC API call tracing mode. 'summary' (default) emits aggregated stats, 'per-call' emits individual spans. */
+  ocTracing?: 'off' | 'summary' | 'per-call';
+  /** Replicad library call tracing mode for user code. Defaults to `off`. */
+  libraryTracing?: KernelLibraryTraceMode;
+  /**
+   * Reuse prototype tessellation for repeated transformed Replicad shapes.
+   *
+   * Temporary diagnostic flag. Set to `false` to force the legacy
+   * one-shape-one-tessellation path for benchmarks and regression isolation.
+   *
+   * @default true
+   */
+  tessellationInstancing?: boolean;
+  /** Load library source maps for enriched error stack traces. Adds ~50ms to init. Defaults to `false`. */
+  withSourceMapping?: boolean;
+};
+
+// =============================================================================
+// Kernel module definition
+// =============================================================================
+
+/** @public */
+export const replicadKernel = defineKernel({
+  id: 'replicad',
+  extensions: ['ts', 'js'],
+  detectImport: replicadDetectPattern,
+  builtinModuleNames: ['replicad', '@taucad/replicad/annotations'],
+  // Resolves through the bundler and reads model sources only as bundle output.
+  sourceIdentity: 'bundle',
+  builtinPackages: {
+    replicad: replicadPackage,
+    'replicad-opencascadejs': { name: '@taulabs/replicad-opencascadejs', version: '0.23.0-beta.3' },
+  },
+  name: 'ReplicadKernel',
+  // 1.5.0: native-handle snapshots are binary BRep. The version keys every cached entry, so text
+  // snapshots from 1.4.0 stop matching and age out; there is nothing to migrate.
+  version: '1.6.0',
+  optionsSchema: replicadOptionsSchema,
+  views: {
+    model: {
+      title: 'Model',
+      mimeType: 'model/gltf-binary',
+      optionsSchema: replicadRenderSchema,
+      content: ['includeEdges', 'includeTopology'],
+    },
+    drawing: { title: 'Drawing', mimeType: 'image/svg+xml', instances: true },
+  },
+  // D2: in-worker OpenCascade yields cooperatively, so a superseded drag render is abandoned, not killed.
+  cancellation: 'cooperative',
+  exports: {
+    stl: { title: 'STL', mimeType: 'model/stl', extension: 'stl', optionsSchema: replicadExportSchemas.stl },
+    step: { title: 'STEP', mimeType: 'application/step', extension: 'step', optionsSchema: replicadExportSchemas.step },
+    glb: {
+      title: 'glTF binary',
+      mimeType: 'model/gltf-binary',
+      extension: 'glb',
+      optionsSchema: replicadExportSchemas.glb,
+      content: ['includeEdges', 'includeTopology'],
+    },
+    gltf: {
+      title: 'glTF JSON',
+      mimeType: 'model/gltf+json',
+      extension: 'gltf',
+      optionsSchema: replicadExportSchemas.gltf,
+      content: ['includeEdges', 'includeTopology'],
+    },
+  },
+  async initialize(options, runtime): Promise<ReplicadContext> {
+    const replicadModule = await import('replicad');
+    // A mutable facade: the library tracer's proxies need configurable properties.
+    const replicadLibrary: ReplicadLibrary = { ...replicadModule };
+    const { mangledToOriginal: exportNameMap, exportNames: libraryExportNames } = preserveExportNames(replicadModule);
+
+    const { logger, tracer } = runtime;
+    const {
+      ocTracing,
+      libraryTracing,
+      withSourceMapping,
+      tessellationInstancing,
+      wasm,
+      computeReuse: computeReuseOption,
+      computeReuseBytes,
+    } = options;
+
+    const wasmLabel = typeof wasm === 'string' ? wasm : 'custom';
+    logger.debug(
+      `Initializing OpenCASCADE WASM (ocTracing: ${ocTracing}, libraryTracing: ${libraryTracing}, wasm: ${wasmLabel})`,
+    );
+
+    const wasmSpan = tracer.startSpan('replicad.wasm-init');
+    const resolved = await resolveWasm(wasm, logger, tracer);
+    const compiledModule = resolved.wasmUrl ? runtime.getCompiledWasmModule(resolved.wasmUrl) : undefined;
+    // This kernel's wrapper over the realm's instance: per-kernel tracing, or exceptions only (I4).
+    let kernelOpenCascade: { instance: OpenCascadeInstance; summary?: OcTracingSummary } | undefined;
+    const wrapForKernel = (raw: OpenCascadeInstance) => {
+      if (kernelOpenCascade === undefined && (ocTracing === 'summary' || ocTracing === 'per-call')) {
+        const traced = wrapOcWithTracing(raw, tracer, { mode: ocTracing });
+        kernelOpenCascade = { instance: traced.tracedInstance, summary: traced.summary };
+      }
+      kernelOpenCascade ??= { instance: wrapOcForExceptions(raw) };
+      return kernelOpenCascade;
+    };
+
+    const occt = await runtime.realm.hold({
+      group: replicadOcct,
+      key: `${resolved.variant}:${resolved.wasmUrl ?? ''}`,
+      async create() {
+        // ponytail: OCCT print/printErr reach the creating kernel's logger only; exact with one realm per client.
+        const raw = await initOcct(resolved.wasmUrl, resolved.bindingsFactory, {
+          tracer,
+          ...(compiledModule ? { compiledModule } : {}),
+          print: (text) => {
+            logger.trace('OCJS stdout', { data: { text } });
+          },
+          printErr: (text) => {
+            logger.warn('OCJS stderr', { data: { text } });
+          },
+        });
+
+        if (resolved.variant === 'multi') {
+          /* oxlint-disable new-cap -- OCCT exposes callable C++ PascalCase methods. */
+          const pool = raw.OSD_ThreadPool.DefaultPool(-1);
+          try {
+            if (pool.IsInUse()) {
+              throw new Error('Cannot configure Replicad OCCT thread pool while it is in use');
+            }
+            // ponytail: cap OCCT threads to reduce parallel working sets; revisit after native batch memory is reduced.
+            pool.Init(Math.min(pool.NbThreads(), 4));
+          } finally {
+            pool.delete();
+          }
+          /* oxlint-enable new-cap */
+          activateOccParallelism(raw, logger);
+        } else {
+          logger.log(`Replicad OCCT initialised: variant=${resolved.variant} (single-threaded)`);
+        }
+
+        // N1: long native booleans and meshing stop on the same abort word the exception proxy polls.
+        installNativeUserBreak(raw);
+
+        // The creating kernel binds the library once (Q5): library-internal OC calls trace to it, which is
+        // exact with one realm per client; every other kernel's wrapper sees only its kernel-direct calls.
+        // ponytail: no unbind on last release — `replicad` keeps the stale instance until the next create rebinds it.
+        replicadLibrary.setOC(wrapForKernel(raw).instance);
+        return raw;
+      },
+    });
+
+    // `onDispose` never runs for a kernel whose initialisation failed, so release the hold here (I5).
+    try {
+      const { instance: openCascade, summary: tracingSummary } = wrapForKernel(occt.value);
+      wasmSpan.end();
+
+      try {
+        const fontSpan = tracer.startSpan('replicad.font-load');
+        // The dependency declaration says this is always present, but its registry lookup returns undefined before load.
+        if (Object.is(replicadLibrary.getFont('default'), undefined)) {
+          logger.debug('Loading default font for text rendering');
+          const fontData = await loadBinaryFile(geistRegularUrl);
+          if (!fontData) {
+            throw new Error('Default font file not found');
+          }
+          await replicadLibrary.loadFont(fontData, 'default');
+        }
+        fontSpan.end();
+      } catch (error) {
+        logger.warn('Failed to load default font', { data: error });
+      }
+
+      // Explicit off constructs nothing: no tier, no cache installed, no key built (I2). A Replicad build without
+      // the operation cache seam runs without the tier.
+      const seamProbe: Partial<ReplicadLibrary> = replicadModule;
+      const seamPresent = typeof seamProbe.setOperationCache === 'function';
+      const liveTier =
+        computeReuseOption === false || !seamPresent
+          ? undefined
+          : createLiveTier<BuiltModel>({
+              library: replicadLibrary,
+              releaseScene: releaseBuiltModel,
+              byteBudget: computeReuseBytes,
+            });
+      const libraryTrace = createKernelLibraryTracer({
+        library: replicadLibrary,
+        tracer,
+        mode: libraryTracing,
+        policy: replicadLibraryTracePolicy,
+        defaultScope: 'kernel-setup',
+      });
+      registerReplicadModule(runtime, libraryTrace.tracedLibrary);
+
+      const librarySourceMapCache = new Map<string, SourceMapConsumer | undefined>();
+      if (withSourceMapping) {
+        try {
+          const sourceMapSpan = tracer.startSpan('replicad.source-map-load');
+          const consumer = await loadReplicadSourceMap();
+          if (consumer) {
+            librarySourceMapCache.set('replicad', consumer);
+            logger.debug('Loaded replicad library source map for error diagnostics');
+          }
+
+          sourceMapSpan.end();
+        } catch {
+          // Source map loading is best-effort — errors are still enriched without it
+        }
+      }
+
+      logger.debug('Replicad kernel initialized');
+
+      return {
+        openCascade,
+        occt,
+        replicadLibrary,
+        tessellationInstancing,
+        replicadInitialised: true,
+        librarySourceMapCache,
+        exportNameMap,
+        libraryExportNames,
+        tracingSummary,
+        libraryTrace,
+        liveTier,
+        epochs: createHandleEpochs(replicadLibrary),
+        collectorModules: new Map(),
+        collectorWorker: false,
+      };
+    } catch (error) {
+      occt.release();
+      throw error;
+    }
+  },
+
+  async resolve({ entryPath }, runtime) {
+    return runtime.bundler.resolveDependencies(entryPath);
+  },
+
+  async describe({ entryPath }, runtime, context) {
+    const relativeFilePath = toVmEntryPath(entryPath);
+    let bundleSourceMap: string | undefined;
+    let entryUrl: string | undefined;
+    try {
+      const bundleResult = await runtime.bundler.bundle(entryPath);
+      if (!bundleResult.success) {
+        return createKernelError(convertRawIssuesToKernelIssues(bundleResult.issues, relativeFilePath));
+      }
+      bundleSourceMap = bundleResult.sourceMap;
+
+      const executeResult = await context.epochs.inModuleEpoch(async () => runtime.execute(bundleResult.code));
+      if (!executeResult.success) {
+        return createKernelError(convertRawIssuesToKernelIssues(executeResult.issues, relativeFilePath));
+      }
+      entryUrl = executeResult.entryUrl;
+
+      const defaultParameters = extractDefaultParameters(executeResult.value);
+      const declaredSchema = isRecordObject(executeResult.value) ? executeResult.value['jsonSchema'] : undefined;
+      if (declaredSchema !== undefined && !isRecordObject(declaredSchema)) {
+        throw new TypeError('The exported jsonSchema must be an object.');
+      }
+      const jsonSchema = declaredSchema ?? (await jsonSchemaFromJson(defaultParameters));
+
+      return createKernelSuccess({
+        parameters: createKernelParameterDeclaration(defaultParameters, jsonSchema, {
+          id: 'urn:taucad:replicad:parameters',
+          name: 'ReplicadParameters',
+        }),
+      });
+    } catch (error) {
+      const issue = formatOcRuntimeError(
+        error,
+        context.openCascade,
+        buildErrorContext(context, { bundleSourceMap, entryUrl }),
+      );
+      return createKernelError([issue]);
+    }
+  },
+
+  async evaluate({ entryPath, parameters }, runtime, context: ReplicadContext) {
+    const { tracer } = runtime;
+    const relativeFilePath = toVmEntryPath(entryPath);
+    let bundleSourceMap: string | undefined;
+    let entryUrl: string | undefined;
+
+    try {
+      const bundleResult = await runtime.bundler.bundle(entryPath);
+      if (!bundleResult.success) {
+        throw new ReplicadBuildError(convertRawIssuesToKernelIssues(bundleResult.issues, relativeFilePath));
+      }
+      bundleSourceMap = bundleResult.sourceMap;
+
+      // The live tier only while compute reuse is on: with it off nothing is installed and no key is built (I2).
+      const documentTier =
+        runtime.compute.status === 'on' && context.liveTier ? context.liveTier.forEntry(entryPath) : undefined;
+      // R16: a build key already seen returns its scene without running any user code.
+      const revisited = documentTier?.scenes.lookup(bundleResult.code, parameters);
+      if (revisited) {
+        return tracedStep(tracer, 'replicad.scene-table-hit', () => {
+          const delivered = aliasBuiltModel(revisited);
+          tierBuiltHandles.add(delivered.handle);
+          context.epochs.adopt(delivered.handle);
+          return { ...delivered, build: { reused: true } };
+        });
+      }
+
+      // R18: the meter of the delivered run of user code; a fallback re-run gets a fresh one.
+      let meter: OperationMeter | undefined;
+      const collector = collectorRelease(context, entryPath, bundleResult.code);
+      let releaseFallback: 'module' | 'worker' | undefined;
+      /** Executes the module, or with `fresh` runs it again and replaces its cached instance. */
+      const executeModule = async (fresh: boolean) => {
+        const result = await context.epochs.inModuleEpoch(async () =>
+          runtime.execute(bundleResult.code, fresh ? { fresh } : undefined),
+        );
+        if (!result.success) {
+          throw new ReplicadBuildError(convertRawIssuesToKernelIssues(result.issues, relativeFilePath));
+        }
+        entryUrl = result.entryUrl;
+        return result;
+      };
+
+      const buildGeometry = named('Object.createGeometry', async () => {
+        let executeResult = await executeModule(false);
+
+        /** One run of `main` with the tier installed; a delivered value an epoch deleted fails it before `endBuild`. */
+        const runMainOnce = async (): Promise<OcRunMainResult & { released?: boolean }> => {
+          meter = documentTier ? meterOperations(documentTier.operations.cache) : undefined;
+          const endBuild =
+            documentTier && meter
+              ? installOperationTier(context.replicadLibrary, { ...documentTier.operations, cache: meter.cache })
+              : undefined;
+          let outcome: 'delivered' | 'failed' = 'failed';
+          try {
+            const result = await context.libraryTrace.runInScope({
+              scope: 'user-main',
+              operation: async () =>
+                runOcMain({
+                  module: executeResult.value,
+                  parameters,
+                  ocInstance: context.openCascade,
+                  errorContext: buildErrorContext(context, {
+                    bundleSourceMap,
+                    entryUrl,
+                  }),
+                  firstArg: context.libraryTrace.tracedLibrary,
+                }),
+            });
+            if (
+              result.success &&
+              deliveredValues(context.libraryTrace.unwrap(result.value)).some((value) =>
+                context.epochs.wasReleased(value),
+              )
+            ) {
+              // A shape kept in module state and returned after the build that delivered it was released.
+              return { success: false, released: true, issues: [releasedShapeIssue()] };
+            }
+            outcome = result.success ? 'delivered' : 'failed';
+            return result;
+          } finally {
+            endBuild?.(outcome);
+          }
+        };
+
+        const mainResult = await tracedPhase(tracer, 'create.runOcMain', async () => {
+          const mainSpan = tracer.startSpan('replicad.run-main', {
+            phase: 'computingGeometry',
+            stage: 'brep',
+          });
+          try {
+            let result = await runMainOnce();
+            // Release fallback (see build-epochs.ts): a use of a value the epochs deleted runs the module fresh and
+            // leaves it to the collector; if the fresh instance fails the same way, the whole worker switches to the
+            // collector and runs it once more. Anything else, or a failure after that, is the build's.
+            while (!result.success && usedReleasedValue(context, result)) {
+              if (!collector.group && !context.collectorWorker) {
+                releaseFallback = 'module';
+                collector.group = context.epochs.collectorGroup();
+                context.collectorModules.set(entryPath, { code: bundleResult.code, group: collector.group });
+              } else if (context.collectorWorker) {
+                break;
+              } else {
+                releaseFallback = 'worker';
+                context.collectorWorker = true;
+              }
+              runtime.logger.warn(
+                releaseFallback === 'module'
+                  ? 'Replicad module used a released shape; running it fresh with collector release'
+                  : 'Replicad module used a released shape again; switching this worker to collector release',
+                { data: { filePath: relativeFilePath } },
+              );
+              // oxlint-disable-next-line eslint/no-await-in-loop -- at most two retries, each after the last one failed.
+              executeResult = await executeModule(true);
+              // oxlint-disable-next-line eslint/no-await-in-loop -- the retry runs the module just executed.
+              result = await runMainOnce();
+            }
+            return result;
+          } finally {
+            context.libraryTrace.emitSummary();
+            context.tracingSummary?.flush();
+            const fallback: Record<string, string> = releaseFallback ? { releaseFallback } : {};
+            if (documentTier) {
+              const { hits, misses, stored, opaque, failureHits, evicted, entries, bytes } =
+                documentTier.operations.stats();
+              mainSpan.end({
+                ...fallback,
+                tierHits: hits,
+                tierMisses: misses,
+                tierStored: stored,
+                tierOpaque: opaque,
+                tierFailureHits: failureHits,
+                tierEvicted: evicted,
+                tierEntries: entries,
+                tierBytes: bytes,
+              });
+            } else {
+              mainSpan.end(fallback);
+            }
+          }
+        });
+
+        if (!mainResult.success) {
+          throw new ReplicadBuildError(mainResult.issues);
+        }
+
+        const shapes = context.libraryTrace.unwrap(mainResult.value);
+
+        if (shapes === undefined) {
+          runtime.logger.warn('createGeometry returning empty: main-returned-undefined', {
+            data: { filePath: relativeFilePath },
+          });
+          const handle: NativeHandle = { shapes: [] };
+          return { handle, ...offersFor(handle) };
+        }
+
+        const model = isRecordObject(shapes) && 'shapes' in shapes ? shapes : undefined;
+        if (model && !Array.isArray(model['shapes'])) {
+          throw new TypeError('Model.shapes must be an array of shape configurations.');
+        }
+        const modelShapes = model?.['shapes'];
+        if (model) {
+          validateGlbResources(model);
+        }
+        const defaultName = extractDefaultName(executeResult.value);
+        const { mechanism, issues } = await readMechanismExport({
+          module: executeResult.value,
+          parameters,
+          kernelId: 'replicad',
+          formatError: (error) =>
+            formatOcRuntimeError(error, context.openCascade, buildErrorContext(context, { bundleSourceMap, entryUrl })),
+        });
+
+        // Build phase ends here: normalize main() output and resolve GeoSpec
+        // interfaces (pure BRep queries) onto the nativeHandle. The handle carries
+        // all export-facing evidence — tessellation is deferred to meshGeometry
+        // and never runs on a BRep-only export path.
+        const entries: NativeHandleEntry[] = await tracedPhase(tracer, 'create.resolveInterfaces', () => {
+          const interfaceSpan = tracer.startSpan('replicad.resolve-interfaces', {
+            phase: 'computingGeometry',
+            stage: 'brep',
+          });
+          try {
+            return normalizeRenderShapes(model ? modelShapes : shapes, defaultName).map((entry) =>
+              resolveEntryInterfaces(entry, context.replicadLibrary),
+            );
+          } finally {
+            interfaceSpan.end();
+          }
+        });
+
+        runtime.signal.throwIfAborted();
+        const handle: NativeHandle = {
+          shapes: entries,
+          mechanism,
+          ...(model ? { images: model.images, textures: model.textures, samplers: model.samplers } : {}),
+        };
+        return { handle, issues, ...offersFor(handle) };
+      });
+
+      const built = await buildGeometry();
+      if (documentTier) {
+        // Fail closed (catalogue N7): any build delivered with a tier installed shares native shapes with tier
+        // entries that a later build's destructive boolean may change in place, so it has no exact snapshot.
+        tierBuiltHandles.add(built.handle);
+      }
+      documentTier?.scenes.admit(bundleResult.code, parameters, aliasBuiltModel(built));
+      // After the worker switch, state may live outside the bundle: no group is retired, the collector frees it all.
+      context.epochs.adopt(built.handle, {
+        collector: context.collectorWorker || (collector.group ?? false),
+      });
+      return documentTier ? { ...built, build: tierBuildReport(documentTier.operations, meter) } : built;
+    } catch (error) {
+      if (error instanceof ReplicadBuildError) {
+        throw error;
+      }
+
+      const issue = formatOcRuntimeError(
+        error,
+        context.openCascade,
+        buildErrorContext(context, { bundleSourceMap, entryUrl }),
+      );
+      throw new ReplicadBuildError([issue]);
+    }
+  },
+
+  async render(input, runtime, context) {
+    const { handle } = input;
+    if (input.view === 'drawing') {
+      const drawings = handle.shapes.filter(({ shape }) => isDrawingShape(shape));
+      const selected = input.instance === undefined ? drawings : drawings.filter(({ name }) => name === input.instance);
+      if (selected.length === 0) {
+        throw new Error(`Drawing instance '${String(input.instance)}' is unavailable.`);
+      }
+      const rendered = render(
+        selected.map((entry, index) => ({
+          ...entry,
+          name: resolveShapeName({ index, name: entry.name, source: 'authored' }),
+        })),
+      );
+      const drawing = rendered.find((artifact): artifact is GeometrySvg => artifact.format === 'svg');
+      if (drawing === undefined) {
+        throw new Error('Drawing render produced no SVG artifact.');
+      }
+      return { content: drawing.content, units: drawing.units };
+    }
+    const { options, content } = input;
+    const { tracer } = runtime;
+    const modelShapes = handle.shapes.filter(({ shape }) => !isDrawingShape(shape));
+    if (modelShapes.length === 0) {
+      return { content: asBuffer(createEmptyGlb()) };
+    }
+
+    try {
+      const { tessellation } = options;
+      const includeEdges = content?.includeEdges === true;
+      const includeTopology = content?.includeTopology === true;
+      let mechanismIssues: KernelIssue[] = [];
+      const namedShapes = modelShapes.map((entry, index) => ({
+        ...entry,
+        name: resolveShapeName({ index, name: entry.name, source: 'authored' }),
+      }));
+
+      let renderMode: 'flat' | 'tessellation-instanced' | 'mixed' = 'flat';
+      // E7: meshes are kept across renders only with the live tier; with reuse off every render meshes (I2).
+      const meshMemo =
+        runtime.compute.status === 'on' && context.liveTier
+          ? (context.meshMemo ??= createReplicadMeshMemo({ openCascade: context.openCascade }))
+          : undefined;
+      // One pass at the requested tessellation: nothing coarsens a mesh (no triangle budget).
+      const rendered = await tracedPhase(tracer, 'mesh.renderDisplayTessellation', () => {
+        const renderOutputSpan = tracer.startSpan('replicad.render-output', {
+          phase: 'computingGeometry',
+          stage: 'render-output',
+        });
+        meshMemo?.beginRender();
+        try {
+          return context.libraryTrace.runInScope({
+            scope: 'render-output',
+            operation: () =>
+              renderTessellated(namedShapes, {
+                request: { tessellation, explicitDefaults: occtExplicitTessellationDefaults.preview },
+                collectBrepEdges: includeEdges || includeTopology,
+                openCascade: context.openCascade,
+                tessellationInstancing: context.tessellationInstancing,
+                tracer,
+                meshMemo,
+                onRenderMode(mode) {
+                  renderMode = mode;
+                },
+              }),
+          });
+        } finally {
+          // Render's OC calls get their own `oc.summary`, not the next evaluation's.
+          context.tracingSummary?.flush();
+          const memo = meshMemo ? memoAttributes(meshMemo) : {};
+          renderOutputSpan.end({ renderMode, ...memo });
+        }
+      });
+
+      const renderedShapes = rendered.geometries;
+      const shapes3d = renderedShapes.filter((shape): shape is GeometryReplicad => shape.format === 'replicad');
+      if (shapes3d.length === 0) {
+        runtime.logger.warn('meshGeometry returning empty: render-output-filtered-empty', {
+          data: {
+            rawShapeCount: modelShapes.length,
+            renderedShapeCount: renderedShapes.length,
+          },
+        });
+        return { content: asBuffer(createEmptyGlb()) };
+      }
+
+      const gltfBlob = await tracedPhase(tracer, 'mesh.packGltf', () => {
+        const gltfSpan = tracer.startSpan('replicad.mesh-to-gltf', {
+          shapeCount: shapes3d.length,
+          phase: 'computingGeometry',
+          stage: 'gltf-pack',
+        });
+        try {
+          return convertReplicadGeometriesToGltf({
+            images: handle.images,
+            textures: handle.textures,
+            samplers: handle.samplers,
+            packFacts: meshMemo?.packFacts,
+            geometries: includeEdges
+              ? shapes3d
+              : shapes3d.map((geometry) => ({
+                  ...geometry,
+                  edges: { ...geometry.edges, lines: new Float32Array(0) },
+                })),
+            format: 'glb',
+            includeTauTopology: includeTopology,
+            logger: runtime.logger,
+            mechanism: handle.mechanism,
+            onMechanismIssues(issues) {
+              mechanismIssues = issues;
+            },
+          });
+        } finally {
+          gltfSpan.end();
+        }
+      });
+      const memo = meshMemo?.stats();
+      return {
+        content: gltfBlob,
+        // R18: the parts whose mesh the memo kept, beside the cost of the mesh.
+        tessellation:
+          memo === undefined
+            ? rendered.tessellation
+            : { ...rendered.tessellation, meshes: { reused: memo.hits, computed: memo.misses } },
+        issues: mechanismIssues,
+      };
+    } catch (error) {
+      const issue = formatOcRuntimeError(error, context.openCascade, buildErrorContext(context, {}));
+      throw new ReplicadBuildError([issue]);
+    }
+  },
+
+  async export(input, runtime, context) {
+    try {
+      return await context.libraryTrace.runInScope({
+        scope: 'export',
+        operation: async () => {
+          const { exportId, handle } = input;
+          const { shapes: entries, mechanism } = handle;
+          const emptyGltfExport = (format: 'glb' | 'gltf') => ({
+            files: [
+              createExportFile(
+                format,
+                format === 'glb' ? 'model.glb' : 'model.gltf',
+                asBuffer(format === 'glb' ? createEmptyGlb() : createEmptyGltf()),
+              ),
+            ] as const,
+          });
+          const noGeometryExportError = (): never => {
+            throw new ReplicadBuildError([
+              { message: 'No geometry available for export', code: 'RUNTIME', type: 'runtime', severity: 'error' },
+            ]);
+          };
+          const stepExportError = (error: unknown): never => {
+            throw new ReplicadBuildError([
+              {
+                message: error instanceof Error ? error.message : String(error),
+                code: 'RUNTIME',
+                type: 'runtime',
+                severity: 'error',
+              },
+            ]);
+          };
+
+          switch (exportId) {
+            case 'glb':
+            case 'gltf': {
+              const { options, content } = input;
+              if (entries.length === 0) {
+                return emptyGltfExport(exportId);
+              }
+
+              const { coordinateSystem, unit } = options;
+              const namedShapes = entries.map((shapeConfig, index) => ({
+                ...shapeConfig,
+                name: resolveShapeName({
+                  index,
+                  name: shapeConfig.name,
+                  source: 'generated',
+                }),
+              }));
+              const requested = resolveReplicadTessellation(namedShapes, {
+                tessellation: options.tessellation,
+                explicitDefaults: occtExplicitTessellationDefaults.export,
+              });
+              const { linearTolerance, angularTolerance } = requested;
+              // N14: with the live tier, the export composes the part meshes a render or an earlier export kept at
+              // these exact tolerances; what it meshes goes to the memo's one-generation export slot, not the display
+              // memo. With reuse off every export meshes, as before (I2).
+              const meshMemo =
+                runtime.compute.status === 'on' && context.liveTier
+                  ? (context.meshMemo ??= createReplicadMeshMemo({ openCascade: context.openCascade }))
+                  : undefined;
+              meshMemo?.beginExport();
+              const renderedShapes = await tracedPhase(runtime.tracer, 'export.renderGlbTessellation', () =>
+                render(namedShapes, {
+                  tessellation: { linearTolerance, angularTolerance },
+                  collectBrepEdges: content?.includeEdges === true || content?.includeTopology === true,
+                  openCascade: context.openCascade,
+                  tessellationInstancing: context.tessellationInstancing,
+                  tracer: runtime.tracer,
+                  meshMemo,
+                }),
+              ).finally(() => {
+                meshMemo?.endExport();
+              });
+              const temporaryShapes = renderedShapes.filter(
+                (shape): shape is GeometryReplicad => shape.format === 'replicad',
+              );
+
+              if (temporaryShapes.length === 0) {
+                return emptyGltfExport(exportId);
+              }
+
+              let mechanismIssues: KernelIssue[] = [];
+              const gltfData = await tracedPhase(runtime.tracer, 'export.packGltf', () =>
+                convertReplicadGeometriesToGltf({
+                  images: handle.images,
+                  textures: handle.textures,
+                  samplers: handle.samplers,
+                  geometries:
+                    content?.includeEdges === true
+                      ? temporaryShapes
+                      : temporaryShapes.map((geometry) => ({
+                          ...geometry,
+                          edges: { ...geometry.edges, lines: new Float32Array(0) },
+                        })),
+                  format: exportId,
+                  includeTauTopology: content?.includeTopology === true,
+                  logger: runtime.logger,
+                  coordinateSystem,
+                  unit,
+                  mechanism,
+                  onMechanismIssues(issues) {
+                    mechanismIssues = issues;
+                  },
+                }),
+              );
+              return {
+                files: [
+                  createExportFile(exportId, exportId === 'glb' ? 'model.glb' : 'model.gltf', asBuffer(gltfData)),
+                ] as const,
+                issues: mechanismIssues,
+              };
+            }
+
+            case 'step': {
+              const { options } = input;
+              if (entries.length === 0) {
+                return noGeometryExportError();
+              }
+
+              const { coordinateSystem } = options;
+
+              // A drawing-only model is offered STEP only when every drawing bounds closed profiles (`offersFor`);
+              // it writes those region faces, sketched on XY at Z = 0, in place of the drawings.
+              const drawingOnly = entries.every(({ shape }) => isDrawingShape(shape));
+              let faced: NativeHandleEntry[] | undefined;
+              let rotated: NativeHandleEntry[] | undefined;
+              let stepBlob: Blob;
+              try {
+                if (drawingOnly) {
+                  // Built one entry at a time so `finally` deletes the faces made before a later drawing throws.
+                  faced = [];
+                  for (const entry of entries) {
+                    faced.push({ ...entry, shape: drawingFaces(entry.shape) });
+                  }
+                }
+                const source = faced ?? entries;
+                // D-RT-20: the y-up copies are this export's own; delete them rather than leave a second B-rep of the
+                // model in the OCCT heap until a finalizer runs.
+                rotated =
+                  coordinateSystem === 'y-up' ? source.map((entry) => rotateNativeEntryToYup(entry)) : undefined;
+                stepBlob = await tracedPhase(runtime.tracer, 'export.exportSTEP', () =>
+                  exportSTEP(context.openCascade, rotated ?? source, {
+                    phase: (label, operation) => tracedStep(runtime.tracer, label, operation),
+                  }),
+                );
+              } catch (error) {
+                return stepExportError(error);
+              } finally {
+                deleteExportCopies(rotated);
+                deleteExportCopies(faced);
+              }
+              const stepBytes = new Uint8Array(await stepBlob.arrayBuffer());
+              return { files: [createExportFile('step', 'assembly', stepBytes)] as const };
+            }
+
+            case 'stl': {
+              const { options } = input;
+              if (entries.length === 0) {
+                return noGeometryExportError();
+              }
+
+              const requested = resolveReplicadTessellation(entries, {
+                tessellation: options.tessellation,
+                explicitDefaults: occtExplicitTessellationDefaults.export,
+              });
+              const { linearTolerance, angularTolerance } = requested;
+              const angularToleranceRad = angularTolerance * (Math.PI / 180);
+              const { coordinateSystem } = options;
+
+              const rotated =
+                coordinateSystem === 'y-up'
+                  ? entries.map((s) => ({
+                      ...s,
+                      shape: s.shape.clone().rotate(-90, [0, 0, 0], [1, 0, 0]),
+                    }))
+                  : undefined;
+
+              const result = await Promise.all(
+                (rotated ?? entries).map(async ({ shape, name }, index) => {
+                  const bytes = await buildExportBytes(shape, {
+                    tolerance: linearTolerance,
+                    angularTolerance: angularToleranceRad,
+                    binary: options.binary,
+                  });
+                  return createExportFile('stl', resolveShapeName({ index, name, source: 'generated' }), bytes);
+                }),
+              ).finally(() => {
+                deleteExportCopies(rotated);
+              });
+              return { files: nonemptyExportFiles(result) };
+            }
+
+            default: {
+              const _exhaustive: never = exportId;
+              throw new ReplicadBuildError([
+                {
+                  message: `Unsupported export format: ${String(_exhaustive)}`,
+                  code: 'KERNEL_CAPABILITY_MISSING',
+                  type: 'runtime',
+                  severity: 'error',
+                },
+              ]);
+            }
+          }
+        },
+      });
+    } finally {
+      // Export's OC calls get their own `oc.summary`, not the next evaluation's.
+      context.tracingSummary?.flush();
+    }
+  },
+
+  serializeHandle({ handle }, runtime, context) {
+    if (tierBuiltHandles.has(handle)) {
+      // Catalogue N7: a destructive boolean may add parametric curves in place to native shapes a tier entry
+      // shares with this build, so its B-rep can differ from reuse off. A snapshot is published as byte-exact, so
+      // none is written: the refusal comes before any native work, and the durable cache keeps reuse-off builds.
+      throw new Error('A Replicad build made with the live tier has no exact native-handle snapshot.');
+    }
+    return tracedStep(runtime.tracer, 'create.serializeNativeHandle', () =>
+      serializeReplicadHandle(handle, context.replicadLibrary),
+    );
+  },
+
+  deserializeHandle({ serialized }, _runtime, context): NativeHandle {
+    if (serialized.format !== replicadSnapshotFormat) {
+      throw new Error(`Unsupported replicad native-handle snapshot format: ${String(serialized.format)}`);
+    }
+    return context.epochs.adopt({
+      ...serialized,
+      shapes: serialized.shapes.map((entry) => ({
+        shape:
+          'drawing' in entry
+            ? restoreDrawing(context.replicadLibrary, entry.drawing)
+            : readBinaryBrep(context.replicadLibrary, entry.brep),
+        ...entry.metadata,
+      })),
+    });
+  },
+
+  // E12: the runtime releases a handle once nothing it keeps reaches it; its build epoch deletes what it alone owns.
+  releaseHandle({ handle }, _runtime, context) {
+    context.epochs.release(handle);
+  },
+
+  // D-RT-03: the realm's one OCCT instance; the host recycles the worker when this outgrows its device.
+  heapBytes: (context) => context.occt.value.wasmMemory.buffer.byteLength,
+  // Observation only (PR-1b): the same linear memory, read for operation facts and never for recycling.
+  observedHeapBytes: (context) => context.occt.value.wasmMemory.buffer.byteLength,
+
+  async onDispose(context) {
+    try {
+      context.meshMemo?.dispose();
+      // Released shapes still parked for the next build are deleted with the kernel (E12).
+      context.epochs.dispose();
+      context.liveTier?.dispose();
+    } finally {
+      context.occt.release();
+    }
+  },
+});
+
+/**
+ * Whether builds of an entry's module leave their handles to the collector (release fallback, first stage). An entry
+ * whose bundle code changed since it fell back is dropped. The map is empty unless a module fell back, so the normal
+ * path reads no key.
+ * @param context - The kernel context.
+ * @param entryPath - The entry being built.
+ * @param code - Its bundled code.
+ * @returns The module's collector group, if it fell back; the build sets it when it falls back.
+ */
+const collectorRelease = (
+  context: ReplicadContext,
+  entryPath: string,
+  code: string,
+): { group: CollectorGroup | undefined } => {
+  if (context.collectorModules.size === 0) {
+    return { group: undefined };
+  }
+  const fellBack = context.collectorModules.get(entryPath);
+  if (fellBack === undefined || fellBack.code === code) {
+    return { group: fellBack?.group };
+  }
+  context.collectorModules.delete(entryPath);
+  if (!context.collectorWorker) {
+    fellBack.group.retire();
+  }
+  return { group: undefined };
+};
+
+/**
+ * Whether a failed run of `main` used a value the epochs deleted: it returned one, or it threw Replicad's or embind's
+ * exact use-after-release message after the epochs had deleted something.
+ * @param context - The kernel context.
+ * @param result - The failed run.
+ * @returns True when the release fallback answers it.
+ */
+const usedReleasedValue = (
+  context: ReplicadContext,
+  result: { readonly released?: boolean; readonly issues: readonly KernelIssue[] },
+): boolean =>
+  result.released === true ||
+  (context.epochs.stats().deleted > 0 && result.issues.some(({ message }) => isUseAfterReleaseMessage(message)));
+
+/**
+ * The values a `main` result delivers, in the forms `normalizeRenderShapes` accepts: a shape, a `{ shape }` entry, an
+ * array of either, or a model with `shapes`.
+ * @param value - What `main` returned, unwrapped.
+ * @returns The candidate shape values.
+ */
+const deliveredValues = (value: unknown): unknown[] => {
+  const shapeOf = (item: unknown): unknown => (isRecordObject(item) && 'shape' in item ? item['shape'] : item);
+  if (Array.isArray(value)) {
+    return value.map((item) => shapeOf(item));
+  }
+  if (isRecordObject(value) && Array.isArray(value['shapes'])) {
+    return value['shapes'].map((item: unknown) => shapeOf(item));
+  }
+  return [shapeOf(value)];
+};
+
+/**
+ * The issue of a build whose `main` returned a shape released with an earlier build.
+ * @returns The issue.
+ */
+const releasedShapeIssue = (): KernelIssue => ({
+  message: 'This object has been deleted',
+  code: 'RUNTIME',
+  type: 'runtime',
+  severity: 'error',
+});
+
+type Aliasable = { delete?: () => void; innerShape?: { delete?: () => void }; clone(): Aliasable };
+
+/**
+ * End a render in the mesh memo and report it on the render span.
+ * @param meshMemo - The memo the render used.
+ * @returns The memo's counters for the span.
+ */
+const memoAttributes = (meshMemo: ReplicadMeshMemo): Record<string, number> => {
+  meshMemo.endRender();
+  const { hits, misses, boxHits, boxMisses, evicted, partners, bytes } = meshMemo.stats();
+  return {
+    meshMemoHits: hits,
+    meshMemoMisses: misses,
+    meshMemoBoxHits: boxHits,
+    meshMemoBoxMisses: boxMisses,
+    meshMemoEvicted: evicted,
+    meshMemoPartners: partners,
+    meshMemoBytes: bytes,
+  };
+};
+
+/**
+ * Delete the aliases a copy of a build owns. A drawing has no `delete`; its blueprint owns the native curves.
+ *
+ * @param entries - The copy's entries.
+ */
+const deleteAliases = (entries: readonly NativeHandleEntry[]): void => {
+  for (const { shape } of entries) {
+    // Typed as `AnyShape`, but a drawing entry has no `delete` at runtime.
+    const owned: Aliasable = shape;
+    if (typeof owned.delete === 'function') {
+      owned.delete();
+    } else {
+      owned.innerShape?.delete?.();
+    }
+  }
+};
+const aliasEntries = (entries: readonly NativeHandleEntry[]): NativeHandleEntry[] => {
+  const aliases: NativeHandleEntry[] = [];
+  try {
+    for (const entry of entries) {
+      aliases.push({ ...entry, shape: entry.shape.clone() });
+    }
+  } catch (error) {
+    deleteAliases(aliases);
+    throw error;
+  }
+  return aliases;
+};
+
+/**
+ * A build with new aliases of its shapes. The scene table keeps one copy and delivers another on a revisit,
+ * so nothing the runtime does with a delivered handle reaches the table (R16).
+ *
+ * @param built - The build to copy.
+ * @returns The copy, owning its aliases.
+ */
+const aliasBuiltModel = (built: BuiltModel): BuiltModel => {
+  const handle = { ...built.handle, shapes: aliasEntries(built.handle.shapes) };
+  if (tierBuiltHandles.has(built.handle)) {
+    tierBuiltHandles.add(handle);
+  }
+  return { ...built, handle };
+};
+
+/**
+ * Delete the aliases the scene table owns, once, when it evicts the scene.
+ *
+ * @param stored - The table's copy of the build.
+ */
+const releaseBuiltModel = (stored: BuiltModel): void => {
+  deleteAliases(stored.handle.shapes);
+};
+
+/**
+ * Delete the shape copies an export made, as soon as the export no longer reads them (D-RT-20).
+ *
+ * @param copies - The export's own rotated entries; `undefined` when it exported the handle's shapes as they are.
+ */
+const deleteExportCopies = (copies: ReadonlyArray<{ readonly shape: AnyShape }> | undefined): void => {
+  for (const { shape } of copies ?? []) {
+    shape.delete();
+  }
+};
+
+/* oxlint-disable new-cap -- OCCT exposes callable C++ PascalCase methods. */
+/** Binary BRep (`BinTools`) without triangulation; the kernel version keys it, so text snapshots age out. */
+const replicadSnapshotFormat = 'occt-bintools';
+let snapshotSequence = 0;
+
+/**
+ * Write one shape as binary BRep without its triangulation (G4). The live shape is read, never changed: a displayed
+ * shape keeps its display mesh (mesh-state rule, E10), and the bytes do not depend on whether it was meshed.
+ *
+ * @param library - The replicad library bound to this realm's OpenCascade instance.
+ * @param shape - The live shape to snapshot.
+ * @returns The binary BRep bytes.
+ */
+const writeBinaryBrep = (library: ReplicadLibrary, shape: AnyShape): Uint8Array<ArrayBuffer> => {
+  // `getOC()` returns `OpenCascadeInstance`, which `replicad-opencascadejs` types with `wasmMemory`: no cast needed.
+  const oc = library.getOC();
+  const data = oc.ReplicadBinaryBrep.Write(shape.wrapped, false, false);
+  try {
+    const pointer = data.getPtr();
+    // A copy, not a view: the buffer is freed below and a later memory.grow() would detach a view.
+    return new Uint8Array(oc.wasmMemory.buffer).slice(pointer, pointer + data.getSize());
+  } finally {
+    data.delete();
+  }
+};
+
+/**
+ * Restore one shape from binary BRep through MEMFS.
+ *
+ * @param library - The replicad library bound to this realm's OpenCASCADE instance.
+ * @param bytes - Binary BRep bytes written by {@link writeBinaryBrep}.
+ * @returns The restored shape.
+ */
+const readBinaryBrep = (library: ReplicadLibrary, bytes: Uint8Array<ArrayBuffer>): AnyShape => {
+  const oc = library.getOC();
+  const path = `/tmp/tau_replicad_native_handle_${++snapshotSequence}.bin`;
+  const progress = new oc.Message_ProgressRange();
+  const shape = new oc.TopoDS_Shape();
+  try {
+    oc.FS.writeFile(path, bytes);
+    if (!oc.BinTools.Read(shape, path, progress) || shape.IsNull()) {
+      throw new Error('Replicad native-handle snapshot read failed.');
+    }
+    return library.cast(shape);
+  } catch (error) {
+    shape.delete();
+    throw error;
+  } finally {
+    progress.delete();
+    try {
+      oc.FS.unlink(path);
+    } catch {
+      // MEMFS cleanup is best-effort.
+    }
+  }
+};
+
+/* oxlint-enable new-cap */
+
+/**
+ * Restore a drawing entry the way a fresh render input admits one.
+ * @param library - The realm's replicad library.
+ * @param serialized - The drawing's own serialisation.
+ * @returns The handle shape.
+ */
+const restoreDrawing = (library: ReplicadLibrary, serialized: string): AnyShape => {
+  const [entry] = normalizeRenderShapes(library.deserializeDrawing(serialized));
+  if (!entry) {
+    throw new Error('Replicad native-handle snapshot drawing is empty.');
+  }
+  return entry.shape;
+};
+
+const serializeReplicadHandle = (nativeHandle: NativeHandle, library: ReplicadLibrary) => ({
+  format: replicadSnapshotFormat,
+  images: nativeHandle.images,
+  textures: nativeHandle.textures,
+  samplers: nativeHandle.samplers,
+  shapes: nativeHandle.shapes.map((entry) => ({
+    // A drawing has no native BRep; it keeps replicad's own serialisation.
+    ...(isDrawingShape(entry.shape)
+      ? { drawing: entry.shape.serialize() }
+      : { brep: writeBinaryBrep(library, entry.shape) }),
+    metadata: {
+      name: entry.name,
+      color: entry.color,
+      opacity: entry.opacity,
+      metalness: entry.metalness,
+      roughness: entry.roughness,
+      material: entry.material,
+      density: entry.density,
+      resolvedInterfaces: entry.resolvedInterfaces,
+    },
+  })),
+  mechanism: nativeHandle.mechanism,
+});
+
+async function buildExportBytes(
+  shape: AnyShape,
+  tessellation: {
+    tolerance: number;
+    angularTolerance: number;
+    binary?: boolean;
+  },
+): Promise<Uint8Array<ArrayBuffer>> {
+  const blob = shape.blobSTL(tessellation.binary ? { ...tessellation, binary: true } : tessellation);
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+class ReplicadBuildError extends Error {
+  public readonly issues: KernelIssue[];
+  public constructor(issues: KernelIssue[]) {
+    super(issues.map((index) => index.message).join('; '));
+    this.issues = issues;
+  }
+}

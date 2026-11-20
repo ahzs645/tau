@@ -1,0 +1,87 @@
+import type { Model } from '@earendil-works/pi-ai';
+import { createEventLogAppender } from '#log/event-log-appender.js';
+import { withLength } from '#log/event-log-storage.fixture.js';
+import type { BareEventLogStorage } from '#log/event-log-storage.fixture.js';
+import type { EventLogAppender } from '#log/event-log-appender.js';
+import type { AgentLogEvent, ModelProviderKind } from '#log/event-types.js';
+import type { InvocationFunding } from '#waist/ports.js';
+import type { InvocationResolution } from '#wire/gateway.js';
+
+/**
+ * A funded facet for fakes (RA-S11). The default lookup answers `voided`: the gateway never admitted the key.
+ *
+ * @param resolve - The lookup's answer.
+ * @param usesBillingAttempt - Which providers the gateway funds.
+ * @returns The facet.
+ */
+export const fundedFacet = (
+  resolve: (attemptId: string) => Promise<InvocationResolution> = async () => ({ status: 'voided' }),
+  usesBillingAttempt: (providerKind: ModelProviderKind | undefined) => boolean = () => true,
+): InvocationFunding => ({
+  type: 'funded',
+  usesBillingAttempt,
+  resolveInvocation: async ({ attemptId }) => resolve(attemptId),
+  /* Unknown: rows go unstamped, and a stamped row is refused (fails closed). */
+  principal: async () => undefined,
+});
+
+/** Deterministic pi model descriptor used by harness unit fixtures. @public */
+export const stubModel: Model<'openai-responses'> = {
+  id: 'stub',
+  name: 'stub',
+  api: 'openai-responses',
+  provider: 'stub',
+  baseUrl: '',
+  reasoning: false,
+  input: ['text'],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 8192,
+  maxTokens: 1024,
+};
+
+/** In-memory W1 appender used by deterministic harness parity fixtures. */
+export const createMemoryEventLog = async (initial: readonly AgentLogEvent[] = []): Promise<EventLogAppender> => {
+  let bytes = new Uint8Array(new ArrayBuffer(0));
+  const storage: BareEventLogStorage = {
+    read: async () => bytes,
+    append: async (next) => {
+      const combined = new Uint8Array(bytes.byteLength + next.byteLength);
+      combined.set(bytes);
+      combined.set(next, bytes.byteLength);
+      bytes = combined;
+    },
+    truncate: async (size) => {
+      bytes = bytes.slice(0, size);
+    },
+    close: async () => undefined,
+  };
+  const log = await createEventLogAppender(withLength(storage));
+  for (const event of initial) {
+    // oxlint-disable-next-line eslint/no-await-in-loop -- Initial log records must be appended in cursor order.
+    await log.append(event);
+  }
+  return log;
+};
+
+/** Reopenable in-memory file used by close/reload durability fixtures. */
+export const createMemoryEventLogFile = (): { open(): Promise<EventLogAppender> } => {
+  let bytes = new Uint8Array(new ArrayBuffer(0));
+  return {
+    open: async () =>
+      createEventLogAppender({
+        read: async () => bytes,
+        append: async (next) => {
+          const combined = new Uint8Array(bytes.byteLength + next.byteLength);
+          combined.set(bytes);
+          combined.set(next, bytes.byteLength);
+          bytes = combined;
+        },
+        truncate: async (size) => {
+          bytes = bytes.slice(0, size);
+        },
+        size: async () => bytes.byteLength,
+        exclusive: async (section) => section(),
+        close: async () => undefined,
+      }),
+  };
+};

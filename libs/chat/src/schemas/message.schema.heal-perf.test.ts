@@ -10,7 +10,7 @@ vi.mock('#schemas/tool-input.registry.js', async (importOriginal) => {
 });
 
 const { getToolInputSchema } = await import('#schemas/tool-input.registry.js');
-const { _healInterruptedToolPartsForTesting: heal } = await import('#schemas/message.schema.js');
+const { _normalizeToolLifecyclePartsForTesting: normalize } = await import('#schemas/message.schema.js');
 
 const getToolInputSchemaSpy = vi.mocked(getToolInputSchema);
 
@@ -76,27 +76,58 @@ const dynamicToolOutputErrorPart = (callId: string) => ({
   errorText: 'interrupted',
 });
 
+const staleReadFileInputAvailablePart = (callId: string) => ({
+  type: 'tool-read_file',
+  toolCallId: callId,
+  state: 'input-available',
+  input: { limit: 15 },
+});
+
+const staleDynamicInputAvailablePart = (callId: string) => ({
+  type: 'dynamic-tool',
+  toolName: 'experimental_tool',
+  toolCallId: callId,
+  state: 'input-available',
+  input: { partial: true },
+});
+
+/** A conversation on the hot path: prose and settled tool parts, nothing to heal. */
+const hotParts = (count: number): unknown[] =>
+  Array.from({ length: count }, (_, index) =>
+    index % 2 === 0 ? textPart(`prose ${index}`) : validReadFileToolPart(`call_${index}`),
+  );
+
+/** Milliseconds for twenty passes over `partCount` parts, so the number is measurable. */
+const timeNormalize = (partCount: number): number => {
+  const messages = [userMessage('m0'), assistantMessage('m1', hotParts(partCount))];
+  const start = performance.now();
+  for (let pass = 0; pass < 20; pass++) {
+    normalize(messages);
+  }
+  return performance.now() - start;
+};
+
 beforeEach(() => {
   getToolInputSchemaSpy.mockClear();
 });
 
-describe('healInterruptedToolParts performance contract', () => {
+describe('normalizeToolLifecycleParts performance contract', () => {
   describe('reference identity (no allocation when no part needs healing)', () => {
     it('should return the same array reference when input is not an array', () => {
       const input = { not: 'an array' };
-      expect(heal(input)).toBe(input);
+      expect(normalize(input)).toBe(input);
     });
 
-    it('should return the same message references when no part is in output-error state', () => {
+    it('should return the same array and message references when no part needs normalization', () => {
       const messages = [
         userMessage('m0'),
         assistantMessage('m1', [textPart('hello'), reasoningPart()]),
         assistantMessage('m2', [validReadFileToolPart('call_1'), validReadFileToolPart('call_2')]),
       ];
 
-      const healed = heal(messages) as typeof messages;
+      const healed = normalize(messages) as typeof messages;
 
-      expect(Array.isArray(healed)).toBe(true);
+      expect(healed).toBe(messages);
       expect(healed.length).toBe(messages.length);
       for (const [i, original] of messages.entries()) {
         expect(healed[i]).toBe(original);
@@ -110,7 +141,7 @@ describe('healInterruptedToolParts performance contract', () => {
         alreadyHealedReadFilePart('call_2'),
       ]);
 
-      const healed = heal([message]) as [typeof message];
+      const healed = normalize([message]) as [typeof message];
 
       expect(healed[0]).toBe(message);
     });
@@ -118,7 +149,7 @@ describe('healInterruptedToolParts performance contract', () => {
     it('should return the same message reference when output-error parts are dynamic-tool', () => {
       const message = assistantMessage('m1', [dynamicToolOutputErrorPart('call_dyn_1')]);
 
-      const healed = heal([message]) as [typeof message];
+      const healed = normalize([message]) as [typeof message];
 
       expect(healed[0]).toBe(message);
     });
@@ -134,9 +165,18 @@ describe('healInterruptedToolParts performance contract', () => {
         },
       ]);
 
-      const healed = heal([message]) as [typeof message];
+      const healed = normalize([message]) as [typeof message];
 
       expect(healed[0]).toBe(message);
+    });
+
+    it('should preserve active current-tail in-progress tool parts', () => {
+      const message = assistantMessage('m1', [staleReadFileInputAvailablePart('call_live')]);
+
+      const healed = normalize([userMessage('m0'), message]) as [MessageFixture, typeof message];
+
+      expect(healed[1]).toBe(message);
+      expect(getToolInputSchemaSpy).not.toHaveBeenCalled();
     });
   });
 
@@ -148,7 +188,7 @@ describe('healInterruptedToolParts performance contract', () => {
       const m3 = assistantMessage('m3', [textPart('reply 3')]);
       const messages = [m0, m1, m2, m3];
 
-      const healed = heal(messages) as typeof messages;
+      const healed = normalize(messages) as typeof messages;
 
       expect(healed[0]).toBe(m0);
       expect(healed[1]).toBe(m1);
@@ -162,7 +202,7 @@ describe('healInterruptedToolParts performance contract', () => {
       const interrupted = interruptedReadFilePart('call_interrupted');
       const message = assistantMessage('m1', [sharedTextPart, interrupted, sharedReasoningPart]);
 
-      const healed = heal([message]) as [typeof message];
+      const healed = normalize([message]) as [typeof message];
       const healedMessage = healed[0];
 
       expect(healedMessage).not.toBe(message);
@@ -178,18 +218,55 @@ describe('healInterruptedToolParts performance contract', () => {
     it('should be idempotent (a second pass returns the same reference as the first)', () => {
       const messages = [userMessage('m0'), assistantMessage('m1', [interruptedReadFilePart('call_interrupted')])];
 
-      const firstPass = heal(messages) as typeof messages;
-      const secondPass = heal(firstPass) as typeof messages;
+      const firstPass = normalize(messages) as typeof messages;
+      const secondPass = normalize(firstPass) as typeof messages;
 
       expect(secondPass).not.toBe(messages);
       for (const [i, part] of firstPass.entries()) {
         expect(secondPass[i]).toBe(part);
       }
     });
+
+    it('should terminalize stale historical static tool parts before a later user message', () => {
+      const m0 = userMessage('m0');
+      const m1 = assistantMessage('m1', [staleReadFileInputAvailablePart('call_stale')]);
+      const m2 = userMessage('m2');
+
+      const normalized = normalize([m0, m1, m2]) as MessageFixture[];
+
+      expect(normalized[0]).toBe(m0);
+      expect(normalized[1]).not.toBe(m1);
+      expect(normalized[2]).toBe(m2);
+      expect(normalized[1]?.parts[0]).toMatchObject({
+        type: 'tool-read_file',
+        toolCallId: 'call_stale',
+        state: 'output-error',
+        input: undefined,
+        rawInput: { limit: 15 },
+      });
+    });
+
+    it('should terminalize stale historical dynamic tool parts without consulting the static registry', () => {
+      const m0 = userMessage('m0');
+      const m1 = assistantMessage('m1', [staleDynamicInputAvailablePart('call_dynamic_stale')]);
+      const m2 = userMessage('m2');
+
+      const normalized = normalize([m0, m1, m2]) as MessageFixture[];
+
+      expect(normalized[1]).not.toBe(m1);
+      expect(normalized[1]?.parts[0]).toMatchObject({
+        type: 'dynamic-tool',
+        toolName: 'experimental_tool',
+        toolCallId: 'call_dynamic_stale',
+        state: 'output-error',
+        input: { partial: true },
+      });
+      expect(getToolInputSchemaSpy).not.toHaveBeenCalled();
+    });
   });
 
   describe('registry short-circuiting (no double-parse on the hot path)', () => {
-    it('should NOT call getToolInputSchema when no part is in output-error state', () => {
+    it('should NOT call getToolInputSchema when no static part needs validation', () => {
       const messages = [
         userMessage('m0'),
         assistantMessage('m1', [
@@ -200,7 +277,7 @@ describe('healInterruptedToolParts performance contract', () => {
         ]),
       ];
 
-      heal(messages);
+      normalize(messages);
 
       expect(getToolInputSchemaSpy).not.toHaveBeenCalled();
     });
@@ -211,7 +288,7 @@ describe('healInterruptedToolParts performance contract', () => {
         assistantMessage('m1', [alreadyHealedReadFilePart('call_1'), alreadyHealedReadFilePart('call_2')]),
       ];
 
-      heal(messages);
+      normalize(messages);
 
       expect(getToolInputSchemaSpy).not.toHaveBeenCalled();
     });
@@ -219,7 +296,7 @@ describe('healInterruptedToolParts performance contract', () => {
     it('should NOT call getToolInputSchema for dynamic-tool output-error parts', () => {
       const messages = [userMessage('m0'), assistantMessage('m1', [dynamicToolOutputErrorPart('call_dyn')])];
 
-      heal(messages);
+      normalize(messages);
 
       expect(getToolInputSchemaSpy).not.toHaveBeenCalled();
     });
@@ -230,30 +307,48 @@ describe('healInterruptedToolParts performance contract', () => {
         assistantMessage('m1', [interruptedReadFilePart('call_a'), interruptedReadFilePart('call_b')]),
       ];
 
-      heal(messages);
+      normalize(messages);
+
+      expect(getToolInputSchemaSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('should call getToolInputSchema exactly once for each stale historical static input part', () => {
+      const messages = [
+        userMessage('m0'),
+        assistantMessage('m1', [staleReadFileInputAvailablePart('call_a'), staleReadFileInputAvailablePart('call_b')]),
+        userMessage('m2'),
+      ];
+
+      normalize(messages);
 
       expect(getToolInputSchemaSpy).toHaveBeenCalledTimes(2);
     });
   });
 
   describe('stress smoke test', () => {
-    it.skipIf(process.env['CI'])(
-      'should heal a 1000-part conversation with no healable parts in well under 5ms',
-      () => {
-        const parts: unknown[] = Array.from({ length: 1000 }, (_, i) =>
-          i % 2 === 0 ? textPart(`prose ${i}`) : validReadFileToolPart(`call_${i}`),
-        );
-        const messages = [userMessage('m0'), assistantMessage('m1', parts)];
+    it('should heal a 1000-part conversation without allocating or consulting the registry', () => {
+      const messages = [userMessage('m0'), assistantMessage('m1', hotParts(1000))];
 
-        const start = performance.now();
-        const healed = heal(messages) as typeof messages;
-        const elapsed = performance.now() - start;
+      const healed = normalize(messages) as typeof messages;
 
-        expect(healed[0]).toBe(messages[0]);
-        expect(healed[1]).toBe(messages[1]);
-        expect(elapsed).toBeLessThan(5);
-        expect(getToolInputSchemaSpy).not.toHaveBeenCalled();
-      },
-    );
+      expect(healed[0]).toBe(messages[0]);
+      expect(healed[1]).toBe(messages[1]);
+      expect(getToolInputSchemaSpy).not.toHaveBeenCalled();
+    });
+
+    /*
+     * A *ratio*, not a wall clock (W14 sweep): the old 5 ms budget measured the
+     * machine, so it went red beside other suites and green alone. Ten times the
+     * input costs about ten times the work when the pass is linear and about a
+     * hundred when it is not, and both halves pay the same load, so the shape is
+     * what the bound reads. Still off in CI, where a shared runner can stall
+     * either half.
+     */
+    it.skipIf(process.env['CI'])('should stay linear in the number of parts', () => {
+      const small = timeNormalize(200);
+      const large = timeNormalize(2000);
+
+      expect(large / Math.max(small, 0.1)).toBeLessThan(30);
+    });
   });
 });

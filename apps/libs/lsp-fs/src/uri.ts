@@ -1,0 +1,24 @@
+import { URI } from 'vscode-uri';
+import { assertRootedPath } from '@taucad/utils/path';
+
+/**
+ * Convert a canonical `file://` language-document URI to the workspace-relative key used
+ * by {@link FileContentService} (`joinPath(root, relative)`).
+ *
+ * @public
+ */
+export function languageFileUriToWorkspaceRelative(uri: string): string {
+  const parsed = URI.parse(uri);
+  if (
+    parsed.scheme !== 'file' ||
+    parsed.authority ||
+    parsed.query ||
+    parsed.fragment ||
+    !parsed.path.startsWith('/') ||
+    parsed.path.startsWith('//')
+  ) {
+    throw new TypeError(`lsp-fs: expected file URI, got ${uri}`);
+  }
+
+  return assertRootedPath(parsed.path.startsWith('/') ? parsed.path.slice(1) : parsed.path);
+}

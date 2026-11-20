@@ -1,0 +1,409 @@
+import { describe, expect, it } from 'vitest';
+import {
+  bundlePattern,
+  bundledLibraries,
+  projects,
+  publishWaves,
+  publishable,
+  publishableClosure,
+  validateTags,
+  workspace,
+} from '#resolver.js';
+import type { Workspace, WorkspaceProject } from '#resolver.js';
+
+const live = await workspace();
+
+const project = (name: string, tags: readonly string[], manifest: WorkspaceProject['manifest']): WorkspaceProject => ({
+  name,
+  root: `fixture/${name}`,
+  tags,
+  targets: [],
+  manifest,
+  configured: true,
+});
+
+const library = (name: string): WorkspaceProject =>
+  project(name, ['scope:shared', 'type:lib'], { name: `@taucad/${name}`, private: true });
+
+/**
+ * A miniature workspace for the cases the live one cannot produce: an untagged
+ * project, a second bundle owner, a manifest-less project, a mis-ordered wave.
+ */
+const fixture: Workspace = {
+  projects: [
+    library('types'),
+    library('units'),
+    project('app-only', ['scope:ui', 'type:app'], undefined),
+    project('base', ['scope:shared', 'type:package'], {
+      name: '@taucad/base',
+      devDependencies: { '@taucad/types': 'workspace:*', '@taucad/units': 'workspace:*', vitest: 'catalog:' },
+      peerDependencies: { '@taucad/units': 'workspace:*' },
+    }),
+    project('leaf', ['scope:shared', 'type:package'], {
+      name: '@taucad/leaf',
+      dependencies: { '@taucad/base': '^0.1.0' },
+    }),
+    project('shipped', ['scope:shared', 'type:package'], { name: '@taucad/shipped', private: true }),
+  ],
+};
+
+describe('workspace()', () => {
+  it('reads the live project graph', () => {
+    expect(live.projects.length).toBeGreaterThan(50);
+    expect(live.projects.map((entry) => entry.name)).toContain('runtime');
+  });
+
+  it('is memoised', async () => {
+    expect(await workspace()).toBe(live);
+  });
+
+  it('carries the target names the graph resolved for each project', () => {
+    expect(live.projects.every((entry) => entry.targets.length > 0)).toBe(true);
+    expect(live.projects.flatMap((entry) => entry.targets)).toContain('pkgcheck');
+  });
+});
+
+describe('projects()', () => {
+  it('resolves an Nx tag selector the same way `nx show projects --projects tag:…` does', () => {
+    expect(projects(live, 'tag:type:package').map((entry) => entry.name)).toEqual(
+      publishable(live).map((entry) => entry.name),
+    );
+    expect(projects(live, 'type:tool')).toEqual(projects(live, 'tag:type:tool'));
+  });
+
+  it('filters on all tags, excluded tags, privacy, and a predicate', () => {
+    expect(projects(fixture, { tags: ['type:lib', 'scope:shared'] }).map((entry) => entry.name)).toEqual([
+      'types',
+      'units',
+    ]);
+    expect(projects(fixture, { not: ['type:lib', 'type:app'] }).map((entry) => entry.name)).toEqual([
+      'base',
+      'leaf',
+      'shipped',
+    ]);
+    expect(projects(fixture, { private: true }).map((entry) => entry.name)).toEqual(['types', 'units', 'shipped']);
+    expect(projects(fixture, { private: false }).map((entry) => entry.name)).toEqual(['app-only', 'base', 'leaf']);
+    expect(projects(fixture, { predicate: (entry) => entry.name === 'leaf' }).map((entry) => entry.name)).toEqual([
+      'leaf',
+    ]);
+    expect(projects(fixture)).toEqual(fixture.projects);
+  });
+});
+
+describe('publishable()', () => {
+  it('is every non-private type:package project, sorted — fifty-nine today', () => {
+    const names = publishable(live).map((entry) => entry.name);
+
+    // The count is the tripwire; re-baselining it is the point at which a new
+    // package is noticed. Pinning the whole list would only restate the rule.
+    // `geospec` left for taucad/geospec (59 to 58), then `rhino` was removed (58 to 57), then `heif` was added (57 to 58, #2337), then `cadmpeg` was added (58 to 59, #2588).
+    expect(names).toHaveLength(59);
+    expect(names).toEqual([...names].sort());
+    // Both ends of the train.
+    for (const name of ['archive-core', 'runtime', 'runtime-testing', 'cli']) {
+      expect(names).toContain(name);
+    }
+    expect(names).not.toContain('geospec');
+    expect(names).not.toContain('rhino');
+
+    // Dev-time tools and private libraries are outside the set by construction.
+    for (const name of ['nx', 'scripts', 'oxlint', 'types', 'chat']) {
+      expect(names).not.toContain(name);
+    }
+  });
+
+  it('excludes a private type:package project', () => {
+    expect(publishable(fixture).map((entry) => entry.name)).toEqual(['base', 'leaf']);
+  });
+});
+
+describe('validateTags()', () => {
+  it('should allow no host or one valid host and reject unknown or duplicate hosts', () => {
+    expect(
+      validateTags({
+        projects: [
+          project('portable', ['scope:shared', 'type:package'], undefined),
+          project('darwin', ['scope:shared', 'type:package', 'host:darwin-arm64'], undefined),
+          project('unknown-host', ['scope:shared', 'type:package', 'host:other'], undefined),
+          project('two-hosts', ['scope:shared', 'type:package', 'host:darwin-arm64', 'host:darwin-arm64'], undefined),
+          project('host-without-scope', ['type:package', 'host:darwin-arm64'], undefined),
+          project('host-without-type', ['scope:shared', 'host:darwin-arm64'], undefined),
+          project('host-without-layer', ['scope:ui', 'type:app-lib', 'host:darwin-arm64'], undefined),
+        ],
+      }),
+    ).toEqual([
+      'fixture/unknown-host: unknown tag "host:other" (host: must be one of darwin-arm64)',
+      'fixture/two-hosts: expected exactly one host: tag, found host:darwin-arm64, host:darwin-arm64',
+      'fixture/host-without-scope: expected exactly one scope: tag, found none',
+      'fixture/host-without-type: expected exactly one type: tag, found none',
+      'fixture/host-without-layer: expected exactly one layer: tag, found none',
+    ]);
+  });
+
+  it('accepts every project in the workspace, inferred ones included', () => {
+    expect(validateTags(live)).toEqual([]);
+  });
+
+  it('should allow no release tag or release:app and reject unknown or duplicate release tags', () => {
+    expect(
+      validateTags({
+        projects: [
+          project('unreleased', ['scope:ui', 'type:app'], undefined),
+          project('released', ['scope:ui', 'type:app', 'release:app'], undefined),
+          project('unknown-release', ['scope:ui', 'type:app', 'release:npm'], undefined),
+          project('two-releases', ['scope:ui', 'type:app', 'release:app', 'release:app'], undefined),
+        ],
+      }),
+    ).toEqual([
+      'fixture/unknown-release: unknown tag "release:npm" (release: must be one of app)',
+      'fixture/two-releases: expected exactly one release: tag, found release:app, release:app',
+    ]);
+  });
+
+  it('should allow no deploy tag or deploy:staging and reject unknown or duplicate deploy tags', () => {
+    expect(
+      validateTags({
+        projects: [
+          project('undeployed', ['scope:ui', 'type:app'], undefined),
+          project('staged', ['scope:ui', 'type:app', 'deploy:staging'], undefined),
+          project('unknown-deploy', ['scope:ui', 'type:app', 'deploy:preview'], undefined),
+          project('two-deploys', ['scope:ui', 'type:app', 'deploy:staging', 'deploy:staging'], undefined),
+        ],
+      }),
+    ).toEqual([
+      'fixture/unknown-deploy: unknown tag "deploy:preview" (deploy: must be one of staging)',
+      'fixture/two-deploys: expected exactly one deploy: tag, found deploy:staging, deploy:staging',
+    ]);
+  });
+
+  it('rejects a project Nx inferred from a bare package.json that declares no tags', () => {
+    expect(validateTags({ projects: [{ ...project('inferred', [], undefined), configured: false }] })).toEqual([
+      'fixture/inferred: expected exactly one type: tag, found none; expected exactly one scope: tag, found none',
+    ]);
+  });
+
+  it('rejects a missing dimension, a duplicated dimension, and an unknown value', () => {
+    expect(
+      validateTags({
+        projects: [
+          project('untagged', ['scope:shared'], undefined),
+          project('two-types', ['scope:shared', 'type:lib', 'type:package'], undefined),
+          project('legacy', ['scope:tooling', 'type:scripts'], undefined),
+        ],
+      }),
+    ).toEqual([
+      'fixture/untagged: expected exactly one type: tag, found none',
+      'fixture/two-types: expected exactly one type: tag, found type:lib, type:package',
+      'fixture/legacy: unknown tag "type:scripts" (type: must be one of app, app-lib, lib, package, tool, example, e2e); unknown tag "scope:tooling" (scope: must be one of shared, api, ui, example)',
+    ]);
+  });
+
+  it('requires one valid layer for app libraries and validates optional layers elsewhere', () => {
+    expect(
+      validateTags({
+        projects: [
+          project('app-lib-without-layer', ['scope:ui', 'type:app-lib'], undefined),
+          project('two-layers', ['scope:ui', 'type:app', 'layer:feature', 'layer:ui'], undefined),
+          project('unknown-layer', ['scope:ui', 'type:app', 'layer:shell'], undefined),
+          project('valid-app-lib', ['scope:ui', 'type:app-lib', 'layer:data-access'], undefined),
+        ],
+      }),
+    ).toEqual([
+      'fixture/app-lib-without-layer: expected exactly one layer: tag, found none',
+      'fixture/two-layers: expected exactly one layer: tag, found layer:feature, layer:ui',
+      'fixture/unknown-layer: unknown tag "layer:shell" (layer: must be one of feature, ui, data-access, util)',
+    ]);
+  });
+
+  it('requires one valid api name for API server libraries and refuses it on every other project', () => {
+    expect(
+      validateTags({
+        projects: [
+          project('api-without-name', ['scope:api', 'type:app-lib', 'layer:util'], undefined),
+          project('api-two-names', ['scope:api', 'type:app-lib', 'layer:util', 'api:core', 'api:redis'], undefined),
+          project('api-unknown-name', ['scope:api', 'type:app-lib', 'layer:util', 'api:git'], undefined),
+          project('named-app', ['scope:api', 'type:app', 'api:core'], undefined),
+          project('named-ui-lib', ['scope:ui', 'type:app-lib', 'layer:util', 'api:core'], undefined),
+          project('valid-api-lib', ['scope:api', 'type:app-lib', 'layer:feature', 'api:billing'], undefined),
+          project('unnamed-api-app', ['scope:api', 'type:app'], undefined),
+        ],
+      }),
+    ).toEqual([
+      'fixture/api-without-name: expected exactly one api: tag, found none',
+      'fixture/api-two-names: expected exactly one api: tag, found api:core, api:redis',
+      'fixture/api-unknown-name: unknown tag "api:git" (api: must be one of core, observability, lifecycle, database, redis, email, auth, hosts, llm-gateway, billing, testing, object-storage, git-core, git-mirror, agent-observability, chat, projects)',
+      'fixture/named-app: unexpected tag "api:core" (api: is only for scope:api type:app-lib projects)',
+      'fixture/named-ui-lib: unexpected tag "api:core" (api: is only for scope:api type:app-lib projects)',
+    ]);
+  });
+
+  it('allows any number of distinct known ci lanes and rejects unknown or repeated lanes', () => {
+    expect(
+      validateTags({
+        projects: [
+          project('unlaned', ['scope:shared', 'type:lib'], undefined),
+          project('desktop-app', ['scope:ui', 'type:app', 'release:app', 'ci:desktop'], undefined),
+          project('two-lanes', ['scope:ui', 'type:app-lib', 'layer:feature', 'ci:shell', 'ci:desktop'], undefined),
+          project('browser-app', ['scope:ui', 'type:app', 'ci:browser', 'ci:standalone'], undefined),
+          project('quarantined-e2e', ['scope:ui', 'type:e2e', 'ci:standalone', 'ci:quarantined'], undefined),
+          project('unknown-lane', ['scope:ui', 'type:app', 'ci:desktop', 'ci:packaged'], undefined),
+          project('repeated-lane', ['scope:ui', 'type:app', 'ci:desktop', 'ci:desktop'], undefined),
+        ],
+      }),
+    ).toEqual([
+      'fixture/unknown-lane: unknown tag "ci:packaged" (ci: must be one of browser, standalone, quarantined, shell, desktop, native-hosts)',
+      'fixture/repeated-lane: duplicate tag "ci:desktop"',
+    ]);
+  });
+
+  it('allows one valid shell role on a private library and refuses it on every other project', () => {
+    expect(
+      validateTags({
+        projects: [
+          project('sandbox', ['scope:shared', 'type:lib', 'shell:sandbox'], undefined),
+          project('terminal', ['scope:ui', 'type:app-lib', 'layer:feature', 'shell:terminal'], undefined),
+          project('unshelled-lib', ['scope:shared', 'type:lib'], undefined),
+          project('unknown-role', ['scope:shared', 'type:lib', 'shell:kernel'], undefined),
+          project('two-roles', ['scope:shared', 'type:lib', 'shell:sandbox', 'shell:service'], undefined),
+          project('shell-package', ['scope:shared', 'type:package', 'shell:service'], undefined),
+          project('shell-app', ['scope:ui', 'type:app', 'shell:terminal'], undefined),
+        ],
+      }),
+    ).toEqual([
+      'fixture/unknown-role: unknown tag "shell:kernel" (shell: must be one of sandbox, service, terminal)',
+      'fixture/two-roles: expected exactly one shell: tag, found shell:sandbox, shell:service',
+      'fixture/shell-package: unexpected tag "shell:service" (shell: is only for type:lib or type:app-lib projects)',
+      'fixture/shell-app: unexpected tag "shell:terminal" (shell: is only for type:lib or type:app-lib projects)',
+    ]);
+  });
+});
+
+describe('bundledLibraries()', () => {
+  it("derives the runtime owner's six direct bundle candidates", () => {
+    expect(bundledLibraries(live, 'runtime')).toEqual([
+      '@taucad/events',
+      '@taucad/fs-bridge',
+      '@taucad/json-schema',
+      '@taucad/memory',
+      '@taucad/types',
+      '@taucad/utils',
+    ]);
+  });
+
+  it('assigns the private chat contracts to their public MCP bundle owner', () => {
+    expect(bundledLibraries(live, 'mcp')).toEqual(['@taucad/chat']);
+  });
+
+  it('yields nothing for every other publishable, or for an unknown project', () => {
+    const bundlers = publishable(live)
+      .filter((entry) => bundledLibraries(live, entry.name).length > 0)
+      .map((entry) => entry.name);
+
+    expect(bundlers).toContain('mcp');
+    expect(bundlers).toContain('runtime');
+    expect(bundledLibraries(live, 'no-such-project')).toEqual([]);
+  });
+
+  it('drops peer dependencies, registry ranges, and non-library workspace packages', () => {
+    expect(bundledLibraries(fixture, 'base')).toEqual(['@taucad/types']);
+  });
+});
+
+describe('bundlePattern()', () => {
+  it('matches a bundled library and its subpaths only', () => {
+    const pattern = bundlePattern(live, 'runtime');
+
+    expect(pattern.test('@taucad/events')).toBe(true);
+    expect(pattern.test('@taucad/events/worker')).toBe(true);
+    expect(pattern.test('@taucad/events-extra')).toBe(false);
+    expect(pattern.test('@taucad/runtime')).toBe(false);
+  });
+
+  it('matches nothing when the package bundles nothing', () => {
+    const pattern = bundlePattern(live, 'no-such-project');
+
+    expect(pattern.test('@taucad/events')).toBe(false);
+    expect(pattern.test('')).toBe(false);
+  });
+});
+
+describe('independent bundle owners', () => {
+  it('derives a subpath-aware pattern for each publishable that claims a private library', () => {
+    const contested: Workspace = {
+      projects: [
+        ...fixture.projects,
+        project('rival', ['scope:shared', 'type:package'], {
+          name: '@taucad/rival',
+          devDependencies: { '@taucad/types': 'workspace:*' },
+        }),
+      ],
+    };
+
+    for (const owner of ['base', 'rival']) {
+      expect(bundlePattern(contested, owner).test('@taucad/types')).toBe(true);
+      expect(bundlePattern(contested, owner).test('@taucad/types/constants')).toBe(true);
+      expect(bundlePattern(contested, owner).test('@taucad/types-extra')).toBe(false);
+    }
+  });
+});
+
+describe('publishWaves()', () => {
+  it('layers the publishables by longest dependency path', () => {
+    const waves = publishWaves(live);
+
+    // The rule, not a transcript of today's graph: the waves partition the
+    // publishable set, and nothing may publish before what it depends on.
+    expect(waves.flat().sort()).toEqual(publishable(live).map((entry) => entry.name));
+
+    // Nothing publishes before what it depends on, read straight off the manifests.
+    const waveOf = new Map(waves.flatMap((wave, index) => wave.map((name) => [name, index] as const)));
+    const packageNames = new Map(live.projects.map((entry) => [entry.manifest?.name, entry.name] as const));
+    for (const entry of publishable(live)) {
+      const dependencies = { ...entry.manifest?.dependencies, ...entry.manifest?.peerDependencies };
+      for (const dependency of Object.keys(dependencies)) {
+        const dependencyWave = waveOf.get(packageNames.get(dependency) ?? '');
+        if (dependencyWave !== undefined) {
+          expect(dependencyWave, `${entry.name} depends on ${dependency}`).toBeLessThan(waveOf.get(entry.name) ?? 0);
+        }
+      }
+    }
+    // The current publishable graph has ten dependency layers; removing the native kernel roster took the
+    // twelfth and removing geospec-engine from Tau took the eleventh.
+    expect(waves).toHaveLength(10);
+    expect(publishWaves(fixture)).toEqual([['base'], ['leaf']]);
+  });
+});
+
+describe('publishableClosure()', () => {
+  it('closes the runtime quick start over its publishable dependencies, in wave order', () => {
+    const closure = publishableClosure(live, ['esbuild', 'replicad']);
+    expect(closure).toEqual([
+      'archive-core',
+      'cache-core',
+      'project-core',
+      'rpc',
+      'spatial',
+      'units',
+      'kinematics',
+      'filesystem',
+      'parameters',
+      'revisions',
+      'runtime',
+      'bundler-core',
+      'geometry-core',
+      'occt-core',
+      'esbuild',
+      'replicad',
+    ]);
+    const waveOf = new Map(publishWaves(live).flatMap((wave, index) => wave.map((name) => [name, index] as const)));
+    const indices = closure.map((name) => waveOf.get(name) ?? -1);
+    expect(indices).toEqual(indices.toSorted((a, b) => a - b));
+  });
+
+  it('includes the requested project itself and is idempotent under duplicates', () => {
+    expect(publishableClosure(fixture, ['leaf'])).toEqual(['base', 'leaf']);
+    expect(publishableClosure(fixture, ['leaf', 'leaf', 'base'])).toEqual(['base', 'leaf']);
+    // A name that is not publishable carries no edges and drops out of the result.
+    expect(publishableClosure(fixture, ['not-publishable'])).toEqual([]);
+  });
+});

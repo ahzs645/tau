@@ -1,0 +1,648 @@
+import { createHash } from 'node:crypto';
+import { StepClock } from '@taucad/xstate-testing/clock';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ProviderMessage } from '#log/event-types.js';
+import type { ModelStreamEvent, ModelStreamRequest, ModelTransport } from '#waist/ports.js';
+import { createMemoryEventLogFile } from '#harness/harness.fixture.js';
+import { recordingFetch } from '#harness/prefix-identity.fixture.js';
+import type { CapturedBody } from '#harness/prefix-identity.fixture.js';
+import { createGatewayModelTransport } from '#transport/gateway-model-transport.js';
+import { hasFileRef, providerMessageToPi } from '#harness/session-record.js';
+import type { AttachmentReader } from '#harness/session-record.js';
+import type * as SessionRecordModule from '#harness/session-record.js';
+import { createAgentSession } from '#harness/session.js';
+
+vi.mock('#harness/session-record.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof SessionRecordModule>();
+  return { ...actual, providerMessageToPi: vi.fn(actual.providerMessageToPi) };
+});
+
+const imagePath = `attachments/${'c'.repeat(64)}.jpg`;
+const pdfHash = 'd'.repeat(64);
+const pdfPath = `attachments/${pdfHash}.pdf`;
+const imageBytes: Uint8Array<ArrayBuffer> = new Uint8Array([255, 216, 255]);
+const pdfBytes = new TextEncoder().encode('%PDF-1.4 body');
+const base64 = (bytes: Uint8Array<ArrayBuffer>): string => Buffer.from(bytes).toString('base64');
+
+class RecordingTransport implements ModelTransport {
+  public readonly funding = { type: 'unfunded' } as const;
+  public readonly requests: ModelStreamRequest[] = [];
+
+  public async *stream(request: ModelStreamRequest): AsyncGenerator<ModelStreamEvent> {
+    this.requests.push(request);
+    yield { type: 'text-delta', text: 'seen' };
+    yield { type: 'completed', stopReason: 'stop' };
+  }
+}
+
+const attachmentsFrom = (
+  files: Record<string, Uint8Array<ArrayBuffer>>,
+): AttachmentReader & { read: ReturnType<typeof vi.fn> } => ({
+  read: vi.fn(async (_chatId: string, path: string) => files[path]),
+});
+
+const userWithAttachments: ProviderMessage & { role: 'user' } = {
+  id: 'user-1',
+  role: 'user',
+  content: [
+    { type: 'text', text: 'what is in these?' },
+    { type: 'file-ref', path: imagePath, mimeType: 'image/jpeg' },
+    { type: 'file-ref', path: pdfPath, mimeType: 'application/pdf', filename: 'drawing.pdf' },
+  ],
+};
+
+const openSession = async (options: {
+  readonly file: ReturnType<typeof createMemoryEventLogFile>;
+  readonly runId: string;
+  readonly transport: ModelTransport;
+  readonly attachments?: AttachmentReader;
+}) =>
+  createAgentSession({
+    chatId: 'chat-1',
+    runId: options.runId,
+    leaderEpoch: 'epoch-1',
+    systemPrompt: 'system',
+    model: { id: 'stub', contextWindow: 200_000, providerKind: 'anthropic' },
+    modelTransport: options.transport,
+    toolRegistry: { list: () => [], invoke: vi.fn() },
+    eventLog: await options.file.open(),
+    ...(options.attachments ? { attachments: options.attachments } : {}),
+  });
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.mocked(providerMessageToPi).mockClear();
+});
+
+describe('attachment materialisation in the session (D15)', () => {
+  it('sends images and documents as bytes, carries the side table on the request, and never sends a file-ref', async () => {
+    const file = createMemoryEventLogFile();
+    const transport = new RecordingTransport();
+    const attachments = attachmentsFrom({ [imagePath]: imageBytes, [pdfPath]: pdfBytes });
+    const session = await openSession({ file, runId: 'run-1', transport, attachments });
+
+    await session.prompt(userWithAttachments);
+
+    expect(transport.requests).toHaveLength(1);
+    const [request] = transport.requests;
+    expect(request?.messages.at(-1)?.content).toEqual([
+      { type: 'text', text: 'what is in these?' },
+      { type: 'image', mimeType: 'image/jpeg', data: base64(imageBytes) },
+      { type: 'text', text: `⟃tau:document:${pdfHash}⟄` },
+    ]);
+    expect(request?.documents).toEqual(
+      new Map([[pdfHash, { data: base64(pdfBytes), mediaType: 'application/pdf', filename: 'drawing.pdf' }]]),
+    );
+    expect(attachments.read).toHaveBeenCalledWith('chat-1', imagePath);
+    // Pin: no request ever contains a file-ref.
+    expect(JSON.stringify(request?.messages)).not.toContain('file-ref');
+  });
+
+  it('keeps the durable rows as references', async () => {
+    const file = createMemoryEventLogFile();
+    const transport = new RecordingTransport();
+    const session = await openSession({
+      file,
+      runId: 'run-1',
+      transport,
+      attachments: attachmentsFrom({ [imagePath]: imageBytes, [pdfPath]: pdfBytes }),
+    });
+
+    await session.prompt(structuredClone(userWithAttachments));
+
+    const log = await file.open();
+    const serialized = JSON.stringify(await log.read());
+    expect(serialized).not.toContain(base64(pdfBytes));
+    expect(serialized).not.toContain('⟃tau:document');
+    const events = await log.read();
+    const committed = events.find((event) => event.type === 'turn.history-projection-committed');
+    expect(committed?.type === 'turn.history-projection-committed' && committed.message).toEqual(userWithAttachments);
+  });
+
+  it('names the chat every generation request belongs to', async () => {
+    /* One transport serves every chat in a worker, so the chat travels with the
+     * request rather than the composition; the gateway turns it into the
+     * receipt's `chatHint`. */
+    const file = createMemoryEventLogFile();
+    const transport = new RecordingTransport();
+    const session = await openSession({ file, runId: 'run-1', transport });
+
+    await session.prompt({ id: 'user-1', role: 'user', content: 'hello' });
+
+    expect(transport.requests[0]?.chatId).toBe('chat-1');
+  });
+
+  it('never hands hydration a file-ref, on the first turn or when a later run rebuilds history', async () => {
+    const file = createMemoryEventLogFile();
+    const attachments = attachmentsFrom({ [imagePath]: imageBytes, [pdfPath]: pdfBytes });
+    const first = await openSession({ file, runId: 'run-1', transport: new RecordingTransport(), attachments });
+    await first.prompt(userWithAttachments);
+    await first.close();
+
+    const transport = new RecordingTransport();
+    const second = await openSession({ file, runId: 'run-2', transport, attachments });
+    await second.prompt({ id: 'user-2', role: 'user', content: 'and now?' });
+
+    const hydrated = vi.mocked(providerMessageToPi).mock.calls.map(([message]) => message);
+    expect(hydrated.some((message) => message.id === 'user-1')).toBe(true);
+    // Pin: hydrateHistory never sees a file-ref.
+    expect(hydrated.filter((message) => hasFileRef(message))).toEqual([]);
+    const replayed = transport.requests[0]?.messages.find((message) => message.id === 'user-1');
+    expect(replayed?.content).toContainEqual({ type: 'image', mimeType: 'image/jpeg', data: base64(imageBytes) });
+    expect(transport.requests[0]?.documents?.get(pdfHash)?.data).toBe(base64(pdfBytes));
+    expect(JSON.stringify(transport.requests[0]?.messages)).not.toContain('file-ref');
+  });
+
+  it('omits a reference whose bytes are absent and warns once', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const file = createMemoryEventLogFile();
+    const transport = new RecordingTransport();
+    const session = await openSession({
+      file,
+      runId: 'run-1',
+      transport,
+      attachments: attachmentsFrom({ [pdfPath]: pdfBytes }),
+    });
+
+    await session.prompt(userWithAttachments);
+
+    expect(transport.requests[0]?.messages.at(-1)?.content).toEqual([
+      { type: 'text', text: 'what is in these?' },
+      { type: 'text', text: `⟃tau:document:${pdfHash}⟄` },
+    ]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain(imagePath);
+  });
+
+  it('treats every reference as absent when the host wires no reader', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const transport = new RecordingTransport();
+    const session = await openSession({ file: createMemoryEventLogFile(), runId: 'run-1', transport });
+
+    await session.prompt(userWithAttachments);
+
+    expect(transport.requests[0]?.messages.at(-1)?.content).toEqual([{ type: 'text', text: 'what is in these?' }]);
+    expect(transport.requests[0]?.documents).toBeUndefined();
+  });
+
+  it('still sends a legacy inline image block unchanged', async () => {
+    const transport = new RecordingTransport();
+    const session = await openSession({ file: createMemoryEventLogFile(), runId: 'run-1', transport });
+    const legacy = [{ type: 'image', mimeType: 'image/png', data: 'bGVnYWN5' }];
+
+    await session.prompt({ id: 'user-legacy', role: 'user', content: legacy });
+
+    expect(transport.requests[0]?.messages.at(-1)?.content).toEqual(legacy);
+    expect(transport.requests[0]?.documents).toBeUndefined();
+  });
+});
+
+describe('attachment eviction agrees across devices (I1)', () => {
+  const pathOf = (index: number): string => `attachments/${String(index).padStart(64, '0')}.png`;
+  const captures = 101;
+  /** A chat of more image attachments than one request may carry, as its durable log holds it. */
+  const chatLog = async (): Promise<ReturnType<typeof createMemoryEventLogFile>> => {
+    const file = createMemoryEventLogFile();
+    const log = await file.open();
+    for (let index = 0; index < captures; index++) {
+      // oxlint-disable-next-line no-await-in-loop -- rows are appended in order.
+      await log.append({
+        version: 1,
+        leaderEpoch: 'epoch-0',
+        sequence: index,
+        recordedAt: new Date(1_700_000_000_000 + index).toISOString(),
+        runId: 'run-0',
+        type: 'message.appended',
+        message: {
+          id: `user-${String(index)}`,
+          role: 'user',
+          content: [
+            { type: 'text', text: `capture ${String(index)}` },
+            { type: 'file-ref', path: pathOf(index), mimeType: 'image/png', byteLength: 3 },
+          ],
+        },
+      });
+    }
+    await log.close();
+    return file;
+  };
+  const bytesOf = (index: number): Uint8Array<ArrayBuffer> => new Uint8Array([index, 0, 0]);
+  const reader = (missing: ReadonlySet<number>): AttachmentReader => ({
+    read: async (_chatId: string, path: string) => {
+      const index = Number(path.slice('attachments/'.length, path.indexOf('.')));
+      return missing.has(index) ? undefined : bytesOf(index);
+    },
+  });
+  /** What one device sends the provider for the chat: the Anthropic body the gateway transport builds. */
+  const sentBy = async (runId: string, missing: ReadonlySet<number>): Promise<Array<Record<string, unknown>>> => {
+    const captured: CapturedBody[] = [];
+    const session = await openSession({
+      file: await chatLog(),
+      runId,
+      transport: createGatewayModelTransport({
+        baseUrl: 'https://gateway.example',
+        fetch: recordingFetch([{ text: 'seen' }], captured),
+      }),
+      attachments: reader(missing),
+    });
+    await session.prompt({ id: 'user-next', role: 'user', content: 'and now?' });
+    await session.close();
+    return captured[0]!['messages'] as Array<Record<string, unknown>>;
+  };
+  const blocksOf = (message: Record<string, unknown>): Array<Record<string, unknown>> =>
+    Array.isArray(message['content']) ? (message['content'] as Array<Record<string, unknown>>) : [];
+  const imagesIn = (messages: ReadonlyArray<Record<string, unknown>>): number =>
+    messages.filter((message) => blocksOf(message).some((block) => block['type'] === 'image')).length;
+  const omittedIn = (messages: ReadonlyArray<Record<string, unknown>>): number[] =>
+    messages.flatMap((message, index) =>
+      blocksOf(message).some((block) => block['text'] === '[attachment omitted]') ? [index] : [],
+    );
+
+  it('should evict the same attachments on a device that lacks one of them as on a device that has them all', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fromDesktop = await sentBy('run-desktop', new Set());
+    /* The phone never received two of the captures: one the chat has outgrown, one it still carries. */
+    const fromPhone = await sentBy('run-phone', new Set([5, 60]));
+
+    expect(omittedIn(fromDesktop).length).toBeGreaterThan(0);
+    expect(omittedIn(fromPhone)).toEqual(omittedIn(fromDesktop));
+    const differing = fromDesktop.flatMap((message, index) =>
+      JSON.stringify(message['content']) === JSON.stringify(fromPhone[index]?.['content']) ? [] : [index],
+    );
+    /* The capture the phone lacks and still carries: the one message that differs between the devices. */
+    expect(differing).toEqual([60]);
+    expect(imagesIn(fromDesktop)).toBeLessThanOrEqual(100);
+  });
+});
+
+describe('screenshot captures as chat attachments (D-UI-04)', () => {
+  const webpBytes: Uint8Array<ArrayBuffer> = new Uint8Array([82, 73, 70, 70, 1, 2, 3, 4]);
+  const webpHash = createHash('sha256').update(webpBytes).digest('hex');
+  const storedPath = `attachments/${webpHash}.webp`;
+  const capture = {
+    images: [{ view: '3d', angle: 'isometric', dataUrl: `data:image/webp;base64,${base64(webpBytes)}` }],
+  };
+
+  class ScreenshotTransport implements ModelTransport {
+    public readonly funding = { type: 'unfunded' } as const;
+    public readonly requests: ModelStreamRequest[] = [];
+
+    public async *stream(request: ModelStreamRequest): AsyncGenerator<ModelStreamEvent> {
+      this.requests.push(structuredClone(request));
+      if (this.requests.length === 1) {
+        yield { type: 'tool-input', toolCallId: 'call-1', toolName: 'screenshot', input: {} };
+        yield { type: 'completed', stopReason: 'toolUse' };
+        return;
+      }
+      yield { type: 'text-delta', text: 'looks fine' };
+      yield { type: 'completed', stopReason: 'stop' };
+    }
+  }
+
+  const store = (): AttachmentReader & { files: Map<string, Uint8Array<ArrayBuffer>> } => {
+    const files = new Map<string, Uint8Array<ArrayBuffer>>();
+    return {
+      files,
+      read: async (_chatId, path) => files.get(path),
+      write: async (_chatId, path, bytes) => {
+        files.set(path, bytes);
+      },
+    };
+  };
+
+  const openScreenshotSession = async ({
+    file,
+    runId,
+    transport,
+    attachments,
+  }: {
+    readonly file: ReturnType<typeof createMemoryEventLogFile>;
+    readonly runId: string;
+    readonly transport: ModelTransport;
+    readonly attachments: AttachmentReader;
+  }) =>
+    createAgentSession({
+      chatId: 'chat-1',
+      runId,
+      leaderEpoch: 'epoch-1',
+      systemPrompt: 'system',
+      model: { id: 'stub', contextWindow: 200_000, providerKind: 'anthropic' },
+      modelTransport: transport,
+      toolRegistry: {
+        list: () => [{ name: 'screenshot', description: 'Capture.', inputSchema: { type: 'object' } }],
+        invoke: async () => ({ content: structuredClone(capture), isError: false }),
+      },
+      eventLog: await file.open(),
+      attachments,
+    });
+
+  it('writes the capture bytes once to the chat attachments and keeps only the reference in the log', async () => {
+    const file = createMemoryEventLogFile();
+    const attachments = store();
+    const transport = new ScreenshotTransport();
+    const session = await openScreenshotSession({ file, runId: 'run-1', transport, attachments });
+
+    await session.prompt({ id: 'user-1', role: 'user', content: 'check it' });
+
+    expect(attachments.files.get(storedPath)).toEqual(webpBytes);
+    const log = await file.open();
+    const events = await log.read();
+    expect(JSON.stringify(events)).not.toContain(base64(webpBytes));
+    const output = events.find((event) => event.type === 'message.appended' && event.message.role === 'tool-output');
+    expect(output?.type === 'message.appended' && output.message.content).toEqual({
+      images: [
+        {
+          view: '3d',
+          angle: 'isometric',
+          path: storedPath,
+          mimeType: 'image/webp',
+          byteLength: webpBytes.byteLength,
+          sha256: webpHash,
+        },
+      ],
+    });
+  });
+
+  it('still shows the model the capture, in the turn and when a later run rebuilds history', async () => {
+    const file = createMemoryEventLogFile();
+    const attachments = store();
+    const transport = new ScreenshotTransport();
+    const first = await openScreenshotSession({ file, runId: 'run-1', transport, attachments });
+    await first.prompt({ id: 'user-1', role: 'user', content: 'check it' });
+    await first.close();
+
+    const later = new RecordingTransport();
+    const second = await openSession({ file, runId: 'run-2', transport: later, attachments });
+    await second.prompt({ id: 'user-2', role: 'user', content: 'and now?' });
+
+    const toolOutput = (request: ModelStreamRequest | undefined) =>
+      request?.messages.find((message) => message.role === 'tool-output')?.content;
+    expect(toolOutput(transport.requests[1])).toEqual(capture);
+    expect(toolOutput(later.requests[0])).toEqual(capture);
+  });
+});
+
+describe('machine camera stills as chat attachments (D-UI-04 WP5)', () => {
+  it('stores a JPEG still and restores it for the model', async () => {
+    const jpegBytes: Uint8Array<ArrayBuffer> = new Uint8Array([255, 216, 255, 224, 0, 16, 74, 70]);
+    const jpegHash = createHash('sha256').update(jpegBytes).digest('hex');
+    const still = {
+      machineId: 'printer-1',
+      byteLength: jpegBytes.byteLength,
+      images: [{ view: 'printer-1', dataUrl: `data:image/jpeg;base64,${base64(jpegBytes)}` }],
+    };
+    const files = new Map<string, Uint8Array<ArrayBuffer>>();
+    const attachments: AttachmentReader & { read: ReturnType<typeof vi.fn> } = {
+      read: vi.fn(async (_chatId: string, path: string) => files.get(path)),
+      write: async (_chatId, path, bytes) => {
+        files.set(path, bytes);
+      },
+    };
+    const requests: ModelStreamRequest[] = [];
+    const transport: ModelTransport = {
+      funding: { type: 'unfunded' },
+      async *stream(request) {
+        requests.push(structuredClone(request));
+        if (requests.length === 1) {
+          yield { type: 'tool-input', toolCallId: 'call-1', toolName: 'capture_machine_still', input: {} };
+          yield { type: 'completed', stopReason: 'toolUse' };
+          return;
+        }
+        yield { type: 'text-delta', text: 'the bed is clear' };
+        yield { type: 'completed', stopReason: 'stop' };
+      },
+    };
+    const file = createMemoryEventLogFile();
+    const session = await createAgentSession({
+      chatId: 'chat-1',
+      runId: 'run-1',
+      leaderEpoch: 'epoch-1',
+      systemPrompt: 'system',
+      model: { id: 'stub', contextWindow: 200_000, providerKind: 'anthropic' },
+      modelTransport: transport,
+      toolRegistry: {
+        list: () => [{ name: 'capture_machine_still', description: 'Still.', inputSchema: { type: 'object' } }],
+        invoke: async () => ({ content: structuredClone(still), isError: false }),
+      },
+      eventLog: await file.open(),
+      attachments,
+    });
+
+    await session.prompt({ id: 'user-1', role: 'user', content: 'is the bed clear?' });
+
+    expect(files.get(`attachments/${jpegHash}.jpg`)).toEqual(jpegBytes);
+    const log = await file.open();
+    expect(JSON.stringify(await log.read())).not.toContain(base64(jpegBytes));
+    expect(attachments.read).toHaveBeenCalledWith('chat-1', `attachments/${jpegHash}.jpg`);
+    // Restored, the still reaches the model exactly as an inline still did: the capture keeps its image (I1).
+    expect(requests[1]?.messages.find((message) => message.role === 'tool-output')?.content).toEqual(still);
+  });
+});
+
+describe('start-of-turn compaction refusal', () => {
+  /*
+   * A chat whose durable history is one message too large to evict cannot be
+   * compacted at all. That refusal has to end the turn the way every other
+   * coded refusal does — a terminal `failed` record carrying the code — instead
+   * of escaping `prompt` mid-admission and leaving the chat with no way to take
+   * another turn.
+   */
+  it('should admit the next turn after a start-of-turn compaction refusal', async () => {
+    const file = createMemoryEventLogFile();
+    const seedLog = await file.open();
+    await seedLog.append({
+      version: 1,
+      leaderEpoch: 'seed-epoch',
+      sequence: 0,
+      recordedAt: '2026-09-01T00:00:00.000Z',
+      runId: 'seed-run',
+      type: 'message.appended',
+      message: { id: 'user-oversized', role: 'user', content: 'p'.repeat(60_000) },
+    });
+    await seedLog.close();
+
+    let generatedId = 0;
+    const refusedSession = async (runId: string, transport: RecordingTransport) =>
+      createAgentSession({
+        chatId: 'chat-oversized',
+        runId,
+        leaderEpoch: `${runId}-epoch`,
+        systemPrompt: 'system',
+        model: { id: 'stub', contextWindow: 8192 },
+        modelTransport: transport,
+        toolRegistry: { list: () => [], invoke: vi.fn() },
+        eventLog: await file.open(),
+        summarize: async () => 'never reached',
+        createId: () => `generated-${generatedId++}`,
+        now: () => new Date('2026-09-01T00:00:00.000Z'),
+      });
+
+    const firstTransport = new RecordingTransport();
+    const first = await refusedSession('run-refused', firstTransport);
+    const refused = await first.prompt({ id: 'user-after-oversized', role: 'user', content: 'continue' });
+    await first.close();
+
+    const secondTransport = new RecordingTransport();
+    const second = await refusedSession('run-next', secondTransport);
+    await second.prompt({ id: 'user-next', role: 'user', content: 'still there?' });
+    await second.close();
+
+    const log = await file.open();
+    const events = await log.read();
+    expect(refused).toMatchObject({ outcome: 'failed', failure: { code: 'NO_EVICTABLE_HISTORY' } });
+    // Only the one-message history is unevictable. The next turn supplies a
+    // valid cut, so the chat compacts it and reaches the provider.
+    expect(JSON.stringify(events)).not.toContain('CIRCUIT_BREAKER_OPEN');
+    expect(
+      events.flatMap((event) => (event.type === 'turn.history-projection-committed' ? [event.message.id] : [])),
+    ).toEqual(['user-after-oversized', 'user-next']);
+    expect(firstTransport.requests).toEqual([]);
+    expect(secondTransport.requests).toHaveLength(1);
+    await log.close();
+  });
+});
+
+describe('the model-stream stall bound (RA-S12, E9)', () => {
+  /** A stream that sends one delta, then nothing, until its request is aborted. */
+  const silentAfterFirst = (): ModelTransport & { aborted: () => boolean } => {
+    let aborted = false;
+    return {
+      funding: { type: 'unfunded' },
+      aborted: () => aborted,
+      async *stream(request): AsyncGenerator<ModelStreamEvent> {
+        yield { type: 'text-delta', text: 'Thinking' };
+        await new Promise<void>((resolve) => {
+          request.signal.addEventListener('abort', () => {
+            aborted = true;
+            resolve();
+          });
+        });
+        throw new DOMException('The operation was aborted.', 'AbortError');
+      },
+    };
+  };
+
+  it('should fail MODEL_STREAM_STALLED when the stream stops sending events', async () => {
+    const clock = new StepClock();
+    const transport = silentAfterFirst();
+    const session = await createAgentSession({
+      chatId: 'chat-stall',
+      runId: 'run-stall',
+      leaderEpoch: 'epoch-stall',
+      systemPrompt: 'system',
+      model: { id: 'stub', contextWindow: 200_000 },
+      modelTransport: transport,
+      toolRegistry: { list: () => [], invoke: vi.fn() },
+      eventLog: await createMemoryEventLogFile().open(),
+      clock,
+      streamStall: 300_000,
+    });
+
+    const ended = session.prompt({ id: 'user-stall', role: 'user', content: 'Answer.' });
+    await vi.waitFor(() => {
+      expect(clock.nextDue()).toBeDefined();
+    });
+    clock.increment(299_999);
+    expect(transport.aborted()).toBe(false);
+    clock.increment(1);
+
+    await expect(ended).resolves.toMatchObject({ outcome: 'failed', failure: { code: 'MODEL_STREAM_STALLED' } });
+    expect(transport.aborted()).toBe(true);
+    await session.close();
+  });
+
+  it('should re-arm once when the bound fires a whole bound late, as after a frozen process', async () => {
+    let now = 0;
+    let armed = 0;
+    const timers = new Map<number, () => void>();
+    const clock = {
+      now: () => now,
+      setTimeout: (function_: () => void) => {
+        armed++;
+        timers.set(armed, function_);
+        return armed;
+      },
+      clearTimeout: (id: number) => {
+        timers.delete(id);
+      },
+    };
+    /** Fire the one live timer. */
+    const fire = (): void => {
+      const [[id, function_] = []] = timers;
+      if (id !== undefined) {
+        timers.delete(id);
+        function_?.();
+      }
+    };
+    const transport = silentAfterFirst();
+    const session = await createAgentSession({
+      chatId: 'chat-frozen',
+      runId: 'run-frozen',
+      leaderEpoch: 'epoch-frozen',
+      systemPrompt: 'system',
+      model: { id: 'stub', contextWindow: 200_000 },
+      modelTransport: transport,
+      toolRegistry: { list: () => [], invoke: vi.fn() },
+      eventLog: await createMemoryEventLogFile().open(),
+      clock,
+      streamStall: 1000,
+    });
+
+    const ended = session.prompt({ id: 'user-frozen', role: 'user', content: 'Answer.' });
+    // The first event's bound was cleared; the second waits on the silent stream.
+    await vi.waitFor(() => {
+      expect(armed).toBe(2);
+    });
+    now = 2000;
+    fire();
+    expect(armed).toBe(3);
+    expect(transport.aborted()).toBe(false);
+
+    now = 3000;
+    fire();
+    await expect(ended).resolves.toMatchObject({ outcome: 'failed', failure: { code: 'MODEL_STREAM_STALLED' } });
+    await session.close();
+  });
+});
+
+describe('provider bytes', () => {
+  it('should store the reply as the provider wrote it, math delimiters included', async () => {
+    const thinking = String.raw`The area is \(\int_0^3 x^2\,dx\).`;
+    const text = String.raw`So \[ \int_0^3 x^2\,dx = 9 \] and \(x\) stays in code as ` + '`\\(x\\)`.';
+    const session = await createAgentSession({
+      chatId: 'chat-bytes',
+      runId: 'run-bytes',
+      leaderEpoch: 'epoch-bytes',
+      systemPrompt: 'system',
+      model: { id: 'stub', contextWindow: 200_000 },
+      modelTransport: {
+        funding: { type: 'unfunded' },
+        async *stream() {
+          yield { type: 'thinking-start', contentIndex: 0 };
+          yield { type: 'thinking-delta', contentIndex: 0, text: thinking };
+          yield { type: 'thinking-end', contentIndex: 0, content: thinking };
+          yield { type: 'thinking-signature', contentIndex: 0, signature: 'sig-1' };
+          yield { type: 'text-start', contentIndex: 1 };
+          yield { type: 'text-delta', contentIndex: 1, text };
+          yield { type: 'text-end', contentIndex: 1, content: text };
+          yield { type: 'completed', stopReason: 'stop' };
+        },
+      },
+      toolRegistry: { list: () => [], invoke: vi.fn() },
+      eventLog: await createMemoryEventLogFile().open(),
+    });
+
+    await expect(session.prompt({ id: 'user-bytes', role: 'user', content: 'Integrate.' })).resolves.toEqual({
+      outcome: 'completed',
+    });
+    const { messages } = await session.snapshot();
+    const stored = messages.findLast((message) => message.role === 'assistant');
+    await session.close();
+
+    /* A signed thinking block is bound to its own bytes, and a rewritten reply is an edit every later request replays. */
+    expect(stored?.content).toMatchObject([
+      { type: 'thinking', thinking, thinkingSignature: 'sig-1' },
+      { type: 'text', text },
+    ]);
+  });
+});

@@ -1,0 +1,93 @@
+import { Heading } from '@taucad/ui/components/heading';
+import { useMemo } from 'react';
+import { useSelector } from '@xstate/react';
+import { asKnownArtifact } from '@taucad/runtime';
+import type { ActorRefFrom } from 'xstate';
+import { Separator } from '@taucad/ui/components/separator';
+import type { cadMachine } from '#machines/cad.machine.js';
+import { inspectGlb } from '@taucad/viewer/utils/inspect-glb';
+import type { GltfInspection } from '@taucad/viewer/utils/inspect-glb';
+
+/**
+ * `TAU_DEBUG`-gated diagnostic panel below the preview "Downloads" section.
+ * Keeps the cross-app e2e contract (counts, asset metadata, scene bounding
+ * box) available without putting GLB inspection in the public examples.
+ */
+type Props = {
+  readonly cadRef: ActorRefFrom<typeof cadMachine>;
+};
+
+const fmt = (n: number): string => (Number.isInteger(n) ? n.toFixed(0) : n.toFixed(3));
+const vec = (v: readonly [number, number, number]): string => `[${fmt(v[0])}, ${fmt(v[1])}, ${fmt(v[2])}]`;
+
+export function PreviewDebugPanel({ cadRef }: Props): React.JSX.Element {
+  const rendering = useSelector(cadRef, (s) => s.context.rendering);
+  const artifact = rendering?.success ? rendering.artifact : undefined;
+
+  const inspection = useMemo<GltfInspection | undefined>(() => {
+    const known = artifact === undefined ? undefined : asKnownArtifact(artifact);
+    if (known?.mimeType !== 'model/gltf-binary') {
+      return undefined;
+    }
+    try {
+      return inspectGlb(known.content);
+    } catch {
+      return undefined;
+    }
+  }, [artifact]);
+
+  return (
+    <>
+      <Separator />
+      <div data-testid='preview-debug-panel'>
+        <Heading level={3} variant='label' className='mb-3'>
+          Debug
+        </Heading>
+        {inspection ? (
+          <DebugBody inspection={inspection} />
+        ) : (
+          <p className='text-xs text-muted-foreground' data-testid='preview-debug-empty'>
+            Awaiting first geometry…
+          </p>
+        )}
+      </div>
+    </>
+  );
+}
+
+function DebugBody({ inspection }: { readonly inspection: GltfInspection }): React.JSX.Element {
+  const { asset, counts, bbox } = inspection;
+  return (
+    <div data-testid='bbox-viewer' className='font-mono text-xs text-muted-foreground'>
+      <p className='mt-2 mb-1 text-[0.7rem] font-semibold tracking-wide text-foreground uppercase'>Bounding box</p>
+      <dl className='grid grid-cols-[5ch_1fr] gap-x-2 gap-y-0.5'>
+        <dt>min</dt>
+        <dd data-testid='bbox-min'>{vec(bbox.min)}</dd>
+        <dt>max</dt>
+        <dd data-testid='bbox-max'>{vec(bbox.max)}</dd>
+        <dt>size</dt>
+        <dd data-testid='bbox-size'>{vec(bbox.size)}</dd>
+        <dt>center</dt>
+        <dd data-testid='bbox-center'>{vec(bbox.center)}</dd>
+      </dl>
+      <p className='mt-2 mb-1 text-[0.7rem] font-semibold tracking-wide text-foreground uppercase'>Counts</p>
+      <dl className='grid grid-cols-[10ch_1fr] gap-x-2 gap-y-0.5'>
+        <dt>meshes</dt>
+        <dd data-testid='count-meshes'>{counts.meshes}</dd>
+        <dt>primitives</dt>
+        <dd data-testid='count-primitives'>{counts.primitives}</dd>
+        <dt>vertices</dt>
+        <dd data-testid='count-vertices'>{counts.vertices}</dd>
+        <dt>triangles</dt>
+        <dd data-testid='count-triangles'>{counts.triangles}</dd>
+      </dl>
+      <p className='mt-2 mb-1 text-[0.7rem] font-semibold tracking-wide text-foreground uppercase'>Asset</p>
+      <dl className='grid grid-cols-[10ch_1fr] gap-x-2 gap-y-0.5'>
+        <dt>version</dt>
+        <dd data-testid='asset-version'>{asset.version}</dd>
+        <dt>generator</dt>
+        <dd data-testid='asset-generator'>{asset.generator ?? '\u2014'}</dd>
+      </dl>
+    </div>
+  );
+}

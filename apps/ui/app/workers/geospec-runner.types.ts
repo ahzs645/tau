@@ -1,0 +1,98 @@
+import type { RunGeoSpecTestsRpcInput, RunGeoSpecTestsRpcResult } from '@taucad/chat';
+import type { GeoSpecRunProgressEvent } from '@taucad/agent-tools/geospec';
+import type { UiRuntimeConfigInput } from '#runtime/ui-runtime.config.js';
+import type { PageTelemetryContext } from '#telemetry/page-telemetry.js';
+
+export type GeoSpecRunnerWorkerInitializeRequest = {
+  type: 'initialize';
+  requestId: string;
+  sessionId: string;
+  runtimeConfig: UiRuntimeConfigInput;
+  fileSystemPort: MessagePort;
+  /** Host policy: the largest work-unit budget a spec may author. */
+  maxWorkUnitLimit?: number;
+  /** Host policy: the longest `testTimeout` a run may use, the input's or the project config's. Milliseconds. */
+  maxRunBudget?: number;
+  /** Runtime telemetry (FR-16): the page's context, present only when the page would record. */
+  telemetry?: PageTelemetryContext;
+};
+
+export type GeoSpecRunnerWorkerRunRequest = {
+  type: 'run';
+  requestId: string;
+  sessionId: string;
+  args: RunGeoSpecTestsRpcInput;
+  /** Foreign candidate bytes remain untrusted until this run recomputes matching facts. */
+  candidates?: ReadonlyArray<Uint8Array<ArrayBuffer>>;
+  /** A successful device-local consent check in this run, before dispatch. */
+  candidateSharingEnabled?: boolean;
+};
+
+export type GeoSpecRunnerWorkerAbortRequest = {
+  type: 'abort';
+  requestId: string;
+  sessionId: string;
+  targetRequestId: string;
+  reason?: string;
+};
+
+export type GeoSpecRunnerWorkerCloseRequest = {
+  type: 'close';
+  requestId: string;
+  sessionId?: string;
+};
+
+export type GeoSpecRunnerWorkerRequest =
+  | GeoSpecRunnerWorkerInitializeRequest
+  | GeoSpecRunnerWorkerRunRequest
+  | GeoSpecRunnerWorkerAbortRequest
+  | GeoSpecRunnerWorkerCloseRequest;
+
+export type GeoSpecRunnerWorkerInitializedResponse = {
+  type: 'initialized';
+  requestId: string;
+  sessionId: string;
+};
+
+export type GeoSpecRunnerWorkerResultResponse = {
+  type: 'result';
+  requestId: string;
+  result: RunGeoSpecTestsRpcResult;
+  /** Facts established by this same run, outside the authored test result. */
+  candidates?: ReadonlyArray<Uint8Array<ArrayBuffer>>;
+};
+
+/** One lifecycle step of a run, posted between tests so it survives a later blocked or reset worker. */
+export type GeoSpecRunnerWorkerProgressResponse = {
+  type: 'progress';
+  requestId: string;
+  event: GeoSpecRunProgressEvent;
+  /** On `run-start`: the run's effective `testTimeout`, the input's or else the project config's. */
+  testTimeout?: number;
+};
+
+export type GeoSpecRunnerWorkerErrorResponse = {
+  type: 'error';
+  requestId: string;
+  message: string;
+};
+
+/** One finished runtime telemetry entry, which the agent host forwards to the page unchanged (FR-16). */
+export type GeoSpecRunnerWorkerTelemetryResponse = {
+  type: 'telemetry';
+  entry: unknown;
+};
+
+export type GeoSpecRunnerWorkerClosedResponse = {
+  type: 'closed';
+  requestId?: string;
+  sessionId?: string;
+};
+
+export type GeoSpecRunnerWorkerResponse =
+  | GeoSpecRunnerWorkerInitializedResponse
+  | GeoSpecRunnerWorkerResultResponse
+  | GeoSpecRunnerWorkerProgressResponse
+  | GeoSpecRunnerWorkerErrorResponse
+  | GeoSpecRunnerWorkerClosedResponse
+  | GeoSpecRunnerWorkerTelemetryResponse;

@@ -1,0 +1,27 @@
+import type { ComponentPropsWithoutRef } from 'react';
+import { cn } from '@taucad/ui/utils/cn';
+
+export type AnimatedShinyTextProps = {
+  readonly shimmerWidth?: number;
+} & ComponentPropsWithoutRef<'span'>;
+
+export function AnimatedShinyText({ children, className, ...props }: AnimatedShinyTextProps): React.JSX.Element {
+  return (
+    <span
+      className={cn(
+        'max-w-md text-neutral/80',
+
+        // Shine effect
+        'animate-shiny-text [background-size:170%_100%] bg-clip-text bg-repeat',
+
+        // Shine gradient
+        'bg-gradient-to-r from-neutral/10 via-foreground via-25% to-neutral/10 to-50%',
+
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </span>
+  );
+}

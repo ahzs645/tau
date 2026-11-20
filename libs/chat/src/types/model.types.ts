@@ -1,33 +1,29 @@
-import type { modelFamilies, modelProviders } from '#constants/model.constants.js';
+/** @public */
+export type ModelInputModality = 'text' | 'image' | 'pdf';
 
 /** @public */
-export type ModelProvider = (typeof modelProviders)[number];
+export type ModelOutputModality = 'text';
 
 /** @public */
-export type ModelFamily = (typeof modelFamilies)[number];
-
-/** @public */
-export type Model = {
-  id: string;
-  model: string;
-  name: string;
-  slug: string;
-  description?: string;
-  recommended?: boolean;
-  provider: {
-    id: ModelProvider;
-    name: string;
-  };
-  contextLength?: number;
-  details: {
-    family: ModelFamily;
-    parameterSize?: string;
-    contextWindow?: number;
-    cost?: {
-      inputTokens: number;
-      outputTokens: number;
-      cacheReadTokens: number;
-      cacheWriteTokens: number;
-    };
-  };
+export type ModelModalities = {
+  input: ModelInputModality[];
+  output: ModelOutputModality[];
 };
+
+/** @public */
+export type ModelSupport = {
+  tools?: boolean;
+  toolChoice?: boolean;
+  modalities?: ModelModalities;
+};
+
+/** @public */
+export const getModelInputModalities = (support?: ModelSupport): ModelInputModality[] =>
+  support?.modalities?.input ?? ['text'];
+
+/** @public */
+export const modelSupportsInput = (support: ModelSupport | undefined, modality: ModelInputModality): boolean =>
+  getModelInputModalities(support).includes(modality);
+
+/** @public */
+export const modelSupportsTools = (support?: ModelSupport): boolean => support?.tools !== false;

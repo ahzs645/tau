@@ -1,23 +1,44 @@
 import { describe, it, expect } from 'vitest';
-import { contextPayloadSchema, skillMetadataSchema } from '#schemas/context-payload.schema.js';
+import {
+  contextPayloadSchema,
+  skillMetadataSchema,
+  contextMemoryMaxBytes,
+  contextSkillsMaxEntries,
+} from '#schemas/context-payload.schema.js';
 
 describe('skillMetadataSchema', () => {
   it('should accept a valid skill entry', () => {
     const result = skillMetadataSchema.safeParse({
       name: 'my-skill',
       description: 'Does useful things',
-      path: '.tau/skills/my-skill',
+      resourceUri: 'file:.agents/skills/my-skill/SKILL.md',
+      path: '.agents/skills/my-skill',
+      skillPath: '.agents/skills/my-skill/SKILL.md',
+      source: 'user',
+      version: '1.0.0',
+      whenToUse: 'Use for useful things',
+      fingerprint: 'abc123',
+      enabled: true,
+      shadowedSources: [{ source: 'legacy', path: '.tau/skills/my-skill', fingerprint: 'def456' }],
     });
 
     expect(result.success).toBe(true);
     expect(result.data).toEqual({
       name: 'my-skill',
       description: 'Does useful things',
-      path: '.tau/skills/my-skill',
+      resourceUri: 'file:.agents/skills/my-skill/SKILL.md',
+      path: '.agents/skills/my-skill',
+      skillPath: '.agents/skills/my-skill/SKILL.md',
+      source: 'user',
+      version: '1.0.0',
+      whenToUse: 'Use for useful things',
+      fingerprint: 'abc123',
+      enabled: true,
+      shadowedSources: [{ source: 'legacy', path: '.tau/skills/my-skill', fingerprint: 'def456' }],
     });
   });
 
-  it('should accept skill entry with optional source', () => {
+  it('should accept legacy fallback path with optional source', () => {
     const result = skillMetadataSchema.safeParse({
       name: 'sourced',
       description: 'Has a source',
@@ -47,13 +68,16 @@ describe('skillMetadataSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('should reject skill entry missing path', () => {
+  it('should accept virtual system skill entries without a filesystem path', () => {
     const result = skillMetadataSchema.safeParse({
-      name: 'no-path',
-      description: 'Missing path field',
+      name: 'create-skill',
+      description: 'Create or update Tau agent skills',
+      resourceUri: 'system:skills/create-skill/SKILL.md',
+      source: 'system',
     });
 
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    expect(result.data?.path).toBeUndefined();
   });
 });
 
@@ -62,8 +86,8 @@ describe('contextPayloadSchema', () => {
     const agentsKey = '.tau/AGENTS.md';
     const result = contextPayloadSchema.safeParse({
       skills: [
-        { name: 'skill-a', description: 'First skill', path: '.tau/skills/skill-a' },
-        { name: 'skill-b', description: 'Second skill', path: '.tau/skills/skill-b' },
+        { name: 'skill-a', description: 'First skill', path: '.agents/skills/skill-a' },
+        { name: 'skill-b', description: 'Second skill', resourceUri: 'system:skills/skill-b/SKILL.md' },
       ],
       memory: { [agentsKey]: '# Rules\n\nUse early returns.' },
     });
@@ -75,7 +99,7 @@ describe('contextPayloadSchema', () => {
 
   it('should accept payload with only skills', () => {
     const result = contextPayloadSchema.safeParse({
-      skills: [{ name: 'solo', description: 'Only skill', path: '.tau/skills/solo' }],
+      skills: [{ name: 'solo', description: 'Only skill', path: '.agents/skills/solo' }],
     });
 
     expect(result.success).toBe(true);
@@ -114,6 +138,29 @@ describe('contextPayloadSchema', () => {
       skills: [{ name: 'valid', description: 'ok', path: 'p' }, { description: 'missing name' }],
     });
 
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('CH-10 payload caps', () => {
+  it('rejects a memory entry beyond the byte ceiling', () => {
+    const oversized = 'x'.repeat(contextMemoryMaxBytes + 512);
+    const result = contextPayloadSchema.safeParse({ memory: { '.tau/AGENTS.md': oversized } });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts a memory entry at the truncated size including the notice', () => {
+    const truncated = 'x'.repeat(contextMemoryMaxBytes) + '\n[AGENTS.md truncated]';
+    const result = contextPayloadSchema.safeParse({ memory: { '.tau/AGENTS.md': truncated } });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a skills catalog beyond the entry cap', () => {
+    const skills = Array.from({ length: contextSkillsMaxEntries + 1 }, (_, index) => ({
+      name: `skill-${String(index)}`,
+      description: 'x',
+    }));
+    const result = contextPayloadSchema.safeParse({ skills });
     expect(result.success).toBe(false);
   });
 });

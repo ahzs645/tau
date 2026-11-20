@@ -1,0 +1,1095 @@
+import { Heading } from '@taucad/ui/components/heading';
+import { ChatMessageSurface } from '@taucad/chat-ui/components/chat-message-surface';
+import {
+  BookOpen,
+  Box,
+  Camera,
+  Globe,
+  ListChecks,
+  MessageCircle,
+  Pencil,
+  Search,
+  Terminal,
+  Wrench,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import { memo, useMemo, useState } from 'react';
+import { messageRole, toolName } from '@taucad/chat/constants';
+import { providerPermissionResolutionSchema } from '@taucad/agent-host/wire';
+import type { MyMessagePart, ToolInvocation, UsageData } from '@taucad/chat';
+import type { DynamicToolUIPart } from 'ai';
+import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
+import { useCadChatClient } from '#chat-clients/use-cad-chat-client.js';
+import { serializeMessage } from '#utils/chat.utils.js';
+import { parseInlineReferences } from '@taucad/chat-ui/utils/at-reference.utils';
+import type { ActivityFamily, ActivityGroup, AggregatedGroup } from '@taucad/chat-ui/utils/assistant-message-activity';
+import {
+  groupAssistantParts,
+  findLastMeaningfulPartIndex,
+  isActivityPartActive,
+} from '@taucad/chat-ui/utils/assistant-message-activity';
+import { AtReferenceChip } from '#components/chat/at-reference-chip.js';
+import { useAtReferenceContext } from '@taucad/chat-ui/components/at-reference-context';
+import { ContextChip } from '@taucad/chat-ui/components/context-chip';
+import { ChatPermissionRequest } from '#components/chat/chat-permission-request.js';
+import { ChatAcpActivity } from '#components/chat/chat-acp-activity.js';
+import { externalAgentDisplayName } from '#lib/agent-host-placement.js';
+import { ChatActivityGroup } from '@taucad/chat-ui/components/chat-activity-group';
+import { useTourAnchor } from '#components/tour/tour-anchors.js';
+import { reportTourAction } from '#components/tour/tour-actions.js';
+import { agentApprovalToolName, parseAgentHostApproval } from '@taucad/chat-ui/services/agent-host-event-projection';
+import { ChatMessageReasoning } from '#routes/w.$workspace.$project/chat-message-reasoning.js';
+import { ChatMessageDataUsage } from '#routes/w.$workspace.$project/chat-message-data-usage.js';
+import { ChatMessageContextCompaction } from '#routes/w.$workspace.$project/chat-message-context-compaction.js';
+import { ChatMessageRating } from '#routes/w.$workspace.$project/chat-message-rating.js';
+import { ChatMessageToolUseSkill } from '#routes/w.$workspace.$project/chat-message-tool-use-skill.js';
+import { ChatMessageText } from '#routes/w.$workspace.$project/chat-message-text.js';
+import { ChatMessageMedia } from '#routes/w.$workspace.$project/chat-message-media.js';
+import { CopyButton } from '@taucad/ui/components/copy-button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@taucad/ui/components/tooltip';
+import { formatAbsoluteTime, formatRelativeTime } from '@taucad/ui-core/utils/date.utils';
+import { cn } from '@taucad/ui/utils/cn';
+import { When } from '@taucad/ui-kit/utils/when';
+import { ChatTextarea } from '#components/chat/chat-textarea.js';
+import { chatInputTextClassName } from '@taucad/chat-ui/components/chat-input-styles';
+import { ChatMessageToolWebSearch } from '#routes/w.$workspace.$project/chat-message-tool-web-search.js';
+import { ChatMessageToolWebBrowser } from '#routes/w.$workspace.$project/chat-message-tool-web-browser.js';
+import { ChatMessageToolFileEdit } from '#routes/w.$workspace.$project/chat-message-tool-edit-file.js';
+import { ChatMessageToolTestModel } from '#routes/w.$workspace.$project/chat-message-tool-test-model.js';
+import { ChatMessageToolReadFile } from '#routes/w.$workspace.$project/chat-message-tool-read-file.js';
+import { ChatMessageToolListDirectory } from '#routes/w.$workspace.$project/chat-message-tool-list-directory.js';
+import { ChatMessageToolCreateFile } from '#routes/w.$workspace.$project/chat-message-tool-create-file.js';
+import { ChatMessageToolDeleteFile } from '#routes/w.$workspace.$project/chat-message-tool-delete-file.js';
+import { ChatMessageToolGrep } from '#routes/w.$workspace.$project/chat-message-tool-grep.js';
+import { ChatMessageToolGlobSearch } from '#routes/w.$workspace.$project/chat-message-tool-glob-search.js';
+import { ChatMessageToolGetKernelResult } from '#routes/w.$workspace.$project/chat-message-tool-get-kernel-result.js';
+import { ChatMessageToolScreenshot } from '#routes/w.$workspace.$project/chat-message-tool-screenshot.js';
+import { ChatMessageToolRevisions } from '#routes/w.$workspace.$project/chat-message-tool-revisions.js';
+import { ChatMessageToolExportGeometry } from '#routes/w.$workspace.$project/chat-message-tool-export-geometry.js';
+import { ChatMessageToolUpdateTodos } from '#routes/w.$workspace.$project/chat-message-tool-update-todos.js';
+import { ChatMessageToolInstallPackages } from '#routes/w.$workspace.$project/chat-message-tool-install-packages.js';
+import { ChatMessageToolShell } from '#routes/w.$workspace.$project/chat-message-tool-shell.js';
+import {
+  ChatMessageToolAskQuestions,
+  ChatMessageToolExternalOrQuestion,
+} from '#routes/w.$workspace.$project/chat-message-tool-ask-questions.js';
+import { ChatMessageToolArrangeWorkbench } from '#routes/w.$workspace.$project/chat-message-tool-arrange-workbench.js';
+import { ChatMessageToolRequestJob } from '#routes/w.$workspace.$project/chat-message-tool-request-job.js';
+import { ChatMessagePartUnknown } from '#routes/w.$workspace.$project/chat-message-tool-unknown.js';
+import {
+  ChatMessageToolExternal,
+  sanitizeAgentPath,
+  sanitizeAgentText,
+} from '#routes/w.$workspace.$project/chat-message-tool-external.js';
+import { ChatMessageFileAttachments } from '#routes/w.$workspace.$project/chat-message-file.js';
+import { useChatAttachmentDirectories } from '#components/chat/attachment-preview.js';
+import { FileLink } from '@taucad/files-ui/components/files/file-link';
+import { isSafeRelativePath } from '@taucad/utils/path';
+import { isRecord } from '@taucad/utils/schema';
+import { CadReferenceChip } from '#components/chat/cad-reference-chip.js';
+
+function segmentKey(segment: ReturnType<typeof parseInlineReferences>[number], index: number): string {
+  if (segment.type === 'atReference') {
+    return `at-${segment.path}`;
+  }
+  if (segment.type === 'invocation') {
+    return `invocation-${segment.token}`;
+  }
+  if (segment.type === 'cadReference') {
+    return `cad-${segment.token}`;
+  }
+  return `text-${index}`;
+}
+
+function TextWithAtReferences({ text }: { readonly text: string }): React.JSX.Element {
+  const { knownTokens } = useAtReferenceContext();
+  const segments = parseInlineReferences(text);
+  const hasReferences = segments.some((s) => s.type !== 'text');
+
+  if (!hasReferences) {
+    return <span>{text}</span>;
+  }
+
+  return (
+    <>
+      {segments.map((segment, i) => {
+        const key = segmentKey(segment, i);
+        if (segment.type === 'text') {
+          return <span key={key}>{segment.value}</span>;
+        }
+        if (segment.type === 'atReference') {
+          return <AtReferenceChip key={key} data-at-reference={segment.path} />;
+        }
+        if (segment.type === 'cadReference') {
+          return <CadReferenceChip key={key} target={segment.target} />;
+        }
+        if (knownTokens.has(segment.token)) {
+          return <ContextChip key={key} label={segment.token} chipType='skill' />;
+        }
+        return <span key={key}>{segment.token}</span>;
+      })}
+    </>
+  );
+}
+
+function ChatMessageAcpPlan({
+  data,
+}: {
+  readonly data: Extract<MyMessagePart, { type: 'data-acp-session' }>['data'];
+}): React.JSX.Element | undefined {
+  const { plan } = data;
+  if (!plan) {
+    return undefined;
+  }
+  const filePath = plan.type === 'file' && isSafeRelativePath(plan.uri) ? plan.uri : undefined;
+  const externalPlanUrl =
+    plan.type === 'file' && ['http:', 'https:'].includes(URL.parse(plan.uri)?.protocol ?? '') ? plan.uri : undefined;
+  return (
+    <section aria-label='Agent plan' className='rounded-lg border bg-background p-3 text-sm'>
+      <Heading level={3} variant='label'>
+        Plan
+      </Heading>
+      {plan.type === 'items' ? (
+        <ul className='mt-2 flex flex-col gap-1.5'>
+          {plan.entries.map((entry, index) => (
+            <li
+              key={`${entry.content}-${String(index)}`}
+              className='flex items-start gap-2 text-xs text-muted-foreground'
+            >
+              <input
+                type='checkbox'
+                checked={entry.status === 'completed'}
+                readOnly
+                tabIndex={-1}
+                aria-label={`${sanitizeAgentText(entry.content, 500)} (${entry.status.replace('_', ' ')})`}
+                className='mt-0.5 size-3.5 shrink-0 rounded-sm'
+              />
+              <span className='min-w-0 flex-1 wrap-break-word' dir='auto'>
+                {sanitizeAgentText(entry.content, 500)}
+              </span>
+              <span className='shrink-0 text-[10px] uppercase' aria-hidden='true'>
+                {entry.status.replace('_', ' ')}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : plan.type === 'markdown' ? (
+        <div className='mt-2 max-h-64 overflow-auto text-xs whitespace-pre-wrap text-muted-foreground' dir='auto'>
+          {sanitizeAgentPath(plan.content).slice(0, 10_000)}
+        </div>
+      ) : filePath === undefined ? (
+        externalPlanUrl === undefined ? (
+          <span className='mt-2 block truncate text-xs text-muted-foreground'>
+            {sanitizeAgentPath(plan.uri).slice(0, 500)}
+          </span>
+        ) : (
+          <a
+            className='mt-2 block truncate text-xs text-primary underline underline-offset-2'
+            href={externalPlanUrl}
+            target='_blank'
+            rel='noreferrer'
+          >
+            {sanitizeAgentPath(externalPlanUrl).slice(0, 500)}
+          </a>
+        )
+      ) : (
+        <FileLink path={filePath} className='mt-2 block truncate text-xs text-primary underline underline-offset-2'>
+          {sanitizeAgentPath(filePath).slice(0, 500)}
+        </FileLink>
+      )}
+    </section>
+  );
+}
+
+type PartRenderContext = {
+  readonly messageId: string;
+  readonly lastMeaningfulIndex: number;
+  readonly isActiveGroup: boolean;
+  readonly isMessageActive: boolean;
+};
+
+/** Tau's own tools without a bespoke card: the generic card shows them under their own name. */
+const genericToolPart = (
+  part:
+    | ToolInvocation<typeof toolName.getParameters>
+    | ToolInvocation<typeof toolName.applyParameterOperation>
+    | ToolInvocation<typeof toolName.listMachines>
+    | ToolInvocation<typeof toolName.getMachine>
+    | ToolInvocation<typeof toolName.machineAction>
+    | ToolInvocation<typeof toolName.stopMachine>
+    | ToolInvocation<typeof toolName.getPrintProfiles>
+    | ToolInvocation<typeof toolName.checkJob>,
+  name:
+    | typeof toolName.getParameters
+    | typeof toolName.applyParameterOperation
+    | typeof toolName.listMachines
+    | typeof toolName.getMachine
+    | typeof toolName.machineAction
+    | typeof toolName.stopMachine
+    | typeof toolName.getPrintProfiles
+    | typeof toolName.checkJob,
+): DynamicToolUIPart => ({
+  ...part,
+  type: 'dynamic-tool',
+  toolName: name,
+});
+
+/**
+ * A tool part from a tool Tau no longer offers (an old chat's `request_print`, `cancel_print`, …): the generic card
+ * shows it under its own name rather than as an unknown part.
+ *
+ * @param part - A part no case of the dispatch names.
+ * @returns The part as a dynamic tool part, or `undefined` when it is not a tool part.
+ */
+const retiredToolPart = (part: unknown): DynamicToolUIPart | undefined => {
+  if (!isRecord(part) || typeof part['type'] !== 'string' || typeof part['toolCallId'] !== 'string') {
+    return undefined;
+  }
+  const { type } = part;
+  if (!type.startsWith('tool-')) {
+    return undefined;
+  }
+  // SAFETY: a static tool part carries every field a dynamic one does; only the name moves from `type` to `toolName`.
+  // oxlint-disable-next-line typescript/consistent-type-assertions -- a persisted part of a retired tool has no static type.
+  return {
+    ...part,
+    type: 'dynamic-tool',
+    toolName: type.slice(5),
+  } as DynamicToolUIPart;
+};
+
+/**
+ * A preliminary result is the tool's progress, not its output (`tool-output-update`, projected with
+ * `preliminary: true`): the native card shows the call as still running until the final result arrives. Rendered as
+ * output, a `test_model` progress object reached `summarizeTestModelOutput` without `failures` or `accounting`, and
+ * the thrown `flatMap` took the chat panel down mid-turn.
+ */
+const settledToolPart = (part: MyMessagePart): MyMessagePart => {
+  if (
+    !part.type.startsWith('tool-') ||
+    !('state' in part) ||
+    part.state !== 'output-available' ||
+    Reflect.get(part, 'preliminary') !== true
+  ) {
+    return part;
+  }
+  // SAFETY: only the state moves back to running; every tool part type has an `input-available` state.
+  // oxlint-disable-next-line typescript/consistent-type-assertions -- the state narrows each tool part's union member.
+  return { ...part, state: 'input-available' } as MyMessagePart;
+};
+
+// oxlint-disable-next-line complexity -- Part type dispatch requires many branches
+function renderAssistantPart(
+  receivedPart: MyMessagePart,
+  index: number,
+  context: PartRenderContext,
+): React.JSX.Element | undefined {
+  const { messageId, lastMeaningfulIndex, isMessageActive } = context;
+  const part = settledToolPart(receivedPart);
+
+  switch (part.type) {
+    case 'text': {
+      return (
+        <ChatMessageText key={`${messageId}-message-part-${index}`} part={part} isMessageActive={isMessageActive} />
+      );
+    }
+
+    case 'reasoning': {
+      return (
+        <ChatMessageReasoning
+          key={`${messageId}-message-part-${index}`}
+          parts={[part]}
+          hasContent={index < lastMeaningfulIndex}
+          isMessageActive={context.isActiveGroup}
+        />
+      );
+    }
+
+    case 'file': {
+      // An agent's media reads in place, at reading size (a user's never reaches here).
+      return (
+        <ChatMessageMedia
+          key={`${messageId}-message-part-${index}`}
+          media={{
+            url: part.url,
+            mediaType: part.mediaType,
+            ...(part.filename ? { filename: part.filename } : {}),
+          }}
+          className='my-2'
+        />
+      );
+    }
+
+    case 'step-start':
+    case 'data-usage':
+    case 'data-context-usage': {
+      return undefined;
+    }
+
+    case 'data-acp-session': {
+      return <ChatMessageAcpPlan key={`${messageId}-acp-session-${index}`} data={part.data} />;
+    }
+
+    case 'data-acp-activity': {
+      return <ChatAcpActivity key={`${messageId}-acp-activity-${index}`} data={part.data} />;
+    }
+
+    case 'dynamic-tool': {
+      // Pending decisions belong above the composer; their settled record stays inspectable here.
+      if (part.toolName === agentApprovalToolName) {
+        const approval = parseAgentHostApproval(part.input);
+        const resolution = providerPermissionResolutionSchema.safeParse(part.output).data;
+        const outcome = resolution?.outcome ?? (isRecord(part.output) ? part.output['outcome'] : undefined);
+        if (
+          approval === undefined ||
+          approval.login !== undefined ||
+          part.state !== 'output-available' ||
+          typeof outcome !== 'string'
+        ) {
+          return undefined;
+        }
+        return (
+          <ChatPermissionRequest
+            key={part.toolCallId}
+            approval={approval}
+            name={approval.agentId ? externalAgentDisplayName(approval.agentId) : 'Agent'}
+            outcome={outcome}
+            resolution={resolution}
+          />
+        );
+      }
+      const tau = isRecord(part.toolMetadata?.['tau']) ? part.toolMetadata['tau'] : undefined;
+      const nativeName = typeof tau?.['nativeName'] === 'string' ? tau['nativeName'] : undefined;
+      if (tau?.['presentation'] === 'tau-mcp') {
+        const state = Reflect.get(part, 'preliminary') === true ? 'input-available' : part.state;
+        switch (nativeName) {
+          case 'arrange_workbench': {
+            return (
+              <ChatMessageToolArrangeWorkbench
+                key={part.toolCallId}
+                part={
+                  { ...part, type: 'tool-arrange_workbench', state } as Extract<
+                    MyMessagePart,
+                    { type: 'tool-arrange_workbench' }
+                  >
+                }
+              />
+            );
+          }
+          case 'evaluate_model': {
+            return (
+              <ChatMessageToolGetKernelResult
+                key={part.toolCallId}
+                part={
+                  { ...part, type: 'tool-evaluate_model', state } as Extract<
+                    MyMessagePart,
+                    { type: 'tool-evaluate_model' }
+                  >
+                }
+              />
+            );
+          }
+          case 'test_model': {
+            return (
+              <ChatMessageToolTestModel
+                key={part.toolCallId}
+                part={
+                  { ...part, type: 'tool-test_model', state } as Extract<MyMessagePart, { type: 'tool-test_model' }>
+                }
+              />
+            );
+          }
+          case 'screenshot': {
+            return (
+              <ChatMessageToolScreenshot
+                key={part.toolCallId}
+                part={
+                  { ...part, type: 'tool-screenshot', state } as Extract<MyMessagePart, { type: 'tool-screenshot' }>
+                }
+              />
+            );
+          }
+          case 'export_model': {
+            return (
+              <ChatMessageToolExportGeometry
+                key={part.toolCallId}
+                part={
+                  { ...part, type: 'tool-export_model', state } as Extract<MyMessagePart, { type: 'tool-export_model' }>
+                }
+              />
+            );
+          }
+          case 'ask_questions': {
+            return (
+              <ChatMessageToolAskQuestions
+                key={part.toolCallId}
+                part={
+                  { ...part, type: 'tool-ask_questions', state } as Extract<
+                    MyMessagePart,
+                    { type: 'tool-ask_questions' }
+                  >
+                }
+              />
+            );
+          }
+        }
+      }
+      return <ChatMessageToolExternalOrQuestion key={part.toolCallId} part={part} />;
+    }
+
+    case 'source-url': {
+      // Model-emitted, so only web URLs become links (same guard as the plan link).
+      if (!['http:', 'https:'].includes(URL.parse(part.url)?.protocol ?? '')) {
+        return (
+          <span
+            key={`${messageId}-message-part-${index}`}
+            className='block max-w-full truncate text-xs text-muted-foreground'
+          >
+            {part.title ?? part.url}
+          </span>
+        );
+      }
+      return (
+        <a
+          key={`${messageId}-message-part-${index}`}
+          href={part.url}
+          target='_blank'
+          rel='noreferrer'
+          className='block max-w-full truncate text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground'
+        >
+          {part.title ?? part.url}
+        </a>
+      );
+    }
+
+    case 'source-document': {
+      return (
+        <div
+          key={`${messageId}-message-part-${index}`}
+          className='flex max-w-full flex-col gap-0.5 text-xs text-muted-foreground'
+        >
+          <span className='truncate font-medium'>{part.title}</span>
+          <span className='truncate'>{part.filename ?? part.mediaType}</span>
+        </div>
+      );
+    }
+
+    case 'tool-web_search': {
+      return <ChatMessageToolWebSearch key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-web_browser': {
+      return <ChatMessageToolWebBrowser key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-edit_file': {
+      return <ChatMessageToolFileEdit key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-test_model': {
+      return <ChatMessageToolTestModel key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-read_file': {
+      return <ChatMessageToolReadFile key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-list_directory': {
+      return <ChatMessageToolListDirectory key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-create_file': {
+      return <ChatMessageToolCreateFile key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-delete_file': {
+      return <ChatMessageToolDeleteFile key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-grep': {
+      return <ChatMessageToolGrep key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-glob_search': {
+      return <ChatMessageToolGlobSearch key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-evaluate_model': {
+      return <ChatMessageToolGetKernelResult key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-screenshot': {
+      return <ChatMessageToolScreenshot key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-history': {
+      return <ChatMessageToolRevisions key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-export_model': {
+      return <ChatMessageToolExportGeometry key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-get_parameters': {
+      return <ChatMessageToolExternal key={part.toolCallId} part={genericToolPart(part, toolName.getParameters)} />;
+    }
+
+    case 'tool-apply_parameter_operation': {
+      return (
+        <ChatMessageToolExternal key={part.toolCallId} part={genericToolPart(part, toolName.applyParameterOperation)} />
+      );
+    }
+
+    case 'data-context-compaction': {
+      return <ChatMessageContextCompaction key={`${messageId}-compaction-${index}`} data={part.data} />;
+    }
+
+    case 'tool-use_skill': {
+      return <ChatMessageToolUseSkill key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-update_todos': {
+      return <ChatMessageToolUpdateTodos key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-ask_questions': {
+      return <ChatMessageToolAskQuestions key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-arrange_workbench': {
+      return <ChatMessageToolArrangeWorkbench key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-install_packages': {
+      return <ChatMessageToolInstallPackages key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-request_job': {
+      return <ChatMessageToolRequestJob key={part.toolCallId} part={part} />;
+    }
+
+    /* The other machine tools read, check or act on what the job card and the Print pane already show, so the
+     * generic card is enough; the pane's History records every action and stop with how the machine confirmed it. */
+    case 'tool-list_machines': {
+      return <ChatMessageToolExternal key={part.toolCallId} part={genericToolPart(part, toolName.listMachines)} />;
+    }
+
+    case 'tool-get_machine': {
+      return <ChatMessageToolExternal key={part.toolCallId} part={genericToolPart(part, toolName.getMachine)} />;
+    }
+
+    case 'tool-machine_action': {
+      return <ChatMessageToolExternal key={part.toolCallId} part={genericToolPart(part, toolName.machineAction)} />;
+    }
+
+    case 'tool-stop_machine': {
+      return <ChatMessageToolExternal key={part.toolCallId} part={genericToolPart(part, toolName.stopMachine)} />;
+    }
+
+    case 'tool-get_print_profiles': {
+      return <ChatMessageToolExternal key={part.toolCallId} part={genericToolPart(part, toolName.getPrintProfiles)} />;
+    }
+
+    case 'tool-check_job': {
+      return <ChatMessageToolExternal key={part.toolCallId} part={genericToolPart(part, toolName.checkJob)} />;
+    }
+
+    case 'tool-shell': {
+      return <ChatMessageToolShell key={part.toolCallId} part={part} />;
+    }
+
+    default: {
+      const unknownPart: never = part;
+      const retired = retiredToolPart(unknownPart);
+      return retired === undefined ? (
+        <ChatMessagePartUnknown key={String(unknownPart)} part={unknownPart} />
+      ) : (
+        <ChatMessageToolExternal key={retired.toolCallId} part={retired} />
+      );
+    }
+  }
+}
+
+/** A trailing thought still open in the active group: its spinner is the group's only motion once collapsed (resting block R3). */
+const isStreamingThought = (part: MyMessagePart | undefined): boolean =>
+  part?.type === 'reasoning' && part.state === 'streaming' && part.text.trim() !== '';
+
+function renderActivityGroup(
+  group: ActivityGroup,
+  groupIndex: number,
+  context: PartRenderContext,
+): React.JSX.Element | undefined {
+  if (group.kind === 'singleton') {
+    return renderAssistantPart(group.part, group.partIndex, context);
+  }
+
+  if (group.category === 'reasoning') {
+    const reasoningParts = group.parts.filter(
+      (part): part is Extract<MyMessagePart, { type: 'reasoning' }> => part.type === 'reasoning',
+    );
+    return (
+      <ChatMessageReasoning
+        key={`${context.messageId}-reasoning-${group.partIndices[0] ?? groupIndex}`}
+        parts={reasoningParts}
+        hasContent={(group.partIndices.at(-1) ?? 0) < context.lastMeaningfulIndex}
+        isMessageActive={context.isActiveGroup}
+      />
+    );
+  }
+
+  const ActivityGroup = group.families.includes('test') ? TestActivityGroup : ChatActivityGroup;
+  return (
+    <ActivityGroup
+      key={`${context.messageId}-group-${groupIndex}`}
+      summary={group.summary}
+      icon={activityIcons[group.families[0] ?? 'other']}
+      isActive={context.isActiveGroup}
+      hasActiveRows={
+        (context.isMessageActive && group.parts.some((part) => isActivityPartActive(part))) ||
+        (context.isActiveGroup && isStreamingThought(group.parts.at(-1)))
+      }
+    >
+      {renderActivityRows(group, context)}
+    </ActivityGroup>
+  );
+}
+
+const reportTestRowOpened = (): void => {
+  reportTourAction('verify');
+};
+
+/**
+ * An activity row that holds a test run. The product tour's Verify tip points at the first such row, and opening it,
+ * which shows each check, is what that tip is about.
+ *
+ * @param properties - The row, as {@link ChatActivityGroup} takes it.
+ * @returns The row, registered as the tour's test-run anchor.
+ */
+function TestActivityGroup(properties: React.ComponentProps<typeof ChatActivityGroup>): React.JSX.Element {
+  const testRowAnchor = useTourAnchor('activity-test');
+  return <ChatActivityGroup {...properties} triggerRef={testRowAnchor} onOpen={reportTestRowOpened} />;
+}
+
+type ReasoningPart = Extract<MyMessagePart, { type: 'reasoning' }>;
+
+/** Tool rows in order, with each consecutive reasoning run as one nested thought. */
+function renderActivityRows(group: AggregatedGroup, context: PartRenderContext): React.JSX.Element[] {
+  const rows: React.JSX.Element[] = [];
+  let run: ReasoningPart[] = [];
+  let runStart = 0;
+  let runEnd = 0;
+  const flushRun = (isTrailing: boolean): void => {
+    if (run.length === 0) {
+      return;
+    }
+    rows.push(
+      <ChatMessageReasoning
+        key={`${context.messageId}-reasoning-${runStart}`}
+        parts={run}
+        hasContent={runEnd < context.lastMeaningfulIndex}
+        isMessageActive={context.isActiveGroup && isTrailing}
+      />,
+    );
+    run = [];
+  };
+  for (const [i, part] of group.parts.entries()) {
+    const partIndex = group.partIndices[i]!;
+    if (part.type === 'reasoning') {
+      if (run.length === 0) {
+        runStart = partIndex;
+      }
+      run.push(part);
+      runEnd = partIndex;
+      continue;
+    }
+    flushRun(false);
+    const row = renderAssistantPart(part, partIndex, context);
+    if (row) {
+      rows.push(row);
+    }
+  }
+  flushRun(true);
+  return rows;
+}
+
+const activityIcons: Record<ActivityFamily, LucideIcon> = {
+  skill: Wrench,
+  read: BookOpen,
+  search: Search,
+  'web-search': Search,
+  'web-read': Globe,
+  execute: Terminal,
+  edit: Pencil,
+  render: Box,
+  screenshot: Camera,
+  test: ListChecks,
+  chat: MessageCircle,
+  other: Wrench,
+};
+
+const AssistantActivityGroup = memo(function AssistantActivityGroup({
+  group,
+  groupIndex,
+  messageId,
+  lastMeaningfulIndex,
+  isActiveGroup,
+  isMessageActive,
+}: {
+  readonly group: ActivityGroup;
+  readonly groupIndex: number;
+  readonly messageId: string;
+  readonly lastMeaningfulIndex: number;
+  readonly isActiveGroup: boolean;
+  readonly isMessageActive: boolean;
+}): React.JSX.Element | undefined {
+  return renderActivityGroup(group, groupIndex, {
+    messageId,
+    lastMeaningfulIndex,
+    isActiveGroup,
+    isMessageActive,
+  });
+});
+
+function AssistantParts({
+  parts,
+  messageId,
+}: {
+  readonly parts: readonly MyMessagePart[];
+  readonly messageId: string;
+}): React.JSX.Element {
+  const groups = useMemo(() => groupAssistantParts(parts), [parts]);
+  const lastMeaningfulIndex = useMemo(() => findLastMeaningfulPartIndex(parts), [parts]);
+  const lastGroupIndex = groups.length - 1;
+  const isMessageActive = useChatSelector(
+    (state) => state.messageOrder.at(-1) === messageId && state.status === 'streaming',
+  );
+
+  return (
+    <>
+      {groups.map((group, groupIndex) => (
+        <AssistantActivityGroup
+          key={group.kind === 'singleton' ? group.partIndex : group.partIndices[0]}
+          group={group}
+          groupIndex={groupIndex}
+          messageId={messageId}
+          lastMeaningfulIndex={lastMeaningfulIndex}
+          isActiveGroup={groupIndex === lastGroupIndex && isMessageActive}
+          isMessageActive={isMessageActive}
+        />
+      ))}
+    </>
+  );
+}
+
+type ChatMessageProperties = {
+  readonly messageId: string;
+  /** Rendered after this message's content, before its action row (e.g. the turn's revision marker). */
+  readonly footer?: React.ReactNode;
+};
+
+/**
+ * When the message was created, as a relative label whose tooltip is the exact
+ * time. ponytail: computed at render, so "just now" ages only when the message
+ * re-renders; a shared minute ticker is the upgrade if that ever shows.
+ *
+ * @param properties - The message's `metadata.createdAt`, epoch milliseconds.
+ * @returns The timestamp, or nothing for an unstamped message.
+ */
+function ChatMessageTimestamp({
+  createdAt,
+}: {
+  readonly createdAt: number | undefined;
+}): React.JSX.Element | undefined {
+  if (createdAt === undefined) {
+    return undefined;
+  }
+  const date = new Date(createdAt);
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <time
+          dateTime={date.toISOString()}
+          // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- keyboard users reach the absolute-time tooltip through focus
+          tabIndex={0}
+          className='mx-1 flex h-6 items-center rounded-md px-1 text-xs outline-none focus-visible:focus-outline'
+        >
+          {formatRelativeTime(date)}
+        </time>
+      </TooltipTrigger>
+      <TooltipContent side='bottom'>{formatAbsoluteTime(date)}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+// oxlint-disable-next-line complexity -- split render paths for user collapse/edit vs assistant tools would churn without UX benefit
+export const ChatMessage = memo(function ({ messageId, footer }: ChatMessageProperties): React.JSX.Element {
+  const userMessageCollapseRowThreshold = 8;
+  const userMessageCollapseCharacterThreshold = 900;
+  const userMessagePreviewCharacterLimit = 220 * (userMessageCollapseRowThreshold + 1);
+
+  const message = useChatSelector((state) => state.messagesById.get(messageId));
+  const displayMessage = useChatSelector((state) => state.messageEdits[messageId] ?? state.messagesById.get(messageId));
+  const attachmentDirectories = useChatAttachmentDirectories();
+  const fileParts = useChatSelector((state) => {
+    const message_ = state.messagesById.get(messageId);
+    return message_?.role === 'user' ? message_.parts.filter((part) => part.type === 'file') : [];
+  });
+  const usageParts = useChatSelector((state) => {
+    const message_ = state.messageEdits[messageId] ?? state.messagesById.get(messageId);
+    if (!message_) {
+      return [];
+    }
+
+    const usageDataParts: UsageData[] = [];
+    for (const part of message_.parts) {
+      if (part.type === 'data-usage') {
+        usageDataParts.push(part.data);
+      }
+    }
+
+    return usageDataParts;
+  });
+  // An answer with nothing visible yet (only `step-start`, empty text) has nothing to copy or date.
+  const hasVisibleContent = useChatSelector((state) => {
+    const message_ = state.messageEdits[messageId] ?? state.messagesById.get(messageId);
+    return message_?.role === messageRole.user || findLastMeaningfulPartIndex(message_?.parts ?? []) >= 0;
+  });
+  const { startEditingMessage, exitEditMode } = useChatActions();
+  const cadChat = useCadChatClient();
+  const [isEditing, setIsEditing] = useState(false);
+
+  const isUser = message?.role === messageRole.user;
+  const isCollapsedUserMessage = isUser && !isEditing;
+
+  const collapsedUserRows = useMemo(() => {
+    if (!isCollapsedUserMessage || !displayMessage) {
+      return [];
+    }
+
+    const rows: string[] = [];
+    const rowLimit = fileParts.length > 0 ? Number.POSITIVE_INFINITY : userMessageCollapseRowThreshold;
+    let remaining = fileParts.length > 0 ? Number.POSITIVE_INFINITY : userMessagePreviewCharacterLimit;
+    for (const part of displayMessage.parts) {
+      if (part.type !== 'text' || remaining === 0 || rows.length > rowLimit) {
+        continue;
+      }
+
+      const preview = part.text.slice(0, remaining);
+      remaining -= preview.length;
+      const normalizedText = preview.replaceAll('\r\n', '\n');
+      for (const line of normalizedText.split('\n')) {
+        if (rows.length > rowLimit) {
+          break;
+        }
+        rows.push(line);
+      }
+    }
+
+    return rows.length > 0 ? rows.slice(0, rowLimit + 1) : [''];
+  }, [displayMessage, fileParts.length, isCollapsedUserMessage]);
+
+  const collapsedUserCharacterCount = useMemo(() => {
+    if (!isCollapsedUserMessage || !displayMessage) {
+      return 0;
+    }
+
+    let characterCount = 0;
+    for (const part of displayMessage.parts) {
+      if (part.type === 'text') {
+        characterCount += part.text.length;
+      }
+    }
+
+    return characterCount;
+  }, [displayMessage, isCollapsedUserMessage]);
+
+  const shouldCollapseUserMessage =
+    isCollapsedUserMessage &&
+    (collapsedUserRows.length > userMessageCollapseRowThreshold ||
+      collapsedUserCharacterCount > userMessageCollapseCharacterThreshold);
+  const shouldRenderCollapsedUserRows = shouldCollapseUserMessage && fileParts.length === 0;
+
+  const inlineParts = displayMessage?.parts ?? [];
+
+  const collapsedUserRowsWithStableKeys = useMemo(() => {
+    if (!displayMessage) {
+      return [];
+    }
+
+    let sliceStartOffsetInVirtualText = 0;
+    return collapsedUserRows.map((row) => {
+      const rowKeyPrefix = `${displayMessage.id}:${sliceStartOffsetInVirtualText}`;
+      sliceStartOffsetInVirtualText += row.length + 1;
+      return { keyPrefix: rowKeyPrefix, row };
+    });
+  }, [collapsedUserRows, displayMessage]);
+
+  if (!message || !displayMessage) {
+    return <div>Message not found</div>;
+  }
+
+  const toggleEdit = (): void => {
+    if (!isUser) {
+      return;
+    }
+
+    if (!isEditing) {
+      startEditingMessage(messageId);
+    }
+
+    setIsEditing((previous) => !previous);
+  };
+
+  const handleEditClick = (event: React.MouseEvent<HTMLDivElement>): void => {
+    const nestedAction =
+      event.target instanceof Element
+        ? event.target.closest('a, button, input, select, textarea, [role="button"], [role="link"]')
+        : null;
+    if (nestedAction && nestedAction !== event.currentTarget) {
+      return;
+    }
+    toggleEdit();
+  };
+
+  const handleEditKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) {
+      return;
+    }
+    event.preventDefault();
+    toggleEdit();
+  };
+
+  return (
+    <article
+      className={cn(
+        'group/chat-message flex w-full flex-row items-start',
+        isUser && 'items-end gap-2 space-x-reverse',
+        // No `position: sticky` on user messages. Every sticky scoping we
+        // tried — every TG, past TGs only, live TG only — produced a
+        // multi-hundred-px viewport jump on the first wheel-up from the
+        // scroll-bottom of a multi-turn chat. Root cause is a layout-
+        // reconciliation cascade between sticky stuck/unstuck transitions
+        // and outer chat-history Virtuoso's measurement/anchor path. The
+        // live (last) TurnGroup is still pinned to viewport top via
+        // `min-h-(--chat-live-turn-min-h)` on the TG and
+        // `scrollToIndex(LAST, align: 'start')` on submit (chat-history.tsx).
+        // Past user messages scroll out of view naturally — accepted UX
+        // trade-off until we have a non-sticky pinning mechanism.
+      )}
+    >
+      <div
+        className={cn(
+          'flex flex-col min-w-0',
+          'w-full',
+          // Vary left margin for user and assistant messages to achieve visual
+          // differentiation. Right side is intentionally flush — the parent
+          // ChatScroller reserves a fixed scrollbar gutter, so dropping the
+          // right margin here lets bubbles use that space when the scrollbar
+          // is hidden, and the gutter doubles as the right margin when shown.
+          // A request's hover-only row sits 4px under its bubble, so the turn
+          // reads as one exchange rather than two islands; an answer keeps 8px,
+          // which its row's `-mt-2` cancels.
+          isUser ? 'mx-2 space-y-1' : 'mx-4 space-y-2',
+        )}
+      >
+        {/* The bubble and its attached footer (the turn's revision card) read as one surface. */}
+        <div className='flex min-w-0 flex-col'>
+          <When shouldRender={isUser ? isEditing : false}>
+            <ChatTextarea
+              mode='edit'
+              className='relative z-10 rounded-lg'
+              onSubmit={async (event) => {
+                // R10/t17: edit-message routes through the cad chat-client so
+                // the wire body's `agent` block is composed from the live
+                // `useCadAgentConfig` snapshot — no model/metadata stamping
+                // on the persisted user row.
+                cadChat.edit(messageId, {
+                  text: event.content,
+                  attachments: event.attachments,
+                  ...(event.references === undefined ? {} : { references: event.references }),
+                });
+                exitEditMode();
+                setIsEditing(false);
+              }}
+              onEscapePressed={() => {
+                exitEditMode();
+                setIsEditing(false);
+              }}
+              onBlur={() => {
+                exitEditMode();
+                setIsEditing(false);
+              }}
+            />
+          </When>
+          <When shouldRender={!isEditing}>
+            {/* Matches focused-edit ChatTextarea natural max (max-h-48 editor + toolbar + padding + border = 15.125rem). Keep in sync so click-to-edit does not jump. */}
+            <ChatMessageSurface
+              isUser={isUser}
+              className={cn(
+                shouldRenderCollapsedUserRows && 'max-h-60.5 overflow-hidden',
+                fileParts.length > 0 && 'pt-3',
+              )}
+              role={isUser ? 'button' : undefined}
+              tabIndex={isUser ? 0 : undefined}
+              onClick={isUser ? handleEditClick : undefined}
+              onKeyDown={isUser ? handleEditKeyDown : undefined}
+            >
+              {fileParts.length > 0 ? (
+                <ChatMessageFileAttachments parts={fileParts} directory={attachmentDirectories?.transcript} />
+              ) : null}
+              {isUser ? (
+                <div className={chatInputTextClassName}>
+                  {collapsedUserRowsWithStableKeys.map(({ keyPrefix, row }) => (
+                    <p key={`${keyPrefix}:${row.slice(0, 120)}`} className='min-h-5'>
+                      <TextWithAtReferences text={row} />
+                    </p>
+                  ))}
+                </div>
+              ) : (
+                <AssistantParts parts={inlineParts} messageId={displayMessage.id} />
+              )}
+            </ChatMessageSurface>
+          </When>
+          {footer}
+        </div>
+        {/* Both roles get the same row: a request is as worth copying and dating
+            as an answer. Usage only ever exists on an answer, so it self-omits.
+            A request's row mirrors its bubble: right-aligned under it, with the
+            time to the left of the buttons — `flex-row-reverse` gives that order
+            from the same children, and the extra inset mirrors the answer row's
+            own column (the user column is mx-2 against the assistant's mx-4). */}
+        <When shouldRender={hasVisibleContent}>
+          <div
+            className={cn(
+              // Centred: the touch-sized copy button is taller than the timestamp.
+              'flex flex-row items-center justify-start text-muted-foreground transition-opacity duration-150',
+              'opacity-0',
+              'group-hover/chat-message:opacity-100',
+              'group-focus-within/chat-message:opacity-100',
+              // A touch screen has no hover to reveal the row.
+              'pointer-coarse:opacity-100',
+              // An answer's last paragraph carries the markdown viewer's own bottom
+              // margin, so its row cancels the column gap; a bubble has none, so a
+              // request's row keeps it above and gives it back below, where the
+              // indicator's margin and the turn-group gap already separate the
+              // request from the answer.
+              isUser ? 'mx-2 -mb-1 flex-row-reverse' : '-mt-2',
+            )}
+          >
+            <CopyButton
+              tooltipContentProperties={{ side: 'bottom' }}
+              size='icon-xs'
+              className='pointer-coarse:size-8'
+              getText={() => serializeMessage(displayMessage)}
+              tooltip='Copy message'
+            />
+            {isUser ? null : <ChatMessageRating messageId={messageId} />}
+            {usageParts.length > 0 ? <ChatMessageDataUsage usageParts={usageParts} /> : null}
+            <ChatMessageTimestamp createdAt={message.metadata?.createdAt} />
+          </div>
+        </When>
+        {/* A trailing request's indicator sits below its revision card, aligned with the activity rows. */}
+      </div>
+    </article>
+  );
+});

@@ -1,0 +1,196 @@
+/* eslint-disable @typescript-eslint/naming-convention -- OTEL constant enum objects use UPPER_SNAKE_CASE */
+/**
+ * Well-known attribute keys used in OTEL metric recording.
+ * Keys follow OTEL semantic conventions (dot-separated, lowercase).
+ * @public
+ */
+export const AttributeKey = {
+  /* Agent usage (W36-C): each maps to its Prometheus label exactly (`agent.id` → `agent_id`). `outcome` and
+   * `status` are bare by contract — W36's dashboards query those label names. */
+  AGENT_ID: 'agent.id',
+  AGENT_PLACEMENT: 'agent.placement',
+  AGENT_OUTCOME: 'outcome',
+  AGENT_TOOL_KIND: 'tool.kind',
+  AGENT_TOOL_STATUS: 'status',
+  AGENT_TOKEN_TYPE: 'token.type',
+  AGENT_ERROR_CODE: 'error.code',
+  /* Agent context (agent usage telemetry blueprint): bounded vocabularies from `ingest.ts`. */
+  AGENT_TOOL_NAME: 'tool.name',
+  AGENT_SKILL: 'skill',
+  AGENT_EVALUATION_CLASS: 'evaluation.class',
+  AGENT_LOOKUP_OUTCOME: 'lookup.outcome',
+  AGENT_RUN_STATUS: 'run.status',
+  AGENT_ASSERTION_RESULT: 'result',
+  /* Agent loop (R9): safeguard interventions and compaction decisions folded from the run's rows. */
+  AGENT_SAFEGUARD_PATTERN: 'safeguard.pattern',
+  AGENT_SAFEGUARD_ACTION: 'safeguard.action',
+  AGENT_COMPACTION_LANE: 'compaction.lane',
+  AGENT_COMPACTION_TIER: 'compaction.tier',
+  AGENT_COMPACTION_OUTCOME: 'compaction.outcome',
+  /* Why a request did not reproduce the previous request's prompt prefix (provider reasoning replay contract). */
+  AGENT_PREFIX_BREAK_CAUSE: 'prefix_break.cause',
+  /* Hosted Remote Storage: where git ran (`in_process` | `forwarded`) and how tau-storage was chosen (`off` | `rendezvous`). */
+  GIT_EXECUTION: 'tau.git.execution',
+  GIT_AFFINITY: 'tau.git.affinity',
+  /* Files service blueprint §4, §8: which kind of host served an open's LFS downloads, from the action host. */
+  LFS_TRANSPORT: 'tau.lfs.transport',
+  KERNEL_ID: 'kernel.id',
+  WS_CLOSE_REASON: 'ws.close.reason',
+  GEN_AI_TOOL_NAME: 'gen_ai.tool.name',
+  GEN_AI_TOOL_STATUS: 'gen_ai.tool.status',
+  GEN_AI_TOOL_INPUT_REPAIR_KIND: 'gen_ai.tool_input.repair_kind',
+  GEN_AI_TOKEN_TYPE: 'gen_ai.token.type',
+  GEN_AI_REQUEST_MODEL: 'gen_ai.request.model',
+  REDIS_ROLE: 'redis.role',
+  HEALTH_INDICATOR: 'health.indicator',
+  ERROR_TYPE: 'error.type',
+  GEN_AI_PROVIDER_NAME: 'gen_ai.provider.name',
+  GEN_AI_OPERATION_NAME: 'gen_ai.operation.name',
+  GEN_AI_RESPONSE_MODEL: 'gen_ai.response.model',
+  WS_DIRECTION: 'ws.direction',
+  GEN_AI_SAFEGUARD_PATTERN: 'gen_ai.agent.safeguard.pattern',
+  GEN_AI_SAFEGUARD_ACTION: 'gen_ai.agent.safeguard.action',
+  GEN_AI_SAFEGUARD_HELPED: 'gen_ai.agent.safeguard.helped',
+  GEN_AI_PROMPT_SECTION_NAME: 'gen_ai.prompt.section.name',
+  GEN_AI_PROMPT_SECTION_CACHE_BREAK: 'gen_ai.prompt.section.cache_break',
+  GEN_AI_INTERRUPT_RECOVERY_OUTCOME: 'gen_ai.agent.interrupt_recovery.outcome',
+  GEN_AI_CONTEXT_BUDGET_COMPONENT: 'gen_ai.context_budget.component',
+  GEN_AI_CONTEXT_BUDGET_KIND: 'gen_ai.context_budget.kind',
+  GEN_AI_CONTEXT_BUDGET_TRIGGER_REASON: 'gen_ai.context_budget.trigger_reason',
+  GEN_AI_CONTEXT_COMPACTION_STATUS: 'gen_ai.context_compaction.status',
+  GEN_AI_CONTEXT_COMPACTION_FAILURE_KIND: 'gen_ai.context_compaction.failure_kind',
+  GEN_AI_CONTEXT_COMPACTION_FAILURE_DISPOSITION: 'gen_ai.context_compaction.failure_disposition',
+  GEN_AI_PROVIDER_NATIVE_REPLAY_METADATA_PRESENT: 'gen_ai.provider.native_replay_metadata_present',
+  GEN_AI_PROVIDER_MISSING_FUNCTION_CALL_SIGNATURE_COUNT: 'gen_ai.provider.missing_function_call_signature_count',
+} as const;
+
+/**
+ * Status values for kernel execution metrics.
+ * @public
+ */
+export const KernelStatus = {
+  SUCCESS: 'success',
+  ERROR: 'error',
+} as const;
+
+/**
+ * Status values for GenAI tool invocations.
+ * @public
+ */
+export const GenAiToolStatus = {
+  SUCCESS: 'success',
+  ERROR: 'error',
+} as const;
+
+/**
+ * Token type values for GenAI token usage metrics.
+ *
+ * `INPUT` is recorded as the **net** prompt tokens (excluding cache reads), and
+ * `CACHE_READ` is recorded as the cache-hit prompt tokens, so the
+ * provider-agnostic prompt-cache hit rate is
+ * `cache_read / (input + cache_read)`. Without splitting cache reads out of
+ * `input` the ratio is skewed for providers that report cache reads inside the
+ * raw `input_tokens` count (Anthropic, Vertex AI Gemini); see
+ * `apps/libs/api-llm-gateway/src/providers/provider.service.ts` (`Provider.inputTokensIncludesCacheReadTokens`).
+ *
+ * @public
+ */
+export const GenAiTokenType = {
+  INPUT: 'input',
+  OUTPUT: 'output',
+  CACHE_READ: 'cache_read',
+  CACHE_WRITE: 'cache_write',
+  /** The 1-hour cache write tier, kept apart because it is priced at twice the input rate. */
+  CACHE_WRITE_1H: 'cache_write_1h',
+} as const;
+
+/**
+ * Action values for GenAI agent safeguard interventions.
+ *
+ * - `nudge`: A `<system-reminder>` HumanMessage was appended to state.messages
+ *   to redirect the agent away from a detected anti-pattern.
+ * - `terminate`: The model call was short-circuited with a synthetic AIMessage
+ *   that has no `tool_calls`, ending the agent loop.
+ * @public
+ */
+export const GenAiSafeguardAction = {
+  NUDGE: 'nudge',
+  TERMINATE: 'terminate',
+} as const;
+
+/**
+ * Whether the agent changed its behavior on the turn following a safeguard
+ * nudge.
+ * - `true`: the agent's next tool call differed from the offending signature
+ *   (or it produced no tool calls at all)
+ * - `false`: the agent repeated the offending tool call signature anyway
+ * @public
+ */
+export const GenAiSafeguardHelped = {
+  TRUE: 'true',
+  FALSE: 'false',
+} as const;
+
+/**
+ * Outcome values for the interrupt-recovery middleware counter.
+ *
+ * - `emitted`: the middleware injected a `<system-reminder>` HumanMessage on
+ *   this turn so the next LLM call sees the recovery guidance.
+ * - `already_fired`: detection matched but state-level dedup suppressed the
+ *   emission for the same parent AIMessage signature.
+ * @public
+ */
+export const GenAiInterruptRecoveryOutcome = {
+  EMITTED: 'emitted',
+  ALREADY_FIRED: 'already_fired',
+} as const;
+
+/**
+ * Budgeting mode used for context-window decisions.
+ *
+ * `estimated` is the only mode implemented: budgets come from a token estimate
+ * rather than a provider-native count.
+ * @public
+ */
+export const GenAiContextBudgetKind = {
+  ESTIMATED: 'estimated',
+} as const;
+
+/**
+ * Trigger reason for a context compaction decision.
+ * @public
+ */
+export const GenAiContextBudgetTriggerReason = {
+  NONE: 'none',
+  ESTIMATE: 'estimate',
+  PREVIOUS_USAGE: 'previous_usage',
+  OVERFLOW: 'overflow',
+} as const;
+
+/**
+ * Outcome/status emitted by the compaction pipeline.
+ * @public
+ */
+export const GenAiContextCompactionStatus = {
+  SKIPPED: 'skipped',
+  COMPACTED: 'compacted',
+  FAILED: 'failed',
+  OVERFLOW_RETRY_SUCCEEDED: 'overflow_retry_succeeded',
+} as const;
+
+/**
+ * Failure disposition emitted when compaction blocks provider dispatch.
+ * @public
+ */
+export const GenAiContextCompactionFailureDisposition = {
+  BLOCKED_BEFORE_PROVIDER: 'blocked_before_provider',
+} as const;
+
+/**
+ * RPC call status values.
+ * @public
+ */
+export const RpcStatus = {
+  OK: 'ok',
+  ERROR: 'error',
+} as const;

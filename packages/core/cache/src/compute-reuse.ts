@@ -1,0 +1,572 @@
+import { CacheCorruptionError, CacheRequiredError } from '#errors.js';
+import { maxEncodedBytes, maxEncodedEntries, ownEncodedContent } from '#encoded-content.js';
+import { actionDigest, canonicalizeComputeAction, contentDigest, digestAction, digestContent } from '#digest.js';
+import type { ActionStore, ComputeActionRecord, ContentStore } from '#store.js';
+import type {
+  ActionDigest,
+  CacheCodec,
+  CacheRetention,
+  ComputeAction,
+  ComputeEvaluationInput,
+  ComputeEvaluationResult,
+  ComputePublicationOutcome,
+  ComputePublicationTask,
+  ComputeReuseService,
+  ContentDigest,
+} from '#types.js';
+
+/**
+ * Promote one already-published record to required durability.
+ *
+ * Called on the hit path as well as the miss path: a hit on previously
+ * disposable data still needs a stable owner pin and the backend's durable
+ * barrier before a required evaluation may succeed. A backend that cannot
+ * acknowledge durability returns `no-durable-storage`, which is a refusal.
+ * @public
+ */
+export type ComputeDurablePromotion = (input: {
+  readonly actionDigest: ActionDigest;
+  readonly contentDigest: ContentDigest;
+  readonly retention: CacheRetention;
+  readonly signal: AbortSignal;
+}) => Promise<{ readonly status: 'promoted' } | { readonly status: 'no-durable-storage' }>;
+
+/** Stores used by a compute reuse service. @public */
+export type ComputeReuseServiceOptions = {
+  readonly contentStore: ContentStore;
+  readonly actionStore: ActionStore;
+  /**
+   * Required-durability barrier. Absent means this service cannot acknowledge
+   * required work at all, and every `required` evaluation is refused.
+   */
+  readonly promote?: ComputeDurablePromotion;
+  /**
+   * Defer best-effort publication past result delivery.
+   *
+   * When present, a best-effort miss returns as soon as its computation does,
+   * with publication status `deferred`, and this receives the task that encodes
+   * and publishes it. The scheduler decides when, and whether, to run it.
+   * Required evaluations always publish before they resolve.
+   */
+  readonly schedulePublication?: (task: ComputePublicationTask) => void;
+};
+
+type PendingEvaluation = {
+  readonly controller: AbortController;
+  readonly promise: Promise<ComputeEvaluationResult<unknown>>;
+  waiters: number;
+};
+
+type CacheLookup<T> =
+  | { readonly status: 'hit'; readonly value: T; readonly contentDigest: ContentDigest }
+  | { readonly status: 'miss' };
+
+const defaultSignal = new AbortController().signal;
+
+const abortReason = (signal: AbortSignal): Error =>
+  signal.reason instanceof Error ? signal.reason : new DOMException('Aborted', 'AbortError');
+
+const throwIfAborted = (signal: AbortSignal): void => {
+  if (signal.aborted) {
+    throw abortReason(signal);
+  }
+};
+
+const requiredFailure = (message: string, cause: unknown): CacheRequiredError =>
+  new CacheRequiredError(message, { cause });
+
+const validateRecord = (input: {
+  readonly record: ComputeActionRecord;
+  readonly action: ComputeAction;
+  readonly codec: CacheCodec<unknown>;
+  readonly expectedDigest: ActionDigest;
+}): void => {
+  const { record, action, codec, expectedDigest } = input;
+  try {
+    const schemaVersion: unknown = record.schemaVersion;
+    if (schemaVersion !== 1) {
+      throw new TypeError('unsupported schema version');
+    }
+    if (actionDigest({ value: record.actionDigest }) !== expectedDigest) {
+      throw new TypeError('action digest mismatch');
+    }
+    if (record.codec.id !== action.codec.id || record.codec.version !== action.codec.version) {
+      throw new TypeError('codec identity mismatch');
+    }
+    contentDigest({ value: record.output.digest });
+    if (!Number.isSafeInteger(record.output.size) || record.output.size < 0) {
+      throw new TypeError('invalid output size');
+    }
+    if (typeof record.output.mediaType !== 'string' || record.output.mediaType.length === 0) {
+      throw new TypeError('invalid output media type');
+    }
+    if (record.output.mediaType !== codec.mediaType) {
+      throw new TypeError('output media type mismatch');
+    }
+    for (const dependency of record.dependencies) {
+      actionDigest({ value: dependency });
+    }
+    for (const required of record.requiredContent ?? []) {
+      contentDigest({ value: required });
+    }
+    if ((record.requiredContent?.length ?? 0) + 1 > maxEncodedEntries) {
+      throw new RangeError('Cached content closure exceeds the entry budget.');
+    }
+  } catch (error) {
+    throw new CacheCorruptionError('Cached action record failed validation.', { cause: error });
+  }
+};
+
+const readCache = async <T>(input: {
+  readonly action: ComputeAction;
+  readonly actionKey: ActionDigest;
+  readonly codec: CacheCodec<T>;
+  readonly contentStore: ContentStore;
+  readonly actionStore: ActionStore;
+  readonly signal: AbortSignal;
+}): Promise<CacheLookup<T>> => {
+  const { action, actionKey, codec, contentStore, actionStore, signal } = input;
+  const actionResult = await actionStore.read({ digest: actionKey, signal });
+  if (actionResult.status === 'miss') {
+    return { status: 'miss' };
+  }
+  validateRecord({
+    record: actionResult.record,
+    action,
+    codec: codec as CacheCodec<unknown>,
+    expectedDigest: actionKey,
+  });
+  const contentResult = await contentStore.read({
+    digest: actionResult.record.output.digest,
+    signal,
+  });
+  if (contentResult.status === 'miss') {
+    throw new CacheCorruptionError('Cached action points to missing content.');
+  }
+  if (contentResult.bytes.byteLength !== actionResult.record.output.size) {
+    throw new CacheCorruptionError('Cached content size does not match its action record.');
+  }
+  const rootBytes = new Uint8Array(contentResult.bytes);
+  if ((await digestContent({ bytes: rootBytes })) !== actionResult.record.output.digest) {
+    throw new CacheCorruptionError('Cached content does not match its digest.');
+  }
+  throwIfAborted(signal);
+  try {
+    const requiredContent = new Set(actionResult.record.requiredContent ?? []);
+    const leaves = new Map<ContentDigest, Uint8Array<ArrayBuffer>>();
+    let size = rootBytes.byteLength;
+    for (const digest of requiredContent) {
+      // oxlint-disable-next-line no-await-in-loop -- verify the entire declared closure once before decode
+      const leaf = await contentStore.read({ digest, signal });
+      if (leaf.status === 'miss') {
+        throw new CacheCorruptionError('Cached action points to missing content leaves.');
+      }
+      size += leaf.bytes.byteLength;
+      if (size > maxEncodedBytes) {
+        throw new CacheCorruptionError('Cached content closure exceeds the byte budget.');
+      }
+      const leafBytes = new Uint8Array(leaf.bytes);
+      // oxlint-disable-next-line no-await-in-loop -- each unique leaf has one integrity check
+      if ((await digestContent({ bytes: leafBytes })) !== digest) {
+        throw new CacheCorruptionError('Cached leaf does not match its digest.');
+      }
+      throwIfAborted(signal);
+      leaves.set(digest, leafBytes);
+    }
+    const readContent = async ({
+      digest,
+    }: {
+      readonly digest: ContentDigest;
+    }): Promise<Uint8Array<ArrayBuffer> | undefined> => {
+      throwIfAborted(signal);
+      contentDigest({ value: digest });
+      if (digest === actionResult.record.output.digest) {
+        return new Uint8Array(rootBytes);
+      }
+      if (!requiredContent.has(digest)) {
+        throw new CacheCorruptionError('Codec requested undeclared content.');
+      }
+      const leaf = leaves.get(digest);
+      return leaf === undefined ? undefined : new Uint8Array(leaf);
+    };
+    const value = await codec.decode({ bytes: new Uint8Array(rootBytes), signal, readContent });
+    throwIfAborted(signal);
+    return { status: 'hit', value, contentDigest: actionResult.record.output.digest };
+  } catch (error) {
+    throwIfAborted(signal);
+    throw new CacheCorruptionError('Cached content could not be decoded.', { cause: error });
+  }
+};
+
+const lookupWithPolicy = async <T>(input: {
+  readonly evaluation: ComputeEvaluationInput<T>;
+  readonly actionKey: ActionDigest;
+  readonly contentStore: ContentStore;
+  readonly actionStore: ActionStore;
+  readonly signal: AbortSignal;
+}): Promise<CacheLookup<T>> => {
+  try {
+    return await readCache({
+      action: input.evaluation.action,
+      actionKey: input.actionKey,
+      codec: input.evaluation.codec,
+      contentStore: input.contentStore,
+      actionStore: input.actionStore,
+      signal: input.signal,
+    });
+  } catch (error) {
+    throwIfAborted(input.signal);
+    if (input.evaluation.policy === 'best-effort') {
+      return { status: 'miss' };
+    }
+    if (error instanceof CacheCorruptionError) {
+      throw error;
+    }
+    throw requiredFailure('Required cache lookup failed.', error);
+  }
+};
+
+/** A computed result whose publication settled inline. */
+type PublishedResult<T> = {
+  readonly source: 'computed';
+  readonly value: T;
+  readonly actionDigest: ActionDigest;
+  readonly publication: ComputePublicationOutcome;
+};
+
+const skipped = <T>(input: {
+  readonly value: T;
+  readonly actionKey: ActionDigest;
+  readonly reason: 'encode-failed' | 'content-store-failed' | 'action-store-failed';
+}): PublishedResult<T> => ({
+  source: 'computed',
+  value: input.value,
+  actionDigest: input.actionKey,
+  publication: { status: 'skipped', reason: input.reason },
+});
+
+const publishComputed = async <T>(input: {
+  readonly evaluation: ComputeEvaluationInput<T>;
+  readonly value: T;
+  readonly actionKey: ActionDigest;
+  readonly contentStore: ContentStore;
+  readonly actionStore: ActionStore;
+  readonly signal: AbortSignal;
+}): Promise<PublishedResult<T>> => {
+  const { evaluation, value, actionKey, contentStore, actionStore, signal } = input;
+  let bytes: Uint8Array<ArrayBuffer>;
+  let outputDigest: ContentDigest;
+  let content: ReadonlyMap<ContentDigest, Uint8Array<ArrayBuffer>>;
+  try {
+    ({
+      bytes,
+      digest: outputDigest,
+      content,
+    } = await ownEncodedContent(await evaluation.codec.encode({ value, signal }), signal));
+    throwIfAborted(signal);
+  } catch (error) {
+    throwIfAborted(signal);
+    if (evaluation.policy === 'required') {
+      throw requiredFailure('Required cache encoding failed.', error);
+    }
+    return skipped({ value, actionKey, reason: 'encode-failed' });
+  }
+
+  const requiredContent = [...content.keys()].sort();
+  try {
+    for (const [digest, leaf] of content) {
+      // oxlint-disable-next-line no-await-in-loop -- publication order precedes the action commit point
+      const leafResult = await contentStore.write({ digest, bytes: leaf, signal });
+      if (leafResult.status === 'rejected') {
+        throw new Error('Content store rejected an encoded leaf.');
+      }
+      throwIfAborted(signal);
+    }
+    const result = await contentStore.write({ digest: outputDigest, bytes, signal });
+    if (result.status === 'rejected') {
+      throw new Error('Content store rejected the encoded result.');
+    }
+    throwIfAborted(signal);
+    // The store verified each digest as it wrote it, so nothing is hashed again here. A bounded
+    // store may still evict an earlier leaf during publication, and a record must never commit an
+    // incomplete closure, so each declared leaf is checked for presence only.
+    for (const digest of requiredContent) {
+      // oxlint-disable-next-line no-await-in-loop -- bounded stores may evict earlier leaves during publication
+      const leaf = await contentStore.read({ digest, signal });
+      if (leaf.status === 'miss') {
+        throw new CacheCorruptionError('Encoded content closure is unavailable before publication.');
+      }
+      throwIfAborted(signal);
+    }
+  } catch (error) {
+    throwIfAborted(signal);
+    if (evaluation.policy === 'required') {
+      throw requiredFailure('Required content publication failed.', error);
+    }
+    return skipped({ value, actionKey, reason: 'content-store-failed' });
+  }
+
+  const record: ComputeActionRecord = {
+    schemaVersion: 1,
+    actionDigest: actionKey,
+    codec: { id: evaluation.codec.id, version: evaluation.codec.version },
+    output: {
+      digest: outputDigest,
+      size: bytes.byteLength,
+      mediaType: evaluation.codec.mediaType,
+    },
+    dependencies: evaluation.action.inputs
+      .filter((dependency) => dependency.kind === 'action')
+      .map((dependency) => actionDigest({ value: dependency.digest })),
+    ...(requiredContent.length > 0 ? { requiredContent } : {}),
+  };
+  try {
+    const result = await actionStore.publish({ record, signal });
+    if (result.status === 'rejected') {
+      throw new Error('Action store rejected the completed record.');
+    }
+    throwIfAborted(signal);
+  } catch (error) {
+    throwIfAborted(signal);
+    if (evaluation.policy === 'required') {
+      throw requiredFailure('Required action publication failed.', error);
+    }
+    return skipped({ value, actionKey, reason: 'action-store-failed' });
+  }
+
+  return {
+    source: 'computed',
+    value,
+    actionDigest: actionKey,
+    publication: { status: 'stored', contentDigest: outputDigest },
+  };
+};
+
+const promoteRequired = async (input: {
+  readonly retention: CacheRetention;
+  readonly actionKey: ActionDigest;
+  readonly contentDigest: ContentDigest;
+  readonly promote: ComputeDurablePromotion | undefined;
+  readonly signal: AbortSignal;
+}): Promise<CacheRetention> => {
+  const { retention } = input;
+  if (!input.promote) {
+    throw requiredFailure(
+      'Required durability is unavailable: this compute store cannot acknowledge a durable barrier.',
+      new Error('no-durable-storage'),
+    );
+  }
+  const outcome = await input.promote({
+    actionDigest: input.actionKey,
+    contentDigest: input.contentDigest,
+    retention,
+    signal: input.signal,
+  });
+  throwIfAborted(input.signal);
+  if (outcome.status === 'no-durable-storage') {
+    throw requiredFailure(
+      'Required durability is unavailable: the backend refused a durable barrier.',
+      new Error('no-durable-storage'),
+    );
+  }
+  return retention;
+};
+
+const runEvaluation = async <T>(input: {
+  readonly evaluation: ComputeEvaluationInput<T>;
+  readonly actionKey: ActionDigest;
+  readonly contentStore: ContentStore;
+  readonly actionStore: ActionStore;
+  readonly signal: AbortSignal;
+  readonly schedulePublication: ((task: ComputePublicationTask) => void) | undefined;
+}): Promise<ComputeEvaluationResult<T>> => {
+  const lookup = await lookupWithPolicy(input);
+  if (lookup.status === 'hit') {
+    return {
+      source: 'cache',
+      value: lookup.value,
+      actionDigest: input.actionKey,
+      contentDigest: lookup.contentDigest,
+    };
+  }
+  throwIfAborted(input.signal);
+  const value = await input.evaluation.compute({ signal: input.signal });
+  throwIfAborted(input.signal);
+  if (input.evaluation.policy === 'best-effort' && input.schedulePublication) {
+    const { evaluation, actionKey } = input;
+    // The encoding (and any snapshot in it) is taken once, under no interruptible signal, and an
+    // interrupted task reuses it when it runs again. Teardown bounds it with the drain deadline.
+    let encoded: ReturnType<CacheCodec<T>['encode']> | undefined;
+    const codec: CacheCodec<T> = {
+      ...evaluation.codec,
+      encode: async () => {
+        encoded ??= evaluation.codec.encode({ value, signal: defaultSignal });
+        return encoded;
+      },
+    };
+    input.schedulePublication({
+      actionDigest: actionKey,
+      signal: evaluation.signal,
+      run: async ({ signal }): Promise<ComputePublicationOutcome> => {
+        throwIfAborted(signal);
+        // A best-effort publication never throws past an abort.
+        const { publication } = await publishComputed({
+          ...input,
+          evaluation: { ...evaluation, codec },
+          value,
+          signal,
+        });
+        return publication;
+      },
+    });
+    return { source: 'computed', value, actionDigest: actionKey, publication: { status: 'deferred' } };
+  }
+  const published = await publishComputed({ ...input, value });
+  if (input.evaluation.policy !== 'required') {
+    return published;
+  }
+  if (published.publication.status !== 'stored') {
+    throw requiredFailure('Required publication did not store its content.', new Error(published.publication.reason));
+  }
+  return published;
+};
+
+const waitFor = async <T>(input: {
+  readonly pending: PendingEvaluation;
+  readonly signal: AbortSignal;
+  readonly evaluation: ComputeEvaluationInput<T>;
+  readonly promote: ComputeDurablePromotion | undefined;
+  readonly onEmpty: () => void;
+}): Promise<ComputeEvaluationResult<T>> => {
+  const { pending, signal } = input;
+  pending.waiters += 1;
+  try {
+    return await new Promise<ComputeEvaluationResult<T>>((resolve, reject) => {
+      const onAbort = (): void => {
+        reject(abortReason(signal));
+      };
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+      void forwardPending({ ...input, onAbort, resolve, reject });
+    });
+  } finally {
+    pending.waiters -= 1;
+    if (pending.waiters === 0) {
+      pending.controller.abort();
+      input.onEmpty();
+    }
+  }
+};
+
+const forwardPending = async <T>(input: {
+  readonly pending: PendingEvaluation;
+  readonly signal: AbortSignal;
+  readonly evaluation: ComputeEvaluationInput<T>;
+  readonly promote: ComputeDurablePromotion | undefined;
+  readonly onAbort: () => void;
+  readonly resolve: (result: ComputeEvaluationResult<T>) => void;
+  readonly reject: (error: Error) => void;
+}): Promise<void> => {
+  try {
+    const result = (await input.pending.promise) as ComputeEvaluationResult<T>;
+    throwIfAborted(input.signal);
+    if (input.evaluation.policy === 'required') {
+      let outputDigest: ContentDigest;
+      if (result.source === 'cache') {
+        outputDigest = result.contentDigest;
+      } else if (result.publication.status === 'stored') {
+        outputDigest = result.publication.contentDigest;
+      } else {
+        throw requiredFailure(
+          'Required publication did not store its content.',
+          // Required work is never deferred.
+          new Error(result.publication.status === 'skipped' ? result.publication.reason : 'deferred'),
+        );
+      }
+      const retention = await promoteRequired({
+        retention: input.evaluation.retention,
+        actionKey: result.actionDigest,
+        contentDigest: outputDigest,
+        promote: input.promote,
+        signal: input.signal,
+      });
+      input.resolve(
+        result.source === 'cache'
+          ? { ...result, retention }
+          : { ...result, publication: { status: 'stored', contentDigest: outputDigest, retention } },
+      );
+      return;
+    }
+    input.resolve(result);
+  } catch (error) {
+    input.reject(error instanceof Error ? error : new Error(String(error)));
+  } finally {
+    input.signal.removeEventListener('abort', input.onAbort);
+  }
+};
+
+/**
+ * Create a compute reuse service over caller-owned content and action stores.
+ *
+ * Concurrent identical evaluations share work. Cancelling one waiter does not
+ * cancel the producer until every waiter has detached. Action records are the
+ * commit point and are published only after immutable content is stored.
+ * @param options - Content and action stores owned by the caller.
+ * @returns A reusable compute coordinator.
+ * @public
+ */
+export const createComputeReuseService = (options: ComputeReuseServiceOptions): ComputeReuseService => {
+  const pendingEvaluations = new Map<string, PendingEvaluation>();
+
+  return {
+    evaluate: async <T>(evaluation: ComputeEvaluationInput<T>) => {
+      const callerSignal = evaluation.signal ?? defaultSignal;
+      throwIfAborted(callerSignal);
+      if (
+        evaluation.action.codec.id !== evaluation.codec.id ||
+        evaluation.action.codec.version !== evaluation.codec.version
+      ) {
+        throw new TypeError('Compute action codec identity must match the supplied codec.');
+      }
+      const flightKey = `${canonicalizeComputeAction(evaluation.action)}:${evaluation.policy}`;
+      let pending = pendingEvaluations.get(flightKey);
+      if (pending === undefined) {
+        const controller = new AbortController();
+        const promise: Promise<ComputeEvaluationResult<unknown>> = (async () => {
+          try {
+            const actionKey = await digestAction({ action: evaluation.action });
+            return await runEvaluation({
+              evaluation,
+              actionKey,
+              contentStore: options.contentStore,
+              actionStore: options.actionStore,
+              signal: controller.signal,
+              schedulePublication: options.schedulePublication,
+            });
+          } finally {
+            if (pendingEvaluations.get(flightKey)?.controller === controller) {
+              pendingEvaluations.delete(flightKey);
+            }
+          }
+        })();
+        pending = { controller, promise, waiters: 0 };
+        pendingEvaluations.set(flightKey, pending);
+      }
+      const activePending = pending;
+      return waitFor<T>({
+        pending: activePending,
+        signal: callerSignal,
+        evaluation,
+        promote: options.promote,
+        onEmpty: () => {
+          if (pendingEvaluations.get(flightKey) === activePending) {
+            pendingEvaluations.delete(flightKey);
+          }
+        },
+      });
+    },
+  };
+};

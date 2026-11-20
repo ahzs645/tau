@@ -1,0 +1,175 @@
+import { useCallback, useEffect, useId, useLayoutEffect, useRef } from 'react';
+import type { Dispatch, SetStateAction } from 'react';
+import { ArrowUp } from 'lucide-react';
+import { Loader } from '@taucad/ui/components/loader';
+import { Button } from '@taucad/ui/components/button';
+import { cn } from '@taucad/ui/utils/cn';
+import { InputGroup, InputGroupTextarea } from '@taucad/ui/components/input-group';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@taucad/ui/components/tooltip';
+import { DictationControl, DictationFeedback } from '#components/dictation/dictation-controls.js';
+import { useDictation } from '#components/dictation/use-dictation.js';
+
+/**
+ * Own-words reply. The draft stays in view while dictating; Stop reviews the transcript; Send finishes dictation
+ * and submits the final answer.
+ */
+export function QuestionTextAnswer({
+  draft,
+  onDraftChange,
+  isOpen,
+  isPending = false,
+  shouldTakeFocus,
+  placeholder,
+  onHold,
+  onAnswer,
+  onDismiss,
+}: {
+  readonly draft: string;
+  readonly onDraftChange: Dispatch<SetStateAction<string>>;
+  readonly isOpen: boolean;
+  readonly isPending?: boolean;
+  readonly shouldTakeFocus: boolean;
+  readonly placeholder: string;
+  readonly onHold: () => void;
+  readonly onAnswer: (text: string) => void;
+  readonly onDismiss: () => void;
+}): React.JSX.Element {
+  const textId = useId();
+  const textRef = useRef<HTMLTextAreaElement>(null);
+  const latestDraft = useRef(draft);
+  useLayoutEffect(() => {
+    latestDraft.current = draft;
+  }, [draft]);
+  const insertTranscript = useCallback(
+    (text: string): void => {
+      const previous = latestDraft.current;
+      const next = `${previous}${previous === '' || /\s$/u.test(previous) ? '' : ' '}${text}`;
+      // Send resumes before React necessarily commits the updated draft.
+      latestDraft.current = next;
+      onDraftChange(next);
+    },
+    [onDraftChange],
+  );
+  const dictation = useDictation(insertTranscript, textId);
+  const isDictating = dictation.phase !== 'idle';
+  const start = useCallback(async (): Promise<void> => {
+    onHold();
+    await dictation.start();
+  }, [dictation.start, onHold]);
+  const sending = useRef(false);
+  const canSend = isOpen && (isDictating ? dictation.phase === 'recording' : draft.trim() !== '');
+  const send = async (): Promise<void> => {
+    if (!canSend || sending.current) {
+      return;
+    }
+    sending.current = true;
+    try {
+      if (isDictating && !(await dictation.stop())) {
+        return;
+      }
+      const text = latestDraft.current.trim();
+      if (text !== '') {
+        onAnswer(text);
+      }
+    } finally {
+      sending.current = false;
+    }
+  };
+  const wasDictating = useRef(false);
+  useEffect(() => {
+    if (!isDictating && (shouldTakeFocus || wasDictating.current)) {
+      textRef.current?.focus();
+    }
+    wasDictating.current = isDictating;
+  }, [isDictating, shouldTakeFocus]);
+
+  return (
+    <div
+      className='flex min-w-0 flex-1 flex-col gap-1'
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          event.stopPropagation();
+          if (isDictating) {
+            dictation.cancel();
+          } else {
+            onDismiss();
+          }
+        }
+      }}
+    >
+      <label htmlFor={textId} className='sr-only'>
+        Your answer
+      </label>
+      <InputGroup
+        aria-label='Answer input'
+        className='h-auto min-h-10 flex-wrap items-end gap-1 rounded-xl p-1 shadow-none'
+      >
+        <InputGroupTextarea
+          ref={textRef}
+          id={textId}
+          rows={1}
+          value={draft}
+          disabled={!isOpen}
+          placeholder={placeholder}
+          // Narrow answers keep a readable draft; the controls wrap below it instead of squeezing it.
+          className='max-h-40 min-h-8 min-w-32 px-2 py-1 leading-6 md:leading-6'
+          onFocus={onHold}
+          onChange={(event) => {
+            onDraftChange(event.target.value);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              void send();
+            }
+          }}
+        />
+        <div className='ml-auto flex min-h-8 shrink-0 items-center gap-1'>
+          {dictation.available === true && isOpen ? (
+            <DictationControl
+              phase={dictation.phase}
+              waveform={dictation.waveform}
+              onStart={start}
+              onStop={dictation.stop}
+              onCancel={dictation.cancel}
+            />
+          ) : null}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type='button'
+                variant='ghost'
+                size='icon-sm'
+                aria-label='Send answer'
+                aria-busy={isPending}
+                className={cn(
+                  'primary-action rounded-full',
+                  'shrink-0 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-foreground',
+                )}
+                aria-disabled={!canSend}
+                onClick={() => {
+                  void send();
+                }}
+              >
+                {isPending ? (
+                  <Loader className='size-4 motion-reduce:animate-none' />
+                ) : (
+                  <ArrowUp aria-hidden='true' className='size-4' />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {dictation.phase === 'recording'
+                ? 'Stop dictation and send answer'
+                : isDictating
+                  ? 'Wait for dictation to finish'
+                  : 'Send answer'}
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      </InputGroup>
+      <DictationFeedback transcript={dictation.transcript} />
+    </div>
+  );
+}

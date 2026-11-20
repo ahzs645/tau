@@ -1,41 +1,117 @@
-import { useLoaderData, useLocation, useNavigate } from 'react-router';
+import { Heading } from '@taucad/ui/components/heading';
+import { PageContent } from '#components/layout/page-content.js';
+import { PageHeader } from '#components/layout/page-header.js';
+import { Link, useLoaderData, useLocation, useNavigate } from 'react-router';
 import type { MetaDescriptor } from 'react-router';
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useId, useRef, useState, useCallback, useMemo } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
-import { AlertCircle, X, XCircle } from 'lucide-react';
-import { fromSafeAsync } from '#lib/xstate.lib.js';
+import { createCallbackLogic } from 'xstate';
+import { ArrowRight, X } from 'lucide-react';
+import { fromSafeAsync } from '@taucad/ui-core/lib/xstate.lib';
+import type { MachineActors } from '@taucad/ui-core/lib/xstate.lib';
+// oxlint-disable-next-line import/extensions -- React Router generates this virtual route-type module.
 import type { Route } from './+types/route.js';
 import type { Handle } from '#types/matches.types.js';
-import { importGitHubMachine } from '#machines/import-github.machine.js';
-import { importDiskMachine } from '#machines/import-disk.machine.js';
-import { Loader } from '#components/ui/loader.js';
-import { Progress } from '#components/ui/progress.js';
-import { Button } from '#components/ui/button.js';
-import { Input } from '#components/ui/input.js';
-import { SvgIcon } from '#components/icons/svg-icon.js';
-import { formatFileSize } from '#components/geometry/converter/converter-utils.js';
+import { ImportGitHubError, importGitHubMachine } from '@taucad/publish-ui/machines/import-github.machine';
+import type { ImportArchiveEvents, ImportArchiveInput } from '@taucad/publish-ui/machines/import-github.machine';
+import { importDiskMachine } from '@taucad/publish-ui/machines/import-disk.machine';
+import { ImportChannelError, createFromStagedImport, openImportSession } from '@taucad/ui-core/machines/import-staging';
+import type { HostImportGrant } from '@taucad/filesystem/importer';
+import type { ImportSession } from '@taucad/ui-core/machines/import-staging';
+import { useOptionalFileManager } from '#hooks/use-file-manager.js';
+import { PageNotice } from '#components/layout/page-notice.js';
+import { Checkbox } from '@taucad/ui/components/checkbox';
+import { Label } from '@taucad/ui/components/label';
+import { Button } from '@taucad/ui/components/button';
+import { Input } from '@taucad/ui/components/input';
+import { useProjects } from '#hooks/use-projects.js';
+import { withNamedLock } from '@taucad/ui-core/lib/named-lock';
 import { useProjectManager } from '#hooks/use-project-manager.js';
+import { useProjectCreationLocationError } from '#hooks/use-project-creation-location-error.js';
 import { RepositoryCard } from '#routes/import.$/repository-card.js';
 import { BranchSelector } from '#routes/import.$/branch-selector.js';
-import { FileSelector, createStaticDataSource } from '#components/files/file-selector.js';
+import { createStaticDataSource } from '@taucad/workbench-panes/files/file-selector';
+import { FileSelector } from '@taucad/files-ui/components/files/file-selector';
 import { SuggestedClones } from '#routes/import.$/suggested-clones.js';
 import { UploadCard } from '#routes/import.$/upload-card.js';
-import { parseGitHubUrl, normalizeGitHubUrl } from '#routes/import.$/import.utils.js';
-import type { GitHubRepoInfo } from '#routes/import.$/import.utils.js';
+import {
+  describeGitHubImport,
+  normalizeGitHubUrl,
+  resolveGitHubImportTarget,
+  resolveImportRoute,
+  isMainFileCandidate,
+  findMainFile,
+  handOverHostGrants,
+} from '#routes/import.$/import.utils.js';
+import { parseGitHubUrl } from '@taucad/publish-ui/lib/github-url';
+import { getGitHubClient } from '#lib/github-api.js';
+import { toast } from '@taucad/ui/components/sonner';
 import { ImportErrorView } from '#routes/import.$/import-error-view.js';
 import { ImportProcessingView } from '#routes/import.$/import-processing-view.js';
 import { ImportMainFileView } from '#routes/import.$/import-main-file-view.js';
 import { inspect } from '#machines/inspector.js';
-import { CopyButton } from '#components/copy-button.js';
+import { CopyButton } from '@taucad/ui/components/copy-button';
+import { OpenInDesktop } from '#components/desktop/open-in-desktop.js';
+import { isExcludedImportPath } from '@taucad/ui-core/utils/file-reader.utils';
+import { projectUrl } from '@taucad/files-ui/utils/project-url.utils';
+import { useProjectSlugs } from '#hooks/use-project-slug-route.js';
+import { useSearchParameter } from '#hooks/use-search-parameter.js';
+import { flagParameter } from '@taucad/ui-core/utils/search-parameter.codecs';
+import { desktopBridge } from '@taucad/files-ui/filesystem/desktop-bridge';
+import { largeObjectThresholdBytes, RevisionPortError } from '@taucad/revisions';
+import { idPrefix } from '@taucad/types/constants';
+import { generatePrefixedId } from '@taucad/utils/id';
+import { workbenchPaths } from '@taucad/workbench';
+import { GithubRepositoryPicker, useGithubConnectionAvailable } from '#components/github/github-repository-picker.js';
+import type { GithubRepositorySelection } from '#components/github/github-repository-picker.js';
+import {
+  linkedProjectData,
+  linkedSetupManifest,
+  prepareLinkedGithubImport,
+  readLinkedGithubManifest,
+} from '#lib/github-linked-import.js';
+import { GithubRequestError } from '#lib/github-connections.js';
+import { githubNoreplyAuthor, githubProjectBinding } from '@taucad/ui-core/lib/github-project-binding';
+import { shareOrigin } from '#lib/share-origin.js';
 
 export const handle: Handle = {
-  enableOverflowY: true,
+  title: 'Import',
 };
 
-export function meta({ loaderData }: Route.MetaArgs): MetaDescriptor[] {
-  const repo = `${loaderData.owner}/${loaderData.repo} ${loaderData.ref === 'main' ? '' : `@ ${loaderData.ref}`}`;
-  const title = `Import ${repo} from GitHub into Tau`;
-  const description = `Get started with ${repo} by importing it into Tau.`;
+const readSplatPath = (params: Record<string, string | undefined>): string => params['*'] ?? '';
+
+/** Compare import URLs across the protocol spellings `/import/*` accepts. */
+const normalizeImportUrl = (url: string): string =>
+  url
+    .replace('/import/https%3A%2F%2Fgithub.com/', '/import/github.com/')
+    .replace('/import/https%3A//github.com/', '/import/github.com/')
+    .replace('/import/https://github.com/', '/import/github.com/')
+    .replace('/import/https:/github.com/', '/import/github.com/');
+
+const linkedSetupBranch = (repositoryName: string): string => {
+  const slug = repositoryName
+    .normalize('NFKC')
+    .replaceAll(/[^\p{L}\p{N}._-]+/gu, '-')
+    .replaceAll(/^[.-]+|[.-]+$/gu, '')
+    .slice(0, 220);
+  return `tau/${slug || 'project'}`;
+};
+
+/**
+ * Derived from the URL, never from loader data: a `clientLoader` route has no
+ * data during the server render, so reading `loaderData` here would cost the
+ * per-repository title on exactly the cold external-link arrival that needs it.
+ *
+ * @param args - React Router meta arguments.
+ * @returns The document meta descriptors.
+ */
+export function meta({ params, location }: Route.MetaArgs): MetaDescriptor[] {
+  const target = resolveGitHubImportTarget(readSplatPath(params), location.search);
+  if (!target?.owner) {
+    return [{ title: 'Import · Tau' }];
+  }
+
+  const { title, description } = describeGitHubImport(target);
   return [{ title, description }];
 }
 
@@ -45,91 +121,341 @@ export function meta({ loaderData }: Route.MetaArgs): MetaDescriptor[] {
  * Handles path-based GitHub URLs like:
  * - /import/https://github.com/owner/repo
  * - /import/https://github.com/owner/repo?ref=main&main=file.scad
+ *
+ * A `clientLoader`, not a `loader`: this is pure URL parsing with no I/O, and
+ * React Router SPA mode (`ui:build:desktop`) bans server `loader` exports.
  */
 // oxlint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- inferred type
-export function loader({ request, params }: Route.LoaderArgs) {
-  const url = new URL(request.url);
-  const splatPath = (params as { '*'?: string })['*'] ?? '';
-
-  const ref = url.searchParams.get('ref') ?? 'main';
-  const mainFile = url.searchParams.get('main') ?? '';
-
-  // If no splat path, return defaults for entering details state
-  if (!splatPath) {
-    return {
-      owner: '',
-      repo: '',
-      ref: 'main',
-      mainFile: '',
-    } satisfies GitHubRepoInfo;
-  }
-
-  // Normalize the GitHub URL from the path
-  const repoUrl = normalizeGitHubUrl(splatPath);
-
-  const parsed = parseGitHubUrl(repoUrl);
-  if (!parsed) {
-    throw new Error('Invalid GitHub URL. Only github.com repositories are supported.');
-  }
-
-  return {
-    owner: parsed.owner,
-    repo: parsed.repo,
-    ref,
-    mainFile,
-  } satisfies GitHubRepoInfo;
+export function clientLoader({ url, params }: Route.ClientLoaderArgs) {
+  /* An address that is not a GitHub repository opens the form holding it, never the crash page. */
+  return resolveImportRoute(readSplatPath(params), url.search);
 }
 
 type ImportMode = 'github' | 'disk';
 
+/** The workbench layout an exported Tau project carries; one that does is not seeded another. */
+const workbenchLayoutPath = workbenchPaths.layout;
+
+/** Bytes the review's preview reads of a disk import, decoded in the worker on request. */
+const previewByteBudget = 32 * 1024 * 1024;
+
+/* A refusal the person can only answer with a smaller repository: retrying the same branch cannot succeed. */
+const tooLargeReasons: ReadonlySet<string> = new Set([
+  'archiveTooLarge',
+  'expandedTooLarge',
+  'fileTooLarge',
+  'ratioTooHigh',
+  'tooManyEntries',
+]);
+
+const failureOf = (error: Error | undefined): ImportGitHubError['failure'] | undefined =>
+  error instanceof ImportGitHubError ? error.failure : undefined;
+
+/** What to do when the repository could not be opened; only a missing repository is an address problem. */
+const repositoryUnavailableAdvice = (error: Error | undefined, canChooseFromAccount: boolean): string => {
+  const fromAccount = canChooseFromAccount ? ', or choose a repository from your GitHub account' : '';
+  switch (failureOf(error)) {
+    case 'rateLimited': {
+      return `GitHub’s limit for public reads was reached. Try again in a few minutes${fromAccount}.`;
+    }
+    case 'failed': {
+      return 'Tau couldn’t read it from GitHub. Try again shortly.';
+    }
+    default: {
+      return canChooseFromAccount
+        ? 'Check the public repository address or choose a repository from your GitHub account.'
+        : 'Check the public repository address.';
+    }
+  }
+};
+
+type LinkedImportRefusal = Readonly<{
+  title: string;
+  message: string;
+  /** The one control that fixes the cause, when the review's own controls cannot (R23). */
+  action?: Readonly<{ label: string; recovery: 'chooseRepository' | 'connectGithub' }>;
+}>;
+
+/**
+ * A deliberate refusal of *Import and link*, headlined as one (R4). Anything
+ * else stopped the import part-way and keeps the "Import interrupted" recovery.
+ *
+ * @param error - What the linked import threw.
+ * @param targetBranch - The local and sync branch the import tried to create.
+ * @param selection - The reviewed repository and branch.
+ * @returns The refusal's headline and next step, or `undefined` for an interruption.
+ */
+const linkedImportRefusal = (
+  error: unknown,
+  targetBranch: string,
+  selection: GithubRepositorySelection,
+): LinkedImportRefusal | undefined => {
+  /* The account that opened the review is gone or lapsed: trying Import and link again cannot succeed (R23). */
+  if (error instanceof GithubRequestError && error.code === 'GITHUB_CONNECTION_NOT_FOUND') {
+    return {
+      title: 'GitHub account no longer connected',
+      message: `Choose ${selection.repository.fullName} again from a connected account.`,
+      action: { label: 'Choose repository again', recovery: 'chooseRepository' },
+    };
+  }
+  if (error instanceof GithubRequestError && error.code === 'GITHUB_RECONNECT_REQUIRED') {
+    return {
+      title: 'GitHub connection needs renewing',
+      message: `Connect GitHub again, then choose ${selection.repository.fullName}.`,
+      action: { label: 'Connect GitHub again', recovery: 'connectGithub' },
+    };
+  }
+  const sourceBranch = selection.branch.name;
+  /* The worker fetches a linked import, so its refusal arrives over the import channel with its code. */
+  const code =
+    error instanceof RevisionPortError ? error.code : error instanceof ImportChannelError ? error.code : undefined;
+  /* GitHub refused the credential minted for this repository: lapsed, or the grant withdrawn. */
+  if (code === 'REMOTE_REAUTHORIZATION_REQUIRED' || code === 'REMOTE_UNAUTHORIZED') {
+    return {
+      title: 'GitHub connection needs renewing',
+      message: `GitHub did not accept this account’s access to ${selection.repository.fullName}. Connect GitHub again, then choose it.`,
+      action: { label: 'Connect GitHub again', recovery: 'connectGithub' },
+    };
+  }
+  if (code === 'REMOTE_FORBIDDEN') {
+    return {
+      title: 'GitHub refused this repository',
+      message: `The connected account can no longer read ${selection.repository.fullName}. Check its access on GitHub, then choose it again.`,
+      action: { label: 'Choose repository again', recovery: 'chooseRepository' },
+    };
+  }
+  if (code === 'REMOTE_NOT_FOUND') {
+    return {
+      title: 'Repository not found on GitHub',
+      message: `${selection.repository.fullName} was removed, renamed or is no longer shared with this account. Choose the repository again.`,
+      action: { label: 'Choose repository again', recovery: 'chooseRepository' },
+    };
+  }
+  if (!(error instanceof Error) || code !== 'REMOTE_REF_CONFLICT') {
+    return undefined;
+  }
+  /* Another branch already holds the chosen name; the reviewed branch itself moving is a change, not a taken name. */
+  if (
+    targetBranch !== sourceBranch &&
+    error.message === `GitHub already has a different branch named ${targetBranch}.`
+  ) {
+    return {
+      title: 'This branch name is taken on GitHub',
+      message: 'Choose another branch name.',
+    };
+  }
+  return {
+    title: 'This repository changed on GitHub',
+    message: 'Choose the repository again to review its latest commit.',
+  };
+};
+
 // oxlint-disable-next-line complexity -- TODO: consider refactoring.
 export default function ImportRoute(): React.JSX.Element {
-  const { owner, repo, ref, mainFile } = useLoaderData<typeof loader>();
+  const { owner, repo, ref, path, mainFile, rejectedUrl } = useLoaderData<typeof clientLoader>();
+  const [arrivalRepository] = useState({ owner, repo });
   const navigate = useNavigate();
   const projectManager = useProjectManager();
+  const fileManager = useOptionalFileManager();
+  /* Both are stable per file manager; the whole context value changes with its services and settings, which would
+   * re-run every preview read that depends on the session. */
+  const whenServicesReady = fileManager?.whenServicesReady;
+  const fileManagerRef = fileManager?.fileManagerRef;
+  /* One import channel to the file-manager worker, opened on first use (W7). */
+  const importSessionRef = useRef<ImportSession | undefined>(undefined);
+  const importSession = useCallback(async (): Promise<ImportSession> => {
+    if (importSessionRef.current === undefined) {
+      if (whenServicesReady === undefined || fileManagerRef === undefined) {
+        throw new Error('The file manager is not available to import.');
+      }
+      /* The scope's wait, on the runtime's clock (row S18). */
+      await whenServicesReady();
+      const { worker } = fileManagerRef.getSnapshot().context;
+      if (worker === undefined) {
+        throw new Error('The file manager is not ready to import.');
+      }
+      importSessionRef.current = openImportSession(worker);
+    }
+    return importSessionRef.current;
+  }, [whenServicesReady, fileManagerRef]);
+  /* A linked import's run: leaving the route stops its stage in the worker, the fetch with it. */
+  const linkedImportAbortRef = useRef<AbortController | undefined>(undefined);
+  /*
+   * The desktop import grants this import holds (W7.4): let go once the
+   * project is created, the review is cancelled, another source replaces
+   * them, or the route is left. A failed create keeps them, so a retry can
+   * stage again; main lets go of the rest when the window closes.
+   */
+  const hostGrantsRef = useRef<string[]>([]);
+  /* False once the route is left: a grant that resolves after that is let go at once, never held. */
+  const routeActiveRef = useRef(true);
+  const releaseHostGrants = useCallback((grants: readonly string[]): void => {
+    const bridge = desktopBridge();
+    if (grants.length === 0 || bridge === undefined) {
+      return;
+    }
+    const release = async (): Promise<void> => {
+      try {
+        await bridge.dialog.releaseImportGrants(grants);
+      } catch {
+        /* Main lets go of them when the window closes. */
+      }
+    };
+    // async-iife: fire-and-forget -- a release is best effort; the window's close releases the rest.
+    void release();
+  }, []);
+  const holdHostGrants = useCallback(
+    (grants: readonly string[]): void => {
+      if (!routeActiveRef.current) {
+        releaseHostGrants(grants);
+        return;
+      }
+      releaseHostGrants(hostGrantsRef.current.splice(0, hostGrantsRef.current.length, ...grants));
+    },
+    [releaseHostGrants],
+  );
+  useEffect(() => {
+    routeActiveRef.current = true;
+    return () => {
+      linkedImportAbortRef.current?.abort(new Error('The import was cancelled.'));
+      importSessionRef.current?.close();
+      importSessionRef.current = undefined;
+      holdHostGrants([]);
+      routeActiveRef.current = false;
+    };
+  }, [holdHostGrants]);
+  const { projects: heldProjects, isLoading: heldProjectsLoading } = useProjects({ scope: 'all' });
+  const presentLocationError = useProjectCreationLocationError();
+  const [linkedSelection, setLinkedSelection] = useState<GithubRepositorySelection>();
+  const [linkedMainFile, setLinkedMainFile] = useState('');
+  const [linkedTargetBranch, setLinkedTargetBranch] = useState('');
+  const [linkedBusy, setLinkedBusy] = useState(false);
+  const [linkedError, setLinkedError] = useState<string>();
+  const [linkedRefusal, setLinkedRefusal] = useState<LinkedImportRefusal>();
+  const [linkedReviewBlocked, setLinkedReviewBlocked] = useState(false);
+  const [linkedSyncChats, setLinkedSyncChats] = useState(true);
+  const [connectGithub, setConnectGithub] = useState(false);
+  const githubConnectionAvailable = useGithubConnectionAvailable();
+  const branchLabelId = useId();
+  const folderLabelId = useId();
+  const folderTriggerId = useId();
+  const mainFileLabelId = useId();
+  const linkedMainFileLabelId = useId();
 
   // Track active import mode
   const [activeMode, setActiveMode] = useState<ImportMode | undefined>(undefined);
+  const [localOperation, setLocalOperation] = useState<'read' | 'extract'>('read');
+  const [repoUrlDraft, setRepoUrlDraft] = useState<string | undefined>(rejectedUrl);
+  const repoUrlInput = useRef<HTMLInputElement>(null);
+  const repoUrlHintId = useId();
 
   // Create GitHub import machine actor
   const gitHubActorRef = useActorRef(
     importGitHubMachine.provide({
       actors: {
-        createProjectActor: fromSafeAsync(async ({ input }) => {
-          const projectFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
-          for (const [path, file] of input.files) {
-            projectFiles[path] = { content: file.content };
-          }
-
-          const project = await projectManager.createProject({
-            project: {
-              name: `${input.owner}/${input.repo}`,
-              description: `Imported from GitHub: https://github.com/${input.owner}/${input.repo}`,
-              author: {
-                name: 'You',
-                avatar: '/avatar-sample.png',
-              },
-              tags: [],
-              thumbnail: '',
-              assets: {
-                mechanical: {
-                  main: input.mainFile,
-                  parameters: {},
+        /* The file-manager worker downloads the archive and plans it: the page holds paths and sizes only (D12). */
+        importWorkerActor: createCallbackLogic<ImportArchiveEvents, ImportArchiveInput>(({ sendBack, input }) => {
+          const closed = new AbortController();
+          // async-iife: bootstrap -- the plan's outcome is sent back while the actor lives.
+          void (async (): Promise<void> => {
+            try {
+              const session = await importSession();
+              const listing = await session.plan(
+                {
+                  kind: 'archive',
+                  provider: 'github',
+                  url: input.downloadUrl,
+                  name: input.name,
+                  ...(input.headers === undefined ? {} : { headers: input.headers }),
                 },
-              },
-            },
-            files: projectFiles,
-          });
-
-          return { type: 'projectCreated', projectId: project.id };
+                {
+                  root: input.root,
+                  /* The actor's end cancels the plan in the worker: its download stops, and it never becomes the plan. */
+                  signal: closed.signal,
+                  onDownload: ({ loaded, total }) => {
+                    if (!closed.signal.aborted) {
+                      sendBack({ type: 'updateDownloadProgress', loaded, total });
+                    }
+                  },
+                },
+              );
+              if (!closed.signal.aborted) {
+                sendBack({
+                  type: 'workerExtractComplete',
+                  filePaths: listing.files.map(({ path: listed }) => listed),
+                  files: [...listing.files],
+                });
+              }
+            } catch (error) {
+              if (!closed.signal.aborted) {
+                const reason = error instanceof ImportChannelError ? error.reason : undefined;
+                sendBack({
+                  type: 'workerError',
+                  message: error instanceof Error ? error.message : String(error),
+                  phase: 'download',
+                  ...(reason !== undefined && tooLargeReasons.has(reason) ? { reason: 'tooLarge' } : {}),
+                });
+              }
+            }
+          })();
+          return () => {
+            closed.abort();
+          };
         }),
-      },
+        createProjectActor: fromSafeAsync(async ({ input }) => {
+          if (isExcludedImportPath(input.mainFile)) {
+            throw new Error(
+              "That file belongs to a repository or a cache, so it can't be the main file. Choose a design file.",
+            );
+          }
+          if (!input.files.has(input.mainFile)) {
+            throw new Error(`The selected main file "${input.mainFile}" is not present in the imported files.`);
+          }
+          const name = `${input.owner}/${input.repo}`;
+          try {
+            /* The planned archive stages on the creation root and lands in the project at commit (D12). */
+            const target = await projectManager.prepareImportStaging(name);
+            const project = await createFromStagedImport({
+              session: await importSession(),
+              target,
+              operationId: generatePrefixedId(idPrefix.request),
+              owns: projectManager.ownsImportStaging,
+              create: async (staging) =>
+                projectManager.createProject({
+                  project: {
+                    name,
+                    description: `Imported from GitHub: https://github.com/${input.owner}/${input.repo}${
+                      input.path ? `/tree/${input.ref}/${input.path}` : ''
+                    }`,
+                    tags: [],
+                    assets: {
+                      main: {
+                        entryPath: input.mainFile,
+                      },
+                    },
+                  },
+                  files: {},
+                  origin: 'github',
+                  location: target.location,
+                  staging: { ...staging, carriesWorkbenchLayout: input.files.has(workbenchLayoutPath) },
+                }),
+            });
+
+            return { type: 'projectCreated', projectId: project.id };
+          } catch (error) {
+            presentLocationError(error);
+            throw error;
+          }
+        }),
+      } satisfies Partial<MachineActors<typeof importGitHubMachine>>,
     }),
     {
       input: {
+        githubClient: getGitHubClient(),
         owner,
         repo,
         ref,
+        path,
         mainFile,
       },
       inspect,
@@ -141,37 +467,62 @@ export default function ImportRoute(): React.JSX.Element {
     importDiskMachine.provide({
       actors: {
         createProjectActor: fromSafeAsync(async ({ input }) => {
-          const projectFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
-          for (const [path, file] of input.files) {
-            projectFiles[path] = { content: file.content };
+          if (!input.listing.files.some(({ path: listed }) => listed === input.mainFile)) {
+            throw new Error(`The selected main file "${input.mainFile}" is not present in the imported files.`);
           }
-
-          const project = await projectManager.createProject({
-            project: {
-              name: input.importName,
-              description: `Imported from disk`,
-              author: {
-                name: 'You',
-                avatar: '/avatar-sample.png',
+          try {
+            /* The files stage on the storage root the project is created on, then land in it at commit (D12). */
+            const target = await projectManager.prepareImportStaging(input.importName);
+            const project = await createFromStagedImport({
+              session: await importSession(),
+              target,
+              operationId: generatePrefixedId(idPrefix.request),
+              owns: projectManager.ownsImportStaging,
+              onProgress: (progress) => {
+                input.onProgress(progress.files, progress.totalFiles);
               },
-              tags: [],
-              thumbnail: '',
-              assets: {
-                mechanical: {
-                  main: input.mainFile,
-                  parameters: {},
-                },
-              },
-            },
-            files: projectFiles,
-          });
+              create: async (staging) =>
+                projectManager.createProject({
+                  project: {
+                    name: input.importName,
+                    description: `Imported from disk`,
+                    tags: [],
+                    assets: {
+                      main: {
+                        entryPath: input.mainFile,
+                      },
+                    },
+                  },
+                  files: {},
+                  origin: input.origin,
+                  location: target.location,
+                  staging: {
+                    ...staging,
+                    carriesWorkbenchLayout: input.listing.files.some(
+                      ({ path: listed }) => listed === workbenchLayoutPath,
+                    ),
+                  },
+                }),
+            });
 
-          return { type: 'projectCreated', projectId: project.id };
+            /* Staged and committed: the host's copy is done with what was chosen. */
+            holdHostGrants([]);
+            return { type: 'projectCreated', projectId: project.id };
+          } catch (error) {
+            presentLocationError(error);
+            throw error;
+          }
         }),
-      },
+      } satisfies Partial<MachineActors<typeof importDiskMachine>>,
     }),
     {
-      input: {},
+      input: {
+        plan: async (source, signal) => {
+          const session = await importSession();
+          return session.plan(source, signal === undefined ? undefined : { signal });
+        },
+        pickMainFile: findMainFile,
+      },
       inspect,
     },
   );
@@ -189,6 +540,18 @@ export default function ImportRoute(): React.JSX.Element {
   const gitHubError = useSelector(gitHubActorRef, (snapshot) => snapshot.context.error);
   const gitHubProjectId = useSelector(gitHubActorRef, (snapshot) => snapshot.context.projectId);
   const gitHubFiles = useSelector(gitHubActorRef, (snapshot) => snapshot.context.files);
+  const gitHubListing = useMemo(
+    () => [...gitHubFiles].map(([listed, file]) => ({ path: listed, size: file.size })),
+    [gitHubFiles],
+  );
+  /* The archive is planned in the file-manager worker, which reads a preview's few files from it on request. */
+  const loadGitHubPreview = useCallback(
+    async (paths: readonly string[]) => {
+      const session = await importSession();
+      return session.preview(paths, previewByteBudget);
+    },
+    [importSession],
+  );
   const gitHubSelectedMainFile = useSelector(gitHubActorRef, (snapshot) => snapshot.context.selectedMainFile);
   const requestedMainFile = useSelector(gitHubActorRef, (snapshot) => snapshot.context.requestedMainFile);
   const repoUrl = useSelector(gitHubActorRef, (snapshot) => snapshot.context.repoUrl);
@@ -198,7 +561,59 @@ export default function ImportRoute(): React.JSX.Element {
   const branches = useSelector(gitHubActorRef, (snapshot) => snapshot.context.branches);
   const selectedBranch = useSelector(gitHubActorRef, (snapshot) => snapshot.context.selectedBranch);
   const repoFiles = useSelector(gitHubActorRef, (snapshot) => snapshot.context.repoFiles);
-  const repoFilesDataSource = useMemo(() => createStaticDataSource(repoFiles), [repoFiles]);
+  const selectedFolder = useSelector(gitHubActorRef, (snapshot) => snapshot.context.path);
+  const hasRepoFolders = useMemo(() => repoFiles.some((file) => file.path.includes('/')), [repoFiles]);
+  const repoFoldersDataSource = useMemo(
+    () => createStaticDataSource(repoFiles, { shouldIncludeDirectories: true }),
+    [repoFiles],
+  );
+  /* Files under the chosen folder, relative to it: the folder becomes the project root. */
+  const folderFiles = useMemo(() => {
+    if (selectedFolder === '') {
+      return repoFiles;
+    }
+    const prefix = `${selectedFolder}/`;
+    return repoFiles
+      .filter((file) => file.path.startsWith(prefix))
+      .map((file) => ({ ...file, path: file.path.slice(prefix.length) }));
+  }, [repoFiles, selectedFolder]);
+  const repoFilesDataSource = useMemo(() => createStaticDataSource(folderFiles), [folderFiles]);
+  const linkedFilesDataSource = useMemo(
+    () =>
+      createStaticDataSource(
+        linkedSelection?.files
+          .filter(({ path }) => isMainFileCandidate(path))
+          .map(({ path, size }) => ({ path, size })) ?? [],
+      ),
+    [linkedSelection],
+  );
+  const linkedMainFileSupported = isMainFileCandidate(linkedMainFile);
+  const linkedManifest = useMemo(
+    () => (linkedSelection?.manifest === undefined ? undefined : readLinkedGithubManifest(linkedSelection.manifest)),
+    [linkedSelection],
+  );
+  // Repository bindings survive declaration edits and no longer depend on authored IDs.
+  const linkedProjectId = useMemo(
+    () =>
+      linkedSelection === undefined
+        ? undefined
+        : heldProjects.find(
+            (project) => githubProjectBinding.get(project.id)?.repositoryId === linkedSelection.repository.id,
+          )?.id,
+    [heldProjects, linkedSelection],
+  );
+  const linkedExisting = useProjectSlugs(linkedProjectId);
+  const linkedExistingBlocks =
+    heldProjectsLoading || (linkedProjectId !== undefined && linkedExisting.status !== 'not-found');
+  /* Exactly what the import's setup revision writes: an empty branch's main file, and `tau.json` unless the repository's
+   * own declares the same project, in which case its bytes are what the create commits. */
+  const linkedNeedsSetup =
+    linkedSelection !== undefined &&
+    (linkedSelection.branch.head === undefined ||
+      linkedSetupManifest(
+        linkedSelection,
+        linkedProjectData({ selection: linkedSelection, mainFile: linkedMainFile, syncChats: linkedSyncChats }),
+      ).changes);
   const isLoadingFiles = useSelector(gitHubActorRef, (snapshot) => snapshot.context.isLoadingFiles);
   const fetchErrors = useSelector(gitHubActorRef, (snapshot) => snapshot.context.fetchErrors);
   const hasMoreBranches = useSelector(gitHubActorRef, (snapshot) => snapshot.context.hasMoreBranches);
@@ -206,7 +621,37 @@ export default function ImportRoute(): React.JSX.Element {
 
   // Disk machine selectors
   const diskState = useSelector(diskActorRef, (snapshot) => snapshot);
-  const diskFiles = useSelector(diskActorRef, (snapshot) => snapshot.context.files);
+  /* A host pick starts an import only when the machine takes it; one it refuses mid-review or mid-create
+   * is let go, and the import in progress keeps its grants (W7.4). */
+  const startHostImport = useCallback(
+    (grants: readonly HostImportGrant[]): void => {
+      const event = { type: 'processHost', grants } as const;
+      const accepted = handOverHostGrants({
+        accepted: routeActiveRef.current && diskActorRef.getSnapshot().can(event),
+        incoming: grants.map(({ grant }) => grant),
+        held: hostGrantsRef.current,
+        release: releaseHostGrants,
+      });
+      if (!accepted) {
+        if (routeActiveRef.current) {
+          toast.error('Finish or cancel the current import before opening another.');
+        }
+        return;
+      }
+      setActiveMode('disk');
+      setLocalOperation('read');
+      diskActorRef.send(event);
+    },
+    [diskActorRef, releaseHostGrants],
+  );
+  const diskListing = useSelector(diskActorRef, (snapshot) => snapshot.context.listing);
+  const loadDiskPreview = useCallback(
+    async (paths: readonly string[]) => {
+      const session = await importSession();
+      return session.preview(paths, previewByteBudget);
+    },
+    [importSession],
+  );
   const diskImportName = useSelector(diskActorRef, (snapshot) => snapshot.context.importName);
   const diskSelectedMainFile = useSelector(diskActorRef, (snapshot) => snapshot.context.selectedMainFile);
   const diskProgress = useSelector(diskActorRef, (snapshot) => snapshot.context.progress);
@@ -216,10 +661,61 @@ export default function ImportRoute(): React.JSX.Element {
   // Track if this is the initial mount to avoid syncing on first render
   const isInitialMount = useRef(true);
   const location = useLocation();
+  const [isDesktopOpen, clearDesktopOpen] = useSearchParameter('desktop-open', flagParameter);
+  const currentUrl = `${location.pathname}${location.search}`;
+  /* The machine owns the import URL, so its own writes must not bounce back in
+   * through `syncLocation`: that would flip `urlFromNavigation` and swallow the
+   * history push the machine raises once a repository resolves. */
+  const machineUrl = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (!isDesktopOpen) {
+      return;
+    }
+    let active = true;
+    const consumeDesktopFiles = async (): Promise<void> => {
+      try {
+        const bridge = desktopBridge();
+        if (bridge === undefined) {
+          return;
+        }
+        const opened = await bridge.openFiles.consume();
+        if (!active) {
+          /* Consumed after this effect ended: nothing will import them, so they are let go now. */
+          releaseHostGrants(opened.map(({ grant }) => grant));
+          return;
+        }
+        if (opened.length === 0) {
+          return;
+        }
+        /* Grants, not bytes: the desktop host copies the opened files into the staging itself (W7.4). */
+        startHostImport(opened.map(({ grant, name }): HostImportGrant => ({ grant, name, kind: 'file' })));
+        clearDesktopOpen(false);
+      } catch (error) {
+        if (active) {
+          diskActorRef.send({
+            type: 'externalError',
+            error: error instanceof Error ? error : new Error(String(error)),
+          });
+        }
+      }
+    };
+    // async-iife: bootstrap -- the desktop handoff is scoped to this route lifetime.
+    void consumeDesktopFiles();
+    return () => {
+      active = false;
+    };
+  }, [clearDesktopOpen, diskActorRef, isDesktopOpen, releaseHostGrants, startHostImport]);
 
   // Sync location changes to machine (for back/forward navigation)
   // This is the single source of truth for URL → Machine state
   useEffect(() => {
+    if (machineUrl.current !== undefined && normalizeImportUrl(machineUrl.current) === normalizeImportUrl(currentUrl)) {
+      // One-shot: a later visit to the same URL is real navigation to sync.
+      machineUrl.current = undefined;
+      isInitialMount.current = false;
+      return;
+    }
     // Skip on initial mount - let the loader data initialize the machine
     if (isInitialMount.current) {
       isInitialMount.current = false;
@@ -229,6 +725,7 @@ export default function ImportRoute(): React.JSX.Element {
         owner,
         repo,
         ref,
+        path,
         mainFile,
       });
       return;
@@ -240,75 +737,58 @@ export default function ImportRoute(): React.JSX.Element {
       owner,
       repo,
       ref,
+      path,
       mainFile,
     });
-  }, [location.pathname, location.search, owner, repo, ref, mainFile, gitHubActorRef]);
+  }, [owner, repo, ref, path, mainFile, gitHubActorRef, currentUrl]);
 
-  // Listen to machine's URL events and update browser URL
+  /* Through the router, never `history.*` (D3): a raw history write left React
+   * Router's location stale, so nothing downstream of `useLocation` saw the
+   * repository the machine had just resolved. */
   useEffect(() => {
-    const subscription = gitHubActorRef.on('urlReplaced', (event) => {
-      // Normalize URLs for comparison (handle all format variants)
-      const normalizeForCompare = (url: string): string =>
-        url
-          // Remove protocol variations to compare just the path
-          .replace('/import/https%3A%2F%2Fgithub.com/', '/import/github.com/')
-          .replace('/import/https%3A//github.com/', '/import/github.com/')
-          .replace('/import/https://github.com/', '/import/github.com/')
-          .replace('/import/https:/github.com/', '/import/github.com/');
-
-      const currentUrl = globalThis.location.pathname + globalThis.location.search;
-
-      if (normalizeForCompare(currentUrl) !== normalizeForCompare(event.url)) {
-        globalThis.history.replaceState(null, '', event.url);
+    const send = (url: string, replace: boolean): void => {
+      if (normalizeImportUrl(currentUrl) === normalizeImportUrl(url)) {
+        return;
       }
+      machineUrl.current = url;
+      void navigate(url, { replace, preventScrollReset: true });
+    };
+    const replaced = gitHubActorRef.on('urlReplaced', (event) => {
+      send(event.url, true);
+    });
+    const pushed = gitHubActorRef.on('urlPushed', (event) => {
+      send(event.url, false);
     });
 
     return () => {
-      subscription.unsubscribe();
+      replaced.unsubscribe();
+      pushed.unsubscribe();
     };
-  }, [gitHubActorRef]);
+  }, [currentUrl, gitHubActorRef, navigate]);
 
+  // Navigate when GitHub project is created. The import machines carry only the
+  // `proj_` id, so the canonical URL comes from the listing once discovery has
+  // published the new directory (L1) — there is no id-addressed URL to ride.
+  const gitHubSlugs = useProjectSlugs(gitHubProjectId);
   useEffect(() => {
-    const subscription = gitHubActorRef.on('urlPushed', (event) => {
-      // Normalize URLs for comparison (handle all format variants)
-      const normalizeForCompare = (url: string): string =>
-        url
-          // Remove protocol variations to compare just the path
-          .replace('/import/https%3A%2F%2Fgithub.com/', '/import/github.com/')
-          .replace('/import/https%3A//github.com/', '/import/github.com/')
-          .replace('/import/https://github.com/', '/import/github.com/')
-          .replace('/import/https:/github.com/', '/import/github.com/');
-
-      const currentUrl = globalThis.location.pathname + globalThis.location.search;
-
-      if (normalizeForCompare(currentUrl) !== normalizeForCompare(event.url)) {
-        globalThis.history.pushState(null, '', event.url);
-      }
-    });
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, [gitHubActorRef]);
-
-  // Navigate when GitHub project is created
-  useEffect(() => {
-    if (gitHubState.matches('success') && gitHubProjectId) {
-      void navigate(`/projects/${gitHubProjectId}`);
+    if (gitHubState.matches('success') && gitHubSlugs.status === 'resolved') {
+      void navigate(projectUrl(gitHubSlugs.value));
     }
-  }, [gitHubState, gitHubProjectId, navigate]);
+  }, [gitHubState, gitHubSlugs, navigate]);
 
   // Navigate when Disk project is created
+  const diskSlugs = useProjectSlugs(diskProjectId);
   useEffect(() => {
-    if (diskState.matches('success') && diskProjectId) {
-      void navigate(`/projects/${diskProjectId}`);
+    if (diskState.matches('success') && diskSlugs.status === 'resolved') {
+      void navigate(projectUrl(diskSlugs.value));
     }
-  }, [diskState, diskProjectId, navigate]);
+  }, [diskState, diskSlugs, navigate]);
 
   // Disk import handlers
   const handleFilesSelected = useCallback(
     (files: FileList | File[]) => {
       setActiveMode('disk');
+      setLocalOperation('read');
       diskActorRef.send({ type: 'processFiles', files });
     },
     [diskActorRef],
@@ -317,6 +797,7 @@ export default function ImportRoute(): React.JSX.Element {
   const handleFolderSelected = useCallback(
     (files: FileList) => {
       setActiveMode('disk');
+      setLocalOperation('read');
       diskActorRef.send({ type: 'processFiles', files });
     },
     [diskActorRef],
@@ -325,6 +806,7 @@ export default function ImportRoute(): React.JSX.Element {
   const handleZipSelected = useCallback(
     (file: File) => {
       setActiveMode('disk');
+      setLocalOperation('extract');
       diskActorRef.send({ type: 'processZip', file });
     },
     [diskActorRef],
@@ -333,6 +815,7 @@ export default function ImportRoute(): React.JSX.Element {
   const handleDataTransfer = useCallback(
     (items: DataTransferItemList) => {
       setActiveMode('disk');
+      setLocalOperation('read');
       diskActorRef.send({ type: 'processDataTransfer', items });
     },
     [diskActorRef],
@@ -341,10 +824,174 @@ export default function ImportRoute(): React.JSX.Element {
   const handleDirectoryHandleSelected = useCallback(
     (handle: FileSystemDirectoryHandle) => {
       setActiveMode('disk');
+      setLocalOperation('read');
       diskActorRef.send({ type: 'processDirectoryHandle', handle });
     },
     [diskActorRef],
   );
+
+  /* Desktop: the native picker mints a grant, and the host copies the folder into the staging itself (W7.4). */
+  const handleHostFolderPick = useCallback(async (): Promise<void> => {
+    try {
+      const picked = await desktopBridge()?.dialog.selectImportFolder();
+      if (picked === undefined) {
+        return;
+      }
+      if (!routeActiveRef.current) {
+        /* Picked after the route was left: nothing will import it. */
+        releaseHostGrants([picked.grant]);
+        return;
+      }
+      startHostImport([{ ...picked, kind: 'directory' }]);
+    } catch (error) {
+      diskActorRef.send({ type: 'externalError', error: error instanceof Error ? error : new Error(String(error)) });
+    }
+  }, [diskActorRef, releaseHostGrants, startHostImport]);
+  const isDesktopHost = desktopBridge() !== undefined;
+
+  const reviewLinkedRepository = useCallback((selection: GithubRepositorySelection): void => {
+    const manifest = selection.manifest === undefined ? undefined : readLinkedGithubManifest(selection.manifest);
+    const paths = selection.files.map((file) => file.path);
+    const supportedPaths = paths.filter((path) => isMainFileCandidate(path));
+    const manifestMain = manifest?.success === true ? manifest.data.assets.main?.entryPath : undefined;
+    const unsupportedLargeBlob = selection.files.find((file) => file.size >= largeObjectThresholdBytes);
+    setLinkedSelection(selection);
+    setLinkedMainFile(
+      manifestMain !== undefined && supportedPaths.includes(manifestMain)
+        ? manifestMain
+        : (findMainFile(supportedPaths) ?? (paths.length === 0 ? 'main.scad' : '')),
+    );
+    setLinkedTargetBranch(
+      manifest?.success === true ? selection.branch.name : linkedSetupBranch(selection.repository.name),
+    );
+    setLinkedSyncChats(manifest?.success === true ? manifest.data.syncChats !== false : true);
+    setLinkedReviewBlocked(manifest?.success === false || unsupportedLargeBlob !== undefined);
+    setLinkedRefusal(undefined);
+    setLinkedError(
+      manifest?.success === false
+        ? 'This repository has an invalid tau.json. Fix or remove it before importing as a linked project.'
+        : unsupportedLargeBlob === undefined
+          ? undefined
+          : `${unsupportedLargeBlob.path} is a large ordinary Git blob. Track it with Git LFS in GitHub before importing so Tau can preserve repository identity.`,
+    );
+  }, []);
+
+  const importLinkedRepository = useCallback(async (): Promise<void> => {
+    if (linkedSelection === undefined || linkedMainFile === '' || linkedTargetBranch.trim() === '') {
+      return;
+    }
+    setLinkedBusy(true);
+    setLinkedError(undefined);
+    setLinkedRefusal(undefined);
+    try {
+      await withNamedLock(`tau:github-import:${String(linkedSelection.repository.id)}`, async () => {
+        const held = await projectManager.getProjects({ includeDeleted: true });
+        const existing = held.find(
+          (project) => githubProjectBinding.get(project.projectId)?.repositoryId === linkedSelection.repository.id,
+        );
+        if (existing !== undefined) {
+          if (existing.library.deletedAt !== undefined) {
+            throw new Error('Restore this project from Trash before opening it.');
+          }
+          if (existing.slugs === undefined) {
+            throw new Error('Reconnect this project’s workspace before opening it.');
+          }
+          await navigate(projectUrl(existing.slugs));
+          return;
+        }
+        const projectId = generatePrefixedId(idPrefix.project);
+        const projectData = linkedProjectData({
+          selection: linkedSelection,
+          mainFile: linkedMainFile,
+          syncChats: linkedSyncChats,
+        });
+        /* The bytes the create commits as `tau.json`: the setup revision records exactly these, so the project opens clean
+         * (a repository whose own `tau.json` declares the same project keeps its bytes, with no setup change for it). */
+        const manifest = linkedSetupManifest(linkedSelection, projectData);
+        const prepared = await prepareLinkedGithubImport({
+          selection: linkedSelection,
+          targetBranch: linkedTargetBranch,
+          manifest: manifest.bytes,
+          mainFile: linkedMainFile,
+        });
+        /* The worker fetches the branch into the staging and stages its tree; the page holds none of it (D12, I6). */
+        const target = await projectManager.prepareImportStaging(projectData.name);
+        linkedImportAbortRef.current = new AbortController();
+        const created = await createFromStagedImport({
+          signal: linkedImportAbortRef.current.signal,
+          session: await importSession(),
+          target,
+          operationId: generatePrefixedId(idPrefix.request),
+          owns: projectManager.ownsImportStaging,
+          linked: prepared.request,
+          create: async (staging) =>
+            projectManager.createProject({
+              id: projectId,
+              project: projectData,
+              files: {},
+              chat: false,
+              location: target.location,
+              staging: {
+                ...staging,
+                carriesWorkbenchLayout: linkedSelection.files.some(
+                  ({ path: listed }) => listed === workbenchLayoutPath,
+                ),
+                manifestBytes: manifest.bytes,
+              },
+            }),
+        });
+        githubProjectBinding.set(created.id, {
+          connectionId: linkedSelection.connection.id,
+          repositoryId: linkedSelection.repository.id,
+          repositoryUrl: linkedSelection.repository.cloneUrl,
+          generation: prepared.generation,
+          author: githubNoreplyAuthor(linkedSelection.connection.subject, linkedSelection.connection.login),
+        });
+        /* Busy until the route leaves: the listing now holds the project this import
+         * just wrote, and the review must not call it "already a project" (R12). */
+        await navigate(projectUrl(created.slugs));
+      });
+    } catch (error) {
+      presentLocationError(error);
+      setLinkedRefusal(linkedImportRefusal(error, linkedTargetBranch, linkedSelection));
+      setLinkedError(error instanceof Error ? error.message : 'The linked project could not be imported.');
+      setLinkedBusy(false);
+    }
+  }, [
+    importSession,
+    linkedMainFile,
+    linkedSelection,
+    linkedSyncChats,
+    linkedTargetBranch,
+    navigate,
+    presentLocationError,
+    projectManager,
+  ]);
+
+  const publicRepoUrl = repoUrlDraft ?? repoUrl;
+  const canReviewRepository = parseGitHubUrl(normalizeGitHubUrl(publicRepoUrl.trim())) !== undefined;
+  const isRepoUrlRejected = publicRepoUrl.trim() !== '' && !canReviewRepository;
+  /* Leaving the linked review remounts the picker, which lists the accounts still connected. */
+  const leaveLinkedReview = (): void => {
+    setLinkedSelection(undefined);
+    requestAnimationFrame(() => repoUrlInput.current?.focus());
+  };
+  const handleConnectRequest = useCallback((): void => {
+    setConnectGithub(false);
+  }, []);
+  const cancelRepositoryReview = (): void => {
+    setRepoUrlDraft(repoUrl);
+    setLinkedSelection(undefined);
+    setActiveMode(undefined);
+    gitHubActorRef.send({ type: 'updateRepoUrl', url: '' });
+    requestAnimationFrame(() => repoUrlInput.current?.focus());
+  };
+  const reviewPublicRepository = (): void => {
+    if (canReviewRepository) {
+      setActiveMode('github');
+      gitHubActorRef.send({ type: 'updateRepoUrl', url: normalizeGitHubUrl(publicRepoUrl.trim()) });
+    }
+  };
 
   // Determine if disk import is active
   const isDiskActive =
@@ -352,6 +999,7 @@ export default function ImportRoute(): React.JSX.Element {
     diskState.matches('reading') ||
     diskState.matches('readingDataTransfer') ||
     diskState.matches('readingDirectoryHandle') ||
+    diskState.matches('readingHost') ||
     diskState.matches('extracting') ||
     diskState.matches('selectingMainFile') ||
     diskState.matches('creating');
@@ -360,11 +1008,11 @@ export default function ImportRoute(): React.JSX.Element {
   if (isDiskActive && diskState.matches('selectingMainFile')) {
     return (
       <ImportMainFileView
-        title='Review Import'
+        title='Review import'
         subtitle={diskImportName}
-        files={diskFiles}
+        files={diskListing.files}
+        loadPreview={loadDiskPreview}
         selectedMainFile={diskSelectedMainFile}
-        variant='disk'
         repo={diskImportName}
         onSelectMainFile={(file) => {
           diskActorRef.send({ type: 'selectMainFile', file });
@@ -374,6 +1022,7 @@ export default function ImportRoute(): React.JSX.Element {
         }}
         onCancel={() => {
           diskActorRef.send({ type: 'reset' });
+          holdHostGrants([]);
           setActiveMode(undefined);
         }}
       />
@@ -386,30 +1035,30 @@ export default function ImportRoute(): React.JSX.Element {
     (diskState.matches('reading') ||
       diskState.matches('readingDataTransfer') ||
       diskState.matches('readingDirectoryHandle') ||
+      diskState.matches('readingHost') ||
       diskState.matches('extracting') ||
       diskState.matches('creating'))
   ) {
     const isReading =
       diskState.matches('reading') ||
       diskState.matches('readingDataTransfer') ||
-      diskState.matches('readingDirectoryHandle');
-    const isExtracting = diskState.matches('extracting');
+      diskState.matches('readingDirectoryHandle') ||
+      diskState.matches('readingHost');
     const isCreating = diskState.matches('creating');
-
-    const title = isReading ? 'Reading Files' : isExtracting ? 'Extracting ZIP' : 'Creating Project';
-    const statusText = isReading ? 'Reading files...' : isExtracting ? 'Extracting files...' : 'Creating project...';
 
     return (
       <ImportProcessingView
-        title={title}
-        statusText={statusText}
+        title={diskImportName}
+        phase={isReading ? 'read' : isCreating ? 'create' : 'extract'}
+        source='local'
+        localOperation={localOperation}
         progress={diskProgress}
-        variant='disk'
         onCancel={
           isCreating
             ? undefined
             : () => {
                 diskActorRef.send({ type: 'reset' });
+                holdHostGrants([]);
                 setActiveMode(undefined);
               }
         }
@@ -430,6 +1079,10 @@ export default function ImportRoute(): React.JSX.Element {
     );
   }
 
+  if (isDiskActive && diskState.matches('success')) {
+    return <ImportProcessingView isComplete title={diskImportName} source='local' phase='create' />;
+  }
+
   // GitHub import flow (existing logic)
   switch (true) {
     case gitHubState.matches('enteringDetails') ||
@@ -442,98 +1095,63 @@ export default function ImportRoute(): React.JSX.Element {
       const isFetchingFiles = gitHubState.matches('fetchingFiles');
 
       return (
-        <div className='flex min-h-full flex-col items-center justify-start px-4 pt-6 pb-16 md:justify-center md:pt-8'>
-          <div className='w-full max-w-4xl space-y-6'>
-            <div className='flex flex-col items-center gap-4'>
-              <div className='text-center'>
-                <h1 className='text-2xl font-semibold'>Import Project</h1>
-                <p className='text-sm text-muted-foreground'>Import from GitHub or upload from your computer</p>
+        <PageContent className='space-y-6'>
+          <PageHeader title='Import' />
+          {/* Keep the shared-link offer scoped to the repository named on arrival. */}
+          {arrivalRepository.owner.length > 0 &&
+          arrivalRepository.owner === repoOwner &&
+          arrivalRepository.repo === repoName ? (
+            <OpenInDesktop continueLabel='Import in the browser' />
+          ) : undefined}
+          {isValidRepo ? (
+            <section aria-labelledby='review-repository' className='space-y-6 border-t pt-6'>
+              <div className='space-y-1'>
+                <Heading level={2} variant='item' id='review-repository'>
+                  Review repository
+                </Heading>
+                <p className='text-sm text-muted-foreground'>A copy of the chosen branch is added to your projects.</p>
               </div>
-            </div>
-
-            {/* Side-by-side cards when no valid repo */}
-            {isValidRepo ? (
-              <div className='space-y-4'>
-                {/* Repository URL Input */}
-                <div className='space-y-2 rounded-lg border bg-sidebar p-6'>
-                  <label htmlFor='repo-url' className='text-sm font-medium'>
-                    Repository URL
-                  </label>
-                  <div className='group relative'>
-                    <Input
-                      id='repo-url'
-                      type='url'
-                      placeholder='https://github.com/owner/repo'
-                      value={repoUrl}
-                      className='pr-8 font-mono text-sm'
-                      onChange={(event) => {
-                        gitHubActorRef.send({ type: 'updateRepoUrl', url: event.target.value });
-                      }}
-                    />
-                    {repoUrl.length > 0 ? (
-                      <Button
-                        variant='secondary'
-                        size='icon'
-                        className='absolute top-1/2 right-1.5 size-5 -translate-y-1/2 bg-neutral/10 p-0 text-muted-foreground hover:text-foreground'
-                        type='button'
-                        aria-label='Clear URL'
-                        onClick={() => {
-                          gitHubActorRef.send({ type: 'updateRepoUrl', url: '' });
-                        }}
-                      >
-                        <X className='size-3.5' />
-                      </Button>
-                    ) : undefined}
-                  </div>
+              {!isCheckingOrFetching && !repoMetadata ? (
+                <PageNotice
+                  title='Couldn’t open this repository'
+                  message={repositoryUnavailableAdvice(gitHubError, githubConnectionAvailable !== false)}
+                  detail={gitHubError?.message ?? "Tau couldn't find a public repository at this address."}
+                >
+                  {githubConnectionAvailable === false ? undefined : (
+                    <Button
+                      variant='outline'
+                      className='h-auto min-h-8 whitespace-normal'
+                      onClick={cancelRepositoryReview}
+                    >
+                      Choose a private repository from GitHub
+                    </Button>
+                  )}
+                </PageNotice>
+              ) : undefined}
+              <div className='grid gap-x-8 gap-y-5 md:grid-cols-[12rem_minmax(0,1fr)]'>
+                <span className='text-sm font-medium'>Repository</span>
+                <div className='min-w-0 space-y-4'>
+                  <RepositoryCard
+                    metadata={repoMetadata}
+                    owner={repoOwner}
+                    repo={repoName}
+                    isLoading={isCheckingOrFetching}
+                  />
+                  {!isCheckingOrFetching && repoMetadata?.isPrivate ? (
+                    <p className='text-sm text-muted-foreground'>
+                      This is a private repository. Make sure you have access permissions to import it.
+                    </p>
+                  ) : undefined}
                 </div>
-
-                <RepositoryCard
-                  metadata={repoMetadata}
-                  owner={repoOwner}
-                  repo={repoName}
-                  isLoading={isCheckingOrFetching}
-                />
-
-                {/* Validation Feedback */}
-                {!isCheckingOrFetching && !repoMetadata ? (
-                  <div className='flex items-start gap-3 rounded-lg border border-warning/50 bg-warning/10 p-4 text-warning'>
-                    <AlertCircle className='size-5 shrink-0' />
-                    <div className='flex flex-col gap-1'>
-                      <div className='font-semibold'>Repository Not Found</div>
-                      <div className='text-sm'>
-                        The repository may not exist, be private, or you may not have access to it. Please check the URL
-                        and try again.
-                      </div>
-                    </div>
-                  </div>
-                ) : undefined}
-
-                {!isCheckingOrFetching && repoMetadata?.isPrivate ? (
-                  <div className='border-info/50 bg-info/10 text-info flex items-start gap-3 rounded-lg border p-4'>
-                    <AlertCircle className='size-5 shrink-0' />
-                    <div className='flex flex-col gap-1'>
-                      <div className='font-semibold'>Private Repository</div>
-                      <div className='text-sm'>
-                        This is a private repository. Make sure you have access permissions to import it.
-                      </div>
-                    </div>
-                  </div>
-                ) : undefined}
-
-                {/* Branch & Main File Selectors - Show grid when we have data or errors */}
-                {repoMetadata &&
-                !isCheckingOrFetching &&
-                (branches.length > 0 ||
-                  repoFiles.length > 0 ||
-                  isLoadingFiles ||
-                  fetchErrors.branches !== undefined ||
-                  fetchErrors.files !== undefined) ? (
-                  <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
-                    {/* Branch Selector or Error */}
-                    {branches.length > 0 ? (
-                      <div className='space-y-2 rounded-lg border bg-sidebar p-6'>
-                        <label className='text-sm font-medium'>Branch</label>
+                {repoMetadata && !isCheckingOrFetching ? (
+                  <>
+                    <span id={branchLabelId} className='text-sm font-medium'>
+                      Branch
+                    </span>
+                    <div className='max-w-sm'>
+                      {branches.length > 0 ? (
                         <BranchSelector
+                          labelId={branchLabelId}
                           branches={branches}
                           selectedBranch={selectedBranch}
                           isLoadingMore={isLoadingMoreBranches}
@@ -548,163 +1166,391 @@ export default function ImportRoute(): React.JSX.Element {
                               : undefined
                           }
                         />
-                      </div>
-                    ) : fetchErrors.branches ? (
-                      <div className='flex items-start gap-3 rounded-lg border border-warning/50 bg-warning/10 p-4 text-warning'>
-                        <AlertCircle className='size-5 shrink-0' />
-                        <div className='flex flex-col gap-1'>
-                          <div className='text-sm font-medium'>Could not fetch branches</div>
-                          <div className='text-xs opacity-80'>
-                            Import will use the <span className='font-semibold'>{selectedBranch}</span> branch.
-                          </div>
-                        </div>
-                      </div>
-                    ) : undefined}
-
-                    {/* Main File Selector or Error */}
-                    {repoFiles.length > 0 || isLoadingFiles ? (
-                      <div className='space-y-2 rounded-lg border bg-sidebar p-6'>
-                        <label className='text-sm font-medium'>Main File</label>
+                      ) : failureOf(fetchErrors.branches) === 'serverNotConfigured' ? (
+                        <p role='status' className='text-sm'>
+                          This server isn’t set up to list branches, so import will use the{' '}
+                          <span className='font-mono'>{selectedBranch}</span> branch. Its administrator can enable
+                          branch listing with <span className='font-mono'>GITHUB_API_TOKEN</span>.
+                        </p>
+                      ) : fetchErrors.branches ? (
+                        <p role='status' className='text-sm'>
+                          Couldn’t list branches. Import will use the{' '}
+                          <span className='font-mono'>{selectedBranch}</span> branch.
+                        </p>
+                      ) : (
+                        <p className='font-mono text-sm'>{selectedBranch}</p>
+                      )}
+                    </div>
+                    <span id={folderLabelId} className='text-sm font-medium'>
+                      Folder
+                    </span>
+                    <div className='max-w-sm'>
+                      {hasRepoFolders ? (
+                        <FileSelector
+                          shouldShowDirectoriesOnly
+                          id={folderTriggerId}
+                          aria-labelledby={`${folderLabelId} ${folderTriggerId}`}
+                          dataSource={repoFoldersDataSource}
+                          selectedFile={selectedFolder}
+                          rootLabel='Whole repository'
+                          isDisabled={isLoadingFiles}
+                          placeholder='Whole repository'
+                          title='Select folder'
+                          description='Import the whole repository or one of its folders'
+                          searchPlaceholder='Search folders…'
+                          emptyMessage='No folders found'
+                          onSelect={(folder) => {
+                            gitHubActorRef.send({ type: 'selectFolder', path: folder });
+                          }}
+                        />
+                      ) : (
+                        <p className='font-mono text-sm'>{selectedFolder || 'Whole repository'}</p>
+                      )}
+                    </div>
+                    <span id={mainFileLabelId} className='text-sm font-medium'>
+                      Main file
+                    </span>
+                    <div role='group' aria-labelledby={mainFileLabelId} className='max-w-sm space-y-2'>
+                      {folderFiles.length > 0 || isLoadingFiles ? (
                         <FileSelector
                           dataSource={repoFilesDataSource}
                           selectedFile={gitHubSelectedMainFile}
                           isLoading={isLoadingFiles}
-                          popoverProperties={{
-                            side: 'top',
-                          }}
+                          placeholder='Select main file…'
+                          title='Select main file'
+                          description='Choose the main entry path for your project'
+                          emptyMessage='No files found'
                           onSelect={(file) => {
                             gitHubActorRef.send({ type: 'selectMainFile', file });
                           }}
                         />
-                      </div>
-                    ) : fetchErrors.files ? (
-                      <div className='flex items-start gap-3 rounded-lg border border-warning/50 bg-warning/10 p-4 text-warning'>
-                        <AlertCircle className='size-5 shrink-0' />
-                        <div className='flex flex-col gap-1'>
-                          <div className='text-sm font-medium'>Could not list files</div>
-                          <div className='text-xs opacity-80'>You can still proceed with the import.</div>
-                        </div>
-                      </div>
-                    ) : undefined}
-                  </div>
+                      ) : (
+                        <p className='text-sm text-muted-foreground'>
+                          {fetchErrors.files
+                            ? 'Could not list files. You can choose a main file after download.'
+                            : 'You can choose a main file after download.'}
+                        </p>
+                      )}
+                      {gitHubSelectedMainFile ? (
+                        <p className='font-mono text-xs break-all text-muted-foreground'>{gitHubSelectedMainFile}</p>
+                      ) : undefined}
+                    </div>
+                  </>
                 ) : undefined}
-
-                {/* Start Import Button and Short Link */}
-                <div className='flex gap-2'>
+                <span aria-hidden className='max-md:hidden' />
+                <div className='flex flex-wrap items-center gap-2'>
                   <Button
-                    className='flex-1'
-                    size='lg'
                     disabled={isCheckingOrFetching || isFetchingFiles || !repoMetadata}
                     onClick={() => {
                       setActiveMode('github');
                       gitHubActorRef.send({ type: 'startImport' });
                     }}
                   >
-                    Start Import
+                    Start import
                   </Button>
                   <CopyButton
                     size='icon'
-                    className='size-11'
                     variant='outline'
                     tooltip='Copy short link'
                     readyToCopyText=''
                     copiedText=''
                     getText={() => {
-                      // Build short URL with /i instead of /import
-                      // Use repoUrl from machine context (not browser URL) to avoid https:/ normalization
                       const parameters = new URLSearchParams();
-
                       if (selectedBranch && selectedBranch !== 'main') {
                         parameters.set('ref', selectedBranch);
                       }
-
+                      if (selectedFolder) {
+                        parameters.set('path', selectedFolder);
+                      }
                       const queryString = parameters.size > 0 ? `?${parameters.toString()}` : '';
-
-                      return `${globalThis.location.origin}/i/${repoUrl}${queryString}`;
+                      return `${shareOrigin()}/i/${repoUrl}${queryString}`;
                     }}
                   />
+                  <Button variant='ghost' onClick={cancelRepositoryReview}>
+                    Cancel
+                  </Button>
                 </div>
               </div>
-            ) : (
-              <>
-                <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
-                  {/* GitHub Import Card */}
-                  <div className='space-y-2 rounded-lg border bg-sidebar p-6'>
-                    <div className='mb-4 flex items-center gap-3'>
-                      <div className='flex size-10 items-center justify-center rounded-full bg-linear-to-br from-primary/20 to-primary/10'>
-                        <SvgIcon id='github' className='size-5 text-primary' />
-                      </div>
-                      <div>
-                        <h2 className='font-medium'>Import from GitHub</h2>
-                        <p className='text-xs text-muted-foreground'>Enter a repository URL</p>
-                      </div>
-                    </div>
-
-                    <div className='group relative'>
+            </section>
+          ) : linkedSelection === undefined ? (
+            <>
+              <div className='grid gap-8 border-t pt-6 md:grid-cols-2'>
+                <section className='min-w-0 space-y-5'>
+                  <div className='space-y-1'>
+                    <Heading level={2} variant='item'>
+                      GitHub repository
+                    </Heading>
+                    <p className='text-sm text-muted-foreground'>
+                      {githubConnectionAvailable === false
+                        ? 'Import a copy of a public repository.'
+                        : 'Link a repository or import a public copy.'}
+                    </p>
+                  </div>
+                  <GithubRepositoryPicker
+                    actionLabel='Review import'
+                    shouldConnect={connectGithub}
+                    onConnectRequestHandled={handleConnectRequest}
+                    onSelect={reviewLinkedRepository}
+                  />
+                  <form
+                    className='space-y-2 pt-1'
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      reviewPublicRepository();
+                    }}
+                  >
+                    <label htmlFor='repo-url' className='block text-sm font-medium'>
+                      Public repository URL
+                    </label>
+                    <div className='relative'>
                       <Input
+                        ref={repoUrlInput}
                         id='repo-url'
-                        type='url'
+                        type='text'
+                        inputMode='url'
+                        autoComplete='off'
+                        spellCheck={false}
                         placeholder='https://github.com/owner/repo'
-                        value={repoUrl}
+                        value={publicRepoUrl}
+                        aria-describedby={repoUrlHintId}
+                        aria-invalid={isRepoUrlRejected}
                         className='pr-8 font-mono text-sm'
                         onChange={(event) => {
-                          setActiveMode('github');
-                          gitHubActorRef.send({ type: 'updateRepoUrl', url: event.target.value });
+                          setRepoUrlDraft(event.target.value);
                         }}
                       />
-                      {repoUrl.length > 0 ? (
+                      {publicRepoUrl.length > 0 ? (
                         <Button
-                          variant='secondary'
-                          size='icon'
-                          className='absolute top-1/2 right-1.5 size-5 -translate-y-1/2 bg-neutral/10 p-0 text-muted-foreground hover:text-foreground'
+                          variant='ghost'
+                          size='icon-xs'
+                          className='absolute top-1/2 right-1 -translate-y-1/2'
                           type='button'
                           aria-label='Clear URL'
                           onClick={() => {
+                            setRepoUrlDraft('');
                             gitHubActorRef.send({ type: 'updateRepoUrl', url: '' });
+                            repoUrlInput.current?.focus();
                           }}
                         >
                           <X className='size-3.5' />
                         </Button>
                       ) : undefined}
                     </div>
-                  </div>
-
-                  {/* Disk Upload Card */}
-                  <UploadCard
-                    onDataTransfer={handleDataTransfer}
-                    onDirectoryHandleSelected={handleDirectoryHandleSelected}
-                    onFilesSelected={handleFilesSelected}
-                    onFolderSelected={handleFolderSelected}
-                    onZipSelected={handleZipSelected}
-                  />
-                </div>
-
-                <SuggestedClones
-                  onSelect={(repository) => {
-                    setActiveMode('github');
-                    // Use github.com without protocol to avoid browser normalizing // to /
-                    const repoUrlValue = `github.com/${repository.owner}/${repository.repo}`;
-                    const parameters = new URLSearchParams();
-
-                    if (repository.ref !== 'main') {
-                      parameters.set('ref', repository.ref);
-                    }
-
-                    if (repository.mainFile) {
-                      parameters.set('main', repository.mainFile);
-                    }
-
-                    const queryString = parameters.size > 0 ? `?${parameters.toString()}` : '';
-                    const targetUrl = `/import/${repoUrlValue}${queryString}`;
-
-                    // Use React Router navigate for proper history management
-                    void navigate(targetUrl);
-                  }}
+                    <p id={repoUrlHintId} className='text-xs text-muted-foreground'>
+                      {isRepoUrlRejected
+                        ? 'Enter a github.com repository address, like https://github.com/owner/repo.'
+                        : 'Copies the files only. No Git history, and no backup to this repository.'}
+                    </p>
+                    <Button type='submit' variant='outline' disabled={!canReviewRepository}>
+                      Review repository
+                      <ArrowRight />
+                    </Button>
+                  </form>
+                </section>
+                <UploadCard
+                  onDataTransfer={handleDataTransfer}
+                  onDirectoryHandleSelected={handleDirectoryHandleSelected}
+                  {...(isDesktopHost
+                    ? {
+                        onPickHostFolder: () => {
+                          void handleHostFolderPick();
+                        },
+                      }
+                    : {})}
+                  onFilesSelected={handleFilesSelected}
+                  onFolderSelected={handleFolderSelected}
+                  onZipSelected={handleZipSelected}
                 />
-              </>
-            )}
-          </div>
-        </div>
+              </div>
+              <SuggestedClones
+                onSelect={(repository) => {
+                  setActiveMode('github');
+                  const repoUrlValue = `github.com/${repository.owner}/${repository.repo}`;
+                  const parameters = new URLSearchParams();
+                  if (repository.ref !== 'main') {
+                    parameters.set('ref', repository.ref);
+                  }
+                  if (repository.mainFile) {
+                    parameters.set('main', repository.mainFile);
+                  }
+                  const queryString = parameters.size > 0 ? `?${parameters.toString()}` : '';
+                  void navigate(`/import/${repoUrlValue}${queryString}`);
+                }}
+              />
+            </>
+          ) : (
+            <section aria-labelledby='linked-import-review' className='space-y-6 border-t pt-6'>
+              <div className='space-y-1'>
+                <Heading level={2} variant='item' id='linked-import-review'>
+                  Review linked import
+                </Heading>
+                <p className='text-sm break-all text-muted-foreground'>
+                  {linkedSelection.repository.fullName} at {linkedSelection.branch.name} ·{' '}
+                  {linkedSelection.repository.access === 'write' ? 'GitHub permits read and write access' : 'read-only'}
+                </p>
+              </div>
+              {linkedError === undefined ? undefined : (
+                <PageNotice
+                  title={
+                    linkedReviewBlocked ? 'Repository needs attention' : (linkedRefusal?.title ?? 'Import interrupted')
+                  }
+                  message={
+                    linkedReviewBlocked
+                      ? linkedManifest?.success === false
+                        ? 'Fix or remove the invalid tau.json, then choose the repository again.'
+                        : 'Track large files with Git LFS, then choose the repository again.'
+                      : (linkedRefusal?.message ??
+                        'Import and link did not finish. Review the details, then try Import and link again.')
+                  }
+                  detail={linkedError}
+                >
+                  {linkedReviewBlocked || linkedRefusal?.action === undefined ? undefined : (
+                    <Button
+                      variant='outline'
+                      size='sm'
+                      onClick={() => {
+                        setConnectGithub(linkedRefusal.action?.recovery === 'connectGithub');
+                        leaveLinkedReview();
+                      }}
+                    >
+                      {linkedRefusal.action.label}
+                    </Button>
+                  )}
+                </PageNotice>
+              )}
+              <div className='grid gap-x-8 gap-y-5 md:grid-cols-[12rem_minmax(0,1fr)]'>
+                <label
+                  id={linkedMainFileLabelId}
+                  htmlFor={linkedSelection.files.length === 0 ? 'linked-main-file' : undefined}
+                  className='text-sm font-medium'
+                >
+                  Main file
+                </label>
+                <div role='group' aria-labelledby={linkedMainFileLabelId} className='max-w-sm space-y-2'>
+                  {linkedSelection.files.length === 0 ? (
+                    <Input
+                      id='linked-main-file'
+                      value={linkedMainFile}
+                      className='font-mono text-sm'
+                      disabled={linkedBusy}
+                      onChange={(event) => {
+                        setLinkedMainFile(event.target.value);
+                      }}
+                    />
+                  ) : (
+                    <FileSelector
+                      dataSource={linkedFilesDataSource}
+                      isDisabled={linkedBusy}
+                      selectedFile={linkedMainFile}
+                      onSelect={setLinkedMainFile}
+                    />
+                  )}
+                  {linkedMainFileSupported ? undefined : (
+                    <p role='alert' className='text-sm'>
+                      Choose a supported CAD source file as the project’s main file.
+                    </p>
+                  )}
+                </div>
+                <label htmlFor='linked-target-branch' className='text-sm font-medium'>
+                  Branch name
+                </label>
+                <div className='max-w-sm space-y-2'>
+                  <Input
+                    id='linked-target-branch'
+                    value={linkedTargetBranch}
+                    className='font-mono text-sm'
+                    disabled={linkedBusy}
+                    onChange={(event) => {
+                      setLinkedTargetBranch(event.target.value);
+                      /* A refusal of the old name ("GitHub already has a different branch named …") is not about the new one. */
+                      if (!linkedReviewBlocked) {
+                        setLinkedError(undefined);
+                      }
+                    }}
+                  />
+                  <p className='text-xs text-muted-foreground'>
+                    Tau keeps the branch’s commits and files, and stays connected to this repository.
+                    {linkedSelection.repository.access === 'write'
+                      ? ' Importing doesn’t back anything up to GitHub. To back up to it, allow backups to this repository in Settings.'
+                      : ' This repository is read-only, so Tau won’t back up to it. Your history stays on this device.'}
+                  </p>
+                </div>
+                <span className='text-sm font-medium'>Chats</span>
+                <div className='flex items-center gap-2'>
+                  <Checkbox
+                    id='linked-sync-chats'
+                    checked={linkedSyncChats}
+                    disabled={linkedBusy}
+                    onCheckedChange={(checked) => {
+                      setLinkedSyncChats(checked === true);
+                    }}
+                  />
+                  <Label htmlFor='linked-sync-chats' className='text-sm leading-none font-normal'>
+                    Include chats
+                  </Label>
+                </div>
+                {/* A blocked review writes nothing, so it lists no setup change (R5). */}
+                {linkedReviewBlocked ? undefined : (
+                  <>
+                    <span className='text-sm font-medium'>Setup change</span>
+                    <dl className='grid max-w-xl gap-x-4 gap-y-1 text-xs text-muted-foreground sm:grid-cols-[auto_minmax(0,1fr)]'>
+                      <dt>Writes</dt>
+                      <dd>
+                        {linkedNeedsSetup ? (
+                          <>
+                            Add or update <span className='font-mono'>tau.json</span>
+                            {linkedSelection.files.length === 0 ? ` and create ${linkedMainFile}` : ''}, with Tau’s{' '}
+                            <span className='font-mono'>.gitignore</span> and{' '}
+                            <span className='font-mono'>.gitattributes</span> entries.
+                          </>
+                        ) : (
+                          <>
+                            Tau’s <span className='font-mono'>.gitignore</span> and{' '}
+                            <span className='font-mono'>.gitattributes</span> entries, only when missing.
+                          </>
+                        )}
+                      </dd>
+                      <dt>Commit author</dt>
+                      <dd>{linkedSelection.connection.login} using GitHub’s no-reply address.</dd>
+                      <dt>Visibility</dt>
+                      <dd>{linkedSelection.repository.visibility}</dd>
+                    </dl>
+                  </>
+                )}
+                {!linkedBusy && linkedExisting.status === 'resolved' && linkedProjectId !== undefined ? (
+                  <>
+                    <span aria-hidden className='max-md:hidden' />
+                    <div role='alert' className='flex flex-wrap items-center gap-3 text-sm'>
+                      <span>This repository is already a project on this device.</span>
+                      <Button asChild size='sm' variant='outline'>
+                        <Link to={projectUrl(linkedExisting.value)}>Open project</Link>
+                      </Button>
+                    </div>
+                  </>
+                ) : undefined}
+                <span aria-hidden className='max-md:hidden' />
+                <div className='flex flex-wrap items-center gap-2'>
+                  <Button
+                    disabled={
+                      linkedBusy ||
+                      linkedReviewBlocked ||
+                      linkedExistingBlocks ||
+                      !linkedMainFileSupported ||
+                      linkedMainFile === '' ||
+                      linkedTargetBranch.trim() === ''
+                    }
+                    onClick={importLinkedRepository}
+                  >
+                    {linkedBusy ? 'Importing and linking…' : 'Import and link'}
+                  </Button>
+                  <Button variant='ghost' disabled={linkedBusy} onClick={leaveLinkedReview}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            </section>
+          )}
+        </PageContent>
       );
     }
 
@@ -717,12 +1563,12 @@ export default function ImportRoute(): React.JSX.Element {
 
       return (
         <ImportMainFileView
-          title='Review Import'
+          title='Review import'
           subtitle={`${owner}/${repo}${ref === 'main' ? '' : ` @ ${ref}`}`}
           requestedMainFileWarning={requestedFileWarning}
-          files={gitHubFiles}
+          files={gitHubListing}
+          loadPreview={loadGitHubPreview}
           selectedMainFile={gitHubSelectedMainFile}
-          variant='github'
           owner={owner}
           repo={repo}
           onSelectMainFile={(file) => {
@@ -744,6 +1590,13 @@ export default function ImportRoute(): React.JSX.Element {
       return (
         <ImportErrorView
           error={gitHubError}
+          {...(failureOf(gitHubError) === 'tooLarge'
+            ? {
+                title: 'Repository too large',
+                message:
+                  'This repository exceeds the size limit for GitHub imports. Import one of its folders, choose a smaller branch, or download the repository and import the files you need from your computer.',
+              }
+            : {})}
           onRetry={() => {
             gitHubActorRef.send({ type: 'retry' });
           }}
@@ -753,122 +1606,27 @@ export default function ImportRoute(): React.JSX.Element {
 
     default: {
       return (
-        <div className='flex min-h-full flex-col items-center justify-start px-4 pt-6 pb-16 md:justify-center md:pt-8'>
-          <div className='w-full max-w-2xl space-y-6'>
-            <div className='flex flex-col items-center gap-4'>
-              <div className='flex size-16 items-center justify-center rounded-full bg-linear-to-br from-primary/20 to-primary/10'>
-                <SvgIcon id='github' className='size-8 text-primary' />
-              </div>
-
-              <div className='text-center'>
-                <h1 className='text-2xl font-semibold'>Importing Repository</h1>
-                <p className='text-sm text-muted-foreground'>
-                  {repoOwner}/{repoName}
-                  {selectedBranch && selectedBranch !== 'main' ? ` @ ${selectedBranch}` : ''}
-                </p>
-              </div>
-            </div>
-
-            {/* Repository Preview Card (read-only) */}
-            {repoMetadata ? (
-              <RepositoryCard metadata={repoMetadata} owner={repoOwner} repo={repoName} isLoading={false} />
-            ) : undefined}
-
-            <div className='space-y-4'>
-              {/* Downloading */}
-              <div className='space-y-2'>
-                <div className='flex items-center justify-between text-sm'>
-                  <span className='flex items-center gap-2 font-medium'>
-                    {gitHubState.matches('downloading') ? (
-                      <>
-                        <Loader />
-                        <span>Downloading...</span>
-                      </>
-                    ) : (
-                      '✓ Downloaded'
-                    )}
-                  </span>
-                  {downloadProgress.loaded > 0 ? (
-                    <span className='text-muted-foreground'>
-                      {downloadProgress.total > 0
-                        ? `${formatFileSize(downloadProgress.loaded)} / ${formatFileSize(downloadProgress.total)}`
-                        : formatFileSize(downloadProgress.loaded)}
-                    </span>
-                  ) : undefined}
-                </div>
-                <Progress
-                  value={
-                    downloadProgress.total > 0 && downloadProgress.loaded > 0
-                      ? (downloadProgress.loaded / downloadProgress.total) * 100
-                      : downloadProgress.loaded > 0
-                        ? undefined
-                        : 0
-                  }
-                  className='h-2'
-                />
-              </div>
-
-              {/* Extracting */}
-              {(gitHubState.matches('downloading') || gitHubState.matches('creating')) &&
-              downloadProgress.loaded > 0 ? (
-                <div className='space-y-2'>
-                  <div className='flex items-center justify-between text-sm'>
-                    <span className='flex items-center gap-2 font-medium'>
-                      {gitHubState.matches('creating') ? (
-                        '✓ Extracted'
-                      ) : (
-                        <>
-                          <Loader />
-                          <span>Extracting files...</span>
-                        </>
-                      )}
-                    </span>
-                    {gitHubExtractProgress.total > 0 ? (
-                      <span className='text-muted-foreground'>
-                        {gitHubExtractProgress.processed} / {gitHubExtractProgress.total} files
-                      </span>
-                    ) : undefined}
-                  </div>
-                  <Progress
-                    value={
-                      gitHubExtractProgress.total > 0
-                        ? (gitHubExtractProgress.processed / gitHubExtractProgress.total) * 100
-                        : 0
-                    }
-                    className='h-2'
-                  />
-                </div>
-              ) : undefined}
-
-              {/* Creating */}
-              {gitHubState.matches('creating') ? (
-                <div className='space-y-2'>
-                  <div className='flex items-center justify-between text-sm'>
-                    <span className='flex items-center gap-2 font-medium'>
-                      <Loader />
-                      <span>Creating project...</span>
-                    </span>
-                  </div>
-                  <Progress value={100} className='h-2' />
-                </div>
-              ) : undefined}
-
-              {/* Cancel Button - show during download/extract only */}
-              {gitHubState.matches('downloading') ? (
-                <Button
-                  variant='outline'
-                  className='w-full'
-                  onClick={() => {
-                    gitHubActorRef.send({ type: 'cancelDownload' });
-                  }}
-                >
-                  <XCircle className='mr-2 size-4' />
-                  Cancel Import
-                </Button>
-              ) : undefined}
-            </div>
-          </div>
-        </div>
+        <ImportProcessingView
+          title={`${repoOwner}/${repoName}${selectedFolder ? `/${selectedFolder}` : ''}${selectedBranch && selectedBranch !== 'main' ? ` @ ${selectedBranch}` : ''}`}
+          source='github'
+          phase={
+            gitHubState.matches('creating') || gitHubState.matches('success')
+              ? 'create'
+              : gitHubExtractProgress.total > 0
+                ? 'extract'
+                : 'download'
+          }
+          isComplete={gitHubState.matches('success')}
+          downloadProgress={downloadProgress}
+          progress={gitHubExtractProgress}
+          onCancel={
+            gitHubState.matches('downloading')
+              ? () => {
+                  gitHubActorRef.send({ type: 'cancelDownload' });
+                }
+              : undefined
+          }
+        />
       );
     }
   }

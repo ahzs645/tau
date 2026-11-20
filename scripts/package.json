@@ -4,17 +4,43 @@
   "description": "Tau workspace scripts and CLI tools",
   "type": "module",
   "private": true,
+  "license": "Apache-2.0",
   "bin": {
     "repos": "./dist/repos.mjs"
   },
+  "imports": {
+    "#*.js": "./src/*.ts",
+    "#*": "./src/*"
+  },
   "dependencies": {
     "@inkjs/ui": "catalog:",
+    "@taucad/agent-host": "workspace:*",
+    "@taucad/chat": "workspace:*",
+    "@taucad/esbuild": "workspace:*",
+    "@taucad/jscad": "workspace:*",
+    "@taucad/openrscad": "workspace:*",
+    "@taucad/runtime": "workspace:*",
+    "@taucad/grammars": "workspace:*",
+    "@taucad/ui": "workspace:*",
+    "@taulabs/openrscad-engine": "catalog:",
     "ink": "catalog:",
+    "ipaddr.js": "catalog:",
     "js-yaml": "catalog:",
-    "react": "catalog:"
+    "jsdom": "catalog:",
+    "pdf-parse": "catalog:",
+    "playwright": "catalog:",
+    "react": "catalog:",
+    "remark-gfm": "catalog:",
+    "remark-parse": "catalog:",
+    "remark-stringify": "catalog:",
+    "unified": "catalog:"
   },
   "devDependencies": {
+    "@sentry/cli": "catalog:",
+    "@taucad/nx": "workspace:*",
+    "@taucad/telemetry": "workspace:*",
     "@types/js-yaml": "catalog:",
+    "@types/jsdom": "catalog:",
     "netlify-cli": "catalog:"
   }
 }

@@ -1,25 +1,18 @@
 /**
- * R19 — `RenderAbortedError.message` must reference the v6 command names
- * (`openFile` / `updateParameters`) instead of the legacy v5 command names
- * (`setFile` / `setParameters`).
- *
- * `RenderAbortedError` is internal cooperative-abort plumbing — it never
- * reaches the public client surface — but the message string is the only
- * trace surface a runtime-author sees in logs / debugger output, so it
- * must speak the same language as the public RuntimeClient API.
+ * `RenderAbortedError` is internal cooperative-abort plumbing. Its message
+ * describes the document operation instead of naming transport commands.
  *
  * @vitest-environment node
  */
 
 import { describe, expect, it } from 'vitest';
 
-import { RenderAbortedError } from '#framework/runtime-worker-client.js';
+import { RenderAbortedError } from '#framework/runtime-operation-errors.js';
 
-describe('RenderAbortedError message (R19)', () => {
-  it('references the v6 command names (openFile / updateParameters)', () => {
+describe('RenderAbortedError message', () => {
+  it('describes document-operation supersession', () => {
     const error = new RenderAbortedError();
-    expect(error.message).toMatch(/openFile/);
-    expect(error.message).toMatch(/updateParameters/);
+    expect(error.message).toBe('Render aborted by a superseding document operation');
   });
 
   it('does not reference the legacy v5 command names (setFile / setParameters)', () => {

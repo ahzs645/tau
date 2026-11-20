@@ -1,0 +1,92 @@
+/* oxlint-disable @typescript-eslint/no-unsafe-assignment -- defineKernel intentionally erases private backend context */
+import { readFileSync } from 'node:fs';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { getBounds, WebIO } from '@gltf-transform/core';
+import { createMockKernelRuntime, expectKernelProjectionOrder, validateGlbData } from '@taucad/runtime-testing';
+import { resolveRuntimePluginDefinition } from '@taucad/runtime/plugin';
+
+import { brepKernel } from '#brep.kernel.js';
+
+const definition = await resolveRuntimePluginDefinition('kernel', brepKernel());
+const runtime = createMockKernelRuntime();
+let context!: Awaited<ReturnType<typeof definition.initialize>>;
+
+beforeAll(async () => {
+  context = await definition.initialize({}, runtime);
+});
+
+describe('brepKernel', () => {
+  // T26 (PR-1b, AR-W15-01): the observation-only heap hook reads the module's whole WebAssembly memory.
+  it('observes its WebAssembly memory after initialize', () => {
+    const observed = definition.observedHeapBytes?.(context);
+
+    expect(Number.isSafeInteger(observed)).toBe(true);
+    expect(observed).toBeGreaterThan(0);
+    expect(observed).toBe(context.occt.HEAPU8.buffer.byteLength);
+    expect(observed! % 65_536).toBe(0);
+    expect(definition.heapBytes).toBeUndefined();
+  });
+
+  it('keeps the stable brep capability id', () => {
+    expect(brepKernel().id).toBe('brep');
+    expect(brepKernel()).toMatchObject({
+      views: { model: { mimeType: 'model/gltf-binary' } },
+      exports: { glb: { extension: 'glb', mimeType: 'model/gltf-binary' } },
+    });
+  });
+
+  it.each(['cube.step', 'cube-brep.iges', 'cube.brep'])('imports %s', async (name) => {
+    const bytes = new Uint8Array(readFileSync(new URL(`fixtures/${name}`, import.meta.url)));
+    runtime.filesystem.mocks.readdir.mockResolvedValueOnce([name]);
+    runtime.filesystem.mocks.stat.mockResolvedValueOnce({ type: 'file', size: bytes.length, mtimeMs: 0 });
+    runtime.filesystem.mocks.readFile.mockResolvedValue(bytes);
+
+    const result = await definition.evaluate({ entryPath: name, parameters: {}, options: {} }, runtime, context);
+    const artifact = await definition.render!({ handle: result.handle, view: 'model', options: {} }, runtime, context);
+    validateGlbData(artifact.content as Uint8Array<ArrayBuffer>);
+    const freshSnapshot = definition.serializeHandle!({ handle: result.handle }, runtime, context);
+    const render = async (handle: typeof result.handle) => {
+      const projected = await definition.render!({ handle, view: 'model', options: {} }, runtime, context);
+      return projected.content;
+    };
+    const exportModel = async (
+      handle: typeof result.handle,
+      coordinateSystem: 'y-up' | 'z-up',
+      length: 'meter' | 'millimeter',
+    ) => {
+      const projected = await definition.export!(
+        { exportId: 'glb', handle, options: { coordinateSystem, unit: { length } } },
+        runtime,
+        context,
+      );
+      return projected.files[0].bytes;
+    };
+    const ordered = await expectKernelProjectionOrder({
+      renderA: async () => render(result.handle),
+      renderB: async () => exportModel(result.handle, 'y-up', 'meter'),
+      export: async () => exportModel(result.handle, 'z-up', 'millimeter'),
+      freshB: async () => {
+        const fresh = definition.deserializeHandle!({ serialized: freshSnapshot }, runtime, context);
+        return exportModel(fresh, 'y-up', 'meter');
+      },
+    });
+    expect(ordered.first).toEqual(artifact.content);
+  });
+
+  it.each(['cube.step', 'cube-brep.iges', 'cube.brep'])('renders %s in meters, as glTF requires', async (name) => {
+    const bytes = new Uint8Array(readFileSync(new URL(`fixtures/${name}`, import.meta.url)));
+    runtime.filesystem.mocks.readdir.mockResolvedValueOnce([name]);
+    runtime.filesystem.mocks.stat.mockResolvedValueOnce({ type: 'file', size: bytes.length, mtimeMs: 0 });
+    runtime.filesystem.mocks.readFile.mockResolvedValue(bytes);
+
+    const result = await definition.evaluate({ entryPath: name, parameters: {}, options: {} }, runtime, context);
+    const artifact = await definition.render!({ handle: result.handle, view: 'model', options: {} }, runtime, context);
+    const document = await new WebIO().readBinary(artifact.content as Uint8Array<ArrayBuffer>);
+    const { min, max } = getBounds(document.getRoot().getDefaultScene() ?? document.getRoot().listScenes()[0]!);
+
+    // Each fixture is a 2 mm cube.
+    for (const axis of [0, 1, 2]) {
+      expect(max[axis]! - min[axis]!).toBeCloseTo(0.002, 6);
+    }
+  });
+});

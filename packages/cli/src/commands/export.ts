@@ -1,21 +1,79 @@
 import { defineCommand } from 'citty';
-import { consola } from 'consola';
-import { resolve, basename, dirname, extname } from 'node:path';
-import { writeFile } from 'node:fs/promises';
-import type { FileExtension } from '@taucad/types';
-import { fileExtensionSet } from '@taucad/types/constants';
-import { createNodeClient } from '@taucad/runtime/node';
+import { resolve, basename, dirname, extname, relative, sep } from 'node:path';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
+import { fileExtensionSet } from '@taucad/runtime/types';
+import type { ExportResult } from '@taucad/runtime';
+import type { FileExtension, TelemetryEntry } from '@taucad/runtime/types';
+import { createNodeClient, isSafeRelativePath } from '@taucad/runtime/node';
+import { loadCliRuntime } from '#runtime-options.js';
+import { unpreparedKernelError } from '#native-kernels.js';
+import { resolveProjectRoot } from '#project-root.js';
+import { authorizeCliZooProxy, cliZooProxyUrl } from '#zoo-proxy.js';
+import { buildExportProfile, createPhaseLedger } from '#commands/export-profile.js';
+import type { CliProfilePhase } from '#commands/export-profile.js';
+import { cliError, createOutput, emit, exitCodes, sanitize, writeStdout } from '#output.js';
+import { cliRuntimeTelemetry } from '#runtime-telemetry.js';
+// oxlint-disable-next-line no-restricted-imports -- relative import is the only portable way to load the CLI's own package.json (matches `packages/runtime/src/utils/package-info.ts`).
+import packageJson from '../../package.json' with { type: 'json' };
+
+/** How long a profiled export waits for its trailing telemetry batch, in milliseconds. */
+const exportTelemetryWait = 2000;
 
 /**
- * `taucad export` command.
+ * Parse a flag's JSON object, refusing anything else as a usage error.
+ *
+ * @internal
+ * @param flag - The flag name, as the error quotes it.
+ * @param input - The flag's raw value, when given.
+ * @returns The object, or `undefined` when the flag was not given.
+ * @throws {CliError} `ARG_JSON_INVALID` (exit 2) for malformed JSON or a non-object.
+ */
+export const parseJsonObject = (flag: string, input: string | undefined): Record<string, unknown> | undefined => {
+  if (input === undefined) {
+    return undefined;
+  }
+
+  let value: unknown;
+  try {
+    value = JSON.parse(input);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw cliError('ARG_JSON_INVALID', `Invalid JSON in ${flag}: ${detail}`, exitCodes.usage);
+  }
+
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw cliError('ARG_JSON_INVALID', `${flag} must be a JSON object`, exitCodes.usage);
+  }
+
+  return value as Record<string, unknown>;
+};
+
+/*
+ * A capability-missing result is the runtime declining a well-formed request, which the
+ * caller distinguishes from a model or plugin failure by exit code alone.
+ */
+const capabilityMissingCodes = new Set(['KERNEL_CAPABILITY_MISSING', 'TRANSCODER_CAPABILITY_MISSING']);
+
+/**
+ * `tau export` command.
  *
  * Renders a CAD source file and exports geometry to the specified format.
  *
  * @example <caption>Export a model to GLB</caption>
  * ```bash
- * taucad export model.ts --ext=glb
- * taucad export bambu-plate.ts --ext=stl --output=plate.stl
- * taucad export gear.ts --ext=step --params='{"teeth":24}'
+ * tau export model.ts --ext=glb
+ * tau export bambu-plate.ts --ext=stl --output=plate.stl
+ * tau export gear.ts --ext=step --params='{"teeth":24}'
+ * tau export model.ts --ext=stl --export-options='{"binary":true}'
+ * tau export model.ts --ext=webp --export-options='{"width":1024,"height":576}'
+ * tau export model.ts --ext=glb --content='{"includeEdges":true}'
+ * tau export model.ts --ext=glb --config=./tau.config.mjs
+ * tau export model.ts --ext=glb --telemetry=./profile.json
+ * tau export model.ts --ext=stl --json
+ * tau export model.ts --ext=stl --output=- | wc -c
+ * tau export --file model.ts --format glb --project . --out ./out
  * ```
  */
 export const exportCommand = defineCommand({
@@ -26,17 +84,24 @@ export const exportCommand = defineCommand({
   args: {
     file: {
       type: 'positional',
-      description: 'Input CAD file path (e.g. model.ts)',
-      required: true,
+      description: 'Input CAD file path (e.g. model.ts); required unless --out selects GeoSpec subprocess protocol 1',
+      required: false,
     },
     ext: {
       type: 'string',
-      description: 'Output format extension (glb, stl, step, 3mf, ...)',
-      required: true,
+      description: 'Target extension; route availability depends on the input source (e.g. glb, stl, step)',
+      required: false,
+    },
+    out: {
+      type: 'string',
+      description:
+        'Serve GeoSpec subprocess protocol 1 into this directory, with --file, --format and --project (see geospec commandExporter)',
+      required: false,
     },
     output: {
       type: 'string',
-      description: 'Output file path (defaults to <input-basename>.<ext>)',
+      description:
+        'Output file path, or "-" to stream the single artifact to stdout (defaults to <input-basename>.<ext>)',
       required: false,
     },
     params: {
@@ -44,61 +109,307 @@ export const exportCommand = defineCommand({
       description: 'JSON-encoded parameters for the model (e.g. \'{"width":100}\')',
       required: false,
     },
+    exportOptions: {
+      type: 'string',
+      description: 'JSON object of options for the source-selected export route',
+      required: false,
+    },
+    content: {
+      type: 'string',
+      description: 'JSON object of semantic content requested from the source-selected export route',
+      required: false,
+    },
+    plugin: {
+      type: 'string',
+      description: 'Default-invoked plugin package or path installed in the invoking project (repeatable)',
+      required: false,
+      multiple: true,
+    },
+    config: {
+      type: 'string',
+      description: 'Configuration module exporting an invoked "plugins" array',
+      required: false,
+    },
+    telemetry: {
+      type: 'string',
+      description: 'Write a process-relative CLI phase ledger and runtime span profile to a JSON file',
+      required: false,
+    },
+    json: {
+      type: 'boolean',
+      description: 'Write one versioned JSON result record to stdout instead of nothing',
+      required: false,
+    },
   },
-  async run({ args }) {
+  async run({ args, rawArgs }) {
+    if (rawArgs.some((argument) => argument === '--out' || argument.startsWith('--out='))) {
+      const { runExportProtocol } = await import('#commands/export-protocol.js');
+      process.exitCode = await runExportProtocol(rawArgs);
+      return;
+    }
+    if (typeof args.file !== 'string' || args.file === '') {
+      throw cliError('ARG_MISSING', 'Missing required positional argument: FILE', exitCodes.usage);
+    }
+    if (typeof args.ext !== 'string' || args.ext === '') {
+      throw cliError('ARG_MISSING', 'Missing required argument: --ext', exitCodes.usage);
+    }
+    const output = await createOutput();
+    const profileLedger = args.telemetry ? createPhaseLedger() : undefined;
+    profileLedger?.checkpoint('process.startup');
     const format = args.ext as FileExtension;
 
     if (!fileExtensionSet.has(format)) {
-      throw new Error(`Unsupported format: "${args.ext}". Supported: ${[...fileExtensionSet].join(', ')}`);
+      throw cliError('EXT_UNRECOGNIZED', `Unrecognized target extension: "${args.ext}"`, exitCodes.usage);
     }
 
     const inputPath = resolve(args.file);
     const inputDirectory = dirname(inputPath);
     const inputBasename = basename(inputPath, extname(inputPath));
     const inputFilename = basename(inputPath);
-    const outputPath = args.output ? resolve(args.output) : resolve(inputDirectory, `${inputBasename}.${format}`);
+    const streamToStdout = args.output === '-';
+    const outputPath = streamToStdout
+      ? '-'
+      : args.output
+        ? resolve(args.output)
+        : resolve(inputDirectory, `${inputBasename}.${format}`);
+    const telemetryPath = args.telemetry ? resolve(args.telemetry) : undefined;
 
-    let parameters: Record<string, unknown> = {};
-    if (args.params) {
-      try {
-        parameters = JSON.parse(args.params) as Record<string, unknown>;
-      } catch {
-        throw new Error(`Invalid JSON in --params: ${args.params}`);
-      }
+    if (streamToStdout && args.json) {
+      throw cliError(
+        'OUTPUT_STREAM_CONFLICT',
+        '--output - streams raw bytes to stdout and cannot be combined with --json. Pass a file path to get both.',
+        exitCodes.usage,
+      );
     }
 
-    consola.start(`Exporting ${inputFilename} → ${basename(outputPath)}`);
+    const suppliedParameters = parseJsonObject('--params', args.params) ?? {};
+    const exportOptions = parseJsonObject('--export-options', args.exportOptions);
+    const content = parseJsonObject('--content', args.content);
 
-    const client = await createNodeClient(inputDirectory);
+    try {
+      await stat(inputPath);
+    } catch {
+      throw cliError(
+        'INPUT_NOT_FOUND',
+        `Input file not found: ${inputPath}. Check the path, or run the command from the project that contains it.`,
+        exitCodes.refused,
+      );
+    }
+
+    output.start(`Exporting ${inputFilename} → ${streamToStdout ? 'stdout' : basename(outputPath)}`);
+    profileLedger?.checkpoint('cli.prepare');
+
+    // The project is rooted at the nearest `tau.json`, as `tau check` roots it, so a sibling import above the model's
+    // folder resolves (S11 F2). Plugins still load from the invoking project.
+    const { root: projectRoot } = resolveProjectRoot({ file: inputPath, cwd: process.cwd() });
+    const sourcePath = relative(projectRoot, inputPath).split(sep).join('/');
+    // A native kernel binds to its sealed closure itself, reading the dependency store's launch index, and refuses with
+    // KERNEL_NOT_PREPARED until it is prepared; nothing is downloaded.
+    await authorizeCliZooProxy(process.env);
+    const runtime = await loadCliRuntime({
+      projectRoot: process.cwd(),
+      plugin: args.plugin,
+      config: args.config,
+      zooProxyUrl: cliZooProxyUrl(process.env),
+    });
+    profileLedger?.checkpoint('cli.load-configured-plugins');
+    profileLedger?.checkpoint('cli.create-runtime');
+    const client = await createNodeClient({
+      runtime,
+      projectPath: projectRoot,
+    });
+    profileLedger?.checkpoint('runtime.create-client');
+    /* Reports only as a Tau Cloud host. */
+    const runtimeTelemetry = cliRuntimeTelemetry('cli', packageJson.version);
+    runtimeTelemetry?.observe(client, 'host');
+    const telemetryEntries: TelemetryEntry[] = [];
+    /* An operation's spans leave after its terminal reply and shutdown stops listening, so the
+     * profile waits, briefly, for the batch that carries the export's own root. */
+    const exportTelemetry = Promise.withResolvers<void>();
 
     client.on('log', (entry) => {
       const level = entry.level as 'info' | 'warn' | 'error' | 'debug';
-      if (level in consola) {
-        consola[level](entry.message);
+      if (level in output) {
+        output[level](sanitize(entry.message));
       }
     });
-
-    try {
-      const result = await client.export(format, {
-        file: inputFilename,
-        parameters,
+    if (telemetryPath) {
+      client.on('telemetry', (batch) => {
+        telemetryEntries.push(...batch.entries);
+        if (batch.entries.some((entry) => entry.name === 'kernel.export')) {
+          exportTelemetry.resolve();
+        }
       });
+    }
+
+    let runtimeExportPhase: CliProfilePhase | undefined;
+    let profileArtifacts: Array<{ name: string; path: string; bytes: number }> = [];
+    /*
+     * Without these handlers the default signal disposition kills the process before
+     * the document closes and the runtime transport shuts down.
+     */
+    const stopped = Promise.withResolvers<NodeJS.Signals>();
+    const onSignal = (signal: NodeJS.Signals): void => {
+      stopped.resolve(signal);
+    };
+    process.once('SIGINT', onSignal);
+    process.once('SIGTERM', onSignal);
+    let document: ReturnType<typeof client.open> | undefined;
+    try {
+      // One export, then exit: a file watcher would only race the shutdown.
+      const opened = client.open({
+        source: { path: sourcePath },
+        parameters: suppliedParameters,
+        watch: false,
+      });
+      document = opened;
+      const exportOutcome = async (): Promise<{
+        readonly type: 'result';
+        readonly value: ExportResult;
+      }> => ({
+        type: 'result',
+        value: await opened.export(format, {
+          ...(exportOptions === undefined ? {} : { options: exportOptions }),
+          ...(content === undefined ? {} : { content }),
+        }),
+      });
+      const signalOutcome = async (): Promise<{
+        readonly type: 'signal';
+        readonly signal: NodeJS.Signals;
+      }> => ({
+        type: 'signal',
+        signal: await stopped.promise,
+      });
+      // Promise.race subscribes to both, so a late export failure is never unhandled.
+      const outcome = await Promise.race([exportOutcome(), signalOutcome()]);
+      if (outcome.type === 'signal') {
+        throw cliError(
+          'EXPORT_CANCELLED',
+          `Export cancelled by ${outcome.signal}; no artifact written`,
+          outcome.signal === 'SIGINT' ? exitCodes.interrupted : exitCodes.terminated,
+        );
+      }
+      const result = outcome.value;
+      runtimeExportPhase = profileLedger?.checkpoint('runtime.export');
+      if (telemetryPath) {
+        await Promise.race([exportTelemetry.promise, delay(exportTelemetryWait, undefined, { ref: false })]);
+      }
 
       if (!result.success) {
-        const messages = result.issues.map((i) => i.message).join('\n  ');
-        throw new Error(`Export failed:\n  ${messages}`);
+        const unprepared = unpreparedKernelError(result.issues);
+        if (unprepared !== undefined) {
+          throw unprepared;
+        }
+        const messages = result.issues
+          .map((issue) =>
+            issue.code === 'KERNEL_CAPABILITY_MISSING'
+              ? `${issue.message} — or rerun with --plugin <package>`
+              : issue.message,
+          )
+          .join('\n  ');
+        throw cliError(
+          result.issues.find((issue) => issue.severity === 'error')?.code ?? 'EXPORT_FAILED',
+          `Export failed:\n  ${sanitize(messages)}`,
+          result.issues.some((issue) => capabilityMissingCodes.has(issue.code)) ? exitCodes.refused : exitCodes.error,
+        );
       }
 
       for (const issue of result.issues) {
         if (issue.severity === 'warning') {
-          consola.warn(issue.message);
+          output.warn(sanitize(issue.message));
         }
       }
 
-      await writeFile(outputPath, result.data.bytes);
-      consola.success(`Wrote ${result.data.bytes.byteLength} bytes → ${outputPath}`);
+      if (streamToStdout && result.files.length !== 1) {
+        throw cliError(
+          'OUTPUT_STREAM_AMBIGUOUS',
+          `--output - streams one artifact, but this export produced ${result.files.length}. Pass a file path instead.`,
+          exitCodes.usage,
+        );
+      }
+
+      const outputDirectory = dirname(outputPath);
+      const targetPaths = streamToStdout
+        ? ['-']
+        : result.files.map((file, index) => {
+            if (!isSafeRelativePath(file.name)) {
+              throw new Error(`Export returned an unsafe relative artifact path: ${file.name}`);
+            }
+            return index === 0 ? outputPath : resolve(outputDirectory, file.name);
+          });
+      if (!streamToStdout) {
+        if (new Set(targetPaths).size !== targetPaths.length) {
+          throw new Error(`Export artifact paths collide under ${outputDirectory}`);
+        }
+        if (telemetryPath && targetPaths.includes(telemetryPath)) {
+          throw new Error(`Telemetry output path collides with an export artifact: ${telemetryPath}`);
+        }
+      }
+      profileArtifacts = result.files.map((file, index) => ({
+        name: file.name,
+        path: targetPaths[index]!,
+        bytes: file.bytes.byteLength,
+      }));
+      profileLedger?.checkpoint('cli.validate-artifacts');
+
+      if (streamToStdout) {
+        const [file] = result.files;
+        await writeStdout(file.bytes);
+        output.success(`Wrote ${file.bytes.byteLength} bytes → stdout`);
+      } else {
+        for (const [index, file] of result.files.entries()) {
+          const targetPath = targetPaths[index]!;
+          // oxlint-disable-next-line no-await-in-loop -- Preflight completes before ordered filesystem writes begin.
+          await mkdir(dirname(targetPath), { recursive: true });
+          // oxlint-disable-next-line no-await-in-loop -- Ordered writes preserve producer artifact order in logs.
+          await writeFile(targetPath, file.bytes);
+          output.success(`Wrote ${file.bytes.byteLength} bytes → ${targetPath}`);
+        }
+      }
+      profileLedger?.checkpoint('cli.write-artifacts');
+
+      if (args.json) {
+        await emit({
+          kind: 'export',
+          ok: true,
+          input: inputPath,
+          format,
+          artifacts: result.files.map((file, index) => ({
+            name: file.name,
+            path: targetPaths[index]!,
+            bytes: file.bytes.byteLength,
+            ext: extname(file.name).slice(1) || format,
+            sha256: createHash('sha256').update(file.bytes).digest('hex'),
+          })),
+        });
+      }
     } finally {
-      client.terminate();
+      process.off('SIGINT', onSignal);
+      process.off('SIGTERM', onSignal);
+      try {
+        document?.close();
+      } finally {
+        await client.shutdown();
+        await runtimeTelemetry?.shutdown();
+      }
+      profileLedger?.checkpoint('runtime.shutdown');
+    }
+
+    if (telemetryPath && profileLedger && runtimeExportPhase) {
+      const profile = buildExportProfile({
+        phases: profileLedger.phases,
+        telemetry: telemetryEntries,
+        runtimeExportPhase,
+        workload: {
+          inputPath,
+          outputPath,
+          format,
+          artifacts: profileArtifacts,
+        },
+      });
+      await mkdir(dirname(telemetryPath), { recursive: true });
+      await writeFile(telemetryPath, `${JSON.stringify(profile, undefined, 2)}\n`, 'utf8');
+      output.info(`Wrote telemetry profile → ${telemetryPath}`);
     }
   },
 });

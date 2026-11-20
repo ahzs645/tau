@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
   agentConfigSchema,
+  agentPersonSchema,
+  cadAgentExecutionSchema,
   cadAgentConfigSchema,
   commitNameAgentConfigSchema,
   projectNameAgentConfigSchema,
@@ -10,7 +12,7 @@ import type { CadAgentConfigInput } from '#schemas/agent-config.schema.js';
 
 const validCadAgent: CadAgentConfigInput = {
   profile: 'cad',
-  model: 'anthropic/claude-sonnet-4-5',
+  execution: { kind: 'tau', model: 'anthropic/claude-sonnet-4-5' },
   kernel: 'replicad',
   mode: 'agent',
   toolChoice: 'auto',
@@ -24,7 +26,7 @@ describe('agentConfigSchema', () => {
 
       expect(result.profile).toBe('cad');
       if (result.profile === 'cad') {
-        expect(result.model).toBe('anthropic/claude-sonnet-4-5');
+        expect(result.execution).toEqual({ kind: 'tau', model: 'anthropic/claude-sonnet-4-5' });
         expect(result.kernel).toBe('replicad');
       }
     });
@@ -62,15 +64,29 @@ describe('agentConfigSchema', () => {
     });
   });
 
+  it('accepts arrange_workbench as an explicit tool choice', () => {
+    expect(cadAgentConfigSchema.safeParse({ ...validCadAgent, toolChoice: ['arrange_workbench'] }).success).toBe(true);
+  });
+
   describe('cad variant required fields', () => {
-    it('should reject a cad agent missing model with path agent.model', () => {
-      const { model: _model, ...withoutModel } = validCadAgent;
-      const result = agentConfigSchema.safeParse(withoutModel);
+    it('should reject a cad agent missing execution with path agent.execution', () => {
+      const { execution: _execution, ...withoutExecution } = validCadAgent;
+      const result = agentConfigSchema.safeParse(withoutExecution);
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error.issues.some((issue) => issue.path.join('.') === 'model')).toBe(true);
+        expect(result.error.issues.some((issue) => issue.path.join('.') === 'execution')).toBe(true);
       }
+    });
+
+    it('should reject the removed top-level model field', () => {
+      const { execution: _execution, ...base } = validCadAgent;
+      const result = cadAgentConfigSchema.safeParse({
+        ...base,
+        model: 'anthropic/claude-sonnet-4-5',
+      });
+
+      expect(result.success).toBe(false);
     });
 
     it('should reject a cad agent missing kernel with path agent.kernel', () => {
@@ -114,6 +130,70 @@ describe('agentConfigSchema', () => {
     });
   });
 
+  describe('execution substrate', () => {
+    it('should parse Tau execution without widening it into a model provider', () => {
+      expect(cadAgentExecutionSchema.parse({ kind: 'tau', model: 'openai/gpt-5.5' })).toEqual({
+        kind: 'tau',
+        model: 'openai/gpt-5.5',
+      });
+    });
+
+    it('should carry an optional daemon hostId and stay wire-compatible without one', () => {
+      expect(cadAgentExecutionSchema.parse({ kind: 'tau', model: 'openai/gpt-5.5', hostId: 'origin' })).toEqual({
+        kind: 'tau',
+        model: 'openai/gpt-5.5',
+        hostId: 'origin',
+      });
+      expect(cadAgentExecutionSchema.parse({ kind: 'tau', model: 'openai/gpt-5.5' })).not.toHaveProperty('hostId');
+      expect(cadAgentExecutionSchema.safeParse({ kind: 'tau', model: 'openai/gpt-5.5', hostId: '' }).success).toBe(
+        false,
+      );
+    });
+
+    it('should carry an optional reasoning level and refuse one outside the shared vocabulary', () => {
+      expect(cadAgentExecutionSchema.parse({ kind: 'tau', model: 'openai/gpt-5.5', effort: 'low' })).toEqual({
+        kind: 'tau',
+        model: 'openai/gpt-5.5',
+        effort: 'low',
+      });
+      // Absent is the model's own default; rows persisted before the field existed parse unchanged.
+      expect(cadAgentExecutionSchema.parse({ kind: 'tau', model: 'openai/gpt-5.5' })).not.toHaveProperty('effort');
+      expect(
+        cadAgentExecutionSchema.safeParse({ kind: 'tau', model: 'openai/gpt-5.5', effort: 'minimal' }).success,
+      ).toBe(false);
+      // An external agent's level is its own ACP option, never Tau's field.
+      expect(
+        cadAgentExecutionSchema.safeParse({ kind: 'acp', hostId: 'origin', agentId: 'codex', effort: 'low' }).success,
+      ).toBe(false);
+    });
+
+    it('should parse an external ACP execution and require the host that spawns it', () => {
+      expect(
+        cadAgentConfigSchema.parse({
+          ...validCadAgent,
+          execution: { kind: 'acp', hostId: 'origin', agentId: 'codex' },
+        }).execution,
+      ).toEqual({ kind: 'acp', hostId: 'origin', agentId: 'codex' });
+      // No browser placement exists for an external agent: the adapter is a
+      // local process, so a turn naming no host has nowhere to run.
+      expect(cadAgentExecutionSchema.safeParse({ kind: 'acp', agentId: 'codex' }).success).toBe(false);
+      expect(cadAgentExecutionSchema.safeParse({ kind: 'acp', hostId: 'origin' }).success).toBe(false);
+      // The adapter's own model id may ride along; nothing Tau-specific may.
+      expect(
+        cadAgentExecutionSchema.parse({
+          kind: 'acp',
+          hostId: 'origin',
+          agentId: 'codex',
+          model: 'gpt-5.3-codex-spark',
+        }),
+      ).toEqual({ kind: 'acp', hostId: 'origin', agentId: 'codex', model: 'gpt-5.3-codex-spark' });
+      expect(
+        cadAgentExecutionSchema.safeParse({ kind: 'acp', hostId: 'origin', agentId: 'codex', provider: 'openai' })
+          .success,
+      ).toBe(false);
+    });
+  });
+
   describe('snapshot / contextPayload optionality', () => {
     it('should leave snapshot undefined when omitted from the wire — no sentinel default, no controller-side collapse', () => {
       const result = cadAgentConfigSchema.parse(validCadAgent);
@@ -137,7 +217,6 @@ describe('agentConfigSchema', () => {
     });
 
     it('should preserve a provided contextPayload verbatim', () => {
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- `AGENTS.md` is a filesystem key, not a JS identifier
       const memory = { 'AGENTS.md': 'guidelines' };
       const result = cadAgentConfigSchema.parse({
         ...validCadAgent,
@@ -145,6 +224,26 @@ describe('agentConfigSchema', () => {
       });
 
       expect(result.contextPayload?.memory).toEqual(memory);
+    });
+  });
+
+  describe('person', () => {
+    it('should leave person undefined when omitted', () => {
+      expect(cadAgentConfigSchema.parse(validCadAgent).person).toBeUndefined();
+    });
+
+    it('should accept the closed goals and languages', () => {
+      const person = { makes: ['mechanical', 'electronics'], reads: ['python'] };
+
+      expect(cadAgentConfigSchema.parse({ ...validCadAgent, person }).person).toEqual(person);
+    });
+
+    it('should refuse "Just exploring", which is never sent', () => {
+      expect(agentPersonSchema.safeParse({ makes: ['exploring'], reads: [] }).success).toBe(false);
+    });
+
+    it('should refuse the tool answer and any other field', () => {
+      expect(agentPersonSchema.safeParse({ makes: [], reads: [], tool: 'fusion' }).success).toBe(false);
     });
   });
 

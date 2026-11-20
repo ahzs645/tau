@@ -1,156 +1,1855 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import type { ResolvedModel } from '#hooks/use-models.js';
+import type { Editor } from '@tiptap/core';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import type { captureDictation } from '#components/dictation/dictation-capture.js';
+import type { transcribeDictation } from '#components/dictation/dictation-client.js';
+import type { AcpSessionData } from '@taucad/chat';
+import type { EarlyChatInput } from '#components/chat/chat-early-input.js';
+import type { PaintedSendVerdict } from '#components/chat/chat-textarea-desktop.js';
 import { kernelConfigurations } from '@taucad/types/constants';
-import type { KernelConfiguration } from '@taucad/types/constants';
+import { TooltipProvider } from '@taucad/ui/components/tooltip';
 import type { ChatComposerContextValue } from '#hooks/active-chat-provider.js';
+import type { AgentHostPlacementTarget } from '#lib/agent-host-placement.js';
+import type { AgentConfig } from '#components/chat/use-agent-config.js';
+
+const dictationDependencies = vi.hoisted(() => ({
+  available: false,
+  capture: vi.fn<typeof captureDictation>(),
+  transcribe: vi.fn<typeof transcribeDictation>(),
+}));
+vi.mock('#components/dictation/dictation-capture.js', () => ({ captureDictation: dictationDependencies.capture }));
+vi.mock('#components/dictation/dictation-client.js', () => ({
+  fetchDictationStatus: async () => ({ available: dictationDependencies.available }),
+  transcribeDictation: dictationDependencies.transcribe,
+}));
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const manifoldKernel = kernelConfigurations.find((k) => k.id === 'manifold')!;
-const openscadKernel = kernelConfigurations.find((k) => k.id === 'openscad')!;
-const mockKernelByConsumer: { current: KernelConfiguration | undefined } = {
-  current: manifoldKernel,
+const execution: { current: ChatComposerContextValue['execution']['execution'] } = {
+  current: { kind: 'tau', model: 'm' },
 };
-
-vi.mock('#hooks/use-chat.js', () => ({
-  useChatActions: () => ({ setDraftMode: vi.fn() }),
-  useChatContext: () => ({ persistenceActorRef: { send: vi.fn() } }),
-  useChatSelector: (selector: (state: unknown) => unknown) => selector({ draftMode: 'agent', status: 'idle' }),
-  useDraftActions: () => ({ setDraftMode: vi.fn() }),
-  useDraftSelector: (selector: (state: unknown) => unknown) => selector({ draftMode: 'agent' }),
-}));
-
-// Single composer-context mock backs every chat-scoped read the desktop
-// controls perform — kernel label is the only field the visible-label
-// tests assert on, but we populate the full contract so the unified
-// `useChatComposer()` hook stays type-correct.
-const mockUseChatComposer = vi.fn(
-  (): ChatComposerContextValue =>
-    ({
-      draftActorRef: { send: vi.fn() },
-      model: { modelId: 'm', model: undefined, setActiveModel: vi.fn() },
-      kernel: {
-        kernelId: mockKernelByConsumer.current?.id,
-        kernel: mockKernelByConsumer.current,
-        setActiveKernel: vi.fn(),
-      },
-      status: 'ready',
-      stop: () => undefined,
-      contextUsage: undefined,
-      session: undefined,
-    }) as unknown as ChatComposerContextValue,
-);
+const setActiveExecution = vi.fn();
+/* The chat whose draft the composer edits; the composer stays mounted when the person moves to another chat. */
+const draftOwner: { current: unknown } = { current: undefined };
+const placements: { current: readonly AgentHostPlacementTarget[] } = { current: [] };
 
 vi.mock('#hooks/active-chat-provider.js', () => ({
-  useChatComposer: () => mockUseChatComposer(),
+  useChatComposer: () => ({
+    kernel: {
+      kernelId: manifoldKernel.id,
+      kernel: manifoldKernel,
+      setActiveKernel: vi.fn(),
+      preference: manifoldKernel.id,
+      setActivePreference: vi.fn(),
+    },
+    execution: { execution: execution.current, setActiveExecution },
+    draftActorRef: draftOwner.current,
+    contextUsage: undefined,
+  }),
 }));
 
-vi.mock('#hooks/use-keyboard.js', () => ({
-  useKeybinding: () => ({ formattedKeyCombination: 'm' }),
+const keybindings = vi.hoisted(() => new Map<string, { callback: () => void; enabled: () => boolean }>());
+vi.mock('@taucad/ui/components/keyboard', () => ({
+  useKeybinding: (
+    combination: { key: string },
+    callback: () => void,
+    options?: { enabled?: boolean | (() => boolean) },
+  ) => {
+    const enabled = options?.enabled ?? true;
+    keybindings.set(combination.key, {
+      callback,
+      enabled: () => (typeof enabled === 'function' ? enabled() : enabled),
+    });
+    return { formattedKeyCombination: '⌘.' };
+  },
 }));
 
-vi.mock('@xstate/react', () => ({
-  useSelector: () => undefined,
-}));
+/* The trigger's name, or its placeholder while the catalog has not named the model. */
+const triggerName = vi.hoisted(() => ({ slot: 'trigger-model' as 'trigger-model' | 'trigger-model-placeholder' }));
 
-vi.mock('#flags/use-feature.js', () => ({
-  useFeature: () => false,
-}));
-
-vi.mock('#components/chat/chat-model-selector.js', () => ({
-  openModelSelectorKeyCombination: { key: '/', modKey: true },
-  ChatModelSelector: ({ children }: { readonly children: (props: unknown) => React.ReactNode }) => (
-    <div>{children({})}</div>
+/* The sheet has its own suite; here it only has to sit beside Send. */
+vi.mock('#components/chat/chat-agent-sheet.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  ChatAgentSheet: ({ agentConfig }: { readonly agentConfig: AgentConfig }) => (
+    <button
+      type='button'
+      data-slot='agent-trigger'
+      data-reasoning={agentConfig.options.find((option) => option.category === 'thought_level')?.currentValue}
+    >
+      <span data-slot={triggerName.slot}>Agent and model</span>
+    </button>
   ),
 }));
 
 vi.mock('#components/chat/chat-kernel-selector.js', () => ({
-  ChatKernelSelector: ({
-    children,
-  }: {
-    readonly children: (props: { selectedKernel: KernelConfiguration | undefined }) => React.ReactNode;
-  }) => <div>{children({ selectedKernel: mockKernelByConsumer.current })}</div>,
+  KernelPreferenceSelector: ({ children }: { readonly children: React.ReactNode }) => <div>{children}</div>,
 }));
 
-vi.mock('#components/chat/chat-tool-selector.js', () => ({
-  ChatToolSelector: ({ children }: { readonly children: (props: unknown) => React.ReactNode }) => (
-    <div>{children({ selectedMode: undefined, selectedTools: [], toolMetadata: {} })}</div>
-  ),
+vi.mock('@taucad/ui-kit/icons/svg-icon', () => ({
+  SvgIcon: ({ id }: { readonly id?: string }) => <span data-testid='svg-icon' data-icon={id} />,
 }));
 
-vi.mock('#components/chat/chat-mode-selector.js', () => ({
-  ChatAgentSelector: () => <div data-testid='mode-selector' />,
-  toggleModeKeyCombination: { key: 'm' },
+const catalogHealth = vi.hoisted(() => ({
+  status: 'ready' as 'registering' | 'ready' | 'error' | 'closed',
+  retry: vi.fn(),
+}));
+vi.mock('#hooks/use-skills-catalog.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  useSkillsCatalog: () => [],
+  useSkillsCatalogState: () => ({ commands: [], prompt: [], status: catalogHealth.status, retry: catalogHealth.retry }),
 }));
 
-vi.mock('#components/icons/svg-icon.js', () => ({
-  SvgIcon: ({ id }: { readonly id?: string }) => <span data-testid='svg-icon'>{id}</span>,
+vi.mock('#hooks/use-cad-agent-config.js', () => ({
+  useAgentHostPlacements: () => ({ targets: placements.current, loading: false }),
 }));
 
-vi.mock('#components/ui/key-shortcut.js', () => ({
-  KeyShortcut: ({ children }: { readonly children: React.ReactNode }) => <span>{children}</span>,
-}));
+const { ChatTextareaBar, ChatTextareaDesktop, acpCommandToSlashCommand } =
+  await import('#components/chat/chat-textarea-desktop.js');
 
-vi.mock('#components/ui/tooltip.js', () => ({
-  Tooltip: ({ children }: { readonly children: React.ReactNode }) => <div>{children}</div>,
-  TooltipTrigger: ({ children }: { readonly children: React.ReactNode }) => <div>{children}</div>,
-  TooltipContent: ({ children }: { readonly children: React.ReactNode }) => (
-    <div data-testid='tooltip-content'>{children}</div>
-  ),
-}));
-
-vi.mock('#components/ui/button.js', () => ({
-  Button: ({ children }: { readonly children: React.ReactNode }) => <button type='button'>{children}</button>,
-}));
-
-const { ChatTextareaLeftControls } = await import('#components/chat/chat-textarea-desktop.js');
-
-const stubModel: ResolvedModel = {
-  id: 'm',
-  name: 'M',
-  family: 'gpt',
-  provider: { id: 'openai', name: 'OpenAI' },
-  isResolved: true,
-};
-// oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref objects are typed with `null` upstream
-const stubFileInput: React.RefObject<HTMLInputElement | null> = { current: null };
 const noop = (): void => undefined;
+const asyncNoop = async (): Promise<void> => undefined;
 
-function renderControls() {
-  return render(
-    <ChatTextareaLeftControls
-      selectedModel={stubModel}
-      enableKernelSelector
-      selectedToolChoice='auto'
-      focusEditor={noop}
-      setDraftToolChoice={noop}
-      fileInputReference={stubFileInput}
-      handleFileChange={noop}
-    />,
+const codexSession: AcpSessionData = {
+  type: 'acp-session',
+  id: 'state',
+  agentId: 'codex',
+  hostId: 'desktop',
+  commands: [],
+  configOptions: [
+    {
+      type: 'select',
+      id: 'mode',
+      name: 'Approval',
+      category: 'mode',
+      currentValue: 'read-only',
+      options: [
+        { value: 'read-only', name: 'Ask for approval' },
+        { value: 'agent', name: 'Approve for me' },
+      ],
+    },
+  ],
+};
+
+const renderBar = (
+  options: {
+    readonly acpSessionData?: AcpSessionData;
+    readonly enableContextActions?: boolean;
+    readonly attachmentInputSupported?: boolean;
+    readonly sendRefusal?: string;
+    readonly handleFileSelect?: () => void;
+    readonly handleAtButtonClick?: () => void;
+  } = {},
+) =>
+  render(
+    <TooltipProvider>
+      <ChatTextareaBar
+        composerMode='main'
+        containerReference={{ current: null }}
+        enableContextActions={options.enableContextActions ?? true}
+        enableKernelSelector
+        acpSessionData={options.acpSessionData}
+        status='ready'
+        focusEditor={noop}
+        handleAtButtonClick={options.handleAtButtonClick ?? noop}
+        handleFileSelect={options.handleFileSelect ?? noop}
+        attachmentInputSupported={options.attachmentInputSupported ?? true}
+        fileInputReference={{ current: null }}
+        attachmentAccept='image/png,application/pdf'
+        handleFileChange={noop}
+        isSubmitting={false}
+        sendRefusal={options.sendRefusal}
+        describedBy={undefined}
+        formattedCancelKeyCombination='⇧⌘⌫'
+        handleSubmit={asyncNoop}
+        handleCancelClick={noop}
+      />
+    </TooltipProvider>,
   );
-}
 
-describe('ChatTextareaLeftControls — chat-scoped kernel label', () => {
+describe('ChatTextareaBar', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockKernelByConsumer.current = manifoldKernel;
+    keybindings.clear();
+    execution.current = { kind: 'tau', model: 'm' };
+    placements.current = [];
   });
 
-  it('should render the kernel label from useChatComposer().kernel (no direct useKernel)', () => {
-    renderControls();
+  it('lays out +, the kernel, the agent trigger and Send — no branch, balance or Tau mode (D6, Q11, Q16)', () => {
+    const { container } = renderBar();
 
-    expect(mockUseChatComposer).toHaveBeenCalled();
-    expect(screen.getAllByText('Manifold').length).toBeGreaterThan(0);
+    const left = container.querySelector('[data-slot=composer-left]')!;
+    const right = container.querySelector('[data-slot=composer-right]')!;
+    expect([...left.querySelectorAll('button')].map((button) => button.getAttribute('aria-label'))).toEqual([
+      'Add',
+      'Kernel: Manifold',
+    ]);
+    expect([...right.querySelectorAll('button')].map((button) => button.textContent || button.ariaLabel)).toEqual([
+      'Agent and model',
+      'Send',
+    ]);
+    expect(screen.queryByRole('button', { name: /branch/iu })).toBeNull();
+    expect(screen.queryByRole('button', { name: /credits/iu })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Mode/u })).toBeNull();
   });
 
-  it('should reflect the new kernel name when active chat kernel changes', () => {
-    const { unmount } = renderControls();
-    expect(screen.getAllByText('Manifold').length).toBeGreaterThan(0);
+  it('lets the kernel label leave first when the bar needs the room', () => {
+    renderBar();
+
+    const kernel = screen.getByRole('button', { name: 'Kernel: Manifold' });
+    expect(kernel.querySelector('span:not([data-testid])')!.className).toContain('group-data-[hide-kernel]/bar:hidden');
+  });
+
+  it('offers attaching and adding context from one + (F10)', async () => {
+    const handleFileSelect = vi.fn();
+    const handleAtButtonClick = vi.fn();
+    renderBar({ handleFileSelect, handleAtButtonClick });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Attach image or PDF',
+      'Add context@',
+    ]);
+    await userEvent.click(screen.getByRole('menuitem', { name: /Add context/u }));
+    expect(handleAtButtonClick).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the attach item, disabled with its reason, for a model that cannot read files (F14)', async () => {
+    renderBar({ attachmentInputSupported: false, enableContextActions: false });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add' }));
+    const attach = screen.getByRole('menuitem', { name: /Attach image or PDF/u });
+    expect(attach).toHaveAttribute('aria-disabled', 'true');
+    expect(attach).toHaveTextContent("This model can't read images or PDFs");
+    expect(screen.queryByRole('menuitem', { name: /Add context/u })).toBeNull();
+  });
+
+  it('gives Send its refusal while staying focusable (F14)', () => {
+    renderBar({ sendRefusal: 'Write a message first' });
+
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('shows an external agent’s permission mode, named, and steps it with ⌘. (C5)', () => {
+    execution.current = { kind: 'acp', hostId: 'desktop', agentId: 'codex' };
+    renderBar({ acpSessionData: codexSession });
+
+    expect(screen.getByRole('button', { name: 'Mode: Ask for approval' })).toBeInTheDocument();
+    act(() => {
+      const binding = keybindings.get('.');
+      if (binding?.enabled()) {
+        binding.callback();
+      }
+    });
+    expect(setActiveExecution).toHaveBeenLastCalledWith({
+      kind: 'acp',
+      hostId: 'desktop',
+      agentId: 'codex',
+      config: { mode: 'agent' },
+    });
+  });
+
+  it('should offer discovered Grok permissions before the first turn and store the selected execution', async () => {
+    // JSDOM omits the browser scrolling primitive used by the real command menu.
+    globalThis.HTMLElement.prototype.scrollIntoView = vi.fn();
+    execution.current = { kind: 'acp', hostId: 'desktop', agentId: 'grok' };
+    placements.current = [
+      {
+        hostId: 'desktop',
+        rung: 'in-process',
+        label: 'This Mac',
+        workspaceRoot: '',
+        online: true,
+        externalAgents: [
+          {
+            id: 'grok',
+            displayName: 'Grok Build',
+            models: [],
+            configOptions: [
+              {
+                type: 'select',
+                id: 'tau.grok.permissions',
+                category: 'mode',
+                name: 'Permissions',
+                currentValue: 'ask',
+                options: [
+                  { value: 'ask', name: 'Ask' },
+                  { value: 'always-approve', name: 'Always approve' },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    renderBar();
+    await userEvent.click(screen.getByRole('button', { name: 'Mode: Ask' }));
+    await userEvent.click(screen.getByRole('option', { name: 'Always approve' }));
+    expect(setActiveExecution).toHaveBeenLastCalledWith({
+      kind: 'acp',
+      hostId: 'desktop',
+      agentId: 'grok',
+      config: { 'tau.grok.permissions': 'always-approve' },
+    });
+  });
+
+  it('passes the host-discovered reasoning option to the pre-project agent control', () => {
+    execution.current = { kind: 'acp', hostId: 'desktop', agentId: 'codex', model: 'gpt-6-astra' };
+    placements.current = [
+      {
+        hostId: 'desktop',
+        rung: 'in-process',
+        label: 'This Mac',
+        workspaceRoot: '',
+        online: true,
+        externalAgents: [
+          {
+            id: 'codex',
+            displayName: 'Codex',
+            defaultModel: 'gpt-6-sol',
+            models: [
+              { id: 'gpt-6-sol', name: 'Sol' },
+              {
+                id: 'gpt-6-astra',
+                name: 'Astra',
+                thoughtLevel: {
+                  type: 'select',
+                  id: 'reasoning_effort',
+                  name: 'Reasoning effort',
+                  category: 'thought_level',
+                  currentValue: 'medium',
+                  options: [
+                    { value: 'medium', name: 'Medium' },
+                    { value: 'high', name: 'High' },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    renderBar();
+    expect(screen.getByRole('button', { name: 'Agent and model' })).toHaveAttribute('data-reasoning', 'medium');
+  });
+
+  it('leaves ⌘. and ⌘/ to an edit box that has focus (F6)', () => {
+    execution.current = { kind: 'acp', hostId: 'desktop', agentId: 'codex' };
+    renderBar({ acpSessionData: codexSession });
+    const edit = document.createElement('div');
+    edit.dataset['chatComposer'] = 'edit';
+    const input = document.createElement('input');
+    edit.append(input);
+    document.body.append(edit);
+    input.focus();
+
+    expect(keybindings.get('.')?.enabled()).toBe(false);
+    edit.remove();
+  });
+});
+
+describe('ACP slash commands', () => {
+  it('preserves dollar-prefixed skills and adds the native slash only to ordinary commands', () => {
+    expect(acpCommandToSlashCommand({ name: '$brep-design', description: 'BRep' }, 'codex')).toMatchObject({
+      id: '$brep-design',
+      label: '$brep-design',
+      group: 'Commands',
+      source: 'codex',
+    });
+    expect(acpCommandToSlashCommand({ name: 'compact', description: 'Compact' }, 'codex')).toMatchObject({
+      id: '/compact',
+      label: '/compact',
+    });
+  });
+});
+
+describe('ChatTextareaDesktop draft rehydration', () => {
+  beforeEach(() => {
+    dictationDependencies.available = false;
+    catalogHealth.status = 'ready';
+    catalogHealth.retry.mockClear();
+  });
+  const renderComposer = (
+    inputText: string,
+    acpSessionData: AcpSessionData,
+    options: {
+      canResume?: boolean;
+      handleSubmit?: (text?: string) => Promise<void>;
+      useTauSkills?: boolean;
+      status?: 'ready' | 'submitted' | 'streaming';
+      isSubmitting?: boolean;
+      handleCancelClick?: () => void;
+      mode?: 'main' | 'edit';
+      enableAutoFocus?: boolean;
+      enableMobileCollapse?: boolean;
+      isFocused?: boolean;
+      earlyInput?: EarlyChatInput;
+      setDraftText?: (text: string) => void;
+      isSubmitDisabled?: boolean;
+      /** Read at each render, so a row can change the verdict between renders. */
+      paintedSendVerdict?: { current: PaintedSendVerdict | undefined };
+    } = {},
+  ) => {
+    const { canResume = false, handleSubmit = asyncNoop } = options;
+    const element = (
+      session: AcpSessionData,
+      text = inputText,
+      isSubmitDisabled = options.isSubmitDisabled,
+    ): React.JSX.Element => (
+      <TooltipProvider>
+        <ChatTextareaDesktop
+          earlyInput={options.earlyInput}
+          paintedSendVerdict={options.paintedSendVerdict?.current}
+          isSubmitDisabled={isSubmitDisabled}
+          enableAutoFocus={options.enableAutoFocus ?? false}
+          mode={options.mode}
+          enableMobileCollapse={options.enableMobileCollapse}
+          isFocused={options.isFocused}
+          dragKind={undefined}
+          isSubmitting={options.isSubmitting ?? false}
+          isAttaching={false}
+          canResume={canResume}
+          inputText={text}
+          attachments={[]}
+          attachmentDirectory={undefined}
+          sendBlockReason={undefined}
+          attachmentAccept='image/png'
+          attachmentInputSupported
+          status={options.status ?? 'ready'}
+          formattedCancelKeyCombination='⇧⌘⌫'
+          treeService={undefined}
+          chats={[]}
+          setDraftText={options.setDraftText ?? noop}
+          acpAgentId={options.useTauSkills ? undefined : 'codex'}
+          acpSessionData={session}
+          fileInputReference={{ current: null }}
+          containerReference={{ current: null }}
+          focusEditorRef={{ current: undefined }}
+          addContextChipsRef={{ current: undefined }}
+          addContextReferencesRef={{ current: undefined }}
+          handleSubmit={handleSubmit}
+          handleCancelClick={options.handleCancelClick ?? noop}
+          handleDragOver={noop}
+          handleDragLeave={noop}
+          handleDrop={asyncNoop}
+          handlePaste={() => false}
+          handleFileSelect={noop}
+          handleFileChange={noop}
+          handleAddImage={noop}
+          onScreenshotAction={noop}
+          handleTextareaBlur={noop}
+          removeAttachment={noop}
+        />
+      </TooltipProvider>
+    );
+    const view = render(element(acpSessionData));
+    return {
+      ...view,
+      rerenderWith: (session: AcpSessionData, text?: string, isSubmitDisabled?: boolean): void => {
+        view.rerender(element(session, text, isSubmitDisabled));
+      },
+    };
+  };
+
+  it.each(['main', 'edit'] as const)(
+    'should focus the %s draft after rehydration without moving an edit to its end',
+    async (mode) => {
+      // The jsdom environment supplies selection, but not the layout methods ProseMirror uses to scroll it.
+      const createRange = document.createRange.bind(document);
+      vi.spyOn(document, 'createRange').mockImplementation(() =>
+        Object.assign(createRange(), {
+          getClientRects: () => [],
+          getBoundingClientRect: () => new DOMRect(),
+        }),
+      );
+      const text = 'A restored message with several words';
+      renderComposer(text, codexSession, { mode, enableAutoFocus: true });
+
+      await waitFor(() => {
+        const selection = globalThis.getSelection();
+        expect(screen.getByRole('textbox')).toHaveFocus();
+        expect(selection?.anchorNode?.textContent).toBe(text);
+        expect(selection?.anchorOffset).toBe(mode === 'edit' ? 0 : text.length);
+      });
+    },
+  );
+
+  /* Review round 2: a painted draft's selection is carried, as an edit's is (P-a). */
+  it("should carry a painted draft's selection into the editor", async () => {
+    const createRange = document.createRange.bind(document);
+    vi.spyOn(document, 'createRange').mockImplementation(() =>
+      Object.assign(createRange(), {
+        getClientRects: () => [],
+        getBoundingClientRect: () => new DOMRect(),
+      }),
+    );
+    renderComposer('Make a gear', codexSession, {
+      earlyInput: {
+        text: 'Make a gear',
+        edited: false,
+        focused: true,
+        focusUnclaimed: false,
+        start: 0,
+        end: 11,
+        direction: 'none',
+        scrollTop: 0,
+        submitQueued: false,
+        prefilled: true,
+      },
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('textbox')).toHaveFocus();
+      expect(globalThis.getSelection()?.toString()).toBe('Make a gear');
+    });
+  });
+
+  /* R11: Home's native input held focus, with the composer's outline, until this replaced it. The editor
+   * takes focus in the same commit, so no frame paints the box unfocused and no key typed during the
+   * handover lands on the page. */
+  it('should hand focus to the editor in the commit that replaces a focused native input', () => {
+    const createRange = document.createRange.bind(document);
+    vi.spyOn(document, 'createRange').mockImplementation(() =>
+      Object.assign(createRange(), {
+        getClientRects: () => [],
+        getBoundingClientRect: () => new DOMRect(),
+      }),
+    );
+    renderComposer('', codexSession, {
+      enableAutoFocus: true,
+      earlyInput: {
+        text: '',
+        edited: false,
+        focused: true,
+        focusUnclaimed: false,
+        start: 0,
+        end: 0,
+        direction: 'none',
+        scrollTop: 0,
+        submitQueued: false,
+      },
+    });
+    // No waiting: a frame's delay is where typed keys were lost.
+    expect(screen.getByRole('textbox')).toHaveFocus();
+    const box = screen.getByRole('textbox').closest<HTMLElement>(String.raw`.group\/chat-textarea`)!;
+    // The editor's own focus outline has taken over from the handover outline.
+    expect(box).not.toHaveClass('focus-outline');
+    expect(box).toHaveClass('has-[.tiptap:focus-visible]:focus-outline');
+  });
+
+  it('should leave focus where it moved and drop the handover outline', () => {
+    const other = document.createElement('button');
+    document.body.append(other);
+    other.focus();
+    try {
+      renderComposer('', codexSession, {
+        earlyInput: {
+          text: '',
+          edited: false,
+          focused: true,
+          focusUnclaimed: false,
+          start: 0,
+          end: 0,
+          direction: 'none',
+          scrollTop: 0,
+          submitQueued: false,
+        },
+      });
+      const box = screen.getByRole('textbox').closest<HTMLElement>(String.raw`.group\/chat-textarea`)!;
+      expect(box).not.toHaveClass('focus-outline');
+      expect(other).toHaveFocus();
+    } finally {
+      other.remove();
+    }
+  });
+
+  /* P4: Enter in the native input before the editor existed is one send, made once it holds the adopted text. */
+  describe('a submit queued in the native input', () => {
+    const queued = (text: string): EarlyChatInput => ({
+      text,
+      edited: true,
+      focused: true,
+      focusUnclaimed: false,
+      start: text.length,
+      end: text.length,
+      direction: 'none',
+      scrollTop: 0,
+      submitQueued: true,
+    });
+    beforeEach(() => {
+      const createRange = document.createRange.bind(document);
+      vi.spyOn(document, 'createRange').mockImplementation(() =>
+        Object.assign(createRange(), {
+          getClientRects: () => [],
+          getBoundingClientRect: () => new DOMRect(),
+        }),
+      );
+    });
+
+    it('should send once, after adoption', async () => {
+      const submit = vi.fn(async (_text?: string) => undefined);
+      const view = renderComposer('Make a bracket.', codexSession, {
+        handleSubmit: submit,
+        earlyInput: queued('Make a bracket.'),
+      });
+      await vi.waitFor(() => {
+        expect(submit).toHaveBeenCalledOnce();
+      });
+      view.rerenderWith(codexSession);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(submit).toHaveBeenCalledOnce();
+    });
+
+    /* The draft the composer last knew can still be the previous one when the queued send runs: the adopted text
+     * travels with the send instead of being read back from the parent. */
+    it('should send the adopted text, not the previous draft', async () => {
+      const submit = vi.fn(async (_text?: string) => undefined);
+      renderComposer('An older draft.', codexSession, {
+        handleSubmit: submit,
+        earlyInput: queued('Make a bracket.'),
+      });
+      await vi.waitFor(() => {
+        expect(submit).toHaveBeenCalledOnce();
+      });
+      expect(submit.mock.calls[0]?.[0]).toBe('Make a bracket.');
+    });
+
+    /* A first visit has no model until the catalog answers, and a send then is refused: the queued one waits for it. */
+    it('should keep the send queued until the chat has a model to send with', async () => {
+      const submit = vi.fn(async (_text?: string) => undefined);
+      execution.current = { kind: 'tau', model: '' };
+      const view = renderComposer('Make a bracket.', codexSession, {
+        handleSubmit: submit,
+        earlyInput: queued('Make a bracket.'),
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(submit).not.toHaveBeenCalled();
+
+      execution.current = { kind: 'tau', model: 'm' };
+      view.rerenderWith(codexSession);
+
+      await vi.waitFor(() => {
+        expect(submit).toHaveBeenCalledOnce();
+      });
+      expect(submit.mock.calls[0]?.[0]).toBe('Make a bracket.');
+    });
+
+    /* STO-25 SP5: the composer mounts and takes the native input before the catalog names a model; only the send
+     * waits for it. */
+    it('should mount the editor with the queued text before the catalog names a model, and send only once it has', async () => {
+      const submit = vi.fn(async (_text?: string) => undefined);
+      execution.current = { kind: 'tau', model: '' };
+      try {
+        const view = renderComposer('Make a bracket.', codexSession, {
+          handleSubmit: submit,
+          earlyInput: queued('Make a bracket.'),
+        });
+        expect(await screen.findByRole('textbox')).toHaveTextContent('Make a bracket.');
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(submit).not.toHaveBeenCalled();
+
+        execution.current = { kind: 'tau', model: 'm' };
+        view.rerenderWith(codexSession);
+
+        await vi.waitFor(() => {
+          expect(submit).toHaveBeenCalledOnce();
+        });
+      } finally {
+        execution.current = { kind: 'tau', model: 'm' };
+      }
+    });
+
+    /* Any edit after the Enter cancels it, as in the native input: an edit undone back to the same text included. */
+    it('should drop the queued send after an edit, even one undone back to the queued text', async () => {
+      const submit = vi.fn(async (_text?: string) => undefined);
+      const view = renderComposer('Make a bracket.', codexSession, {
+        handleSubmit: submit,
+        isSubmitDisabled: true,
+        earlyInput: queued('Make a bracket.'),
+      });
+      const editor = view.container.querySelector<HTMLElement & { editor?: Editor }>('.ProseMirror')?.editor;
+      expect(editor).toBeDefined();
+      act(() => {
+        editor!.commands.insertContent('!');
+      });
+      act(() => {
+        editor!.commands.undo();
+      });
+      expect(editor!.getText()).toBe('Make a bracket.');
+
+      view.rerenderWith(codexSession, undefined, false);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(submit).not.toHaveBeenCalled();
+    });
+
+    /* The composer stays mounted when the person moves to another chat: the Enter was for the chat it was pressed in. */
+    it('should drop the queued send when the composer moves to another chat', async () => {
+      const submit = vi.fn(async (_text?: string) => undefined);
+      draftOwner.current = { chat: 'one' };
+      onTestFinished(() => {
+        draftOwner.current = undefined;
+      });
+      const view = renderComposer('Make a bracket.', codexSession, {
+        handleSubmit: submit,
+        isSubmitDisabled: true,
+        earlyInput: queued('Make a bracket.'),
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      draftOwner.current = { chat: 'two' };
+      view.rerenderWith(codexSession, 'The other chat draft.', true);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      view.rerenderWith(codexSession, 'The other chat draft.', false);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(submit).not.toHaveBeenCalled();
+    });
+
+    /* Send while dictating stops the recording first and sends its words; the queued send cannot, so it waits. */
+    it('should keep the send queued while dictation is running', async () => {
+      dictationDependencies.available = true;
+      dictationDependencies.capture.mockResolvedValue({
+        finish: async () => new Blob([], { type: 'audio/wav' }),
+        cancel: noop,
+      });
+      const submit = vi.fn(async (_text?: string) => undefined);
+      const view = renderComposer('Make a bracket.', codexSession, {
+        handleSubmit: submit,
+        isSubmitDisabled: true,
+        earlyInput: queued('Make a bracket.'),
+      });
+      await userEvent.click(await screen.findByRole('button', { name: 'Dictate' }));
+      await screen.findByRole('button', { name: 'Stop dictation' });
+
+      view.rerenderWith(codexSession, undefined, false);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(submit).not.toHaveBeenCalled();
+    });
+
+    /* A send that is not permitted yet stays queued; the gesture is spent only when it is sent. */
+    it('should keep the send queued while sending is not permitted, then send once', async () => {
+      const submit = vi.fn(async (_text?: string) => undefined);
+      const view = renderComposer('Make a bracket.', codexSession, {
+        handleSubmit: submit,
+        isSubmitDisabled: true,
+        earlyInput: queued('Make a bracket.'),
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(submit).not.toHaveBeenCalled();
+      view.rerenderWith(codexSession, undefined, false);
+      await vi.waitFor(() => {
+        expect(submit).toHaveBeenCalledOnce();
+      });
+      expect(submit.mock.calls[0]?.[0]).toBe('Make a bracket.');
+      view.rerenderWith(codexSession, undefined, false);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(submit).toHaveBeenCalledOnce();
+    });
+  });
+
+  it('should not draw a focus outline when the native input was not focused', () => {
+    renderComposer('', codexSession, {
+      earlyInput: {
+        text: '',
+        edited: false,
+        focused: false,
+        focusUnclaimed: true,
+        start: 0,
+        end: 0,
+        direction: 'none',
+        scrollTop: 0,
+        submitQueued: false,
+      },
+    });
+    const box = screen.getByRole('textbox').closest<HTMLElement>(String.raw`.group\/chat-textarea`)!;
+    expect(box).not.toHaveClass('focus-outline');
+  });
+
+  /* A15d (C10, H-f, F7): Enter pressed before this composer was here is replayed once, through the submit Enter calls. */
+  it('should replay a queued send once, through the submit Enter calls', async () => {
+    const handleSubmit = vi.fn(asyncNoop);
+    const earlyInput: EarlyChatInput = {
+      text: 'Make a bracket.',
+      edited: true,
+      focused: true,
+      focusUnclaimed: false,
+      start: 15,
+      end: 15,
+      direction: 'none',
+      scrollTop: 0,
+      submitQueued: true,
+    };
+    const view = renderComposer('Make a bracket.', codexSession, { earlyInput, handleSubmit });
+    await waitFor(() => {
+      expect(handleSubmit).toHaveBeenCalledOnce();
+    });
+    view.rerenderWith(codexSession);
+    await Promise.resolve();
+    expect(handleSubmit).toHaveBeenCalledOnce();
+  });
+
+  const queuedEarlyInput: EarlyChatInput = {
+    text: 'Make a bracket.',
+    edited: true,
+    focused: true,
+    focusUnclaimed: false,
+    start: 15,
+    end: 15,
+    direction: 'none',
+    scrollTop: 0,
+    submitQueued: true,
+  };
+
+  /* Ruling 2026-11-17T03:28Z: an Enter on a painted draft nobody edited queued visibly; it is replayed only when the chat's
+   * record holds that text, and otherwise cancelled with the record's text shown and a status saying why. */
+  describe('an Enter queued on a painted draft', () => {
+    const paintedQueued: EarlyChatInput = {
+      text: 'Fillet it',
+      edited: false,
+      focused: true,
+      focusUnclaimed: false,
+      start: 9,
+      end: 9,
+      direction: 'none',
+      scrollTop: 0,
+      submitQueued: true,
+      prefilled: true,
+    };
+
+    it('should hold it, shown as queued, while the record is unread, and send it once the record holds the same text', async () => {
+      const handleSubmit = vi.fn(async (_text?: string) => undefined);
+      const verdict: { current: PaintedSendVerdict | undefined } = { current: { kind: 'wait' } };
+      const view = renderComposer('Fillet it', codexSession, {
+        earlyInput: paintedQueued,
+        handleSubmit,
+        paintedSendVerdict: verdict,
+      });
+      await waitFor(() => {
+        expect(view.container.querySelector('[data-queued-send]')).not.toBeNull();
+      });
+      expect(screen.getByRole('status')).toHaveTextContent('Send queued. Press Escape to cancel.');
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(handleSubmit).not.toHaveBeenCalled();
+
+      verdict.current = { kind: 'send' };
+      view.rerenderWith(codexSession, 'Fillet it');
+      await waitFor(() => {
+        expect(handleSubmit).toHaveBeenCalledOnce();
+      });
+      expect(handleSubmit.mock.calls[0]?.[0]).toBe('Fillet it');
+    });
+
+    it('should cancel it when the record holds another text, show that text, and say why', async () => {
+      const handleSubmit = vi.fn(asyncNoop);
+      const setDraftText = vi.fn();
+      const verdict: { current: PaintedSendVerdict | undefined } = { current: { kind: 'wait' } };
+      const view = renderComposer('Fillet it', codexSession, {
+        earlyInput: paintedQueued,
+        handleSubmit,
+        setDraftText,
+        paintedSendVerdict: verdict,
+      });
+      await waitFor(() => {
+        expect(view.container.querySelector('[data-queued-send]')).not.toBeNull();
+      });
+
+      /* A record with no draft at all: the painted text is not the record's, so it goes too. */
+      verdict.current = { kind: 'cancel', recordText: '' };
+      view.rerenderWith(codexSession, 'Fillet it');
+      await waitFor(() => {
+        expect(screen.getByRole('status')).toHaveTextContent('Queued send cancelled: the saved draft differs.');
+      });
+      expect(view.container.querySelector('[data-queued-send]')).toBeNull();
+      const editor = view.container.querySelector<HTMLElement & { editor?: Editor }>('.ProseMirror')?.editor;
+      expect(editor!.getText()).toBe('');
+      expect(setDraftText).toHaveBeenLastCalledWith('');
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(handleSubmit).not.toHaveBeenCalled();
+    });
+
+    /* Review round 21: Home's record can still be unread at adoption; one that loads another text before the send is
+     * permitted replaces the painted draft, and the queued Enter must not send that text. */
+    it('should cancel it with the notice when the draft changes to another text before the send is permitted', async () => {
+      const handleSubmit = vi.fn(asyncNoop);
+      const view = renderComposer('Fillet it', codexSession, {
+        earlyInput: paintedQueued,
+        handleSubmit,
+        isSubmitDisabled: true,
+      });
+      await waitFor(() => {
+        expect(view.container.querySelector('[data-queued-send]')).not.toBeNull();
+      });
+      view.rerenderWith(codexSession, 'A hinge for the door', true);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      view.rerenderWith(codexSession, 'A hinge for the door', false);
+      await waitFor(() => {
+        expect(screen.getByRole('status')).toHaveTextContent('Queued send cancelled: the saved draft differs.');
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(handleSubmit).not.toHaveBeenCalled();
+      expect(view.container.querySelector('[data-queued-send]')).toBeNull();
+    });
+
+    /* Home decides at adoption (ruling 2026-11-17T03:43Z): its early input carries the cancellation and the record's text. */
+    it('should cancel it with the same notice when the early input says the record holds another text', async () => {
+      const handleSubmit = vi.fn(asyncNoop);
+      const view = renderComposer('A hinge for the door', codexSession, {
+        earlyInput: { ...paintedQueued, paintedSendCancelled: { recordText: 'A hinge for the door' } },
+        handleSubmit,
+      });
+      await waitFor(() => {
+        expect(screen.getByRole('status')).toHaveTextContent('Queued send cancelled: the saved draft differs.');
+      });
+      expect(view.container.querySelector('[data-queued-send]')).toBeNull();
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(handleSubmit).not.toHaveBeenCalled();
+    });
+  });
+
+  /* Home's creation location can still be loading at adoption (H-f): the queued send waits, shown on Send. */
+  it('should hold a queued send, shown as queued, until nothing refuses it', async () => {
+    const handleSubmit = vi.fn(asyncNoop);
+    const view = renderComposer('Make a bracket.', codexSession, {
+      earlyInput: queuedEarlyInput,
+      handleSubmit,
+      isSubmitDisabled: true,
+    });
+    await waitFor(() => {
+      expect(view.container.querySelector('[data-queued-send]')).not.toBeNull();
+    });
+    expect(handleSubmit).not.toHaveBeenCalled();
+    view.rerenderWith(codexSession, 'Make a bracket.', false);
+    await waitFor(() => {
+      expect(handleSubmit).toHaveBeenCalledOnce();
+    });
+    expect(view.container.querySelector('[data-queued-send]')).toBeNull();
+  });
+
+  it.each([
+    {
+      name: 'an edit in the editor',
+      cancel: (view: ReturnType<typeof renderComposer>): void => {
+        const editor = view.container.querySelector<HTMLElement & { editor?: Editor }>('.ProseMirror')?.editor;
+        act(() => {
+          editor!.commands.insertContent(' Twice');
+        });
+      },
+    },
+    {
+      name: 'Escape',
+      cancel: (_view: ReturnType<typeof renderComposer>, box: Element): void => {
+        fireEvent.keyDown(box, { key: 'Escape' });
+      },
+    },
+  ])('should cancel a held queued send on $name', async ({ cancel }) => {
+    const handleSubmit = vi.fn(asyncNoop);
+    const view = renderComposer('Make a bracket.', codexSession, {
+      earlyInput: queuedEarlyInput,
+      handleSubmit,
+      isSubmitDisabled: true,
+    });
+    const box = await waitFor(() => {
+      const queued = view.container.querySelector('[data-queued-send]');
+      expect(queued).not.toBeNull();
+      return queued!;
+    });
+    cancel(view, box);
+    expect(view.container.querySelector('[data-queued-send]')).toBeNull();
+    view.rerenderWith(codexSession, 'Make a bracket.', false);
+    await Promise.resolve();
+    expect(handleSubmit).not.toHaveBeenCalled();
+  });
+
+  it('should not send for an early input that queued none', async () => {
+    const handleSubmit = vi.fn(asyncNoop);
+    renderComposer('Make a bracket.', codexSession, {
+      handleSubmit,
+      earlyInput: {
+        text: 'Make a bracket.',
+        edited: true,
+        focused: false,
+        focusUnclaimed: true,
+        start: 0,
+        end: 0,
+        direction: 'none',
+        scrollTop: 0,
+        submitQueued: false,
+      },
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(handleSubmit).not.toHaveBeenCalled();
+  });
+
+  /* The project route's served input is handed over once its lane is revealed, after this editor exists (F7). */
+  it('should take an edit handed over after the editor exists, as an edit, with its caret and focus', async () => {
+    const createRange = document.createRange.bind(document);
+    vi.spyOn(document, 'createRange').mockImplementation(() =>
+      Object.assign(createRange(), {
+        getClientRects: () => [],
+        getBoundingClientRect: () => new DOMRect(),
+      }),
+    );
+    const setDraftText = vi.fn();
+    const adopted = vi.fn();
+    /* Stable across renders, as the route's are: the draft rehydration effect re-runs on a new list. */
+    const chats: never[] = [];
+    const attachments: never[] = [];
+    const props = (earlyInput?: EarlyChatInput): React.ComponentProps<typeof ChatTextareaDesktop> => ({
+      earlyInput,
+      onEarlyInputAdopted: earlyInput === undefined ? undefined : adopted,
+      enableAutoFocus: false,
+      dragKind: undefined,
+      isSubmitting: false,
+      isAttaching: false,
+      canResume: false,
+      inputText: '',
+      attachments,
+      attachmentDirectory: undefined,
+      sendBlockReason: undefined,
+      attachmentAccept: 'image/png',
+      attachmentInputSupported: true,
+      status: 'ready',
+      formattedCancelKeyCombination: '⇧⌘⌫',
+      treeService: undefined,
+      chats,
+      setDraftText,
+      acpAgentId: 'codex',
+      acpSessionData: codexSession,
+      fileInputReference: { current: null },
+      containerReference: { current: null },
+      focusEditorRef: { current: undefined },
+      addContextChipsRef: { current: undefined },
+      addContextReferencesRef: { current: undefined },
+      handleSubmit: asyncNoop,
+      handleCancelClick: noop,
+      handleDragOver: noop,
+      handleDragLeave: noop,
+      handleDrop: asyncNoop,
+      handlePaste: () => false,
+      handleFileSelect: noop,
+      handleFileChange: noop,
+      handleAddImage: noop,
+      onScreenshotAction: noop,
+      handleTextareaBlur: noop,
+      removeAttachment: noop,
+    });
+    const view = render(
+      <TooltipProvider>
+        <ChatTextareaDesktop {...props()} />
+      </TooltipProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole('textbox')).toHaveAttribute('contenteditable', 'true');
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ChatTextareaDesktop
+          {...props({
+            text: 'abc',
+            edited: true,
+            focused: true,
+            focusUnclaimed: false,
+            start: 3,
+            end: 3,
+            direction: 'none',
+            scrollTop: 0,
+            submitQueued: false,
+          })}
+        />
+      </TooltipProvider>,
+    );
+    expect(screen.getByRole('textbox')).toHaveTextContent('abc');
+    expect(screen.getByRole('textbox')).toHaveFocus();
+    expect(globalThis.getSelection()?.anchorOffset).toBe(3);
+    expect(setDraftText).toHaveBeenLastCalledWith('abc');
+    expect(adopted).toHaveBeenCalledOnce();
+  });
+
+  /* Review round 6: a painted draft handed over to an editor that holds nothing stays in the box, not as an edit (P-a). */
+  it('should keep a painted draft handed over after the editor exists, not as an edit', async () => {
+    const createRange = document.createRange.bind(document);
+    vi.spyOn(document, 'createRange').mockImplementation(() =>
+      Object.assign(createRange(), {
+        getClientRects: () => [],
+        getBoundingClientRect: () => new DOMRect(),
+      }),
+    );
+    const setDraftText = vi.fn();
+    const adopted = vi.fn(() => true);
+    /* Stable across renders, as the route's are: the draft rehydration effect re-runs on a new list. */
+    const chats: never[] = [];
+    const attachments: never[] = [];
+    const props = (earlyInput?: EarlyChatInput): React.ComponentProps<typeof ChatTextareaDesktop> => ({
+      earlyInput,
+      onEarlyInputAdopted: earlyInput === undefined ? undefined : adopted,
+      enableAutoFocus: false,
+      dragKind: undefined,
+      isSubmitting: false,
+      isAttaching: false,
+      canResume: false,
+      inputText: '',
+      attachments,
+      attachmentDirectory: undefined,
+      sendBlockReason: undefined,
+      attachmentAccept: 'image/png',
+      attachmentInputSupported: true,
+      status: 'ready',
+      formattedCancelKeyCombination: '⇧⌘⌫',
+      treeService: undefined,
+      chats,
+      setDraftText,
+      acpAgentId: 'codex',
+      acpSessionData: codexSession,
+      fileInputReference: { current: null },
+      containerReference: { current: null },
+      focusEditorRef: { current: undefined },
+      addContextChipsRef: { current: undefined },
+      addContextReferencesRef: { current: undefined },
+      handleSubmit: asyncNoop,
+      handleCancelClick: noop,
+      handleDragOver: noop,
+      handleDragLeave: noop,
+      handleDrop: asyncNoop,
+      handlePaste: () => false,
+      handleFileSelect: noop,
+      handleFileChange: noop,
+      handleAddImage: noop,
+      onScreenshotAction: noop,
+      handleTextareaBlur: noop,
+      removeAttachment: noop,
+    });
+    const view = render(
+      <TooltipProvider>
+        <ChatTextareaDesktop {...props()} />
+      </TooltipProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole('textbox')).toHaveAttribute('contenteditable', 'true');
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ChatTextareaDesktop
+          {...props({
+            text: 'Fillet it',
+            edited: false,
+            focused: true,
+            focusUnclaimed: false,
+            start: 3,
+            end: 3,
+            direction: 'none',
+            scrollTop: 0,
+            submitQueued: false,
+            prefilled: true,
+          })}
+        />
+      </TooltipProvider>,
+    );
+    expect(screen.getByRole('textbox')).toHaveTextContent('Fillet it');
+    expect(screen.getByRole('textbox')).toHaveFocus();
+    expect(globalThis.getSelection()?.anchorOffset).toBe(3);
+    /* The draft takes it from the handover (`onEarlyInputAdopted`), open to the record: no edit is written. */
+    expect(setDraftText).not.toHaveBeenCalled();
+    expect(adopted).toHaveBeenCalledOnce();
+  });
+
+  /* Review round 10: the record was read with the painted text before the handover; the caret is still carried. */
+  it('should carry a painted caret when the record already holds the painted text at the handover', async () => {
+    const createRange = document.createRange.bind(document);
+    vi.spyOn(document, 'createRange').mockImplementation(() =>
+      Object.assign(createRange(), {
+        getClientRects: () => [],
+        getBoundingClientRect: () => new DOMRect(),
+      }),
+    );
+    const setDraftText = vi.fn();
+    const adopted = vi.fn(() => false);
+    /* Stable across renders, as the route's are: the draft rehydration effect re-runs on a new list. */
+    const chats: never[] = [];
+    const attachments: never[] = [];
+    const props = (earlyInput?: EarlyChatInput, inputText = ''): React.ComponentProps<typeof ChatTextareaDesktop> => ({
+      earlyInput,
+      onEarlyInputAdopted: earlyInput === undefined ? undefined : adopted,
+      enableAutoFocus: false,
+      dragKind: undefined,
+      isSubmitting: false,
+      isAttaching: false,
+      canResume: false,
+      inputText,
+      attachments,
+      attachmentDirectory: undefined,
+      sendBlockReason: undefined,
+      attachmentAccept: 'image/png',
+      attachmentInputSupported: true,
+      status: 'ready',
+      formattedCancelKeyCombination: '⇧⌘⌫',
+      treeService: undefined,
+      chats,
+      setDraftText,
+      acpAgentId: 'codex',
+      acpSessionData: codexSession,
+      fileInputReference: { current: null },
+      containerReference: { current: null },
+      focusEditorRef: { current: undefined },
+      addContextChipsRef: { current: undefined },
+      addContextReferencesRef: { current: undefined },
+      handleSubmit: asyncNoop,
+      handleCancelClick: noop,
+      handleDragOver: noop,
+      handleDragLeave: noop,
+      handleDrop: asyncNoop,
+      handlePaste: () => false,
+      handleFileSelect: noop,
+      handleFileChange: noop,
+      handleAddImage: noop,
+      onScreenshotAction: noop,
+      handleTextareaBlur: noop,
+      removeAttachment: noop,
+    });
+    const view = render(
+      <TooltipProvider>
+        <ChatTextareaDesktop {...props()} />
+      </TooltipProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole('textbox')).toHaveAttribute('contenteditable', 'true');
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ChatTextareaDesktop
+          {...props(
+            {
+              text: 'Fillet it',
+              edited: false,
+              focused: true,
+              focusUnclaimed: false,
+              start: 3,
+              end: 3,
+              direction: 'none',
+              scrollTop: 0,
+              submitQueued: false,
+              prefilled: true,
+            },
+            'Fillet it',
+          )}
+        />
+      </TooltipProvider>,
+    );
+    expect(screen.getByRole('textbox')).toHaveTextContent('Fillet it');
+    expect(screen.getByRole('textbox')).toHaveFocus();
+    expect(globalThis.getSelection()?.anchorOffset).toBe(3);
+    /* The record holds it already: no edit is written, and the caret is not moved to the end after the commit. */
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(globalThis.getSelection()?.anchorOffset).toBe(3);
+    expect(setDraftText).not.toHaveBeenCalled();
+    expect(adopted).toHaveBeenCalledOnce();
+  });
+
+  describe('enableMobileCollapse', () => {
+    const composerBox = (): HTMLElement =>
+      screen.getByRole('textbox').closest<HTMLElement>(String.raw`.group\/chat-textarea`)!;
+
+    it('should rest collapsed while empty and unfocused', () => {
+      renderComposer('', codexSession, { enableMobileCollapse: true });
+      expect(composerBox()).toHaveAttribute('data-collapsed');
+      // Only the controls a collapsed row keeps stay outside the collapsible groups.
+      for (const group of document.querySelectorAll('[data-slot=composer-collapsible]')) {
+        expect(group).not.toContainElement(screen.getByRole('button', { name: 'Add' }));
+      }
+    });
+
+    it.each([
+      ['focused', '', { isFocused: true }],
+      ['holding a draft', 'A draft', {}],
+      ['sending', '', { isSubmitting: true }],
+    ] as const)('should unfold while %s', (_label, text, options) => {
+      renderComposer(text, codexSession, { enableMobileCollapse: true, ...options });
+      expect(composerBox()).not.toHaveAttribute('data-collapsed');
+    });
+
+    it('should never collapse without the flag', () => {
+      renderComposer('', codexSession);
+      expect(composerBox()).not.toHaveAttribute('data-collapsed');
+    });
+
+    /** The bar's controls a collapsed row keeps: those outside the collapsible groups, in order. */
+    const restingControls = (): string[] =>
+      [...document.querySelectorAll<HTMLButtonElement>('[data-slot=composer-bar] button')]
+        .filter((button) => !button.closest('[data-slot=composer-collapsible]'))
+        .map((button) => button.ariaLabel ?? '');
+
+    it('should rest as + / microphone / Send, with the model selector folded away (D14, D18)', async () => {
+      dictationDependencies.available = true;
+      renderComposer('', codexSession, { enableMobileCollapse: true });
+      await screen.findByRole('button', { name: 'Dictate' });
+
+      expect(composerBox()).toHaveAttribute('data-collapsed');
+      expect(restingControls()).toEqual(['Add', 'Dictate', 'Send']);
+      const agent = document.querySelector('[data-slot=agent-trigger]')!;
+      expect(agent.closest('[data-slot=composer-collapsible]')).toHaveClass(
+        '@max-[768px]/composer:group-data-[collapsed]/chat-textarea:invisible',
+      );
+    });
+
+    it('should unfold to the model selector → microphone → Send once focused (D18)', async () => {
+      dictationDependencies.available = true;
+      const view = renderComposer('', codexSession, { enableMobileCollapse: true, isFocused: true });
+      await screen.findByRole('button', { name: 'Dictate' });
+
+      expect(composerBox()).not.toHaveAttribute('data-collapsed');
+      expect(
+        [...view.container.querySelectorAll<HTMLButtonElement>('[data-slot=composer-right] button')].map(
+          (button) => button.getAttribute('aria-label') ?? button.dataset['slot'],
+        ),
+      ).toEqual(['agent-trigger', 'Dictate', 'Send']);
+    });
+
+    it('should keep the resting row while a turn streams, with Stop in Send’s place ending it', async () => {
+      dictationDependencies.available = true;
+      const cancel = vi.fn();
+      const submit = vi.fn().mockResolvedValue(undefined);
+      renderComposer('', codexSession, {
+        enableMobileCollapse: true,
+        status: 'streaming',
+        handleCancelClick: cancel,
+        handleSubmit: submit,
+      });
+      await screen.findByRole('button', { name: 'Dictate' });
+
+      expect(composerBox()).toHaveAttribute('data-collapsed');
+      expect(restingControls()).toEqual(['Add', 'Dictate', 'Stop']);
+      expect(screen.queryByRole('button', { name: 'Send' })).toBeNull();
+      await userEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(submit).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['Add', 'ready'],
+      ['Dictate', 'ready'],
+      ['Send', 'ready'],
+      ['Stop', 'streaming'],
+    ] as const)(
+      'should give %s the same words in its tooltip as its name, its key hint hidden from touch (I6, I7)',
+      async (name, status) => {
+        dictationDependencies.available = true;
+        renderComposer('A draft', codexSession, { enableMobileCollapse: true, status });
+        const control = await screen.findByRole('button', { name });
+
+        await userEvent.hover(control);
+        const tooltip = await screen.findByRole('tooltip');
+        // KeyShortcut chips, the only spans that set letter tracking.
+        const hints = [...tooltip.querySelectorAll('span')].filter((span) => span.className.includes('tracking-'));
+        expect(hints).toHaveLength(name === 'Send' || name === 'Stop' ? 1 : 0);
+        for (const hint of hints) {
+          expect(hint).toHaveClass('pointer-coarse:hidden');
+        }
+        let words = tooltip.textContent;
+        for (const hint of hints) {
+          words = words.replace(hint.textContent, '');
+        }
+        expect(words.trim()).toBe(name);
+      },
+    );
+
+    it('should give the bar 40px touch targets that never overlap, and leave fine pointers untouched (I3)', () => {
+      renderComposer('', codexSession, { enableMobileCollapse: true });
+      const bar = document.querySelector('[data-slot=composer-bar]')!;
+
+      // A 28px control plus 6px each side is 40px; 12px apart, neighbouring hit areas meet.
+      expect(bar).toHaveClass(
+        'pointer-coarse:[&_button]:relative',
+        'pointer-coarse:[&_button]:after:absolute',
+        'pointer-coarse:[&_button]:after:-inset-1.5',
+        'pointer-coarse:gap-3',
+      );
+      for (const cluster of bar.querySelectorAll('[data-slot=composer-left], [data-slot=composer-right]')) {
+        expect(cluster).toHaveClass('pointer-coarse:gap-3');
+      }
+      // Every touch rule is coarse-only, so a desktop pointer keeps the bar it had.
+      const touchOnly = [bar, ...bar.querySelectorAll('[data-slot^=composer-]')].flatMap((element) =>
+        [...element.classList].filter((name) => name.includes('gap-3') || name.includes('after:')),
+      );
+      expect(touchOnly.every((name) => name.startsWith('pointer-coarse:'))).toBe(true);
+    });
+  });
+
+  it.each(['closed', 'error'] as const)(
+    'should offer skill recovery inside the bar after the catalog %s',
+    async (status) => {
+      catalogHealth.status = status;
+      renderComposer('Keep this draft', codexSession, { useTauSkills: true });
+      expect(screen.getByRole('status')).toHaveTextContent('Skill updates unavailable');
+      const retry = screen.getByRole('button', { name: 'Retry skill updates' });
+      // A control in the bar, not a row of its own: the composer keeps its height.
+      expect(retry.closest('[data-slot=composer-bar]')).not.toBeNull();
+      await userEvent.click(retry);
+      expect(catalogHealth.retry).toHaveBeenCalledOnce();
+      expect(screen.getByRole('textbox')).toHaveTextContent('Keep this draft');
+    },
+  );
+
+  it('should show no skill recovery while the catalog has not started', () => {
+    catalogHealth.status = 'registering';
+    renderComposer('', codexSession, { useTauSkills: true });
+    expect(screen.queryByText('Skill updates unavailable')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry skill updates' })).not.toBeInTheDocument();
+  });
+
+  it('should keep the same bar and editor when the catalog becomes ready', async () => {
+    catalogHealth.status = 'registering';
+    const view = renderComposer('Keep this draft', codexSession, { useTauSkills: true });
+    const bar = view.container.querySelector('[data-slot=composer-bar]');
+    const editor = screen.getByRole('textbox');
+    await waitFor(() => {
+      expect(editor).toHaveTextContent('Keep this draft');
+    });
+    catalogHealth.status = 'ready';
+    view.rerenderWith(codexSession);
+    expect(view.container.querySelector('[data-slot=composer-bar]')).toBe(bar);
+    expect(screen.getByRole('textbox')).toBe(editor);
+    expect(editor).toHaveTextContent('Keep this draft');
+  });
+
+  /* When tokens arrive mid-typing, a render can still carry a text the editor reported a keystroke ago.
+   * Writing that back deleted what was typed since. */
+  it('should not write back an older text the editor itself reported', async () => {
+    const reported: string[] = [];
+    const view = renderComposer('', codexSession, {
+      setDraftText(text) {
+        reported.push(text);
+      },
+    });
+    const editor = view.container.querySelector<HTMLElement & { editor?: Editor }>('.ProseMirror')?.editor;
+    expect(editor).toBeDefined();
+    act(() => {
+      editor!.commands.insertContent('A');
+    });
+    act(() => {
+      editor!.commands.insertContent('B');
+    });
+    expect(reported).toEqual(['A', 'AB']);
+    // The parent has rendered only the first report, and the agent's commands arrive with it.
+    view.rerenderWith({ ...codexSession, commands: [{ name: '$imagegen', description: 'Generate images' }] }, 'A');
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(editor!.getText()).toBe('AB');
+    view.rerenderWith({ ...codexSession, commands: [{ name: '$imagegen', description: 'Generate images' }] }, 'AB');
+    expect(editor!.getText()).toBe('AB');
+  });
+
+  it('should offer Resume through the full composer without the empty-message refusal', () => {
+    renderComposer('', codexSession, { canResume: true });
+
+    const resume = screen.getByRole('button', { name: 'Resume' });
+    expect(resume).toHaveTextContent('Resume');
+    expect(resume).toHaveAttribute('aria-disabled', 'false');
+  });
+
+  it('keeps one editor scroll region above controls that take layout space', () => {
+    const view = renderComposer('', codexSession);
+    const editorContent = view.container.querySelector('.tiptap')?.parentElement;
+    const editorScroller = editorContent?.parentElement;
+    const bar = view.container.querySelector('[data-slot=composer-bar]');
+
+    expect(editorScroller).toHaveClass('overflow-y-auto', 'max-h-[min(12rem,30cqh)]');
+    expect(editorContent).not.toHaveClass('overflow-y-auto');
+    expect(bar?.parentElement).toBe(editorScroller?.parentElement);
+    expect(bar).not.toHaveClass('absolute');
+  });
+
+  /* Review round 9: a painted draft enters the editor as plain text; its tokens are chipped once the draft holds it. */
+  it("chips a painted draft's $skill the agent already advertises, without changing the draft text", async () => {
+    execution.current = { kind: 'acp', hostId: 'desktop', agentId: 'codex' };
+    const text = 'Make a render of this using $imagegen';
+    const view = renderComposer(
+      text,
+      { ...codexSession, commands: [{ name: '$imagegen', description: 'Generate images' }] },
+      {
+        earlyInput: {
+          text,
+          edited: false,
+          focused: false,
+          focusUnclaimed: false,
+          start: 0,
+          end: 0,
+          direction: 'none',
+          scrollTop: 0,
+          submitQueued: false,
+          prefilled: true,
+        },
+      },
+    );
+
+    await vi.waitFor(() => {
+      expect(view.container.querySelector('.ProseMirror svg')).not.toBeNull();
+    });
+    expect(view.container.querySelector('.ProseMirror')).toHaveTextContent(text);
+  });
+
+  it('chips a restored $skill once the agent advertises it, without changing the draft text', async () => {
+    execution.current = { kind: 'acp', hostId: 'desktop', agentId: 'codex' };
+    const view = renderComposer('Make a render of this using $imagegen', codexSession);
+
+    await vi.waitFor(() => {
+      expect(view.container.querySelector('.ProseMirror')).toHaveTextContent('Make a render of this using $imagegen');
+    });
+    /* A chip is the only thing in the editor that draws an icon. */
+    expect(view.container.querySelector('.ProseMirror svg')).toBeNull();
+
+    view.rerenderWith({ ...codexSession, commands: [{ name: '$imagegen', description: 'Generate images' }] });
+
+    await vi.waitFor(() => {
+      expect(view.container.querySelector('.ProseMirror svg')).not.toBeNull();
+    });
+    expect(view.container.querySelector('.ProseMirror')).toHaveTextContent('Make a render of this using $imagegen');
+  });
+  it.each(['submitted', 'streaming'] as const)(
+    'should dictate into the draft while a chat is %s without sending or stopping it',
+    async (status) => {
+      const createRange = document.createRange.bind(document);
+      vi.spyOn(document, 'createRange').mockImplementation(() =>
+        Object.assign(createRange(), {
+          getClientRects: () => [],
+          getBoundingClientRect: () => new DOMRect(),
+        }),
+      );
+      dictationDependencies.available = true;
+      dictationDependencies.capture.mockResolvedValue({
+        finish: async () => new Blob([], { type: 'audio/wav' }),
+        cancel: noop,
+      });
+      dictationDependencies.transcribe.mockResolvedValue('Make the corners round.');
+      const submit = vi.fn().mockResolvedValue(undefined);
+      const cancelChat = vi.fn();
+      renderComposer('Existing draft.', codexSession, {
+        status,
+        isSubmitting: status === 'submitted',
+        handleSubmit: submit,
+        handleCancelClick: cancelChat,
+      });
+      const dictate = await screen.findByRole('button', { name: 'Dictate' });
+      expect(dictate).toHaveAttribute('aria-disabled', 'false');
+      await userEvent.click(dictate);
+      await userEvent.click(await screen.findByRole('button', { name: 'Stop dictation' }));
+      await waitFor(() => {
+        expect(screen.getByRole('textbox')).toHaveTextContent('Existing draft. Make the corners round.');
+      });
+      expect(submit).not.toHaveBeenCalled();
+      expect(cancelChat).not.toHaveBeenCalled();
+      await userEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      expect(cancelChat).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(['submitted', 'streaming'] as const)(
+    'should offer Send instead of a second Stop while dictating a follow-up as a chat is %s',
+    async (status) => {
+      const createRange = document.createRange.bind(document);
+      vi.spyOn(document, 'createRange').mockImplementation(() =>
+        Object.assign(createRange(), {
+          getClientRects: () => [],
+          getBoundingClientRect: () => new DOMRect(),
+        }),
+      );
+      dictationDependencies.available = true;
+      dictationDependencies.capture.mockResolvedValue({
+        finish: async () => new Blob([], { type: 'audio/wav' }),
+        cancel: noop,
+      });
+      dictationDependencies.transcribe.mockResolvedValue('Then fillet the edges.');
+      const submit = vi.fn().mockResolvedValue(undefined);
+      const cancelChat = vi.fn();
+      renderComposer('', codexSession, {
+        status,
+        isSubmitting: status === 'submitted',
+        handleSubmit: submit,
+        handleCancelClick: cancelChat,
+      });
+      await userEvent.click(await screen.findByRole('button', { name: 'Dictate' }));
+      await screen.findByRole('button', { name: 'Stop dictation' });
+      // The pill's stop square is the only stop: the turn's Stop yields to Send while dictating.
+      expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+      const send = screen.getByRole('button', { name: 'Send' });
+      if (status === 'submitted') {
+        // A send still in flight refuses the next one until it lands.
+        expect(send).toHaveAttribute('aria-disabled', 'true');
+        await userEvent.click(screen.getByRole('button', { name: 'Stop dictation' }));
+      } else {
+        await userEvent.click(send);
+        await waitFor(() => {
+          expect(submit).toHaveBeenCalledExactlyOnceWith('Then fillet the edges.');
+        });
+      }
+      expect(cancelChat).not.toHaveBeenCalled();
+      // Once dictation ends, the running turn offers Stop again.
+      expect(await screen.findByRole('button', { name: 'Stop' })).toBeVisible();
+    },
+  );
+
+  it('should place the microphone beside Send and send the final transcript exactly once after recording', async () => {
+    const createRange = document.createRange.bind(document);
+    vi.spyOn(document, 'createRange').mockImplementation(() =>
+      Object.assign(createRange(), {
+        getClientRects: () => [],
+        getBoundingClientRect: () => new DOMRect(),
+      }),
+    );
+    const microphone = Promise.withResolvers<{ finish: () => Promise<Blob>; cancel: () => void }>();
+    const transcription = Promise.withResolvers<string>();
+    let preview: ((text: string) => void) | undefined;
+    dictationDependencies.available = true;
+    dictationDependencies.capture.mockReturnValue(microphone.promise);
+    dictationDependencies.transcribe.mockImplementation(async (_wav, options) => {
+      preview = options.onPreview;
+      return transcription.promise;
+    });
+    const submit = vi.fn().mockResolvedValue(undefined);
+    const view = renderComposer('Existing draft.', codexSession, { handleSubmit: submit });
+    const dictate = await screen.findByRole('button', { name: 'Dictate' });
+    expect(
+      [...view.container.querySelectorAll('[data-slot=composer-right] button')]
+        .slice(-2)
+        .map((button) => button.ariaLabel),
+    ).toEqual(['Dictate', 'Send']);
+    await userEvent.click(dictate);
+    await screen.findByRole('button', { name: 'Requesting microphone…' });
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+    act(() => {
+      screen.getByRole('textbox').focus();
+    });
+    await userEvent.keyboard('{Enter}');
+    expect(submit).not.toHaveBeenCalled();
+    await act(async () => {
+      microphone.resolve({ finish: async () => new Blob([], { type: 'audio/wav' }), cancel: noop });
+      await microphone.promise;
+    });
+    await screen.findByRole('button', { name: 'Stop dictation' });
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => {
+      expect(preview).toBeDefined();
+    });
+    act(() => {
+      preview?.('Build a');
+    });
+    expect(view.container.querySelector('[data-slot=dictation-transcript]')).toHaveTextContent('Build a');
+    expect(submit).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveAttribute('aria-disabled', 'true');
+    await act(async () => {
+      transcription.resolve('Build a bracket.');
+    });
+    await waitFor(() => {
+      expect(submit).toHaveBeenCalledExactlyOnceWith('Existing draft. Build a bracket.');
+    });
+  });
+});
+
+describe('composer bar measurement lifecycle', () => {
+  const observers = new Map<Element, { callback: ResizeObserverCallback; observer: ResizeObserver }>();
+  let width = 200;
+  let height = 40;
+  let requiredWidth = 260;
+  let reads: string[] = [];
+  let fonts: ReturnType<typeof Promise.withResolvers<FontFaceSet>>;
+  let originalFonts: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    width = 200;
+    height = 40;
+    requiredWidth = 260;
+    reads = [];
+    triggerName.slot = 'trigger-model';
+    observers.clear();
+    originalFonts = Object.getOwnPropertyDescriptor(document, 'fonts');
+    fonts = Promise.withResolvers<FontFaceSet>();
+    Object.defineProperty(document, 'fonts', {
+      configurable: true,
+      value: { status: 'loading', ready: fonts.promise },
+    });
+    vi.stubGlobal(
+      'ResizeObserver',
+      class implements ResizeObserver {
+        readonly #callback: ResizeObserverCallback;
+        public constructor(callback: ResizeObserverCallback) {
+          this.#callback = callback;
+        }
+        public observe(target: Element): void {
+          observers.set(target, { callback: this.#callback, observer: this });
+        }
+        public unobserve(target: Element): void {
+          observers.delete(target);
+        }
+        public disconnect(): void {
+          for (const [target, entry] of observers) {
+            if (entry.observer === this) {
+              observers.delete(target);
+            }
+          }
+        }
+      },
+    );
+    vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      if (this.dataset['slot'] !== triggerName.slot) {
+        return 0;
+      }
+      const bar = this.closest('[data-slot=composer-bar]')!;
+      reads.push(['kernel', 'mode', 'level'].filter((label) => bar.hasAttribute(`data-hide-${label}`)).join(','));
+      return requiredWidth;
+    });
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      if (this.dataset['slot'] !== triggerName.slot) {
+        return 0;
+      }
+      const bar = this.closest('[data-slot=composer-bar]')!;
+      return width + ['kernel', 'mode', 'level'].filter((label) => bar.hasAttribute(`data-hide-${label}`)).length * 30;
+    });
+  });
+
+  afterEach(() => {
+    if (originalFonts) {
+      Object.defineProperty(document, 'fonts', originalFonts);
+    }
+    vi.unstubAllGlobals();
+  });
+
+  const notify = (bar: Element): void => {
+    const current = observers.get(bar);
+    if (!current) {
+      throw new Error('The actual composer observer is missing.');
+    }
+    current.callback(
+      [
+        {
+          target: bar,
+          contentRect: new DOMRectReadOnly(0, 0, width, height),
+          borderBoxSize: [],
+          contentBoxSize: [],
+          devicePixelContentBoxSize: [],
+        },
+      ],
+      current.observer,
+    );
+  };
+
+  it('should fit labels in order and restore them when widened', () => {
+    const { container } = renderBar();
+    const bar = container.querySelector<HTMLElement>('[data-slot=composer-bar]')!;
+    expect(reads.slice(0, 3)).toEqual(['', 'kernel', 'kernel,mode']);
+    act(() => {
+      notify(bar);
+    });
+    width = 400;
+    act(() => {
+      notify(bar);
+    });
+    expect(Object.hasOwn(bar.dataset, 'hideKernel')).toBe(false);
+    expect(Object.hasOwn(bar.dataset, 'hideMode')).toBe(false);
+    expect(Object.hasOwn(bar.dataset, 'hideLevel')).toBe(false);
+  });
+
+  it('should fit labels in order while the model name is still a placeholder', () => {
+    triggerName.slot = 'trigger-model-placeholder';
+    const { container } = renderBar();
+    const bar = container.querySelector<HTMLElement>('[data-slot=composer-bar]')!;
+    expect(reads.slice(0, 3)).toEqual(['', 'kernel', 'kernel,mode']);
+    expect(Object.hasOwn(bar.dataset, 'hideKernel')).toBe(true);
+    expect(Object.hasOwn(bar.dataset, 'hideMode')).toBe(true);
+  });
+
+  it('should refit genuine height and live font changes even when width is unchanged', async () => {
+    const { container } = renderBar();
+    const bar = container.querySelector<HTMLElement>('[data-slot=composer-bar]')!;
+    act(() => {
+      notify(bar);
+    });
+    reads = [];
+    height = 60;
+    act(() => {
+      notify(bar);
+    });
+    expect(reads.length).toBeGreaterThan(0);
+    reads = [];
+    requiredWidth = 290;
+    await act(async () => {
+      fonts.resolve(document.fonts);
+      await fonts.promise;
+    });
+    expect(reads).toEqual(['', 'kernel', 'kernel,mode', 'kernel,mode,level']);
+    expect(Object.hasOwn(bar.dataset, 'hideLevel')).toBe(true);
+  });
+
+  it.each(['model', 'kernel', 'mode'])('should refit a changed %s label without a resize', async (label) => {
+    execution.current = { kind: 'acp', hostId: 'desktop', agentId: 'codex' };
+    const { container } = renderBar({ acpSessionData: codexSession });
+    const bar = container.querySelector<HTMLElement>('[data-slot=composer-bar]')!;
+    act(() => {
+      notify(bar);
+    });
+    reads = [];
+    requiredWidth = 290;
+    const target =
+      label === 'model'
+        ? bar.querySelector('[data-slot=trigger-model]')
+        : label === 'kernel'
+          ? screen.getByRole('button', { name: 'Kernel: Manifold' })
+          : screen.getByRole('button', { name: 'Mode: Ask for approval' });
+    if (!target) {
+      throw new Error('The actual composer label is missing.');
+    }
+    await act(async () => {
+      target.append(document.createTextNode(' changed label'));
+    });
+    expect(reads.length).toBeGreaterThan(0);
+    expect(Object.hasOwn(bar.dataset, 'hideLevel')).toBe(true);
+  });
+
+  it('should ignore late font completion after the actual bar unmounts', async () => {
+    const { unmount } = renderBar();
     unmount();
-
-    mockKernelByConsumer.current = openscadKernel;
-    renderControls();
-
-    expect(screen.getAllByText('OpenSCAD').length).toBeGreaterThan(0);
+    reads = [];
+    await act(async () => {
+      fonts.resolve(document.fonts);
+      await fonts.promise;
+    });
+    expect(reads).toHaveLength(0);
   });
 });

@@ -1,0 +1,594 @@
+import type { ReactNode } from 'react';
+import { useRef } from 'react';
+import type { Column, ColumnDef, Table as TanstackTable } from '@tanstack/react-table';
+import { flexRender } from '@tanstack/react-table';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  ChevronsUpDown,
+  EyeOff,
+  List,
+} from 'lucide-react';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@taucad/ui/components/table';
+import { Button } from '@taucad/ui/components/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@taucad/ui/components/select';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@taucad/ui/components/dropdown-menu';
+import { toTitleCase } from '@taucad/ui/utils/label';
+import { SearchInput } from '@taucad/ui/components/search-input';
+import { Skeleton } from '@taucad/ui/components/skeleton';
+import { cn } from '@taucad/ui/utils/cn';
+
+// =============================================================================
+// DataTable
+// =============================================================================
+
+type DataTableProps<Data> = {
+  readonly isLoading?: boolean;
+  readonly table: TanstackTable<Data>;
+  readonly columns: Array<ColumnDef<Data>>;
+  readonly emptyMessage?: string;
+  readonly onRowClick?: (row: Data) => void;
+};
+
+export function DataTable<Data>({
+  isLoading = false,
+  table,
+  columns,
+  emptyMessage = 'No results.',
+  onRowClick,
+}: DataTableProps<Data>): ReactNode {
+  // TanStack keeps its state on a stable `table` object, so the React Compiler would cache these reads forever.
+  'use no memo';
+  return (
+    <Table aria-busy={isLoading || undefined}>
+      <TableHeader>
+        {table.getHeaderGroups().map((headerGroup) => (
+          <TableRow key={headerGroup.id}>
+            {headerGroup.headers.map((header) => (
+              <TableHead key={header.id}>
+                {header.isPlaceholder ? undefined : flexRender(header.column.columnDef.header, header.getContext())}
+              </TableHead>
+            ))}
+          </TableRow>
+        ))}
+      </TableHeader>
+      <TableBody>
+        {isLoading ? (
+          Array.from({ length: 8 }, (_, index) => (
+            <TableRow key={index}>
+              {table.getVisibleLeafColumns().map((column) => (
+                <TableCell key={column.id}>
+                  <Skeleton className='h-8 w-full' />
+                </TableCell>
+              ))}
+            </TableRow>
+          ))
+        ) : table.getRowModel().rows.length > 0 ? (
+          table.getRowModel().rows.map((row) => (
+            <TableRow
+              key={row.id}
+              className={cn(row.getIsSelected() ? 'bg-muted/50' : undefined, onRowClick && 'cursor-action')}
+              tabIndex={onRowClick ? 0 : undefined}
+              onClick={
+                onRowClick
+                  ? () => {
+                      onRowClick(row.original);
+                    }
+                  : undefined
+              }
+              onKeyDown={
+                onRowClick
+                  ? (event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        onRowClick(row.original);
+                      }
+                    }
+                  : undefined
+              }
+            >
+              {row.getVisibleCells().map((cell) => (
+                <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+              ))}
+            </TableRow>
+          ))
+        ) : (
+          <TableRow>
+            <TableCell colSpan={columns.length} className='h-24 text-center'>
+              {emptyMessage}
+            </TableCell>
+          </TableRow>
+        )}
+      </TableBody>
+    </Table>
+  );
+}
+
+// =============================================================================
+// DataTableVirtualized
+// =============================================================================
+
+type DataTableVirtualizedProps<Data> = {
+  readonly table: TanstackTable<Data>;
+  readonly columns: Array<ColumnDef<Data>>;
+  readonly emptyMessage?: string;
+  readonly height?: number;
+  readonly estimatedRowHeight?: number;
+  readonly overscan?: number;
+  readonly onRowClick?: (row: Data) => void;
+};
+
+/**
+ * Virtualized data table for large datasets.
+ * Only renders visible rows for better performance.
+ */
+export function DataTableVirtualized<Data>({
+  table,
+  columns,
+  emptyMessage = 'No results.',
+  height = 400,
+  estimatedRowHeight = 48,
+  overscan = 10,
+  onRowClick,
+}: DataTableVirtualizedProps<Data>): ReactNode {
+  // TanStack keeps its state on a stable `table` object, so the React Compiler would cache these reads forever.
+  'use no memo';
+  'use no memo';
+
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+  const { rows } = table.getRowModel();
+
+  // oxlint-disable-next-line react/incompatible-library -- This component is explicitly opted out because TanStack Virtual returns mutable functions that cannot be compiler-memoized safely.
+  const rowVirtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => tableContainerRef.current,
+    estimateSize: () => estimatedRowHeight,
+    overscan,
+  });
+
+  const virtualRows = rowVirtualizer.getVirtualItems();
+  const totalSize = rowVirtualizer.getTotalSize();
+
+  // Calculate padding for virtual scrolling
+  const firstVirtualRow = virtualRows[0];
+  const lastVirtualRow = virtualRows.at(-1);
+  const paddingTop = firstVirtualRow ? firstVirtualRow.start : 0;
+  const paddingBottom = lastVirtualRow ? totalSize - lastVirtualRow.end : 0;
+
+  return (
+    <div ref={tableContainerRef} className='overflow-auto' style={{ height }}>
+      <Table>
+        <TableHeader className='sticky top-0 z-10 bg-background'>
+          {table.getHeaderGroups().map((headerGroup) => (
+            <TableRow key={headerGroup.id}>
+              {headerGroup.headers.map((header) => (
+                <TableHead key={header.id}>
+                  {header.isPlaceholder ? undefined : flexRender(header.column.columnDef.header, header.getContext())}
+                </TableHead>
+              ))}
+            </TableRow>
+          ))}
+        </TableHeader>
+        <TableBody>
+          {rows.length > 0 ? (
+            <>
+              {paddingTop > 0 && (
+                <tr>
+                  <td style={{ height: paddingTop }} />
+                </tr>
+              )}
+              {virtualRows.map((virtualRow) => {
+                const row = rows[virtualRow.index];
+                if (!row) {
+                  return undefined;
+                }
+
+                return (
+                  <TableRow
+                    key={row.id}
+                    data-index={virtualRow.index}
+                    className={cn(row.getIsSelected() ? 'bg-muted/50' : undefined, onRowClick && 'cursor-action')}
+                    tabIndex={onRowClick ? 0 : undefined}
+                    onClick={
+                      onRowClick
+                        ? () => {
+                            onRowClick(row.original);
+                          }
+                        : undefined
+                    }
+                    onKeyDown={
+                      onRowClick
+                        ? (event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault();
+                              onRowClick(row.original);
+                            }
+                          }
+                        : undefined
+                    }
+                  >
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                    ))}
+                  </TableRow>
+                );
+              })}
+              {paddingBottom > 0 && (
+                <tr>
+                  <td style={{ height: paddingBottom }} />
+                </tr>
+              )}
+            </>
+          ) : (
+            <TableRow>
+              <TableCell colSpan={columns.length} className='h-24 text-center'>
+                {emptyMessage}
+              </TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+// =============================================================================
+// DataTableSearch
+// =============================================================================
+
+type DataTableSearchProps<Data> = {
+  readonly table: TanstackTable<Data>;
+  readonly placeholder?: string;
+  readonly className?: string;
+  readonly containerClassName?: string;
+  /** Keep the field in place but inert, as when there is nothing to search yet. */
+  readonly isDisabled?: boolean;
+};
+
+export function DataTableSearch<Data>({
+  table,
+  placeholder = 'Search…',
+  className,
+  containerClassName,
+  isDisabled = false,
+}: DataTableSearchProps<Data>): ReactNode {
+  // TanStack keeps its state on a stable `table` object, so the React Compiler would cache these reads forever.
+  'use no memo';
+  const globalFilter = table.getState().globalFilter as string;
+
+  return (
+    <SearchInput
+      aria-label={placeholder.replace('…', '')}
+      autoComplete='off'
+      className={cn('h-8', className)}
+      placeholder={placeholder}
+      value={globalFilter}
+      containerClassName={containerClassName}
+      disabled={isDisabled}
+      onChange={(event) => {
+        table.setGlobalFilter(event.target.value);
+      }}
+      onClear={() => {
+        table.setGlobalFilter('');
+      }}
+    />
+  );
+}
+
+// =============================================================================
+// DataTablePagination
+// =============================================================================
+
+type DataTablePaginationProps<Data> = {
+  readonly table: TanstackTable<Data>;
+  readonly pageSizeOptions?: number[];
+  readonly withSelectedCount?: boolean;
+  readonly itemName?: string;
+};
+
+const defaultPageSizeOptions = [10, 20, 30, 40, 50];
+
+export function DataTablePagination<Data>({
+  table,
+  pageSizeOptions = defaultPageSizeOptions,
+  withSelectedCount = true,
+  itemName = 'row',
+}: DataTablePaginationProps<Data>): ReactNode {
+  // TanStack keeps its state on a stable `table` object, so the React Compiler would cache these reads forever.
+  'use no memo';
+  const selectedCount = table.getFilteredSelectedRowModel().rows.length;
+  const totalCount = table.getFilteredRowModel().rows.length;
+  const { pageIndex, pageSize } = table.getState().pagination;
+  const firstVisible = Math.min(pageIndex * pageSize + 1, totalCount);
+  const lastVisible = Math.min((pageIndex + 1) * pageSize, totalCount);
+
+  return (
+    <div className='flex flex-wrap items-center justify-between gap-x-6 gap-y-2'>
+      <div className='text-sm text-muted-foreground'>
+        {withSelectedCount
+          ? `${selectedCount} of ${totalCount} ${itemName}(s) selected.`
+          : `${firstVisible}–${lastVisible} of ${totalCount} ${itemName}${totalCount === 1 ? '' : 's'}`}
+      </div>
+      <div className='flex flex-wrap items-center gap-x-6 gap-y-2 lg:gap-x-8'>
+        <div className='flex items-center gap-2'>
+          <p className='hidden text-sm font-medium whitespace-nowrap sm:block'>Items per page</p>
+          <Select
+            size='sm'
+            value={`${pageSize}`}
+            onValueChange={(value) => {
+              table.setPageSize(Number(value));
+            }}
+          >
+            <SelectTrigger aria-label='Items per page'>
+              <SelectValue placeholder={pageSize} />
+            </SelectTrigger>
+            <SelectContent position='popper' side='top'>
+              {pageSizeOptions.map((option) => (
+                <SelectItem key={option} value={`${option}`}>
+                  {option}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className='text-sm font-medium whitespace-nowrap'>
+          Page {pageIndex + 1} of {table.getPageCount()}
+        </div>
+        <div className='flex items-center gap-2'>
+          <Button
+            variant='outline'
+            size='icon-sm'
+            className='hidden lg:flex'
+            disabled={!table.getCanPreviousPage()}
+            onClick={() => {
+              table.setPageIndex(0);
+            }}
+          >
+            <span className='sr-only'>Go to first page</span>
+            <ChevronsLeft />
+          </Button>
+          <Button
+            variant='outline'
+            size='icon-sm'
+            disabled={!table.getCanPreviousPage()}
+            onClick={() => {
+              table.previousPage();
+            }}
+          >
+            <span className='sr-only'>Go to previous page</span>
+            <ChevronLeft />
+          </Button>
+          <Button
+            variant='outline'
+            size='icon-sm'
+            disabled={!table.getCanNextPage()}
+            onClick={() => {
+              table.nextPage();
+            }}
+          >
+            <span className='sr-only'>Go to next page</span>
+            <ChevronRight />
+          </Button>
+          <Button
+            variant='outline'
+            size='icon-sm'
+            className='hidden lg:flex'
+            disabled={!table.getCanNextPage()}
+            onClick={() => {
+              table.setPageIndex(table.getPageCount() - 1);
+            }}
+          >
+            <span className='sr-only'>Go to last page</span>
+            <ChevronsRight />
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// DataTableColumnHeader
+// =============================================================================
+
+type DataTableColumnHeaderProps<Data, Value> = {
+  readonly column: Column<Data, Value>;
+  readonly title: string;
+  readonly className?: string;
+};
+
+export function DataTableColumnHeader<Data, Value>({
+  column,
+  title,
+  className,
+}: DataTableColumnHeaderProps<Data, Value>): ReactNode {
+  // TanStack keeps its state on a stable `table` object, so the React Compiler would cache these reads forever.
+  'use no memo';
+  if (!column.getCanSort()) {
+    return <div className={cn('text-sm font-medium', className)}>{title}</div>;
+  }
+
+  return (
+    <div className={cn('flex items-center space-x-2', className)}>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant='ghost' size='sm' className='-ml-3 h-7 text-sm font-medium data-[state=open]:bg-accent'>
+            <span>{title}</span>
+            {column.getIsSorted() === 'desc' ? (
+              <ArrowDown className='ml-2 h-4 w-4' />
+            ) : column.getIsSorted() === 'asc' ? (
+              <ArrowUp className='ml-2 h-4 w-4' />
+            ) : (
+              <ChevronsUpDown className='ml-2 h-4 w-4' />
+            )}
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align='start'>
+          <DropdownMenuItem
+            onClick={() => {
+              column.toggleSorting(false);
+            }}
+          >
+            <ArrowUp className='text-muted-foreground/70' />
+            Asc
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={() => {
+              column.toggleSorting(true);
+            }}
+          >
+            <ArrowDown className='text-muted-foreground/70' />
+            Desc
+          </DropdownMenuItem>
+          {column.getCanHide() && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => {
+                  column.toggleVisibility(false);
+                }}
+              >
+                <EyeOff className='text-muted-foreground/70' />
+                Hide
+              </DropdownMenuItem>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
+// =============================================================================
+// DataTableSortingDropdown
+// =============================================================================
+
+type DataTableSortingDropdownProps<Data> = {
+  readonly table: TanstackTable<Data>;
+  /** Filters that belong with the sort, listed after the sort fields. */
+  readonly children?: ReactNode;
+};
+
+export function DataTableSortingDropdown<Data>({ table, children }: DataTableSortingDropdownProps<Data>): ReactNode {
+  // TanStack keeps its state on a stable `table` object, so the React Compiler would cache these reads forever.
+  'use no memo';
+  const sortingState = table.getState().sorting[0];
+
+  // Dynamically get sortable columns from the table
+  const sortFields = table
+    .getAllColumns()
+    .filter((column) => column.getCanSort())
+    .map((column) => ({
+      id: column.id,
+      label: toTitleCase(column.id),
+    }));
+
+  const toggleSorting = (id: string): void => {
+    if (sortingState?.id === id) {
+      // Toggle direction if already sorting by this column
+      table.setSorting([{ id, desc: !sortingState.desc }]);
+    } else {
+      // Set to descending order by default on first click
+      table.setSorting([{ id, desc: true }]);
+    }
+  };
+
+  const renderSortIndicator = (fieldId: string): ReactNode => {
+    if (sortingState?.id !== fieldId) {
+      return undefined;
+    }
+
+    return sortingState.desc ? <ArrowDown className='ml-auto' /> : <ArrowUp className='ml-auto' />;
+  };
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant='outline' size='icon' aria-label='Sort'>
+          <ArrowUpDown className='size-4' />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align='end'>
+        <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {sortFields.map((field) => (
+          <DropdownMenuItem
+            key={field.id}
+            className='flex w-full items-center'
+            onClick={() => {
+              toggleSorting(field.id);
+            }}
+            onSelect={(event) => {
+              event.preventDefault();
+            }}
+          >
+            {field.label}
+            {renderSortIndicator(field.id)}
+          </DropdownMenuItem>
+        ))}
+        {children}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// =============================================================================
+// DataTableColumnVisibilityDropdown
+// =============================================================================
+
+type DataTableColumnVisibilityDropdownProps<Data> = {
+  readonly table: TanstackTable<Data>;
+};
+
+export function DataTableColumnVisibilityDropdown<Data>({
+  table,
+}: DataTableColumnVisibilityDropdownProps<Data>): ReactNode {
+  // TanStack keeps its state on a stable `table` object, so the React Compiler would cache these reads forever.
+  'use no memo';
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant='outline' size='icon' aria-label='Toggle columns'>
+          <List className='size-4' />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align='end'>
+        <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {table
+          .getAllColumns()
+          .filter((column) => column.getCanHide())
+          .map((column) => {
+            return (
+              <DropdownMenuCheckboxItem
+                key={column.id}
+                checked={column.getIsVisible()}
+                onCheckedChange={(value) => {
+                  column.toggleVisibility(Boolean(value));
+                }}
+                onSelect={(event) => {
+                  event.preventDefault();
+                }}
+              >
+                {toTitleCase(column.id)}
+              </DropdownMenuCheckboxItem>
+            );
+          })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}

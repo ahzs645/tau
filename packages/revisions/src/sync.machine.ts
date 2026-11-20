@@ -1,0 +1,2889 @@
+/**
+ * `sync.machine` — the only thing in Tau that decides when a project is pushed.
+ *
+ * Sync is never a user event (D28, S41). A remote that is connected means every
+ * minted revision reaches it within one debounce; a tab going hidden means the
+ * `close` revision is pushed while the page can still `await`; anything the
+ * server did not acknowledge is a record in `.git/sync-pending` that
+ * the next open of this project on this device retries before it does anything
+ * else. Opening pulls first, under a bound, so a second device sees the first
+ * device's work without anybody pressing anything.
+ *
+ * Three things this machine deliberately does not hold:
+ *
+ * - **A backoff tick.** The facet is settled values only (A38): `Backed up`,
+ *   `Backing up… n`, `Not backed up · n`, `Needs resolution`. The retry counter
+ *   exists in context and never leaves it.
+ * - **A snapshot.** The durable queue is a *record* read by an injected actor
+ *   at start and written by another after every push (D29, "records are the
+ *   durable form"). Nothing here is persisted as machine state.
+ * - **The over-quota file list.** A push the remote refused for storage
+ *   forwards `quotaRefused { paths }` to the parent, which routes it to
+ *   `remote.machine` — the single owner of that list (P19, A40).
+ *
+ * `Sync now` is not a verb a person has: it exists only as the correlated
+ * `syncNow { pushId }` / `pushSettled { pushId, outcome }` pair `publish.machine`
+ * needs to know its refs are on the remote before it tags them (architecture
+ * `publish.machine` row).
+ */
+
+import { createAsyncLogic, createCallbackLogic, setup, types } from 'xstate';
+import type { AnyActorRef, AnyEventObject, EnqueueObject, SnapshotFrom } from 'xstate';
+
+import type { CheckoutCutTrigger } from '#checkout.machine.js';
+import { eventSchemas } from '#machine-schemas.js';
+import type { MachineActors } from '#machine-schemas.js';
+import { isCommitRefusal, isStorageRefusal } from '#refusal-markers.js';
+import type { RevisionRef, RemoteStorageRefusal } from '#revision-port.js';
+import type {
+  SyncFacet,
+  SyncPushOutcome,
+  SyncQueueEntry,
+  SyncQueueRecord,
+  SyncRefOutcome,
+  SyncFailureReason,
+  VersionRenumbering,
+} from '#sync.types.js';
+
+/** Input accepted when creating the syncMachine actor. @public */
+export type SyncMachineInput = Readonly<{
+  projectId: string;
+  /** The branch the history set tracks. Defaults to `main`. */
+  branch?: string;
+  /** The root, for the two facts that belong to siblings (`publish`, `remote`). */
+  parentRef?: AnyActorRef;
+  /** D28's 2 s. */
+  debounceMilliseconds?: number;
+  /** How long a burst of mints may hold its push. Defaults to {@link syncDebounceMaxWaitFactor} windows. */
+  debounceMaxWaitMilliseconds?: number;
+  /** First retry wait after an unacknowledged push; doubles per attempt. */
+  retryMilliseconds?: number;
+  /** The ceiling the doubling stops at. */
+  maxRetryMilliseconds?: number;
+  /** Review 3 F16's 3 s: how long the row says `Checking…`. */
+  pullRenderMilliseconds?: number;
+  /** Active background pull deadline. Defaults to 15 minutes. */
+  pullDeadlineMilliseconds?: number;
+  /** Whether this host starts believing it is online. Defaults to `true`. */
+  online?: boolean;
+  /** How long one push may hold the network before it is abandoned and retried (A12). Defaults to 15 minutes. */
+  pushDeadlineMilliseconds?: number;
+}>;
+
+/* The fields of {@link SyncMachineContext}, named by the interface below. */
+type SyncMachineContextFields = Readonly<{
+  projectId: string;
+  branch: string;
+  parentRef: AnyActorRef | undefined;
+  /** The remote's name in git's config, or `undefined` while there is none. */
+  remote: string | undefined;
+  /** False for remotes requiring a fresh explicit push gesture. */
+  automaticPush: boolean;
+  explicitPush: boolean;
+  explicitTarget: string | undefined;
+  online: boolean;
+  /** The durable queue, exactly as the record holds it. */
+  pending: readonly SyncQueueEntry[];
+  /** Ref → what this host last saw the remote hold, which is the push lease (P18). */
+  leases: Readonly<Record<string, string>>;
+  /** The correlated requests the running or next push answers (RM-R11). */
+  pushIds: readonly string[];
+  /**
+   * Requests that arrived while a push was already on the wire (W15 F1, RM-R11).
+   *
+   * That push was assembled before them — before the revision each requester
+   * minted and then asked about — so it is never the one that answers: the push
+   * after it does.
+   */
+  nextPushIds: readonly string[];
+  /** How many pushes in a row have not been acknowledged. Never leaves context. */
+  attempt: number;
+  /**
+   * A rate-limited remote's own wait (W13d): the next retry waits exactly this
+   * long instead of the doubling, which a 429 does not advance.
+   */
+  retryAfterMilliseconds: number | undefined;
+  /** Whether the last settle was retryable, fatal, or fine. */
+  failure: 'none' | 'retry' | 'fatal';
+  /** A local retry-record write failed; only a successful write clears it. */
+  queueWriteError: string | undefined;
+  /** Set while the open pull is still inside its first window (F16's 3 s). */
+  withinPullWindow: boolean;
+  /** Memory-only acknowledgement, rebuilt by a successful pull after restart. */
+  hasAppliedRemote: boolean;
+  chats: NonNullable<SyncFacet['chats']>;
+  recordProjection: SyncProjectRecordsActorInput | undefined;
+  /**
+   * The last revision this device minted.
+   *
+   * Recorded so a push that *threw* — a transport failure reports no refs at
+   * all (W11b R5) — still leaves an honest queue entry naming what did not
+   * reach the remote.
+   */
+  localHead: string | undefined;
+  /**
+   * A revision was minted while this machine was busy elsewhere.
+   *
+   * `reading` and `opening` are both effect states with no push edge, and a
+   * `close` cut lands in whichever one the host happens to be in — so the fact
+   * is remembered and the state that finishes acts on it. Without it a project
+   * closed within a second of opening would drop its own close flush.
+   */
+  pendingMint: boolean;
+  /**
+   * That remembered mint was a `close` or `hidden` cut, which flushes now.
+   *
+   * `pendingMint` alone cannot say so, and the state that acts on it —
+   * `backedUp.always` — is not the state the event arrived in, so a close cut
+   * landing during an in-flight push was routed to the 2 s debounce and lost
+   * with the document (C17).
+   */
+  pendingFlush: boolean;
+  /** A fetch completed record projections whose durable retry slice must be written. */
+  recordQueueDirty: boolean;
+  /**
+   * The last pull found this device ahead of the remote (C15).
+   *
+   * Distinct from `pendingMint`: nothing was minted *now*, the remote is simply
+   * missing revisions this device already has — the state of any device whose
+   * queue write was lost or whose process died inside the debounce.
+   */
+  ahead: boolean;
+  /** Where a divergence landed, when one did (A22). */
+  conflictRef: string | undefined;
+  /**
+   * A remote move arrived while this machine was busy (D13).
+   *
+   * The same remembered-fact shape as `pendingMint`: the entry is a wake-up,
+   * and the state that finishes the current effect fetches for it.
+   */
+  pendingFetch: boolean;
+  /**
+   * A session change not yet read under the new session (audit R6): a refusal
+   * of an answer asked under the last session that lands in `failed` opens
+   * again, and a busy `manual` remote reads again once it settles. Cleared by
+   * `opening`, `pushing` and a disconnect; the pull held through quiescing is
+   * `heldSessionPull`'s.
+   */
+  pendingSession: boolean;
+  /**
+   * A session change not yet pulled when the host began quiescing, or one that
+   * arrived during it (audit R6). Kept apart from `pendingSession`, which a push
+   * started during the hold clears: the release pulls for this one, unless the
+   * machine is in `failed` (which reopens only while `pendingSession` is set, so
+   * a refusal of a push started after the change stays terminal) or in
+   * `conflicted.offering` (which pulls once its push is answered).
+   */
+  heldSessionPull: boolean;
+  /** Holds new background work while the host waits for close. */
+  quiescing: boolean;
+  /** Transport cancellation was requested; local reconciliation still completes. */
+  transportStopped: boolean;
+  /** A lease retired since the current pull started, so a hold it hit may already be gone (rule 9). */
+  leaseSettled: boolean;
+  /** The checkout an apply left alone, and which the `merge` cut or the lease wait is about (D12). */
+  heldCheckoutId: string | undefined;
+  /**
+   * A merge cut already found nothing to save and the pull ran again at once.
+   *
+   * The second such answer backs off instead (RV-W5b F2): a dirty check and a
+   * cut that disagree — a registry lease with no file behind it, a turn not yet
+   * leased, a capture that saw a write the cut's memo did not — would otherwise
+   * be a real fetch per loop. Cleared once the project is backed up.
+   */
+  mintRepulled: boolean;
+  /** The fetched remote head a leased checkout has not applied (RA4's *Arrived*). */
+  arrived: string | undefined;
+  /** How many cuts this machine has asked for, so each `requestId` is new (N2). */
+  cutCount: number;
+  /** The id the checkout echoes on the answer to this machine's latest cut. */
+  requestId: string | undefined;
+  error: string | undefined;
+  reason: SyncFailureReason | undefined;
+  /** When this device first minted a revision the remote has not acknowledged, for the lag report. */
+  unsyncedSince: number | undefined;
+  /** The first mint since the current push was assembled: what is still unsynced once that push is acknowledged. */
+  mintedSincePushAt: number | undefined;
+  /**
+   * The first unsynced change of any kind — a mint, a record change, a landed
+   * decision — since the current push was assembled. `mintedSincePushAt` is a
+   * mint alone (D98); this is what the lag of whatever that push left unsent
+   * runs from once it is acknowledged.
+   */
+  changedSincePushAt: number | undefined;
+  /**
+   * What the push under way is measured from, read once as it starts: a change
+   * made while it is on the wire is not one it carries, so it never moves this.
+   */
+  pushSince: number;
+  /** Which fact dated `pushSince`, so a panel can leave out the pushes nothing dated. */
+  pushSinceKind: SyncLagSince;
+  /** When the push or pull under way started, and the queue depth a push started with (`syncAttempt`). */
+  attemptStartedAt: number;
+  pushPending: number;
+  debounceMilliseconds: number;
+  debounceMaxWaitMilliseconds: number;
+  retryMilliseconds: number;
+  maxRetryMilliseconds: number;
+  pullRenderMilliseconds: number;
+  pullDeadlineMilliseconds: number;
+  pushDeadlineMilliseconds: number;
+}>;
+
+/** Serializable state owned by syncMachine. @public */
+// oxlint-disable-next-line typescript/no-empty-interface, typescript/no-empty-object-type, typescript/consistent-type-definitions -- an interface, not a type alias: declarations reference it by name, where an alias is expanded into every transition of this machine and of any machine that holds it (K-17, TS7056)
+export interface SyncMachineContext extends SyncMachineContextFields {}
+
+/** Events accepted by syncMachine. @public */
+export type SyncMachineEvent =
+  /**
+   * A checkout minted a revision (W6).
+   *
+   * `close` and `hidden` push with **zero debounce**: the document is still
+   * alive at `hidden` and the desktop's quit is held, so this is the last
+   * moment an `await` means anything. A cut the root declined mints nothing and
+   * never arrives here, so the queue records no phantom (W6-a2 R1).
+   */
+  | Readonly<{
+      type: 'revisionMinted';
+      checkoutId: string;
+      trigger: CheckoutCutTrigger;
+      revisionId: string;
+      /* The branch the minting checkout is on; only a mint on this machine's branch is its head (RM-S3). */
+      branch: string | undefined;
+      /* This machine's own `merge` cut echoes the id it asked under (RM-R1). */
+      requestId?: string;
+    }>
+  /* The root's other answers to a cut, which reach here only for a cut no turn
+   * asked for; this machine reads the one whose `requestId` is its own (D12). */
+  | Readonly<{ type: 'nothingToSave'; checkoutId: string; trigger: CheckoutCutTrigger; requestId?: string }>
+  | Readonly<{
+      type: 'cutFailed';
+      checkoutId: string | undefined;
+      trigger: CheckoutCutTrigger;
+      requestId?: string;
+      reason: string;
+    }>
+  | Readonly<{ type: 'casLost'; checkoutId: string; trigger: CheckoutCutTrigger; requestId?: string }>
+  /** A turn's lease retired; a pull parked behind it applies now (rule 9). */
+  | Readonly<{ type: 'leaseRetired'; runId: string }>
+  /**
+   * The remote moved (D13): one `revision` entry from the durable-events long
+   * poll. A wake-up, never a payload — the bytes come from the fetch it starts.
+   */
+  | Readonly<{ type: 'remoteMoved'; generation: number; refs: readonly string[] }>
+  /** The long poll was refused (404 for a non-member); classified like any remote refusal (rule 19). */
+  | Readonly<{ type: 'remoteRefused'; code: string; message: string }>
+  /** A durable project record changed after the current push snapshot was built. */
+  | Readonly<{ type: 'recordsChanged' }>
+  /**
+   * The page's signed-in person changed (audit R6): the remote is read afresh
+   * under the new session, its move stream included, as a fresh root would.
+   */
+  | Readonly<{ type: 'sessionChanged' }>
+  /** Push now, and — with a `pushId` — tell the requester how it ended. */
+  | Readonly<{ type: 'syncNow'; pushId?: string; remote?: string }>
+  /** One explicit push; never retried without another request. */
+  | Readonly<{ type: 'pushNow'; pushId: string; repositoryUrl: string }>
+  /** A client reopened a retained project root; fetch before it reads. */
+  | Readonly<{ type: 'open' }>
+  /** The host is going away: flush while there is still a `then` to run. */
+  | Readonly<{ type: 'close' }>
+  /** Hold background triggers, then cancel transports, or release a refused close. */
+  | Readonly<{ type: 'quiesce'; phase: 'hold' | 'cancel' | 'release' }>
+  | Readonly<{ type: 'remoteConnected'; remote: string; automaticPush?: boolean }>
+  | Readonly<{ type: 'remoteDisconnected' }>
+  | Readonly<{ type: 'online' }>
+  | Readonly<{ type: 'offline' }>
+  /**
+   * A push this machine did not make settled.
+   *
+   * The `pagehide` keepalive re-send is the sender: the document issued the POST
+   * itself because nothing asynchronous survives an unload, and the answer — if
+   * the host is still alive to hear one — arrives here (A32, S41).
+   */
+  | Readonly<{ type: 'pushAcknowledged'; refs: readonly SyncRefOutcome[] }>
+  | Readonly<{ type: 'pushFailed'; reason: string }>
+  /**
+   * A divergence this machine reported has been composed (S33, W10, review 2 R6).
+   *
+   * `Needs resolution` is otherwise sticky: `conflicted` leaves only on
+   * connectivity or a correlated `syncNow`, so a resolution the person made
+   * would be invisible to the Sync row until something else happened.
+   *
+   * The payload is W10's own, translated by the root: `ref` is
+   * `refs/heads/<branch>` for the branch its resolution settled, and
+   * `revisionId` is the head that resolution minted — which is what this
+   * machine then offers the remote under its lease (P44). Absent `ref` means
+   * "whatever you were conflicted about".
+   */
+  | Readonly<{ type: 'conflictResolved'; ref?: string; revisionId?: string }>
+  /**
+   * The live checkout moved to another branch (D50).
+   *
+   * `branch` is read once when the project opens, so without this a switch
+   * left the pull integrating the branch the project was opened on.
+   */
+  | Readonly<{ type: 'branchChanged'; branch: string }>;
+
+/** Facts syncMachine emits for a host that holds only the root. @public */
+export type SyncMachineEmitted =
+  /** The remote and this device have diverged; W10's surface takes it from here. */
+  | Readonly<{ type: 'syncConflict'; ref: string; reason: string }>
+  /** The correlated answer to one `syncNow { pushId }` (the `publish.machine` row). */
+  | Readonly<{ type: 'pushSettled'; pushId: string; outcome: SyncPushOutcome }>
+  /**
+   * This device's own versions took new numbers before their first backup
+   * (B6): told once, on the push that moved them ("V4 Lid fit is now V5").
+   */
+  | Readonly<{ type: 'versionsRenumbered'; renumbered: readonly VersionRenumbering[] }>
+  /**
+   * One push or pull settled, for the host's telemetry sender (W36 D1). Bounded
+   * facts only: the host adds where it runs and reports it, never this machine.
+   */
+  | Readonly<{
+      type: 'syncAttempt';
+      direction: 'push' | 'pull';
+      outcome: SyncAttemptOutcome;
+      durationMilliseconds: number;
+      /** First unsynced change (or the push request) to the server's ack; on every acknowledged push, never another. */
+      lagMilliseconds?: number;
+      /** What dated `lagMilliseconds`; present exactly when it is. */
+      lagSince?: SyncLagSince;
+      /** `.git/sync-pending` depth when the push started; on a push only. */
+      pending?: number;
+    }>;
+
+/**
+ * What a push's lag runs from, in telemetry's bounded words: the first unsynced
+ * change (a mint, a record change, a landed decision), the oldest queued entry
+ * of a device that reopened owing it, or the push request itself when nothing
+ * was dated (a bare *Sync now*, a pull that found this device ahead).
+ *
+ * @public
+ */
+export type SyncLagSince = 'change' | 'queue' | 'request';
+
+/** How one push or pull ended, in telemetry's bounded words. @public */
+export type SyncAttemptOutcome = 'ok' | 'retry' | 'quota_refused' | 'offline' | 'error';
+
+/** What `readPending` is asked, and what the record answers. @public */
+export type SyncReadPendingActorInput = Readonly<{ projectId: string }>;
+
+/** What `writePending` is asked to record. @public */
+export type SyncWritePendingActorInput = Readonly<{ projectId: string; record: SyncQueueRecord }>;
+
+/** What `readRemote` answers: the remote git's own config already holds. @public */
+export type SyncReadRemoteActorOutput = Readonly<{
+  remote: string | undefined;
+  branch?: string;
+  automaticPush?: boolean;
+}>;
+
+/** What one scheduled push offers, and under which leases. @public */
+export type SyncPushActorInput = Readonly<{
+  /** A one-operation request, never carried into retries. */
+  explicit?: boolean;
+  /** The exact destination approved for this operation. */
+  repositoryUrl?: string;
+  remote: string;
+  branch: string;
+  /** Ref → the lease this push is made under (P18). Absent = the remote's own rule. */
+  leases: Readonly<Record<string, string>>;
+  /**
+   * Narrow the offer to these refs, when a retry is catching up the queue.
+   *
+   * Absent means "the whole history set and the whole record set", which is what
+   * an ordinary debounce wants.
+   */
+  refs?: readonly string[];
+}>;
+
+/**
+ * What one push answers.
+ *
+ * Per ref, always: A39's record set must never be able to block history, and a
+ * scheduler that only saw a boolean could not retry one chat ref without
+ * re-offering a branch.
+ *
+ * @public
+ */
+export type SyncPushActorOutput = Readonly<{
+  refs: readonly SyncRefOutcome[];
+  /** Project-relative paths the remote would not store (D16, P19). */
+  overQuota?: readonly string[];
+  /** The server's own words, for the row that names the files. */
+  quotaMessage?: string;
+  /** What it said about room, when it said anything (C13). */
+  quotaStorage?: RemoteStorageRefusal;
+  /**
+   * This device's versions that took the next free number because Tau Cloud
+   * refused theirs as taken (B6), before this push offered them again.
+   */
+  renumbered?: readonly VersionRenumbering[];
+}>;
+
+/** What one open pull is asked for. @public */
+export type SyncFetchActorInput = Readonly<{
+  remote: string;
+  branch: string;
+  /** The wall the effect builds its `AbortSignal.timeout` from (S24, F16). */
+  deadlineMilliseconds: number;
+}>;
+
+/**
+ * What the pull found.
+ *
+ * `integration` is what decides `fastForwarding` from `merging`; `leases` is
+ * what this host now believes the remote holds, which is the lease every later
+ * push is made under (P18).
+ *
+ * @public
+ */
+export type SyncFetchActorOutput = Readonly<{
+  leases: Readonly<Record<string, string>>;
+  /**
+   * What this device has to do about the remote's head.
+   *
+   * `ahead` is the case a single `upToDate` used to hide: "the remote has
+   * everything" and "the remote is missing my revisions" are opposite answers,
+   * and collapsing them let a device whose work never reached the remote open
+   * to *Backed up* and push nothing (C15).
+   */
+  integration: 'upToDate' | 'ahead' | 'fastForward' | 'diverged';
+  /**
+   * Local branch refs after remote branch reconciliation, including ref-only branches.
+   * `onRemote` is whether this fetch found the branch on the remote (D93).
+   */
+  branches?: ReadonlyArray<Readonly<{ name: string; head: string; onRemote?: boolean }>>;
+  /** Independent record projections attempted after the fetch. */
+  records?: readonly SyncRefOutcome[];
+  /** Deferred optional records, projected only after authored integration succeeds. */
+  recordProjection?: SyncProjectRecordsActorInput;
+  /** Other checkouts this pull moved onto their remote heads (D60), or onto a merge with them (D87). */
+  advanced?: ReadonlyArray<SyncMovedCheckout & Readonly<{ branch: string }>>;
+  /** Other checkouts' branches this pull merged with their remote heads: unsent merge revisions (D87). */
+  merged?: readonly string[];
+  /** Conflicts this pull newly recorded for other checkouts' branches, each announced once (D87). */
+  conflicts?: ReadonlyArray<Readonly<{ branch: string; into: string; paths: readonly string[] }>>;
+}>;
+
+/** Serializable optional-record work owned by the current pull invocation. @public */
+export type SyncProjectRecordsActorInput = Readonly<{
+  /** The same remote that supplied the authored refs. */
+  remote: string;
+  /** Advertised record refs not already present in this store. */
+  fetchRefs: readonly string[];
+  refs: readonly RevisionRef[];
+  syncChats: boolean;
+  syncLargeExports: boolean;
+  priorEvidenceHead?: string;
+  /** When this pull read the remote's refs, on this device's clock: the chats it projects record it (`pullRecordAfter`). */
+  pulledAt?: number | undefined;
+  /**
+   * The records may run while the apply writes the checkout (SP2h): a fast-forward whose `tau.json` asks for chats as
+   * the checkout's does. `syncChats` is then the fetch's reading of the applied manifest, since the checkout's may be
+   * mid-write; without it the records wait for the apply and read the manifest it landed.
+   */
+  besideApply?: true;
+}>;
+
+/** Independent completion of optional records after authored integration. @public */
+export type SyncProjectRecordsActorOutput = Readonly<{
+  records: readonly SyncRefOutcome[];
+  chats: 'ready' | 'disabled' | 'failed';
+}>;
+
+/** What applying the fetched head is asked for. @public */
+export type SyncIntegrateActorInput = Readonly<{ remote: string; branch: string }>;
+
+/** A checkout an integration moved, reported so its actor re-heads (D3). @public */
+export type SyncMovedCheckout = Readonly<{ checkoutId: string; revisionId: string; treeId: string }>;
+
+/**
+ * Why an integration left a checkout alone (D12, rule 9).
+ *
+ * Not a failure: a `dirty` checkout is minted first through its own checkout
+ * actor (trigger `merge`) and the pull runs again; a `leased` one is never
+ * re-based, so the pull waits for the lease to retire. `revisionId` is the
+ * fetched remote head the checkout has not applied.
+ *
+ * @public
+ */
+export type SyncHold = Readonly<{
+  status: 'held';
+  hold: 'dirty' | 'leased';
+  checkoutId: string;
+  revisionId: string;
+}>;
+
+/** What composing a diverged local and remote branch produced. @public */
+export type SyncMergeActorOutput =
+  | Readonly<{ status: 'merged'; moved?: SyncMovedCheckout }>
+  | Readonly<{ status: 'conflicted'; branch: string; into: string; paths: readonly string[] }>
+  | SyncHold;
+
+/** The checkout a successful open pull re-headed, or why it held. @public */
+export type SyncFastForwardActorOutput = SyncMovedCheckout | SyncHold | undefined;
+
+/** What the remote-moves subscription is started with. @public */
+export type SyncRemoteMovesActorInput = Readonly<{ projectId: string }>;
+
+const defaultBranch = 'main';
+const defaultDebounceMilliseconds = 2000;
+
+/**
+ * How many debounce windows a burst of mints may hold its push (W13's finding).
+ *
+ * The window restarts on every mint, so without a ceiling an agent minting
+ * faster than it never pushes while it keeps going. Two windows is the least
+ * that still coalesces a burst — a mint cadence spaced at one window already
+ * pushes once per window plus the push, so a burst pushing once per two windows
+ * never costs more requests than that — and it keeps the first mint of a burst
+ * on the remote within 4 s plus the push, about B6's 5 s: rule 20's 2.1 s budget
+ * is the single mint's, and a burst gets one more window, not an unbounded wait.
+ *
+ * @public
+ */
+export const syncDebounceMaxWaitFactor = 2;
+
+/**
+ * The burst ceiling at the default window: 4 s.
+ *
+ * @public
+ */
+export const syncDebounceMaxWaitMilliseconds = defaultDebounceMilliseconds * syncDebounceMaxWaitFactor;
+const defaultRetryMilliseconds = 5000;
+const defaultMaxRetryMilliseconds = 300_000;
+const defaultPullRenderMilliseconds = 3000;
+
+/**
+ * The finite budget for an active background pull: policy rule 9's 15 minutes.
+ * Local rendering remains bounded to 3 seconds. Close cancels active network
+ * work within its separate quiesce budget; it never waits this long.
+ *
+ * @public
+ */
+export const syncPullDeadlineMilliseconds = 15 * 60_000;
+
+const defaultPushDeadlineMilliseconds = syncPullDeadlineMilliseconds;
+const mintDeadlineMilliseconds = 10_000;
+
+/*
+ * The refusals no amount of waiting will satisfy (N2).
+ *
+ * Retrying any of these is retrying behind the person's back: a lapsed plan, a
+ * revoked session, a project that is not theirs and a full store all need
+ * somebody to *do* something, and until this set existed the machine recognised
+ * only the credential frame the page supplies before a request — so a real
+ * 401/403/404 was retried on a 5 s→300 s backoff for as long as the tab lived,
+ * with the only recovery transition unreachable.
+ *
+ * `REMOTE_UNAVAILABLE` (429, 5xx) and `ENGINE_FAILED` (no status at all) are
+ * deliberately absent: those are the retryable ones. The literals are written
+ * here rather than imported because a machine may import only *types* from this
+ * package's contracts (I20, AC22).
+ */
+const terminalFailureCodes: ReadonlySet<string> = new Set([
+  'REMOTE_REAUTHORIZATION_REQUIRED',
+  'REMOTE_UNAUTHORIZED',
+  'REMOTE_NOT_ENTITLED',
+  'REMOTE_FORBIDDEN',
+  'REMOTE_NOT_FOUND',
+  'REMOTE_QUOTA_EXCEEDED',
+  'REMOTE_MOVED',
+  /* A damaged hosted repository answers the same 500 to every retry. */
+  'REMOTE_DAMAGED',
+  /* D49: refused before any network call; retrying cannot change the tree. */
+  'LFS_REMOTE_UNSUPPORTED',
+]);
+
+const codeOf = (error: unknown): string | undefined => {
+  if (typeof error !== 'object' || error === null) {
+    return undefined;
+  }
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- a rejection is `unknown` until read.
+  const { code } = error as Readonly<{ code?: unknown }>;
+  return typeof code === 'string' ? code : undefined;
+};
+
+/*
+ * A refused commit stays in every later push of its branch, so the remote
+ * refuses each retry the same way and only the person can clear it: the
+ * refusal is shown once and waits for *Try again*, never replayed on the
+ * backoff.
+ */
+const isFatal = (error: unknown): boolean =>
+  terminalFailureCodes.has(codeOf(error) ?? '') ||
+  (codeOf(error) === 'REMOTE_REJECTED' && error instanceof Error && isCommitRefusal(error.message));
+
+/* A 429's wait, read off the port's error the way `codeOf` reads its code. */
+const retryAfterOf = (error: unknown): number | undefined => {
+  if (typeof error !== 'object' || error === null) {
+    return undefined;
+  }
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- a rejection is `unknown` until read.
+  const { retryAfterMilliseconds } = error as Readonly<{ retryAfterMilliseconds?: unknown }>;
+  return typeof retryAfterMilliseconds === 'number' ? retryAfterMilliseconds : undefined;
+};
+
+/**
+ * Which action the surface beside this failure should offer (N3).
+ *
+ * The one classifier, exported because `remote.machine` needs the same answer
+ * for a refused *connect*: rule 19 asks every surface showing a remote failure
+ * for exactly one action matching its class, and the connect path used to have
+ * no class at all, so a `403 GIT_SYNC_NOT_ENTITLED` on connect could only offer
+ * *Retry* where the identical refusal on a push offered *Upgrade*. It lives
+ * here rather than in `remotes.ts` because a machine may import only *types*
+ * from this package's contracts (I20, AC22) and may import a sibling machine.
+ *
+ * @param error - The rejection, as the actor reported it.
+ * @returns The class, `'unknown'` when the code says nothing.
+ * @public
+ */
+export const syncFailureReason = (error: unknown): SyncFailureReason => {
+  switch (codeOf(error)) {
+    case 'REMOTE_REAUTHORIZATION_REQUIRED':
+    case 'REMOTE_UNAUTHORIZED': {
+      return 'unauthorized';
+    }
+    case 'REMOTE_NOT_ENTITLED': {
+      return 'notEntitled';
+    }
+    case 'REMOTE_FORBIDDEN': {
+      return 'forbidden';
+    }
+    case 'REMOTE_NOT_FOUND': {
+      return 'notFound';
+    }
+    case 'REMOTE_QUOTA_EXCEEDED': {
+      return 'quota';
+    }
+    case 'LFS_REMOTE_UNSUPPORTED': {
+      return 'largeFiles';
+    }
+    case 'REMOTE_MOVED': {
+      return 'moved';
+    }
+    case 'REMOTE_DAMAGED': {
+      return 'damaged';
+    }
+    /* The server refused the refs, not the device (contract §4): a fetch and a
+     * replay clear it, so the action beside it is *Sync now*, not *Sign in*. */
+    case 'REMOTE_REJECTED':
+    case 'REMOTE_REF_CONFLICT': {
+      return 'rejected';
+    }
+    /* No status at all is the one failure that really is connectivity. */
+    case 'ENGINE_FAILED': {
+      return 'offline';
+    }
+    default: {
+      return 'unknown';
+    }
+  }
+};
+
+const reason = (error: unknown): string => (error instanceof Error ? error.message : 'Couldn’t back up this project.');
+
+const unsupported = async (): Promise<never> => {
+  await Promise.resolve();
+  throw new Error('This host provided no sync actors; `syncMachine.provide` supplies them.');
+};
+
+/** A host with no connectivity source is a host that is always online. */
+const noConnectivity = createCallbackLogic(() => () => undefined);
+
+const historyRefOf = (branch: string): string => `refs/heads/${branch}`;
+
+/*
+ * Whether a push's per-ref answer is a storage refusal.
+ *
+ * D20's ceiling and D17's plan quota arrive as per-ref results rather than as a
+ * thrown transport error: the hook's sentence, or an LFS batch refusal whose
+ * body carries no marker but names the files (FX1 Q). Either is a quota answer:
+ * *Sync now* replays the same bytes and cannot clear it (W10 defect 4). The
+ * hook's sentence is recognised by the same predicate the native leg uses;
+ * every other refusal stays `rejected`, and the remote's own sentence and file
+ * list are untouched either way.
+ */
+const isQuotaAnswer = (pending: readonly SyncQueueEntry[], overQuota: readonly string[] | undefined): boolean =>
+  pending.length > 0 && ((overQuota ?? []).length > 0 || pending.some((entry) => isStorageRefusal(entry.reason)));
+
+/**
+ * A refused ref's reason in a person's words; `leaseLost` is the ports' code
+ * for "the remote moved" (D39). Another checkout's branch is named: the row
+ * belongs to the branch in view, and "this branch" pointed at the wrong one.
+ */
+const refusalSaid = (
+  refused: Readonly<{ ref: string; reason: string | undefined }> | undefined,
+  branch: string,
+): string | undefined => {
+  if (refused?.reason !== 'leaseLost') {
+    return refused?.reason;
+  }
+  const other =
+    refused.ref.startsWith('refs/heads/') && refused.ref !== historyRefOf(branch)
+      ? refused.ref.slice('refs/heads/'.length)
+      : undefined;
+  return `${other ?? 'This branch'} changed somewhere else. Tau will get those changes and try again.`;
+};
+
+/**
+ * The queue entries *this* remote is owed.
+ *
+ * One predicate, because "what is unacknowledged" is asked in three places —
+ * the narrowed offer, the `hasPushPending` guard and the `n` the row renders —
+ * and they must agree. Entries recorded against a remote this project is no
+ * longer connected to stay in the record and are never offered: disconnect
+ * pauses the old destination's queue rather than erasing it (policy Rule 9).
+ * A projection entry is inbound work, never something owed to a remote.
+ *
+ * @param context - Current context.
+ * @returns The push entries this remote has not acknowledged.
+ */
+const owedPushes = (context: SyncMachineContext): readonly SyncQueueEntry[] =>
+  context.pending.filter(
+    (entry) => entry.operation !== 'projection' && (entry.remote === undefined || entry.remote === context.remote),
+  );
+
+/**
+ * Whether a revision minted since the last push is missing from what this remote is owed (D98).
+ *
+ * `mintedSincePushAt` is set by a mint alone, never by a record change, and
+ * cleared when a push carries it; a push that then fails records its own entry.
+ *
+ * @param context - Current context.
+ * @returns `true` when this branch's owed entry is absent or names an older head.
+ */
+const owesUnrecordedMint = (context: SyncMachineContext): boolean => {
+  if (context.mintedSincePushAt === undefined) {
+    return false;
+  }
+  const owed = owedPushes(context).find((entry) => entry.ref === historyRefOf(context.branch));
+  return owed === undefined || (context.localHead !== undefined && owed.head !== context.localHead);
+};
+
+/**
+ * A queue write inside `failed` did not land; what is owed stays in context (D98, MC-R8: a named effect).
+ * @param error - Why the write failed.
+ */
+const reportQueueWriteFailure = (error: unknown): void => {
+  console.error('[revisions] sync queue write', error);
+};
+
+/**
+ * Whether a ref is in the history set rather than the record set (policy rule 10).
+ *
+ * @param ref - A fully-qualified ref name.
+ * @returns `true` for `refs/heads/*` and `refs/tags/*`.
+ */
+const isHistoryRef = (ref: string): boolean => ref.startsWith('refs/heads/') || ref.startsWith('refs/tags/');
+
+/**
+ * The refs a retry narrows its offer to, or `undefined` for "both sets".
+ *
+ * Only an owed history ref other than this branch narrows — a conflict line
+ * travels alone, because the diverged branch it decides would sink the atomic
+ * set. An owed *record* ref never narrows: offering it alone left every new
+ * revision of this branch unpushed for as long as the remote refused it, and a
+ * record's refusal never blocks history (rule 10, W13c). A queued history ref
+ * is the synthetic marker for a thrown full-set push, so it cannot narrow. Nor
+ * does a lost lease, for the same reason as a record: the push itself keeps a
+ * branch that has not integrated its lease out of the atomic set (D54), and
+ * narrowing to it held every other branch's revisions back (D87).
+ *
+ * @param context - Current context.
+ * @returns The narrowed ref list, or `undefined` when both sets are offered.
+ */
+const narrowedOffer = (context: SyncMachineContext): readonly string[] | undefined => {
+  const owed = owedPushes(context);
+  const history = owed.filter((entry) => isHistoryRef(entry.ref) && entry.reason !== 'leaseLost');
+  return history.length > 0 &&
+    context.failure !== 'none' &&
+    history.every((entry) => entry.ref !== historyRefOf(context.branch))
+    ? owed.map((entry) => entry.ref)
+    : undefined;
+};
+
+/**
+ * What the push that is running actually offered.
+ *
+ * A transport failure reports no refs at all (W11b R5), so the queue entry has
+ * to be synthesised — and synthesising `refs/heads/<branch>` for a retry that
+ * only offered one chat ref would record a branch nobody offered as
+ * unacknowledged (review 2 R9). A full offer records the branch even when the
+ * remote holds its head: records have no entry of their own until a push
+ * reports them, so that entry is what makes the retry happen at all.
+ *
+ * @param context - Current context.
+ * @returns Every ref this push put on the wire.
+ */
+const offeredNames = (context: SyncMachineContext): readonly string[] =>
+  narrowedOffer(context) ?? [historyRefOf(context.branch)];
+
+/**
+ * Every offered ref, refused with one reason.
+ *
+ * @param context - Current context.
+ * @param why - Words already safe to render.
+ * @returns One outcome per ref this push offered.
+ */
+const throwFailures = (context: SyncMachineContext, why: string): readonly SyncRefOutcome[] =>
+  offeredNames(context).map((ref) => ({
+    name: ref,
+    status: 'rejected',
+    head:
+      context.pending.find((entry) => entry.ref === ref)?.head ??
+      (ref === historyRefOf(context.branch) ? context.localHead : undefined),
+    reason: why,
+  }));
+
+/**
+ * The queue as this settle leaves it.
+ *
+ * One entry per ref, last outcome wins: a ref the remote took is gone, a ref it
+ * refused is recorded with the head it refused and the lease to retry under.
+ * Refs nobody offered this time keep their entry — a narrowed retry must not
+ * silently drop what it did not look at.
+ *
+ * @param input - The queue as it stands, every ref this push offered with its
+ *   outcome, the leases this host holds, and the current time in milliseconds.
+ * @returns The queue to record.
+ */
+const nextPending = (
+  input: Readonly<{
+    pending: readonly SyncQueueEntry[];
+    outcomes: readonly SyncRefOutcome[];
+    leases: Readonly<Record<string, string>>;
+    /** Who the push was made to; stamped on every entry it leaves behind. */
+    remote: string | undefined;
+    now: number;
+  }>,
+): readonly SyncQueueEntry[] => {
+  const { pending, outcomes, leases, remote, now } = input;
+  const offered = new Map(outcomes.map((entry) => [entry.name, entry]));
+  /* Only entries this push could have settled are replaced: a ref it did not
+   * offer, and every entry owed to a *different* remote, keeps its record. */
+  const kept = pending.filter(
+    (entry) =>
+      entry.operation === 'projection' ||
+      !offered.has(entry.ref) ||
+      (entry.remote !== undefined && entry.remote !== remote),
+  );
+  const refused = outcomes.flatMap((entry): readonly SyncQueueEntry[] =>
+    entry.status === 'rejected'
+      ? [
+          {
+            ref: entry.name,
+            ...(entry.head === undefined ? {} : { head: entry.head }),
+            ...(remote === undefined ? {} : { remote }),
+            expected: leases[entry.name],
+            reason: entry.reason ?? 'Couldn’t back up part of this project. Try again.',
+            recordedAt: now,
+          },
+        ]
+      : [],
+  );
+  return [...kept, ...refused];
+};
+
+/** Replace the projection-retry slice after one complete fetch cycle. */
+const nextProjectionPending = (
+  pending: readonly SyncQueueEntry[],
+  outcomes: readonly SyncRefOutcome[],
+  now: number,
+): readonly SyncQueueEntry[] => [
+  ...pending.filter((entry) => entry.operation !== 'projection'),
+  ...outcomes.flatMap((entry): readonly SyncQueueEntry[] =>
+    entry.status === 'rejected'
+      ? [
+          {
+            ref: entry.name,
+            operation: 'projection',
+            ...(entry.head === undefined ? {} : { head: entry.head }),
+            expected: undefined,
+            reason: entry.reason ?? 'This record could not be restored.',
+            recordedAt: now,
+          },
+        ]
+      : [],
+  ),
+];
+
+type SyncEnqueue = EnqueueObject<SyncMachineEvent, SyncMachineEmitted>;
+type SyncContextPatch = Partial<SyncMachineContext>;
+
+/*
+ * A local change the remote has not acknowledged, for the lag report: the
+ * first one starts both clocks and a later one moves neither. A mint, a record
+ * change and a landed decision all count, so a push that carries only records
+ * still reports how long they waited.
+ */
+const markUnsynced = (context: SyncMachineContext, now: number): SyncContextPatch => ({
+  unsyncedSince: context.unsyncedSince ?? now,
+  changedSincePushAt: context.changedSincePushAt ?? now,
+});
+
+/*
+ * A record change or a landed decision only waits on a push when one will
+ * follow on its own: with no remote, or one that pushes only on request, it is
+ * not unsynced in the lag's sense, and dating it would age the clock until a
+ * push no change asked for. A mint still dates itself, as it always has.
+ */
+const markUnsyncedRecords = (context: SyncMachineContext): SyncContextPatch =>
+  context.automaticPush && context.remote !== undefined ? markUnsynced(context, Date.now()) : {};
+
+/* What a push starting now is measured from (see `pushSince`). */
+const pushSinceOf = (context: SyncMachineContext, now: number): Readonly<{ at: number; kind: SyncLagSince }> => {
+  if (context.unsyncedSince !== undefined) {
+    return { at: context.unsyncedSince, kind: 'change' };
+  }
+  const oldestOwed = Math.min(...owedPushes(context).map((entry) => entry.recordedAt));
+  return Number.isFinite(oldestOwed) ? { at: oldestOwed, kind: 'queue' } : { at: now, kind: 'request' };
+};
+
+const rememberHead = (context: SyncMachineContext, event: SyncMachineEvent): SyncContextPatch => {
+  if (event.type !== 'revisionMinted') {
+    return {};
+  }
+  const now = Date.now();
+  return {
+    /* A mint on another branch is pushed with the history set, but it is not this branch's head (RM-S3). */
+    localHead: event.branch === context.branch ? event.revisionId : context.localHead,
+    pendingMint: true,
+    ...markUnsynced(context, now),
+    mintedSincePushAt: context.mintedSincePushAt ?? now,
+    /* The trigger travels with the fact, because the state that *acts* on the
+     * remembered mint is never the state the event arrived in (C17). */
+    pendingFlush: event.trigger === 'close' || event.trigger === 'hidden' ? true : context.pendingFlush,
+  };
+};
+
+/* `close` and `hidden` are the last moment an `await` means anything, so
+ * they skip the window the other triggers coalesce in (D28, S41). */
+const flushesNow = (trigger: string): boolean => trigger === 'close' || trigger === 'hidden';
+
+/* Answer each id with how its push ended (RM-R11). */
+const answerPushes = (
+  context: SyncMachineContext,
+  enq: SyncEnqueue,
+  { pushIds, outcome }: Readonly<{ pushIds: readonly string[]; outcome: SyncPushOutcome }>,
+): void => {
+  for (const pushId of pushIds) {
+    enq.emit({ type: 'pushSettled', pushId, outcome });
+    if (context.parentRef !== undefined) {
+      enq.sendTo(context.parentRef, { type: 'pushSettled', pushId, outcome });
+    }
+  }
+};
+
+/**
+ * A session change the conflict line's push waited for (audit R6): the pull follows its answer.
+ *
+ * @returns `opening` when a change is still unread and the host is not quiescing.
+ */
+const sessionPullOf = (context: SyncMachineContext): '#sync.opening' | undefined =>
+  context.pendingSession && !context.quiescing ? '#sync.opening' : undefined;
+
+/* A close cannot promise a new push. Answer the request without retaining a
+ * wake-up that could restart transport as the successful close releases its hold. */
+const holdPushRequest = (context: SyncMachineContext, event: Readonly<{ pushId?: string }>, enq: SyncEnqueue) => {
+  answerPushes(context, enq, { pushIds: event.pushId === undefined ? [] : [event.pushId], outcome: 'queued' });
+  return {};
+};
+
+/*
+ * A push settled into a state that pushes again on its own (`backedUp`, `queued`,
+ * `awaitingLease`): answer what it carried, and carry the requests that arrived during it.
+ */
+const settlePush = (context: SyncMachineContext, enq: SyncEnqueue, outcome: SyncPushOutcome): SyncContextPatch => {
+  answerPushes(context, enq, { pushIds: context.pushIds, outcome });
+  return { pushIds: context.nextPushIds, nextPushIds: [] };
+};
+
+/* A state no push leaves on its own (`failed`, `conflicted`, `noRemote`) answers every request it holds. */
+const settleEveryPush = (context: SyncMachineContext, enq: SyncEnqueue, outcome: SyncPushOutcome): SyncContextPatch => {
+  answerPushes(context, enq, { pushIds: [...context.pushIds, ...context.nextPushIds], outcome });
+  return { pushIds: [], nextPushIds: [] };
+};
+
+/* A `syncNow` the next push carries; one without an id asks for a push and is owed no answer. */
+const carry = (context: SyncMachineContext, event: Readonly<{ pushId?: string }>): SyncContextPatch =>
+  event.pushId === undefined ? {} : { pushIds: [...context.pushIds, event.pushId] };
+
+/* `pushing` and `recording` hold a push built before this request: the push after it answers (W15 F1). */
+const deferPush = (
+  { context, event }: Readonly<{ context: SyncMachineContext; event: Readonly<{ pushId?: string }> }>,
+  enq: SyncEnqueue,
+) =>
+  context.quiescing
+    ? holdPushRequest(context, event, enq)
+    : {
+        context: {
+          pendingMint: true,
+          nextPushIds: event.pushId === undefined ? context.nextPushIds : [...context.nextPushIds, event.pushId],
+        },
+      };
+
+/**
+ * A conflict line the remote refused or could not take; the line stays owed or offered (MC-R8: a named effect).
+ * @param stage - Whether the push threw or the remote refused the line.
+ * @param parts - The error, or the refused ref and its reason.
+ */
+const reportConflictLineFailure = (stage: 'push' | 'refused', ...parts: readonly unknown[]): void => {
+  console.error(`[revisions] conflict line ${stage}`, ...parts);
+};
+
+const reportFastForward = (
+  context: SyncMachineContext,
+  enq: SyncEnqueue,
+  output: SyncMovedCheckout | undefined,
+): void => {
+  if (output === undefined) {
+    return;
+  }
+  if (context.parentRef !== undefined) {
+    enq.sendTo(context.parentRef, {
+      type: 'checkoutChanged',
+      ...output,
+      branch: context.branch,
+    });
+  }
+};
+
+const rememberRecords = (context: SyncMachineContext, records: readonly SyncRefOutcome[]): SyncContextPatch => {
+  const pending = nextProjectionPending(context.pending, records, Date.now());
+  const failed = records.find((entry) => entry.status === 'rejected');
+  const chatFailed = records.some((entry) => entry.name.startsWith('refs/tau/chats/') && entry.status === 'rejected');
+  return {
+    pending,
+    recordQueueDirty: true,
+    // Only the record actor can confirm the applied manifest disabled chats.
+    chats: chatFailed ? 'failed' : 'ready',
+    failure: failed === undefined ? 'none' : 'retry',
+    error: failed?.reason,
+    reason: failed === undefined ? undefined : 'unknown',
+  };
+};
+
+const failedRecords = (context: SyncMachineContext, error: unknown): readonly SyncRefOutcome[] =>
+  (context.recordProjection?.refs ?? []).map((ref) => ({
+    name: ref.name.replace(/^refs\/remotes\/[^/]+\//u, 'refs/'),
+    head: ref.head,
+    status: 'rejected',
+    reason: error instanceof Error ? error.message : 'Optional records could not be restored.',
+  }));
+
+/* The record projection's input, its empty stand-in when the fetch named none. */
+const recordsInputOf = (context: SyncMachineContext): SyncProjectRecordsActorInput =>
+  context.recordProjection ?? { remote: '', fetchRefs: [], refs: [], syncChats: false, syncLargeExports: false };
+
+/* What the record projection settled, whichever state ran it. */
+const recordsSettled = (context: SyncMachineContext, output: SyncProjectRecordsActorOutput): SyncContextPatch => ({
+  ...rememberRecords(context, output.records),
+  chats: output.chats,
+});
+
+/*
+ * Whether the open has only its optional records left: the authored apply has landed, so the deadline fails the
+ * records alone and the person keeps the files (SP2h runs them beside a fast-forward).
+ */
+const onlyRecordsLeft = (value: unknown): boolean => {
+  const childOf = (state: unknown, key: string): unknown =>
+    typeof state === 'object' && state !== null ? Object.getOwnPropertyDescriptor(state, key)?.value : undefined;
+  const opening = childOf(value, 'opening');
+  return opening === 'projectingRecords' || childOf(childOf(opening, 'besideApply'), 'authored') === 'applied';
+};
+
+const rememberFetch = (
+  context: SyncMachineContext,
+  enq: SyncEnqueue,
+  output: SyncFetchActorOutput,
+): SyncContextPatch => {
+  const { records } = output;
+  const pending = records === undefined ? context.pending : nextProjectionPending(context.pending, records, Date.now());
+  const projectionFailure = pending.find((entry) => entry.operation === 'projection');
+  if (context.parentRef !== undefined && output.branches !== undefined) {
+    enq.sendTo(context.parentRef, { type: 'branchesFetched', branches: output.branches });
+  }
+  for (const moved of output.advanced ?? []) {
+    if (context.parentRef !== undefined) {
+      enq.sendTo(context.parentRef, { type: 'checkoutChanged', ...moved });
+    }
+  }
+  /* Another checkout's conflict is that branch's decision: this branch still syncs (D87). */
+  for (const conflict of output.conflicts ?? []) {
+    if (context.parentRef !== undefined) {
+      enq.sendTo(context.parentRef, { type: 'mergeConflicted', ...conflict });
+    }
+  }
+  return {
+    /* A merge on another checkout's branch is this device's own and unsent, as `merging`'s is. */
+    pendingMint: context.pendingMint || output.merged !== undefined,
+    recordProjection: output.recordProjection,
+    chats: 'loading',
+    leases: output.leases,
+    pending,
+    retryAfterMilliseconds: undefined,
+    recordQueueDirty: records !== undefined,
+    ahead: output.integration === 'ahead',
+    failure: projectionFailure === undefined ? (pending.length === 0 ? 'none' : context.failure) : 'retry',
+    error: pending.length === 0 ? undefined : (projectionFailure?.reason ?? context.error),
+    reason: pending.length === 0 ? undefined : projectionFailure === undefined ? context.reason : 'unknown',
+  };
+};
+
+/*
+ * A pull step that failed. A refusal no wait can satisfy is terminal here too
+ * (C3b/N2): the backoff would only re-fetch it.
+ */
+/* One settled push, for the host's telemetry sender (W36 D1). */
+const reportPushAttempt = (
+  context: SyncMachineContext,
+  enq: SyncEnqueue,
+  attempt: Readonly<{ outcome: SyncAttemptOutcome; lagMilliseconds?: number; lagSince?: SyncLagSince }>,
+): void => {
+  enq.emit({
+    type: 'syncAttempt',
+    direction: 'push',
+    durationMilliseconds: Math.max(0, Date.now() - context.attemptStartedAt),
+    pending: context.pushPending,
+    ...attempt,
+  });
+};
+
+/* One settled pull (the open fetch), for the host's telemetry sender. */
+const reportPullAttempt = (context: SyncMachineContext, enq: SyncEnqueue, outcome: SyncAttemptOutcome): void => {
+  enq.emit({
+    type: 'syncAttempt',
+    direction: 'pull',
+    outcome,
+    durationMilliseconds: Math.max(0, Date.now() - context.attemptStartedAt),
+  });
+};
+
+/* The bounded telemetry word for a thrown push or pull. */
+const thrownOutcome = (error: unknown): SyncAttemptOutcome => {
+  const why = syncFailureReason(error);
+  return why === 'offline' ? 'offline' : why === 'quota' ? 'quota_refused' : isFatal(error) ? 'error' : 'retry';
+};
+
+/* A cancelled pull may already have applied linked checkouts. Preserve that
+ * result and write the retry record only after its effect returns. */
+const closeRetry = (context: SyncMachineContext): SyncContextPatch => {
+  const why = 'Closing stopped the backup. It continues the next time you open this project.';
+  return {
+    pendingFetch: false,
+    pendingFlush: false,
+    pendingMint: false,
+    failure: 'retry',
+    error: why,
+    reason: 'unknown',
+    pending: nextPending({
+      pending: context.pending,
+      outcomes: throwFailures(context, why),
+      leases: context.leases,
+      remote: context.remote,
+      now: Date.now(),
+    }),
+  };
+};
+
+const pullFailed = (error: unknown) => {
+  const failure: SyncContextPatch = {
+    chats: 'failed',
+    error: reason(error),
+    reason: syncFailureReason(error),
+    retryAfterMilliseconds: retryAfterOf(error),
+  };
+  return isFatal(error) ? { target: '#sync.failed', context: failure } : { target: '#sync.queued', context: failure };
+};
+
+/**
+ * Where a held integration goes (D12, rule 9): a leased checkout waits for its
+ * lease with the fetched head shown as arrived, a dirty one is minted first.
+ *
+ * @param hold - What the apply reported.
+ * @returns The transition.
+ */
+const heldAt = (hold: SyncHold) =>
+  hold.hold === 'leased'
+    ? {
+        target: '#sync.awaitingLease',
+        /* `pendingFetch`: the parked head is owed a pull however the park ends (RV-W5b F7). */
+        context: { heldCheckoutId: hold.checkoutId, arrived: hold.revisionId, pendingFetch: true },
+      }
+    : { target: '#sync.minting', context: { heldCheckoutId: hold.checkoutId } };
+
+/* This machine's own cut, by the id the checkout echoes (N2), as `branch.machine` reads its. */
+const answersOurCut = (context: SyncMachineContext, event: Readonly<{ requestId?: string }>): boolean =>
+  event.requestId !== undefined && event.requestId === context.requestId;
+
+/* A mint this machine asked for could not land; the backoff's pull asks again (D3: terminal for the request). */
+const mintRefused = (error: string) => ({
+  target: '#sync.queued',
+  context: { error, reason: 'unknown' } satisfies SyncContextPatch,
+});
+
+/**
+ * Headless continuous sync for one project.
+ *
+ * @public
+ * @example <caption>Run the scheduler for one project</caption>
+ * ```typescript
+ * import { createActor } from 'xstate';
+ * import { syncMachine } from '@taucad/revisions/sync-machine';
+ * import type { SyncActors } from '@taucad/revisions/sync-machine';
+ *
+ * declare const hostActors: SyncActors;
+ * const actor = createActor(syncMachine.provide({ actors: hostActors }), { input: { projectId: 'p1' } });
+ * actor.start();
+ * actor.send({ type: 'revisionMinted', checkoutId: 'live', trigger: 'save', revisionId: 'r1', branch: 'main' });
+ * ```
+ */
+// oxlint-disable-next-line eslint/max-lines-per-function -- one state chart; splitting it would hide the transitions it exists to show.
+const syncMachineDefinition = setup({
+  schemas: {
+    context: types<SyncMachineContext>(),
+    events: eventSchemas<SyncMachineEvent>(),
+    emitted: eventSchemas<SyncMachineEmitted>(),
+    input: types<SyncMachineInput>(),
+  },
+  actors: {
+    /** The durable queue as the record holds it (D29: rehydrate from records). */
+    readPending: createAsyncLogic<SyncQueueRecord, SyncReadPendingActorInput>({ run: unsupported }),
+    writePending: createAsyncLogic<void, SyncWritePendingActorInput>({ run: unsupported }),
+    /** Git's own remotes list, so a reopened project knows it has one. */
+    readRemote: createAsyncLogic<SyncReadRemoteActorOutput, Readonly<{ projectId: string }>>({ run: unsupported }),
+    push: createAsyncLogic<SyncPushActorOutput, SyncPushActorInput>({ run: unsupported }),
+    fetch: createAsyncLogic<SyncFetchActorOutput, SyncFetchActorInput>({ run: unsupported }),
+    projectRecords: createAsyncLogic<SyncProjectRecordsActorOutput, SyncProjectRecordsActorInput>({ run: unsupported }),
+    fastForward: createAsyncLogic<SyncFastForwardActorOutput, SyncIntegrateActorInput>({ run: unsupported }),
+    /**
+     * Composing two diverged lines (A22).
+     *
+     * W10 provides it (`revision-effects.ts` `merge`). Two outcomes, and they
+     * leave by different doors: `conflicted` targets `#sync.conflicted`, which
+     * is where *Needs resolution* lives; a merge that *throws* targets
+     * `#sync.queued`, because a composition this host could not attempt is work
+     * still owed, not a divergence for a person to resolve.
+     */
+    merge: createAsyncLogic<SyncMergeActorOutput, SyncIntegrateActorInput>({ run: unsupported }),
+    connectivity: noConnectivity,
+    /**
+     * The project's `revision` entries while a remote is connected (D13).
+     *
+     * Invoked for the machine's whole life and told which remote to watch
+     * (`watch { remote }` / `unwatch`), so its long-poll cursor survives every
+     * transition; it answers `remoteMoved` per entry and `remoteRefused` once,
+     * then stops, when the stream is refused.
+     */
+    remoteMoves: createCallbackLogic<AnyEventObject, SyncRemoteMovesActorInput>(() => () => undefined),
+  },
+  delays: {
+    syncDebounce: ({ context }) => context.debounceMilliseconds,
+    /* Started by the burst's first mint and never restarted by the rest. */
+    syncMaxWait: ({ context }) => context.debounceMaxWaitMilliseconds,
+    /* Doubling, capped. It is a delay, not a rendered state (A38). */
+    syncBackoff: ({ context }) =>
+      Math.min(
+        context.retryAfterMilliseconds ?? context.retryMilliseconds * 2 ** Math.max(0, context.attempt - 1),
+        context.maxRetryMilliseconds,
+      ),
+    pullRenderWindow: ({ context }) => context.pullRenderMilliseconds,
+    pullDeadline: ({ context }) => context.pullDeadlineMilliseconds,
+    mintDeadline: () => mintDeadlineMilliseconds,
+    /* A12: the network edge of a push, not a peer bound (RM-R3). */
+    pushDeadline: ({ context }) => context.pushDeadlineMilliseconds,
+  },
+  guards: {
+    hasRemote: (context: SyncMachineContext) => context.remote !== undefined,
+    hasPushPending: (context: SyncMachineContext) => owedPushes(context).length > 0,
+    hasRecordResults: (context: SyncMachineContext) => context.recordQueueDirty,
+    isOnline: (context: SyncMachineContext) => context.online,
+  },
+}).createMachine({
+  id: 'sync',
+  version: '8',
+  context: ({ input }) => ({
+    projectId: input.projectId,
+    branch: input.branch ?? defaultBranch,
+    parentRef: input.parentRef,
+    remote: undefined,
+    automaticPush: true,
+    explicitPush: false,
+    explicitTarget: undefined,
+    online: input.online ?? true,
+    pending: [],
+    leases: {},
+    pushIds: [],
+    nextPushIds: [],
+    attempt: 0,
+    retryAfterMilliseconds: undefined,
+    failure: 'none',
+    queueWriteError: undefined,
+    withinPullWindow: false,
+    hasAppliedRemote: false,
+    chats: 'unknown',
+    recordProjection: undefined,
+    localHead: undefined,
+    pendingMint: false,
+    pendingFlush: false,
+    recordQueueDirty: false,
+    ahead: false,
+    conflictRef: undefined,
+    pendingFetch: false,
+    pendingSession: false,
+    heldSessionPull: false,
+    quiescing: false,
+    transportStopped: false,
+    leaseSettled: false,
+    heldCheckoutId: undefined,
+    mintRepulled: false,
+    arrived: undefined,
+    cutCount: 0,
+    requestId: undefined,
+    error: undefined,
+    reason: undefined,
+    unsyncedSince: undefined,
+    mintedSincePushAt: undefined,
+    changedSincePushAt: undefined,
+    attemptStartedAt: 0,
+    pushSince: 0,
+    pushSinceKind: 'request',
+    pushPending: 0,
+    debounceMilliseconds: input.debounceMilliseconds ?? defaultDebounceMilliseconds,
+    debounceMaxWaitMilliseconds:
+      input.debounceMaxWaitMilliseconds ??
+      (input.debounceMilliseconds ?? defaultDebounceMilliseconds) * syncDebounceMaxWaitFactor,
+    retryMilliseconds: input.retryMilliseconds ?? defaultRetryMilliseconds,
+    maxRetryMilliseconds: input.maxRetryMilliseconds ?? defaultMaxRetryMilliseconds,
+    pullRenderMilliseconds: input.pullRenderMilliseconds ?? defaultPullRenderMilliseconds,
+    pullDeadlineMilliseconds: input.pullDeadlineMilliseconds ?? syncPullDeadlineMilliseconds,
+    pushDeadlineMilliseconds: input.pushDeadlineMilliseconds ?? defaultPushDeadlineMilliseconds,
+  }),
+  invoke: [
+    { id: 'connectivity', src: 'connectivity' },
+    { id: 'remoteMoves', src: 'remoteMoves', input: ({ context }) => ({ projectId: context.projectId }) },
+  ],
+  /* Connectivity and the remote are facts about the host, not about which state
+   * the scheduler is in, so they are handled once at the root. */
+  on: {
+    quiesce: ({ context, event, value, guards }, enq) => {
+      if (event.phase === 'release') {
+        const hasRemote = guards.hasRemote(context);
+        /* `failed.settled` opens again on its own once quiescing ends while `pendingSession` is set;
+         * a refusal of a push started after the change stays terminal. `conflicted.offering` pulls
+         * once its push settles, so the line's answer is not dropped. */
+        const busy = typeof value !== 'string' && (value['failed'] !== undefined || value['conflicted'] === 'offering');
+        if (context.heldSessionPull && hasRemote && !busy) {
+          /* A session change held through the close is pulled now (audit R6). */
+          enq.raise({ type: 'remoteMoved', generation: 0, refs: [] });
+        }
+        return {
+          ...(value === 'queued' ? { target: '.queued', reenter: true } : {}),
+          context: {
+            quiescing: false,
+            transportStopped: false,
+            pendingFetch: false,
+            pendingFlush: false,
+            pendingSession: context.pendingSession && hasRemote,
+            heldSessionPull: false,
+          },
+        };
+      }
+      return {
+        context: {
+          quiescing: true,
+          transportStopped: event.phase === 'cancel' || context.transportStopped,
+          pendingFetch: false,
+          pendingFlush: false,
+          /* A session change not yet pulled is held to the release (audit R6). */
+          heldSessionPull: context.heldSessionPull || context.pendingSession,
+        },
+      };
+    },
+    online: { context: { online: true } },
+    offline: { context: { online: false } },
+    /* The fallback, not an override: a state with its own `revisionMinted`
+     * handler keeps it (the deepest transition wins). This one catches the
+     * states that have none — `reading`, `opening`, `recording` — so a cut is
+     * never dropped for arriving at a busy moment. */
+    revisionMinted: { context: ({ context, event }) => rememberHead(context, event) },
+    recordsChanged: { context: ({ context }) => ({ pendingMint: true, ...markUnsyncedRecords(context) }) },
+    /* The same fallback for a remote move (D13): a busy state remembers it and
+     * the state that finishes fetches. The idle states fetch at once. */
+    remoteMoved: { context: ({ context }) => ({ pendingFetch: !context.quiescing }) },
+    /* The stream is only the wake-up channel (RV-W5b F5): a refusal of it is
+     * not a refusal of the repository — a repository-scoped credential is
+     * refused on every non-git route by design (I10). So it pulls, as a move
+     * would, and the git fetch with the same credential is what the one
+     * classifier reads (rule 19). The subscription does not re-read a refused
+     * stream until the remote is watched afresh, so this is one pull. */
+    remoteRefused: (_arguments, enq) => {
+      enq.raise({ type: 'remoteMoved', generation: 0, refs: [] });
+      return {};
+    },
+    /*
+     * The page's signed-in person changed (audit R6, rule 19). The remote is
+     * read afresh under the new session without abandoning anything in flight:
+     * the move stream is watched again (a refused one is never re-read for the
+     * remote it already watches), and the remote is pulled as a move would be,
+     * at once from an idle state and when a busy one settles (`conflicted.offering`
+     * takes the change itself, so its push is answered first). `pendingSession`
+     * survives the busy state: an answer it gets under the last session that
+     * lands in `failed` opens again from there. Every `opening` clears it.
+     */
+    sessionChanged: ({ context, guards }, enq) => {
+      if (!guards.hasRemote(context)) {
+        /* No remote: nothing is read under any session, so the change is taken and changes nothing (MC-R17). */
+        return {};
+      }
+      enq.sendTo('remoteMoves', { type: 'unwatch' });
+      enq.sendTo('remoteMoves', { type: 'watch', remote: context.remote ?? '' });
+      enq.raise({ type: 'remoteMoved', generation: 0, refs: [] });
+      return { context: { pendingSession: true, heldSessionPull: context.heldSessionPull || context.quiescing } };
+    },
+    leaseRetired: { context: { leaseSettled: true } },
+    /* The root forwards every answer to a cut no turn asked for; only `minting`
+     * waits for one, by its own request id. Elsewhere it is taken and changes nothing (MC-R16). */
+    nothingToSave: () => ({}),
+    cutFailed: () => ({}),
+    casLost: () => ({}),
+    /* The same fallback, for the same reason (review 2 R7): `close` is handled
+     * where it can push, and remembered where it cannot — `reading`, `opening`,
+     * `recording` — so the state that finishes acts on it. */
+    close: { context: { pendingMint: true, pendingFlush: true } },
+    /* A decision landed while this machine was not `conflicted` — one fetched
+     * from another device (D14): the merge it minted is this device's own and
+     * unsent, so it is pushed like a mint. `conflicted` answers it itself. */
+    conflictResolved: { context: ({ context }) => ({ pendingMint: true, ...markUnsyncedRecords(context) }) },
+    /* The same fallback once more (L2-F3): `reading`, `opening` and `minting`
+     * are effects with no push edge of their own, and dropping a
+     * correlated request there left `publish.machine` waiting out its 60 s and
+     * then blaming the cloud. The request is remembered, and every way out of
+     * those states answers it: `opening` by pushing (or by the settle its
+     * failure edges make), `noRemote` at once. `pushing` and `recording`
+     * defer it to the next push instead (W15 F1). */
+    syncNow: ({ context, event }, enq) =>
+      context.quiescing ? holdPushRequest(context, event, enq) : { context: carry(context, event) },
+    pushNow: ({ context, event }, enq) => {
+      answerPushes(context, enq, { pushIds: [event.pushId], outcome: 'failed' });
+      return {};
+    },
+    /* A busy push/queue write keeps ownership until it settles; the next cycle
+     * pulls the new remote. Opening overrides this to discard its old answer. */
+    remoteConnected: {
+      context: ({ event }) => ({
+        remote: event.remote,
+        automaticPush: event.automaticPush !== false,
+        hasAppliedRemote: false,
+        chats: 'unknown',
+        pendingFetch: true,
+      }),
+    },
+    /* No remote, nothing to fetch: answered, and nothing changes. */
+    open: ({ context, guards }) => (guards.hasRemote(context) ? { target: '.opening', reenter: true } : {}),
+    /* D50: pull the branch the person is now on, as a reopen would. */
+    branchChanged: ({ context, event, guards }) => {
+      if (event.branch === context.branch) {
+        return {};
+      }
+      return guards.hasRemote(context)
+        ? { target: '.opening', reenter: true, context: { branch: event.branch, hasAppliedRemote: false } }
+        : { context: { branch: event.branch, hasAppliedRemote: false } };
+    },
+    remoteDisconnected: {
+      target: '.noRemote',
+      /* The queue is *paused*, not dropped (policy Rule 9, C12): its entries
+       * name the remote they are owed to, `owedPushes` never offers them to
+       * anybody else, and keeping them in context is what keeps them in the
+       * record the next `recording` writes. Clearing them here erased work that
+       * had never reached a remote, silently, while the row went blank. */
+      context: {
+        remote: undefined,
+        pendingSession: false,
+        heldSessionPull: false,
+        hasAppliedRemote: false,
+        chats: 'unknown',
+        recordProjection: undefined,
+        leases: {},
+        attempt: 0,
+        retryAfterMilliseconds: undefined,
+        failure: 'none',
+        error: undefined,
+        reason: undefined,
+        conflictRef: undefined,
+        ahead: false,
+        recordQueueDirty: false,
+        pendingFetch: false,
+        heldCheckoutId: undefined,
+        arrived: undefined,
+      },
+    },
+    /*
+     * A push this machine did not make, settled (A32).
+     *
+     * Handled at the root because the `pagehide` keepalive re-send can land in
+     * any state — including `pushing`, where the in-flight push is about to be
+     * cancelled with the document anyway, and the last word is the POST the
+     * platform already took. Both arms go through `recording`, so the queue on
+     * disk is what a reopened project reads either way.
+     */
+    pushAcknowledged: {
+      target: '.recording',
+      context: ({ context, event }) => ({
+        pending: nextPending({
+          pending: context.pending,
+          outcomes: event.refs,
+          leases: context.leases,
+          remote: context.remote,
+          now: Date.now(),
+        }),
+        failure: 'none',
+        attempt: 0,
+        retryAfterMilliseconds: undefined,
+      }),
+    },
+    pushFailed: {
+      target: '.recording',
+      context: ({ context, event }) => ({
+        pendingFetch: false,
+        pendingFlush: false,
+        pendingMint: false,
+        failure: 'retry',
+        error: event.reason,
+        reason: 'unknown',
+        pending: nextPending({
+          pending: context.pending,
+          outcomes: throwFailures(context, event.reason),
+          leases: context.leases,
+          remote: context.remote,
+          now: Date.now(),
+        }),
+      }),
+    },
+  },
+  initial: 'reading',
+  states: {
+    /**
+     * What this device already owes the remote, and whether it has one.
+     *
+     * Two records, read in order, because neither is a snapshot: the queue is a
+     * file this device wrote and the remote is git's own config. A machine that
+     * started from a persisted XState snapshot would be a second schema to
+     * migrate; these already exist (D29).
+     */
+    reading: {
+      initial: 'queue',
+      states: {
+        queue: {
+          invoke: {
+            src: 'readPending',
+            input: ({ context }) => ({ projectId: context.projectId }),
+            onDone: { target: 'remote', context: ({ event }) => ({ pending: event.output.entries }) },
+            /* A queue that cannot be read is an empty queue, not a dead
+             * scheduler: the push that follows re-derives what is unacknowledged
+             * from the remote's own answer. */
+            onError: { target: 'remote' },
+          },
+        },
+        remote: {
+          invoke: {
+            src: 'readRemote',
+            input: ({ context }) => ({ projectId: context.projectId }),
+            onDone: {
+              target: 'done',
+              context: ({ context, event }) => ({
+                remote: event.output.remote,
+                automaticPush: event.output.automaticPush !== false,
+                branch: event.output.branch ?? context.branch,
+              }),
+            },
+            onError: { target: 'done' },
+          },
+        },
+        done: { type: 'final' },
+      },
+      onDone: ({ context, guards }) => (guards.hasRemote(context) ? { target: 'opening' } : { target: 'noRemote' }),
+    },
+
+    /** No remote is not a failure, and nothing is queued against one. */
+    noRemote: {
+      /* A request remembered while this machine was still reading, or cut off
+       * by a disconnect, has nowhere to go: say so rather than leave it
+       * waiting (L2-F3). */
+      entry: ({ context }, enq) => {
+        enq.sendTo('remoteMoves', { type: 'unwatch' });
+        return { context: settleEveryPush(context, enq, 'failed') };
+      },
+      on: {
+        /* With no remote to push to, the request is answered at once (RM-R11). */
+        syncNow: ({ context, event }, enq) => {
+          if (context.quiescing) {
+            return holdPushRequest(context, event, enq);
+          }
+          if (event.remote !== undefined) {
+            return { target: 'pushing', context: { ...carry(context, event), remote: event.remote } };
+          }
+          answerPushes(context, enq, { pushIds: event.pushId === undefined ? [] : [event.pushId], outcome: 'failed' });
+          return {};
+        },
+        remoteConnected: {
+          target: 'opening',
+          context: ({ event }) => ({
+            remote: event.remote,
+            automaticPush: event.automaticPush !== false,
+            hasAppliedRemote: false,
+            chats: 'unknown',
+          }),
+        },
+      },
+    },
+
+    /**
+     * Opening pulls first, under a bound (review 3 F16).
+     *
+     * Three exits, all of them here: offline skips the pull outright and waits
+     * for `online`; the first window is how long the row says `Checking…`; the
+     * deadline abandons the pull, records what is owed, and lets the project get
+     * on with itself. The tree is never held behind any of them — this host
+     * renders from the local checkout and the fetched bytes arrive through the
+     * authority's own watch plane, which is what makes "no reload" true.
+     */
+    opening: {
+      on: {
+        remoteConnected: {
+          target: '#sync.opening',
+          reenter: true,
+          context: ({ event }) => ({
+            remote: event.remote,
+            automaticPush: event.automaticPush !== false,
+            hasAppliedRemote: false,
+            chats: 'unknown',
+          }),
+        },
+      },
+      always: ({ context }, enq) => {
+        if (context.online) {
+          return undefined;
+        }
+        reportPullAttempt(context, enq, 'offline');
+        /* A correlated `syncNow { pushId }` that arrives offline is answered
+         * `queued` by `queued` itself (C18): the requester — `publish.machine` —
+         * hears the honest outcome at once rather than waiting out a bound. */
+        return {
+          target: 'queued',
+          context: {
+            error: 'You’re offline. This project backs up when you’re back online.',
+            reason: 'offline',
+          },
+        };
+      },
+      entry: ({ context }, enq) => {
+        /* Subscribed while open (D13), from before the pull reads the remote,
+         * so a move that lands after it is a wake-up rather than a miss. The
+         * subscription ignores a repeat for the remote it already watches. */
+        enq.sendTo('remoteMoves', { type: 'watch', remote: context.remote ?? '' });
+        return {
+          context: {
+            withinPullWindow: true,
+            chats: 'loading',
+            recordProjection: undefined,
+            attemptStartedAt: Date.now(),
+            recordQueueDirty: false,
+            pendingFetch: false,
+            pendingSession: false,
+            heldSessionPull: false,
+            leaseSettled: false,
+            arrived: undefined,
+          },
+        };
+      },
+      exit: () => ({ context: { withinPullWindow: false } }),
+      after: {
+        pullRenderWindow: { context: { withinPullWindow: false } },
+        pullDeadline: ({ context, value }, enq) => {
+          reportPullAttempt(context, enq, 'retry');
+          if (onlyRecordsLeft(value)) {
+            return {
+              target: 'recording',
+              context: rememberRecords(
+                context,
+                failedRecords(context, new Error('Optional records did not finish in time.')),
+              ),
+            };
+          }
+          return {
+            target: 'queued',
+            context: {
+              error: 'Backup is taking too long. Tau will try again.',
+              reason: 'offline',
+              chats: context.chats === 'loading' ? 'failed' : context.chats,
+            },
+          };
+        },
+      },
+      initial: 'fetching',
+      states: {
+        fetching: {
+          invoke: {
+            src: 'fetch',
+            input: ({ context }) => ({
+              remote: context.remote ?? '',
+              branch: context.branch,
+              deadlineMilliseconds: context.pullDeadlineMilliseconds,
+            }),
+            onDone: ({ context, event }, enq) => {
+              reportPullAttempt(context, enq, 'ok');
+              const remembered = rememberFetch(context, enq, event.output);
+              switch (event.output.integration) {
+                case 'fastForward': {
+                  return {
+                    target: event.output.recordProjection?.besideApply === true ? 'besideApply' : 'fastForwarding',
+                    context: remembered,
+                  };
+                }
+                case 'diverged': {
+                  return { target: 'merging', context: remembered };
+                }
+                default: {
+                  return { target: 'authoredReady', context: remembered };
+                }
+              }
+            },
+            onError: ({ context, event }, enq) => {
+              reportPullAttempt(context, enq, thrownOutcome(event.error));
+              return context.transportStopped
+                ? { target: '#sync.recording', context: closeRetry(context) }
+                : pullFailed(event.error);
+            },
+          },
+        },
+        fastForwarding: {
+          invoke: {
+            src: 'fastForward',
+            input: ({ context }) => ({ remote: context.remote ?? '', branch: context.branch }),
+            onDone: ({ context, event }, enq) => {
+              if (event.output !== undefined && 'hold' in event.output) {
+                return heldAt(event.output);
+              }
+              reportFastForward(context, enq, event.output);
+              return { target: 'authoredReady' };
+            },
+            onError: ({ event }) => pullFailed(event.error),
+          },
+        },
+        /** A dirty or diverged checkout merges by the ordinary rules (A2/A22). */
+        merging: {
+          invoke: {
+            src: 'merge',
+            input: ({ context }) => ({ remote: context.remote ?? '', branch: context.branch }),
+            onDone: ({ context, event }, enq) => {
+              if (event.output.status === 'held') {
+                return heldAt(event.output);
+              }
+              if (event.output.status === 'merged') {
+                /* The merge moved the checkout's head: its actor re-heads, or
+                 * its next cut would lose the compare-and-swap (D3). The merge
+                 * revision is this device's own and unsent, so the pull's exit
+                 * pushes it (D12: two devices converge without a person). */
+                reportFastForward(context, enq, event.output.moved);
+                return { target: 'authoredReady', context: { pendingMint: true } };
+              }
+              const conflict = {
+                conflictRef: `refs/heads/${event.output.branch}`,
+                error: 'This project changed here and somewhere else. Choose what to keep, then back up again.',
+              };
+              /* A re-pull that lands on the conflict already waiting (D55) is
+               * not news: announcing it again toasted on every retry. */
+              if (context.parentRef !== undefined && context.conflictRef !== conflict.conflictRef) {
+                enq.sendTo(context.parentRef, {
+                  type: 'mergeConflicted',
+                  branch: event.output.branch,
+                  into: event.output.into,
+                  paths: event.output.paths,
+                });
+              } else if (context.parentRef !== undefined) {
+                /* The same line can now contain another decision (D14). Re-read
+                 * its records without repeating D55's user-facing announcement. */
+                enq.sendTo(context.parentRef, { type: 'conflictsChanged' });
+              }
+              return { target: '#sync.conflicted', context: conflict };
+            },
+            onError: ({ event }) => pullFailed(event.error),
+          },
+        },
+        authoredReady: {
+          entry: () => ({ context: { hasAppliedRemote: true } }),
+          always: ({ context }) =>
+            context.recordProjection === undefined
+              ? {
+                  target: 'done',
+                  context: {
+                    chats: context.pending.some(
+                      (entry) => entry.operation === 'projection' && entry.ref.startsWith('refs/tau/chats/'),
+                    )
+                      ? 'failed'
+                      : 'ready',
+                  },
+                }
+              : { target: 'projectingRecords' },
+        },
+        projectingRecords: {
+          invoke: {
+            src: 'projectRecords',
+            input: ({ context }) => recordsInputOf(context),
+            onDone: ({ context, event }) => ({ target: 'done', context: recordsSettled(context, event.output) }),
+            onError: ({ context, event }) => ({
+              target: 'done',
+              context: rememberRecords(context, failedRecords(context, event.error)),
+            }),
+          },
+        },
+        /*
+         * A fast-forward whose records write only unversioned paths, disjoint from its own (SP2h): the chats land while
+         * the files are written, so a chat opens on its records and never waits for the whole download. The remote is
+         * applied only once the authored region lands; a failed or held apply ends both, as it always did.
+         */
+        besideApply: {
+          type: 'parallel',
+          states: {
+            authored: {
+              initial: 'fastForwarding',
+              states: {
+                fastForwarding: {
+                  invoke: {
+                    src: 'fastForward',
+                    input: ({ context }) => ({ remote: context.remote ?? '', branch: context.branch }),
+                    onDone: ({ context, event }, enq) => {
+                      if (event.output !== undefined && 'hold' in event.output) {
+                        return heldAt(event.output);
+                      }
+                      reportFastForward(context, enq, event.output);
+                      return { target: 'applied' };
+                    },
+                    onError: ({ event }) => pullFailed(event.error),
+                  },
+                },
+                applied: { type: 'final', entry: () => ({ context: { hasAppliedRemote: true } }) },
+              },
+            },
+            records: {
+              initial: 'projecting',
+              states: {
+                projecting: {
+                  invoke: {
+                    src: 'projectRecords',
+                    input: ({ context }) => recordsInputOf(context),
+                    onDone: ({ context, event }) => ({
+                      target: 'projected',
+                      context: recordsSettled(context, event.output),
+                    }),
+                    onError: ({ context, event }) => ({
+                      target: 'projected',
+                      context: rememberRecords(context, failedRecords(context, event.error)),
+                    }),
+                  },
+                },
+                projected: { type: 'final' },
+              },
+            },
+          },
+          onDone: { target: 'done' },
+        },
+        done: { type: 'final' },
+      },
+      onDone: ({ context, guards }) => {
+        if (context.transportStopped) {
+          return { target: 'recording', context: closeRetry(context) };
+        }
+        if (!context.automaticPush) {
+          return { target: 'manual' };
+        }
+        /* The queue first, before anything else this open does (D28). */
+        if (guards.hasPushPending(context)) {
+          return { target: 'pushing' };
+        }
+        /* Then anything minted while the pull was running — including a `close`
+         * cut on a project opened and shut inside one window — and a correlated
+         * request, which is a push by definition: settling in `backedUp` would
+         * answer it never (L2-F3). */
+        if (context.pendingMint || context.pushIds.length > 0) {
+          return { target: 'pushing' };
+        }
+        /* Then the case an empty queue cannot express: the pull found this
+         * device holding revisions the remote does not have (C15). Nothing was
+         * minted and nothing is queued, and the machine used to read that as
+         * `backedUp` and push nothing — a *Backed up* row over work that has
+         * never left the device. */
+        if (context.ahead) {
+          return { target: 'pushing' };
+        }
+        /* Record failures are durable work of their own; writing their queue
+         * cannot block the history integration that just completed. */
+        if (guards.hasRecordResults(context)) {
+          return { target: 'recording' };
+        }
+        return { target: 'backedUp' };
+      },
+    },
+
+    /** Readable remote whose writes require an explicit request every time. */
+    manual: {
+      entry: ({ context }, enq) => ({
+        context: {
+          ...settleEveryPush(context, enq, context.failure === 'none' ? 'queued' : 'failed'),
+          explicitPush: false,
+          pendingFlush: false,
+        },
+      }),
+      /* A manual remote pulls on nothing but a request: a session change remembered while busy is read now (audit R6). */
+      always: ({ context, guards }) =>
+        context.pendingSession && !context.quiescing && guards.hasRemote(context) ? { target: 'opening' } : undefined,
+      on: {
+        pushNow: ({ context, event }) =>
+          context.online
+            ? {
+                target: 'pushing',
+                context: { pushIds: [event.pushId], explicitPush: true, explicitTarget: event.repositoryUrl },
+              }
+            : {
+                target: 'failed',
+                context: {
+                  pushIds: [event.pushId],
+                  error: 'Go online before backing up to GitHub.',
+                  reason: 'offline',
+                },
+              },
+        syncNow: ({ context, event }, enq) => {
+          if (context.quiescing) {
+            return holdPushRequest(context, event, enq);
+          }
+          answerPushes(context, enq, { pushIds: event.pushId === undefined ? [] : [event.pushId], outcome: 'queued' });
+          return { target: 'opening' };
+        },
+        remoteMoved: ({ context }) => (context.quiescing ? {} : { target: 'opening' }),
+        remoteConnected: { target: 'reading' },
+        close: () => ({}),
+      },
+    },
+
+    backedUp: {
+      entry: ({ context }, enq) => ({
+        context: {
+          ...settlePush(context, enq, 'backedUp'),
+          attempt: 0,
+          retryAfterMilliseconds: undefined,
+          failure: 'none',
+          error: undefined,
+          reason: undefined,
+          conflictRef: undefined,
+          mintRepulled: false,
+        },
+      }),
+      /* A revision minted *during* the push that is settling here was built
+       * after that push was, so it is still unsent: it goes through `pending`,
+       * not straight to `pushing`, so the debounce still coalesces (review 2
+       * R4). Without this the row said `Backed up` over an unsent revision.
+       *
+       * Unless it was a `close` or `hidden` cut, which is the one trigger that
+       * cannot afford a window: the document is unloading (C17). */
+      always: ({ context }) => {
+        if (context.quiescing) {
+          return context.pendingMint ? { target: 'recording', context: closeRetry(context) } : undefined;
+        }
+        if (!context.automaticPush) {
+          return { target: 'manual' };
+        }
+        /* A `syncNow` that arrived during the push that just settled asks for the next one now (RM-R11). */
+        if (context.pendingFlush || context.pushIds.length > 0) {
+          return { target: 'pushing' };
+        }
+        /* A remote move that landed while busy: pull, and the pull pushes any
+         * remembered mint after it (D13). */
+        if (context.pendingFetch) {
+          return { target: 'opening' };
+        }
+        return context.pendingMint ? { target: 'pending' } : undefined;
+      },
+      on: {
+        remoteMoved: ({ context }) => (context.quiescing ? {} : { target: 'opening' }),
+        revisionMinted: ({ context, event }) => ({
+          target: context.quiescing ? 'recording' : flushesNow(event.trigger) ? 'pushing' : 'pending',
+          context: context.quiescing
+            ? closeRetry({ ...context, ...rememberHead(context, event) })
+            : rememberHead(context, event),
+        }),
+        syncNow: ({ context, event }, enq) =>
+          context.quiescing
+            ? holdPushRequest(context, event, enq)
+            : {
+                target: 'pushing',
+                context: carry(context, event),
+              },
+        close: ({ context }) => (context.quiescing ? {} : { target: 'pushing' }),
+        remoteConnected: {
+          target: 'opening',
+          context: ({ event }) => ({
+            remote: event.remote,
+            automaticPush: event.automaticPush !== false,
+            hasAppliedRemote: false,
+            chats: 'unknown',
+          }),
+        },
+      },
+    },
+
+    /** D28's 2 s. Re-entered by every later revision, which is the coalescing. */
+    pending: {
+      /* The burst's ceiling: this state is entered once per burst, so its timer
+       * runs from the first mint however often the window below restarts. */
+      after: { syncMaxWait: { target: 'pushing' } },
+      on: {
+        /* Pull first: the remembered mint is pushed by the pull's own exit, under the lease it takes. */
+        remoteMoved: ({ context }) => (context.quiescing ? {} : { target: 'opening' }),
+        syncNow: ({ context, event }, enq) =>
+          context.quiescing
+            ? holdPushRequest(context, event, enq)
+            : {
+                target: 'pushing',
+                context: carry(context, event),
+              },
+        close: ({ context }) => (context.quiescing ? {} : { target: 'pushing' }),
+      },
+      initial: 'debouncing',
+      states: {
+        debouncing: {
+          after: { syncDebounce: { target: '#sync.pushing' } },
+          on: {
+            revisionMinted: ({ context, event }) =>
+              flushesNow(event.trigger)
+                ? { target: '#sync.pushing', context: rememberHead(context, event) }
+                : /* An external self-transition of the window alone, so the
+                   * debounce restarts and the ceiling does not: three saves in a
+                   * second are one push, and a steady stream still pushes. */
+                  { target: 'debouncing', reenter: true, context: rememberHead(context, event) },
+          },
+        },
+      },
+    },
+
+    pushing: {
+      /* A push that starts after a deferred request carries the head current at it (W15 F1), however the
+       * push it waited behind ended — settled, or abandoned by `open` (RV-W15). */
+      entry: ({ context }) => {
+        const now = Date.now();
+        const since = pushSinceOf(context, now);
+        return {
+          context: {
+            pendingMint: false,
+            pendingFlush: false,
+            /* A push that starts now runs under the session in force: a refusal of it is this session's (audit R6). */
+            pendingSession: false,
+            explicitPush: false,
+            ahead: false,
+            pushIds: [...context.pushIds, ...context.nextPushIds],
+            nextPushIds: [],
+            attemptStartedAt: now,
+            pushPending: context.pending.length,
+            mintedSincePushAt: undefined,
+            changedSincePushAt: undefined,
+            pushSince: since.at,
+            pushSinceKind: since.kind,
+          },
+        };
+      },
+      invoke: {
+        src: 'push',
+        input: ({ context }) => {
+          /* A retry offers exactly what is owed; an ordinary debounce offers
+           * both sets and lets the port decide what is already up to date. */
+          const narrowed = narrowedOffer(context);
+          return {
+            remote: context.remote ?? '',
+            branch: context.branch,
+            leases: context.leases,
+            ...(context.explicitPush ? { explicit: true, repositoryUrl: context.explicitTarget } : {}),
+            ...(narrowed === undefined ? {} : { refs: narrowed }),
+          };
+        },
+        onDone: ({ context, event }, enq) => {
+          const now = Date.now();
+          const leases = {
+            ...context.leases,
+            ...Object.fromEntries(
+              event.output.refs.flatMap((entry) =>
+                entry.status === 'rejected' || entry.head === undefined ? [] : [[entry.name, entry.head]],
+              ),
+            ),
+          };
+          const pending = nextPending({
+            pending: context.pending,
+            outcomes: event.output.refs,
+            leases: context.leases,
+            remote: context.remote,
+            now,
+          });
+          const refusedHistory = event.output.refs.find(
+            (entry) => entry.status === 'rejected' && entry.name === historyRefOf(context.branch),
+          );
+          /* A branch or tag refused for a commit it carries is terminal wherever it
+           * is: every retry offers that ref, and that commit, again. */
+          const commitRefused = event.output.refs.some(
+            (entry) => entry.status === 'rejected' && isHistoryRef(entry.name) && isCommitRefusal(entry.reason),
+          );
+          /* The over-quota list is `remote.machine`'s, always (P19, A40): the
+           * scheduler forwards it through the parent and keeps no copy. */
+          if ((event.output.overQuota ?? []).length > 0 && context.parentRef !== undefined) {
+            enq.sendTo(context.parentRef, {
+              type: 'remote',
+              event: {
+                type: 'quotaRefused',
+                paths: event.output.overQuota ?? [],
+                ...(event.output.quotaStorage === undefined ? {} : { storage: event.output.quotaStorage }),
+              },
+            });
+          }
+          /* B6: the push that moved this device's versions says so, once. */
+          if ((event.output.renumbered ?? []).length > 0) {
+            enq.emit({ type: 'versionsRenumbered', renumbered: event.output.renumbered ?? [] });
+            /* Before the settlement, so a publish waiting on it names the version's final number. */
+            if (context.parentRef !== undefined) {
+              enq.sendTo(context.parentRef, { type: 'versionsRenumbered', renumbered: event.output.renumbered ?? [] });
+            }
+          }
+          /* F9: bytes reached the remote, so its stored figure is stale. */
+          if (event.output.refs.some((entry) => entry.status === 'updated') && context.parentRef !== undefined) {
+            enq.sendTo(context.parentRef, { type: 'remote', event: { type: 'pushed' } });
+          }
+          /* Acknowledged is judged on what this remote is owed, not the whole
+           * queue: a projection entry or one kept for a disconnected remote is
+           * not something this push could settle, and counting it reported an
+           * accepted push as a retry and backed off on it. Both stay queued. */
+          const owed = owedPushes({ ...context, pending });
+          const quota = isQuotaAnswer(owed, event.output.overQuota);
+          const acknowledged = owed.length === 0;
+          /* Every acknowledged push reports its lag, from what it was dated by as it started
+           * (`pushSince`): never from a change made while it was on the wire, which it did not carry
+           * and which the next push reports. */
+          reportPushAttempt(context, enq, {
+            outcome: acknowledged ? 'ok' : quota ? 'quota_refused' : 'retry',
+            ...(acknowledged
+              ? { lagMilliseconds: Math.max(0, now - context.pushSince), lagSince: context.pushSinceKind }
+              : {}),
+          });
+          return {
+            target: 'recording',
+            context: {
+              leases,
+              pending,
+              /* A change made while this push was on the wire is still unsent, from its own moment. */
+              unsyncedSince: acknowledged ? context.changedSincePushAt : context.unsyncedSince,
+              /* Rule 19: a refused history is terminal, as the thrown class is; a
+               * record's refusal never blocks history, so it keeps retrying. A
+               * history refused for a commit it carries is terminal too: every
+               * retry carries that commit again (see `isFatal`). */
+              failure:
+                (refusedHistory !== undefined && quota) || commitRefused ? 'fatal' : acknowledged ? 'none' : 'retry',
+              attempt: acknowledged ? 0 : context.attempt + 1,
+              retryAfterMilliseconds: undefined,
+              conflictRef: refusedHistory === undefined ? undefined : refusedHistory.name,
+              error: refusalSaid(
+                refusedHistory === undefined ? owed[0] : { ref: refusedHistory.name, reason: refusedHistory.reason },
+                context.branch,
+              ),
+              reason: quota ? 'quota' : acknowledged ? undefined : 'rejected',
+            },
+          };
+        },
+        /*
+         * R5: the browser leg *throws* on a transport failure rather than
+         * reporting every ref as refused, so "the network is down" never reads
+         * as "the remote refused this ref". It also means no ref report comes
+         * back — so the history ref is recorded here by hand, or an offline
+         * close would leave an empty queue and claim it was backed up.
+         */
+        onError: ({ context, event }, enq) => {
+          reportPushAttempt(context, enq, { outcome: thrownOutcome(event.error) });
+          return {
+            target: 'recording',
+            context: {
+              ...(context.quiescing ? { pendingMint: false, pendingFlush: false, pendingFetch: false } : {}),
+              failure: isFatal(event.error) ? 'fatal' : 'retry',
+              /* A rate limit is the remote pacing this host, not this host
+               * failing: it waits the remote's wait and keeps its doubling (W13d). */
+              attempt: retryAfterOf(event.error) === undefined ? context.attempt + 1 : context.attempt,
+              retryAfterMilliseconds: retryAfterOf(event.error),
+              error: reason(event.error),
+              reason: syncFailureReason(event.error),
+              pending: nextPending({
+                pending: context.pending,
+                outcomes: throwFailures(context, reason(event.error)),
+                leases: context.leases,
+                remote: context.remote,
+                now: Date.now(),
+              }),
+            },
+          };
+        },
+      },
+      on: {
+        /* A revision minted mid-push is not lost: the push that is running was
+         * built before it, so another one follows on the ordinary debounce. */
+        revisionMinted: { context: ({ context, event }) => rememberHead(context, event) },
+        /* The push on the wire was built before this request: the next one carries it. */
+        syncNow: deferPush,
+      },
+      /*
+       * A push past its deadline aborts its invoked effect and the port's
+       * HTTP request or native process group. Its unacknowledged refs remain
+       * owed until the durable retry record has been written.
+       */
+      after: {
+        pushDeadline: ({ context }, enq) => {
+          reportPushAttempt(context, enq, { outcome: 'retry' });
+          const why = 'Backup is taking too long. Tau will try again.';
+          return {
+            target: 'recording',
+            context: {
+              failure: 'retry',
+              attempt: context.attempt + 1,
+              error: why,
+              reason: 'offline',
+              pending: nextPending({
+                pending: context.pending,
+                outcomes: throwFailures(context, why),
+                leases: context.leases,
+                remote: context.remote,
+                now: Date.now(),
+              }),
+            },
+          };
+        },
+      },
+    },
+
+    /**
+     * The queue is a record, so writing it is an effect with its own edge (I29).
+     *
+     * Every push settle passes through here, including the ones that owe
+     * nothing: a ref the remote finally took has to *leave* the record, or the
+     * next open would retry a push that already landed.
+     */
+    recording: {
+      /* The push being recorded was built before this request: the next one carries it. */
+      on: { syncNow: deferPush },
+      invoke: {
+        src: 'writePending',
+        input: ({ context }) => ({
+          projectId: context.projectId,
+          record: { version: 1, entries: context.pending },
+        }),
+        /*
+         * There is deliberately no "a history ref was refused, so pull again"
+         * arm here (C3a). It sent every non-divergence refusal — a
+         * `pre-receive` decline, an allow-list refusal, a protected branch —
+         * straight to `opening`, whose fetch answers `upToDate` for all of
+         * them, and `opening.onDone` then went straight back to `pushing`:
+         * an unbounded fetch↔push cycle that never touched `queued`'s
+         * backoff, measured at 25 network rounds in 90 ms and able to starve
+         * the worker it runs in. `failure` is already `'retry'` on that
+         * settle, so the `queued` arm below takes it, and `queued`'s
+         * `after: syncBackoff → opening` performs the same pull *with* the
+         * backoff. A genuine divergence still arrives through `merging`.
+         */
+        /* The state it lands in answers every push it carried (RM-R11). */
+        onDone: ({ context }) => ({
+          target: context.failure === 'fatal' ? 'failed' : context.failure === 'retry' ? 'queued' : 'backedUp',
+          context: { queueWriteError: undefined },
+        }),
+        /* A queue that cannot be written is the one failure this machine cannot
+         * retry its way out of: nothing would remember what is owed. */
+        onError: {
+          target: 'failed',
+          context: ({ event }) => ({
+            error: reason(event.error),
+            reason: 'unknown',
+            queueWriteError: reason(event.error),
+          }),
+        },
+      },
+    },
+
+    /** `Not backed up · n`, and this host will try again on its own. */
+    queued: {
+      entry: ({ context }, enq) => ({ context: settlePush(context, enq, 'queued') }),
+      /* A `close` or `hidden` cut remembered while the pull or the push was
+       * running flushes as soon as there is a state that can push: the document
+       * is unloading and a backoff is time it does not have. Every entry into
+       * `queued` passes through here, including the pull's own failure edges —
+       * which is what stops an offline close from being dropped by the open that
+       * preceded it. Any other remembered mint waits out the backoff like the
+       * work already queued (policy rule 19, L2-F6): the backoff's `opening`
+       * pushes it once the pull lands. */
+      always: ({ context }) => {
+        if (context.quiescing) {
+          return context.pendingMint ? { target: 'recording', context: closeRetry(context) } : undefined;
+        }
+        if (!context.automaticPush) {
+          return { target: 'manual' };
+        }
+        return context.pendingFlush
+          ? { target: 'pushing' }
+          : /* A request that waited behind the push that just failed asks for the
+             * retry now, as one arriving here would (RV-W15); it is answered by
+             * that retry, or `queued` when the retry lands here again. */
+            context.pushIds.length > 0
+            ? { target: 'opening' }
+            : /* The remote moved: that is news the backoff was waiting for — unless
+               * the remote itself asked for the wait (W13d). */
+              context.pendingFetch && context.online && context.retryAfterMilliseconds === undefined
+              ? { target: 'opening' }
+              : undefined;
+      },
+      after: {
+        /* Offline, the backoff waits for `online` instead: answered, and nothing changes (MC-R16). */
+        syncBackoff: ({ context, guards }) =>
+          !context.quiescing && guards.isOnline(context) ? { target: 'opening' } : {},
+      },
+      on: {
+        remoteMoved: ({ context }) =>
+          !context.quiescing && context.online && context.retryAfterMilliseconds === undefined
+            ? { target: 'opening' }
+            : { context: { pendingFetch: !context.quiescing } },
+        /* The patch is here as well as at the root because a state's own
+         * handler is the one that runs: without it `opening` would read the
+         * stale `online` and bounce straight back. */
+        online: ({ context }) => ({ ...(context.quiescing ? {} : { target: 'opening' }), context: { online: true } }),
+        /* Only the unloading triggers pre-empt the backoff; the root remembers
+         * every other mint for the retry that is already scheduled. */
+        revisionMinted: ({ context, event }) =>
+          context.quiescing
+            ? { target: 'recording', context: closeRetry({ ...context, ...rememberHead(context, event) }) }
+            : flushesNow(event.trigger)
+              ? { target: 'pushing', context: rememberHead(context, event) }
+              : { context: rememberHead(context, event) },
+        syncNow: ({ context, event }, enq) =>
+          context.quiescing
+            ? holdPushRequest(context, event, enq)
+            : {
+                target: 'opening',
+                context: carry(context, event),
+              },
+        close: ({ context }) => (context.quiescing ? {} : { target: 'pushing' }),
+        remoteConnected: {
+          target: 'opening',
+          context: ({ event }) => ({
+            remote: event.remote,
+            automaticPush: event.automaticPush !== false,
+            hasAppliedRemote: false,
+            chats: 'unknown',
+          }),
+        },
+      },
+    },
+
+    /**
+     * A dirty checkout is minted before anything integrates into it (D12, rule 6).
+     *
+     * The checkout actor is the only minter, so this asks the root for a
+     * `merge` cut and waits for the answer to that request; then the pull runs
+     * again and composes a clean checkout. The independent local-cut deadline
+     * bounds this wait, because a close waits on this machine (rule 9).
+     */
+    minting: {
+      entry: ({ context }, enq) => {
+        const cutCount = context.cutCount + 1;
+        const requestId = `sync-${String(cutCount)}`;
+        if (context.parentRef === undefined) {
+          enq.raise({
+            type: 'cutFailed',
+            checkoutId: context.heldCheckoutId,
+            trigger: 'merge',
+            requestId,
+            reason: 'This project has no checkout to record these files with.',
+          });
+        } else {
+          enq.sendTo(context.parentRef, {
+            type: 'cut',
+            trigger: 'merge',
+            checkoutId: context.heldCheckoutId,
+            leaseIds: [],
+            requestId,
+          });
+        }
+        return { context: { cutCount, requestId } };
+      },
+      after: {
+        mintDeadline: mintRefused('Couldn’t save your changes before backing up. Tau will try again.'),
+      },
+      on: {
+        revisionMinted: ({ context, event }) =>
+          answersOurCut(context, event)
+            ? { target: 'opening', context: rememberHead(context, event) }
+            : { context: rememberHead(context, event) },
+        /* Clean by the time the cut ran: the pull integrates as it is — once.
+         * A second disagreement between the hold and the cut waits out the
+         * backoff (RV-W5b F2). */
+        /* Another requester's answer passes through: handled, and nothing changes (MC-R16). */
+        nothingToSave: ({ context, event }) => {
+          if (!answersOurCut(context, event)) {
+            return {};
+          }
+          return context.mintRepulled
+            ? mintRefused('Couldn’t save your changes before backing up. Tau will try again.')
+            : { target: 'opening', context: { mintRepulled: true } };
+        },
+        cutFailed: ({ context, event }) => (answersOurCut(context, event) ? mintRefused(event.reason) : {}),
+        casLost: ({ context, event }) =>
+          answersOurCut(context, event)
+            ? mintRefused('Another writer moved this branch first; this project will try again.')
+            : {},
+      },
+    },
+
+    /**
+     * A leased checkout is never re-based (rule 9): the fetched head waits here,
+     * shown as arrived, until the lease retires.
+     *
+     * Parked, not backing off: no timer re-fetches, and the lease's own
+     * retirement is what applies it. A retirement that landed while the pull was
+     * still deciding is not lost (`leaseSettled`).
+     */
+    awaitingLease: {
+      always: ({ context }) => (context.leaseSettled ? { target: 'opening' } : undefined),
+      /* Pushing now would be refused, so a request that waited behind the push is answered as one arriving here is. */
+      entry: ({ context }, enq) => ({ context: settleEveryPush(context, enq, 'queued') }),
+      on: {
+        leaseRetired: { target: 'opening' },
+        /* Remembered, not dropped (RV-W5b F7): whichever way the park ends —
+         * the lease, a close's push, a keepalive's acknowledgement — the state
+         * that settles pulls again. */
+        remoteMoved: { context: ({ context }) => ({ pendingFetch: !context.quiescing }) },
+        /* Pushing now would be refused: the remote moved past this device. */
+        syncNow: ({ context, event }, enq) => {
+          if (context.quiescing) {
+            return holdPushRequest(context, event, enq);
+          }
+          answerPushes(context, enq, { pushIds: event.pushId === undefined ? [] : [event.pushId], outcome: 'queued' });
+          return {};
+        },
+        /* An unloading document still records what it owes (C17). */
+        revisionMinted: ({ context, event }) =>
+          context.quiescing
+            ? { target: 'recording', context: closeRetry({ ...context, ...rememberHead(context, event) }) }
+            : flushesNow(event.trigger)
+              ? { target: 'pushing', context: rememberHead(context, event) }
+              : { context: rememberHead(context, event) },
+        close: ({ context }) => (context.quiescing ? {} : { target: 'pushing' }),
+        open: { target: 'opening' },
+        remoteConnected: {
+          target: 'opening',
+          context: ({ event }) => ({
+            remote: event.remote,
+            automaticPush: event.automaticPush !== false,
+            hasAppliedRemote: false,
+            chats: 'unknown',
+          }),
+        },
+      },
+    },
+
+    /**
+     * The remote moved under this host's lease (P18, A22).
+     *
+     * Not a failure and not a retry: history is the one thing a scheduler must
+     * never force. `Needs your decision` stands until a person lands the
+     * decision — here, or on another device, which a remote move brings in —
+     * and every way out of here pulls first.
+     *
+     * The decision itself travels (D14): the conflict line is offered alone on
+     * entry, because the line it decides has diverged and would sink it in the
+     * atomic set. An offer that failed is reported and owed: after the backoff
+     * the machine pulls again, which reaches the same conflict under fresh
+     * leases and offers the line again. A terminal refusal waits for *Sync now*
+     * or a remote change, as every terminal class does (rule 19).
+     */
+    conflicted: {
+      entry: ({ context }, enq) => {
+        enq.emit({
+          type: 'syncConflict',
+          ref: context.conflictRef ?? historyRefOf(context.branch),
+          reason: context.error ?? 'This project changed somewhere else. Tau will get those changes first.',
+        });
+        return { context: settleEveryPush(context, enq, 'conflicted') };
+      },
+      initial: 'offering',
+      states: {
+        offering: {
+          always: ({ context }) => (context.automaticPush ? undefined : { target: 'offered' }),
+          on: {
+            /* The conflict line's push is kept (audit R6): its answer is recorded, then the pull follows.
+             * The stream is only stopped here: `opening` watches it afresh, so a refusal of it under
+             * the new session cannot pre-empt the push. */
+            sessionChanged: ({ context, guards }, enq) => {
+              if (!guards.hasRemote(context)) {
+                /* No remote: nothing is read under any session, so the change is taken and changes nothing (MC-R17). */
+                return {};
+              }
+              enq.sendTo('remoteMoves', { type: 'unwatch' });
+              return {
+                context: { pendingSession: true, heldSessionPull: context.heldSessionPull || context.quiescing },
+              };
+            },
+          },
+          invoke: {
+            src: 'push',
+            input: ({ context }) => ({
+              remote: context.remote ?? '',
+              branch: context.branch,
+              leases: context.leases,
+              refs: [context.conflictRef ?? historyRefOf(context.branch)],
+            }),
+            onDone: ({ context, event }, enq) => {
+              const leases = {
+                ...context.leases,
+                ...Object.fromEntries(
+                  event.output.refs.flatMap((entry) =>
+                    entry.status === 'rejected' || entry.head === undefined ? [] : [[entry.name, entry.head]],
+                  ),
+                ),
+              };
+              const refused = event.output.refs.find((entry) => entry.status === 'rejected');
+              if (refused === undefined) {
+                return {
+                  target: sessionPullOf(context) ?? 'offered',
+                  context: { leases, attempt: 0, retryAfterMilliseconds: undefined },
+                };
+              }
+              enq(reportConflictLineFailure, 'refused', refused.name, refused.reason);
+              const quota = (event.output.overQuota ?? []).length > 0 || isStorageRefusal(refused.reason ?? '');
+              /* A conflict line refused for a commit it carries is terminal, as the thrown form is. */
+              const terminal = quota || isCommitRefusal(refused.reason);
+              return {
+                target: sessionPullOf(context) ?? (terminal ? 'offered' : 'owed'),
+                context: { leases, attempt: context.attempt + 1, retryAfterMilliseconds: undefined },
+              };
+            },
+            onError: ({ context, event }, enq) => {
+              const { error } = event;
+              enq(reportConflictLineFailure, 'push', error);
+              return {
+                target: sessionPullOf(context) ?? (isFatal(error) ? 'offered' : 'owed'),
+                context: { attempt: context.attempt + 1, retryAfterMilliseconds: retryAfterOf(error) },
+              };
+            },
+          },
+        },
+        /* Recorded here and not on the remote yet: `Needs your decision` stays, and the backoff pulls again. */
+        owed: {
+          after: {
+            syncBackoff: ({ context, guards }) =>
+              !context.quiescing && guards.isOnline(context) ? { target: '#sync.opening' } : {},
+          },
+        },
+        offered: {},
+      },
+      on: {
+        remoteMoved: ({ context }) => (context.quiescing ? {} : { target: 'opening' }),
+        syncNow: ({ context, event }, enq) =>
+          context.quiescing
+            ? holdPushRequest(context, event, enq)
+            : {
+                target: 'opening',
+                context: carry(context, event),
+              },
+        online: ({ context }) => ({ ...(context.quiescing ? {} : { target: 'opening' }), context: { online: true } }),
+        remoteConnected: {
+          target: 'opening',
+          context: ({ event }) => ({
+            remote: event.remote,
+            automaticPush: event.automaticPush !== false,
+            hasAppliedRemote: false,
+            chats: 'unknown',
+          }),
+        },
+        /* Composed, so pull again: the resolution minted a revision on this
+         * branch and whether the remote takes it is the remote's answer, not
+         * something this machine can assume (review 2 R6, S33). */
+        conflictResolved: ({ context, event }) =>
+          event.ref === undefined || event.ref === context.conflictRef || event.ref === historyRefOf(context.branch)
+            ? {
+                target: 'opening',
+                context: {
+                  conflictRef: undefined,
+                  error: undefined,
+                  /* The composed revision is this device's head now, and it is
+                   * unsent: the pull that follows leaves `opening` by
+                   * `pendingMint → pushing`, which offers it under the lease the
+                   * same pull just took (P18, P44). */
+                  localHead: event.revisionId ?? context.localHead,
+                  pendingMint: true,
+                  /* The decision is an unsent change: it dates the lag as the root's handler would. */
+                  ...markUnsyncedRecords(context),
+                },
+              }
+            : /* Another line's resolution: remembered as the root would, for the next push. */
+              { context: { pendingMint: true, ...markUnsyncedRecords(context) } },
+      },
+    },
+
+    /**
+     * Something a person has to act on — a credential, or a queue that will not write.
+     *
+     * A mint here is remembered by the root and pushed by the pull that *Sync
+     * now* or a remote change starts; it never re-enters the push on its own,
+     * or a refused project would retry on every save (policy rule 19, L2-F6).
+     */
+    failed: {
+      entry: ({ context }, enq) => ({ context: settleEveryPush(context, enq, 'failed') }),
+      on: {
+        sessionChanged: ({ context, guards }, enq) => {
+          if (!guards.hasRemote(context)) {
+            /* No remote: nothing is read under any session, so the change is taken and changes nothing (MC-R17). */
+            return {};
+          }
+          enq.sendTo('remoteMoves', { type: 'unwatch' });
+          return context.quiescing ? { context: { pendingSession: true } } : { target: 'opening' };
+        },
+        syncNow: ({ context, event }, enq) =>
+          context.quiescing
+            ? holdPushRequest(context, event, enq)
+            : {
+                target: 'opening',
+                context: carry(context, event),
+              },
+        remoteConnected: {
+          target: 'opening',
+          context: ({ event }) => ({
+            remote: event.remote,
+            automaticPush: event.automaticPush !== false,
+            hasAppliedRemote: false,
+            chats: 'unknown',
+          }),
+        },
+      },
+      /* D98: that remembered mint is still owed, so it is recorded as owed — or
+       * the row read *Backed up* over a revision that never left (D68 holds
+       * only with nothing minted since). Recorded inside `failed`, never pushed:
+       * the state stays terminal and *Sync now* still leaves it at once. */
+      initial: 'settled',
+      states: {
+        settled: {
+          /* After any owed entry is recorded, a refusal answered under the last
+           * session opens again under this one, the stream watched afresh (audit R6). */
+          always: ({ context, guards }, enq) => {
+            if (owesUnrecordedMint(context)) {
+              return {
+                target: 'recording',
+                context: {
+                  pending: nextPending({
+                    pending: context.pending,
+                    outcomes: [
+                      {
+                        name: historyRefOf(context.branch),
+                        status: 'rejected',
+                        head: context.localHead,
+                        ...(context.error === undefined ? {} : { reason: context.error }),
+                      },
+                    ],
+                    leases: context.leases,
+                    remote: context.remote,
+                    now: Date.now(),
+                  }),
+                },
+              };
+            }
+            if (!context.pendingSession || context.quiescing || !guards.hasRemote(context)) {
+              return undefined;
+            }
+            enq.sendTo('remoteMoves', { type: 'unwatch' });
+            return { target: '#sync.opening' };
+          },
+        },
+        recording: {
+          invoke: {
+            src: 'writePending',
+            input: ({ context }) => ({
+              projectId: context.projectId,
+              record: { version: 1, entries: context.pending },
+            }),
+            onDone: { target: 'settled', context: { queueWriteError: undefined } },
+            /* The refusal stays the row's reason; the next settle that records rewrites the queue. */
+            onError: ({ event }, enq) => {
+              enq(reportQueueWriteFailure, event.error);
+              return { target: 'settled', context: { queueWriteError: reason(event.error) } };
+            },
+          },
+        },
+      },
+    },
+  },
+});
+
+type SyncMachineDefinition = typeof syncMachineDefinition;
+
+/**
+ * The type of {@link syncMachine}, named so declarations reference it rather than inline it.
+ *
+ * @public
+ */
+// oxlint-disable-next-line typescript/no-empty-interface, typescript/no-empty-object-type, typescript/consistent-type-definitions -- an interface, not a type alias: declarations reference an interface by name and would expand an alias (K-17)
+export interface SyncMachine extends SyncMachineDefinition {}
+
+/**
+ * One project's push scheduler and retry queue.
+ *
+ * @public
+ */
+export const syncMachine: SyncMachine = syncMachineDefinition;
+
+/** The actor set `syncMachine.provide` needs. @public */
+export type SyncActors = MachineActors<typeof syncMachine>;
+
+const facetStateOf = (value: string, withinPullWindow: boolean): SyncFacet['state'] => {
+  switch (value) {
+    case 'noRemote': {
+      return 'noRemote';
+    }
+    case 'reading': {
+      return 'checking';
+    }
+    case 'opening': {
+      /* F16's first window is exactly how long the row is allowed to say
+       * `Checking…`; after it the pull continues and the row shows what this
+       * device actually knows. */
+      return withinPullWindow ? 'checking' : 'pending';
+    }
+    case 'pending':
+    case 'pushing':
+    case 'recording':
+    case 'minting': {
+      return 'pending';
+    }
+    case 'conflicted': {
+      return 'conflicted';
+    }
+    case 'failed': {
+      return 'failed';
+    }
+    case 'queued': {
+      return 'queued';
+    }
+    default: {
+      return 'backedUp';
+    }
+  }
+};
+
+/**
+ * The row's sentence while its lost lease is on a branch whose conflict waits (D90).
+ *
+ * A lost lease is caught up by the next pull's merge, except on a branch whose
+ * merge recorded a conflict: that branch moves only once the person decides,
+ * so "will get those changes and try again" would be false. The conflicts are the
+ * root's (read from the conflict lines, so they survive a reload); this
+ * machine keeps no copy.
+ *
+ * @param context - Current sync context.
+ * @param undecided - Branches with a conflict waiting on the person.
+ * @returns The waiting sentence, or `undefined` when the row says no lost lease on one of them.
+ */
+const waitingSaid = (context: SyncMachineContext, undecided: readonly string[]): string | undefined => {
+  const waiting = undecided.find(
+    (into) => context.error === refusalSaid({ ref: historyRefOf(into), reason: 'leaseLost' }, context.branch),
+  );
+  return waiting === undefined
+    ? undefined
+    : `${waiting === context.branch ? 'This branch' : waiting} is waiting for your decision. It backs up once you choose.`;
+};
+
+/**
+ * The remote's head for each branch, as far as this host knows it (D4).
+ *
+ * The lease is the last thing a fetch or a push saw the remote hold. A device
+ * that opened offline has fetched nothing, so a branch it still owes falls back
+ * to the lease its queued entry was recorded under. A branch with neither, and
+ * every branch while there is no remote, has no entry: nothing is known to be
+ * backed up, so History draws no boundary.
+ *
+ * @param snapshot - Current sync snapshot.
+ * @returns Branch name to the revision the remote holds.
+ * @public
+ */
+export const selectRemoteHeads = (snapshot: SnapshotFrom<typeof syncMachine>): ReadonlyMap<string, string> => {
+  const { context } = snapshot;
+  const heads = new Map<string, string>();
+  if (context.remote === undefined) {
+    return heads;
+  }
+  const branchOf = (ref: string): string | undefined =>
+    ref.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length) : undefined;
+  for (const entry of owedPushes(context)) {
+    const branch = branchOf(entry.ref);
+    if (branch !== undefined && entry.expected !== undefined) {
+      heads.set(branch, entry.expected);
+    }
+  }
+  for (const [ref, head] of Object.entries(context.leases)) {
+    const branch = branchOf(ref);
+    if (branch !== undefined) {
+      heads.set(branch, head);
+    }
+  }
+  return heads;
+};
+
+/**
+ * The Sync row's whole input, read where it lives.
+ *
+ * @param snapshot - Current sync snapshot.
+ * @param undecided - Branches whose conflict waits on the person, the root's `conflicts` (D90).
+ * @returns The facet the pane, the chip and the projection carry.
+ * @public
+ */
+export const selectSyncFacet = (
+  snapshot: SnapshotFrom<typeof syncMachine>,
+  undecided: readonly string[] = [],
+): SyncFacet => {
+  const value = typeof snapshot.value === 'string' ? snapshot.value : (Object.keys(snapshot.value)[0] ?? '');
+  /* Only while parked: once the pull applies it, it is simply the head. */
+  const arrived = value === 'awaitingLease' ? snapshot.context.arrived : undefined;
+  return {
+    /* Parked behind a lease, what this device owes is still owed (C12). */
+    state:
+      value === 'manual'
+        ? snapshot.context.error === undefined
+          ? 'manual'
+          : 'failed'
+        : value === 'awaitingLease' && owedPushes(snapshot.context).length > 0
+          ? 'queued'
+          : facetStateOf(value, snapshot.context.withinPullWindow),
+    /* `n` is what this device owes *this* remote (C12, C19). A `projection`
+     * entry is a record the fetch could not restore **locally** — inbound work,
+     * not work the remote is missing — and counting it made *Not backed up · 3*
+     * out of a project that was fully backed up; the reason for it still
+     * reaches the person through `error`. */
+    pullPhase: snapshot.matches({ opening: 'fetching' })
+      ? 'fetching'
+      : snapshot.matches({ opening: 'fastForwarding' }) ||
+          snapshot.matches({ opening: 'merging' }) ||
+          snapshot.matches({ opening: { besideApply: { authored: 'fastForwarding' } } })
+        ? 'applying'
+        : snapshot.matches({ opening: 'projectingRecords' }) ||
+            snapshot.matches({ opening: { besideApply: { authored: 'applied' } } })
+          ? 'records'
+          : 'idle',
+    hasAppliedRemote: snapshot.context.hasAppliedRemote,
+    chats: snapshot.context.chats,
+    pendingCount: owedPushes(snapshot.context).length,
+    online: snapshot.context.online,
+    conflictRef: snapshot.context.conflictRef,
+    error: waitingSaid(snapshot.context, undecided) ?? snapshot.context.error,
+    reason: snapshot.context.reason,
+    ...(arrived === undefined ? {} : { arrived }),
+  };
+};

@@ -1,0 +1,26 @@
+{
+  "title": "Gel comb SCAD",
+  "entry": "main.scad",
+  "kernel": "OpenSCAD",
+  "language": "scad",
+  "description": "Ported lab comb from the old playground gallery.",
+  "exportFormats": [
+    "glb"
+  ],
+  "initialParameters": {
+    "tooth_count": 28,
+    "tooth_length": 20,
+    "tooth_width": 3,
+    "tooth_thickness": 0.8,
+    "tooth_gap": 1.5,
+    "bar_height": 18,
+    "bar_thickness": 1.2,
+    "side_overhang": 4,
+    "slot_count": 2,
+    "slot_height": 3,
+    "slot_gap": 4,
+    "slot_side_margin": 6,
+    "show_side_hooks": true
+  },
+  "runtimeKernel": "openscad"
+}

@@ -1,0 +1,31 @@
+# Build123d's registry-native closure (native-dependency-resolution charter W3, D2, D17, D22, I13), checked and
+# golden-recorded by the shared Python kernel workflow: `--check` on pull requests, golden receipts on dispatch.
+name: Build123d tau-plugin
+
+on:
+  pull_request:
+    paths:
+      - packages/plugins/build123d/python/**
+      - packages/plugins/build123d/tau-plugin*.json
+      - packages/plugins/build123d/project/**
+      - packages/core/python-kernel/python/**
+      - packages/core/python-kernel/scripts/**
+      - packages/core/python-kernel/src/{generator,template}.ts
+      - .github/workflows/build123d-tau-plugin.yml
+      - .github/workflows/python-kernel-tau-plugin.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build123d-tau-plugin-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  tau-plugin:
+    if: ${{ github.repository == 'taucad/tau' }}
+    uses: ./.github/workflows/python-kernel-tau-plugin.yml
+    with:
+      package: packages/plugins/build123d
+      project: build123d

@@ -1,0 +1,740 @@
+/**
+ * A field signal for tabs the OS killed for memory (B-01, D-UI-25; browser observability SB3, G3).
+ *
+ * iOS Safari ends a tab that exceeds its memory limit without running any
+ * JavaScript: no `pagehide`, no `beforeunload`, no error. The only trace is the
+ * next load. So the page keeps a small marker in `sessionStorage` (it survives a
+ * reload of the same tab, and only that), marks it finished on `pagehide`, and on
+ * the next load reports a kill when that marker is unfinished and the load looks
+ * like the same page coming back.
+ *
+ * The marker carries what the report needs and the dead page could not send: the
+ * route and scrubbed path, the build, whether the page was visible, the live
+ * counts, the last memory sample (SB2) and a ring of the last
+ * {@link killTrailLimit} activity names with their timestamps. It is capped at
+ * {@link markerByteLimit} and every write is one synchronous `setItem`.
+ *
+ * A kill detected on this load does not leave the marker until its report is
+ * handed over: it waits in `pending` (at most {@link pendingKillLimit}), so a page
+ * that dies again while reporting still reports the first kill on the load after
+ * that (G17). Each report carries how many kills happened in a row.
+ */
+
+import { recordActivityBreadcrumb } from '@taucad/ui-core/lib/activity-breadcrumbs';
+import { readBuildId } from '#lib/build-identity.js';
+import { redactUrlCredentials } from '@taucad/ui-core/lib/url-credential.lib';
+import { readLastMemorySample, readHighWaterWasmBytes, takeMemorySample } from '@taucad/ui-core/lib/memory-sampler';
+import { readSessionStorage } from '@taucad/ui-core/lib/session-storage';
+import { isModelKey } from '#lib/kill-memory.js';
+import type { MemorySample } from '@taucad/ui-core/lib/memory-sampler';
+
+/** The marker shape this build writes and reads. An older shape is left alone rather than guessed at. */
+export const killMarkerVersion = 3;
+
+/** The marker's budget, kept well inside every browser's `sessionStorage` quota. */
+export const markerByteLimit = 4096;
+
+/** Activity names kept in the marker's trail (principle 3). */
+export const killTrailLimit = 20;
+
+/** Trail entries a kill keeps once it is only waiting to be reported, so a loop still fits the budget. */
+export const pendingTrailLimit = 5;
+
+/** How long after its last write a marker still counts as the same page coming back. */
+export const killDetectionWindowMilliseconds = 90_000;
+
+/** How often a visible page refreshes `updatedAt`, so the detection window measures the kill, not the idle. */
+export const killHeartbeatMilliseconds = 30_000;
+
+/** How often the heartbeat runs while a model is opening or rendering, so `phaseSeconds` is accurate to it. */
+export const killBusyHeartbeatMilliseconds = 5000;
+
+/**
+ * The step the page was in, written as the step begins (crash capture blueprint). `boot` from marker creation,
+ * `idle` from the viewer's first frame; the rest name runtime and viewer work.
+ */
+export const killPhases = [
+  'boot',
+  'kernel-init',
+  'evaluate',
+  'mesh',
+  'geometry-receive',
+  'gpu-upload',
+  'idle',
+  'export',
+  'capture',
+] as const;
+
+/** One closed phase name. @public */
+export type KillPhase = (typeof killPhases)[number];
+
+/** The phases in which a model is opening or rendering: a kill in one of them pauses the model next time. */
+export const busyKillPhases: ReadonlySet<KillPhase> = new Set([
+  'kernel-init',
+  'evaluate',
+  'mesh',
+  'geometry-receive',
+  'gpu-upload',
+]);
+
+/** The closed interaction names a page records. */
+export const killInteractions = [
+  'none',
+  'open',
+  'parameter',
+  'camera',
+  'section',
+  'measure',
+  'export',
+  'chat',
+  'edit',
+] as const;
+
+/** Share providers whose name may be recorded; never the reference. */
+export const killShareProviders = ['builtin', 'tau', 'github-gist', 'direct'] as const;
+
+/**
+ * What the page was working on, recorded before it could die (crash capture blueprint, marker v3). Closed names,
+ * counts, sizes and durations only: no source, parameter names or values, file names or geometry.
+ * @public
+ */
+export type KillWork = Readonly<{
+  kernel?: string;
+  /** A builtin's public catalog locator, such as `replicad.worm-gear-system`. */
+  builtin?: string;
+  shareProvider?: (typeof killShareProviders)[number];
+  phase?: KillPhase;
+  phaseStartedAt?: number;
+  renderCount?: number;
+  /** Milliseconds: the last settled evaluate. */
+  lastEvaluate?: number;
+  /** Milliseconds: the last settled render. */
+  lastRender?: number;
+  triangles?: number;
+  geometryBytes?: number;
+  gpuGeometries?: number;
+  textures?: number;
+  peakWasmBytes?: number;
+  backend?: 'webgl' | 'webgpu';
+  contextLost?: boolean;
+  lastInteraction?: (typeof killInteractions)[number];
+  interactionAt?: number;
+  parameterChanges?: number;
+  /** The opaque kill-memory key of the model on screen (`#lib/kill-memory`); kept on the device, never reported. */
+  model?: string;
+}>;
+
+const kernelPattern = /^[a-z][\da-z-]{0,31}$/u;
+/** A builtin locator: `<kernel>.<example>`, lowercase words joined by hyphens. */
+const builtinPattern = /^[a-z][\da-z-]{0,31}\.[\da-z][\da-z-]{0,79}$/u;
+const phaseSet: ReadonlySet<string> = new Set(killPhases);
+const interactionSet: ReadonlySet<string> = new Set(killInteractions);
+const providerSet: ReadonlySet<string> = new Set(killShareProviders);
+const numericWorkFields = [
+  'phaseStartedAt',
+  'renderCount',
+  'lastEvaluate',
+  'lastRender',
+  'triangles',
+  'geometryBytes',
+  'gpuGeometries',
+  'textures',
+  'peakWasmBytes',
+  'interactionAt',
+  'parameterChanges',
+] as const;
+
+/**
+ * Keep only the closed names and finite non-negative numbers of a work patch; anything else is dropped, so free
+ * text can never reach the marker or a report.
+ *
+ * @param patch - What a producer wants to record.
+ * @returns The admitted fields.
+ * @public
+ */
+export const admitKillWork = (patch: Readonly<Record<string, unknown>>): KillWork => {
+  const admitted: Record<string, unknown> = {};
+  const { kernel, builtin, shareProvider, phase, backend, contextLost, lastInteraction, model } = patch;
+  if (isModelKey(model)) {
+    admitted['model'] = model;
+  }
+  if (typeof kernel === 'string' && kernelPattern.test(kernel)) {
+    admitted['kernel'] = kernel;
+  }
+  if (typeof builtin === 'string' && builtinPattern.test(builtin)) {
+    admitted['builtin'] = builtin;
+  }
+  if (typeof shareProvider === 'string' && providerSet.has(shareProvider)) {
+    admitted['shareProvider'] = shareProvider;
+  }
+  if (typeof phase === 'string' && phaseSet.has(phase)) {
+    admitted['phase'] = phase;
+  }
+  if (backend === 'webgl' || backend === 'webgpu') {
+    admitted['backend'] = backend;
+  }
+  if (typeof contextLost === 'boolean') {
+    admitted['contextLost'] = contextLost;
+  }
+  if (typeof lastInteraction === 'string' && interactionSet.has(lastInteraction)) {
+    admitted['lastInteraction'] = lastInteraction;
+  }
+  for (const field of numericWorkFields) {
+    const value = patch[field];
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+      admitted[field] = Math.round(value);
+    }
+  }
+  return admitted as KillWork;
+};
+
+/** Kills that can wait for delivery at once; the oldest is dropped beyond this (G17). */
+export const pendingKillLimit = 3;
+
+/**
+ * Kills in a row that make a kill loop: the point at which Safari starts telling the user "A problem
+ * repeatedly occurred" and the report rises to `error` (A11).
+ */
+export const killLoopThreshold = 2;
+
+/** How the page stood when its marker was last written. @public */
+export type KillClassification = 'foreground' | 'background' | 'unknown';
+
+/** One activity name with the time it was recorded. @public */
+export type KillTrailEntry = Readonly<{ at: number; name: string }>;
+
+/** A kill the next load detected: what the dead page was doing and holding. @public */
+export type DetectedMemoryKill = Readonly<{
+  /** Identifies this kill while it waits for delivery; never reported. */
+  id: string;
+  classification: KillClassification;
+  route: string | undefined;
+  path: string | undefined;
+  buildId: string | undefined;
+  deviceClass: string;
+  liveProjectCount: number;
+  chatCount: number;
+  lastActivity: string | undefined;
+  aliveForMilliseconds: number;
+  /** Epoch milliseconds of the dead page's last marker write: the latest it is known to have been alive. */
+  diedAt: number;
+  /** How long the page had been hidden when it died, for a `background` kill. */
+  hiddenForMilliseconds?: number;
+  /** Kills in a row on this tab without a clean finish, this one included. */
+  consecutiveKills: number;
+  sample?: MemorySample;
+  highWaterWasmBytes?: number;
+  trail: readonly KillTrailEntry[];
+  /** What the page was working on; absent fields were never known. */
+  work: KillWork;
+}>;
+
+type AliveMarker = {
+  version: number;
+  finished: boolean;
+  startedAt: number;
+  updatedAt: number;
+  route: string | undefined;
+  path: string | undefined;
+  buildId: string | undefined;
+  visible: boolean;
+  hiddenAt: number | undefined;
+  deviceClass: string;
+  liveProjectCount: number;
+  chatCount: number;
+  sample: MemorySample | undefined;
+  highWaterWasmBytes: number | undefined;
+  trail: readonly KillTrailEntry[];
+  /** Kills in a row on this tab, so far: 0 on a page that loaded after a clean finish. */
+  consecutiveKills: number;
+  /** Kills detected but not yet handed to the error tracker. */
+  pending: readonly DetectedMemoryKill[];
+  work: KillWork;
+};
+
+const markerKey = 'tau:alive';
+
+/** Where the live kill context goes as Sentry tags; installed by the desktop renderer SDK only (D13). */
+type KillContextSink = (tags: Readonly<Record<string, string>>) => void;
+
+let killContextSink: KillContextSink | undefined;
+let publishedKillContext: Readonly<Record<string, string>> | undefined;
+let publishedKillContextKey = '';
+
+/**
+ * The marker's crash context as Sentry tag values, named as the `TabKilledError` report names them
+ * (`#lib/tab-kill-reporting`), so a desktop minidump and a browser kill report are searched alike.
+ */
+const killContextTags = (marker: AliveMarker): Readonly<Record<string, string>> => {
+  /* eslint-disable @typescript-eslint/naming-convention -- Sentry tag names, filtered on by operators. */
+  const tags: Record<string, string | undefined> = {
+    route: marker.route,
+    last_activity: marker.trail.at(-1)?.name,
+    live_project_count: String(marker.liveProjectCount),
+    chat_count: String(marker.chatCount),
+    device_class: marker.deviceClass,
+  };
+  /* eslint-enable @typescript-eslint/naming-convention -- Sentry tag names, filtered on by operators. */
+  return Object.fromEntries(Object.entries(tags).filter((entry): entry is [string, string] => entry[1] !== undefined));
+};
+
+/** Hand the current kill context to the sink, only when it changed: each change crosses IPC to main. */
+const publishKillContext = (marker: AliveMarker): void => {
+  const tags = killContextTags(marker);
+  const key = JSON.stringify(tags);
+  if (key === publishedKillContextKey) {
+    return;
+  }
+  publishedKillContextKey = key;
+  publishedKillContext = tags;
+  killContextSink?.(tags);
+};
+
+/**
+ * Keep the live kill context on the error tracker's scope (D13). On desktop the renderer's scope
+ * tags sync to main, and main puts them on the native minidump of a renderer that dies, which is
+ * that crash's one report. The browser has no such report and installs no sink.
+ *
+ * @param sink - Sets the tags on the SDK's scope, or `undefined` to stop.
+ * @public
+ */
+export const setKillContextSink = (sink: KillContextSink | undefined): void => {
+  killContextSink = sink;
+  if (sink !== undefined && publishedKillContext !== undefined) {
+    sink(publishedKillContext);
+  }
+};
+
+type MemoryKillSignalOptions = Readonly<{
+  storage: Storage | undefined;
+  /** `PerformanceNavigationTiming.type` of this load. */
+  navigationType: string | undefined;
+  deviceClass: string;
+  now?: () => number;
+  /** The deepest route id, read at each write; absent before hydration. */
+  readRoute?: () => string | undefined;
+  /** This page's scrubbed path, read at each write. */
+  readPath?: () => string | undefined;
+  /** This build's id, or `undefined` for a bundle without one. */
+  readBuild?: () => string | undefined;
+  /** Whether the page is visible now. */
+  readVisible?: () => boolean;
+}>;
+
+/** The page's side of the signal. @public */
+export type MemoryKillSignal = Readonly<{
+  /**
+   * The kills this load has to report — the previous page's, and any the page before it never
+   * delivered — at most once per load. Also arms this page's marker with them still pending.
+   */
+  takeDetectedKills: () => readonly DetectedMemoryKill[];
+  /** A kill's report reached the error tracker: it leaves the marker and is never reported again. */
+  settleKill: (id: string) => void;
+  /** Name the heavy work about to start. */
+  breadcrumb: (name: string) => void;
+  /** Record what the page is working on: closed names and numbers only (`admitKillWork`). */
+  work: (patch: Readonly<Record<string, unknown>>) => void;
+  /** What has been recorded so far. */
+  currentWork: () => KillWork;
+  setCounts: (counts: Readonly<{ liveProjectCount: number; chatCount: number }>) => void;
+  /** The counts last set, for the error tracker's `tau.session` context. */
+  counts: () => Readonly<{ liveProjectCount: number; chatCount: number }>;
+  /** The page became visible or hidden (`visibilitychange`). */
+  observeVisibility: () => void;
+  /**
+   * Keep `updatedAt` fresh while the page is visible; a no-op on a hidden page. Called every
+   * {@link killBusyHeartbeatMilliseconds}; it writes every time while the phase is busy, else every
+   * {@link killHeartbeatMilliseconds}.
+   */
+  heartbeat: () => void;
+  /** The page ended cleanly (`pagehide`). */
+  finish: () => void;
+  /** The page is alive again (`pageshow` from the back-forward cache). */
+  arm: () => void;
+}>;
+
+const sharePathPattern = /^\/s\/([^/~]+)~[^/]+/u;
+
+/**
+ * A path with no query, no fragment and no invitation token (principle 6), and, for a share that is not a builtin,
+ * no share reference: `/s/github-gist~…` names the provider only, since the reference identifies someone's share
+ * (crash capture blueprint, Finding 7). A builtin's reference is a public catalog name and stays.
+ *
+ * @param path - The document path.
+ * @returns The scrubbed path.
+ * @public
+ */
+export const scrubPath = (path: string): string => {
+  const plain = redactUrlCredentials(path.split(/[?#]/u, 1)[0] ?? '');
+  const share = sharePathPattern.exec(plain);
+  if (share === null || share[1] === 'builtin') {
+    return plain;
+  }
+  return plain.replace(sharePathPattern, `/s/${share[1] ?? ''}~…`);
+};
+
+const readDocumentPath = (): string | undefined => {
+  try {
+    return scrubPath(globalThis.location.pathname);
+  } catch {
+    return undefined;
+  }
+};
+
+const readDocumentBuild = (): string | undefined => {
+  const id = readBuildId();
+  return id === 0 ? undefined : String(id);
+};
+
+const readDocumentVisible = (): boolean => {
+  try {
+    // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- absent in a worker and during SSR.
+    return globalThis.document?.visibilityState !== 'hidden';
+  } catch {
+    return true;
+  }
+};
+
+/**
+ * A stored marker of this build's shape, or nothing. An older or unparseable marker is ignored
+ * rather than read field by field: a wrong kill report is worse than a missed one.
+ */
+const parseMarker = (raw: string | undefined): AliveMarker | undefined => {
+  if (raw === undefined) {
+    return undefined;
+  }
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (typeof value !== 'object' || value === null || !('version' in value)) {
+      return undefined;
+    }
+    const marker = value as AliveMarker;
+    return marker.version === killMarkerVersion && typeof marker.finished === 'boolean' ? marker : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const byteLength = (value: string): number => {
+  try {
+    return new TextEncoder().encode(value).length;
+  } catch {
+    return value.length;
+  }
+};
+
+/** A pending kill keeps only the tail of its trail: it has already been classified. */
+const trimPending = (kill: DetectedMemoryKill): DetectedMemoryKill => ({
+  ...kill,
+  trail: kill.trail.slice(-pendingTrailLimit),
+});
+
+/**
+ * The marker as it will be stored, reduced until it fits {@link markerByteLimit}: the page's own
+ * trail first (it is the part that grows), then the memory sample, then the oldest kills still
+ * waiting — one report lost is better than every one lost to a failed write.
+ *
+ * @param marker - The marker to serialize.
+ * @returns The JSON to store.
+ */
+const serializeMarker = (marker: AliveMarker): string => {
+  let reduced = marker;
+  let serialized = JSON.stringify(reduced);
+  const reductions: ReadonlyArray<(from: AliveMarker) => AliveMarker | undefined> = [
+    (from) => (from.trail.length > pendingTrailLimit ? { ...from, trail: from.trail.slice(1) } : undefined),
+    (from) => (from.sample === undefined ? undefined : { ...from, sample: undefined }),
+    (from) => (from.pending.length > 1 ? { ...from, pending: from.pending.slice(1) } : undefined),
+    (from) => (from.trail.length > 0 ? { ...from, trail: from.trail.slice(1) } : undefined),
+  ];
+  for (const reduce of reductions) {
+    while (byteLength(serialized) > markerByteLimit) {
+      const next = reduce(reduced);
+      if (next === undefined) {
+        break;
+      }
+      reduced = next;
+      serialized = JSON.stringify(reduced);
+    }
+  }
+  return serialized;
+};
+
+/**
+ * Create the signal for one document.
+ *
+ * Every storage access is guarded: private windows, blocked site data and
+ * thumbnail captures can throw, and the page must work without the signal.
+ *
+ * @param options - Storage, this load's navigation type, the device class and the page's readers.
+ * @returns The page's handle on the marker.
+ * @public
+ */
+export const createMemoryKillSignal = ({
+  storage,
+  navigationType,
+  deviceClass,
+  now = Date.now,
+  readRoute = () => undefined,
+  readPath = readDocumentPath,
+  readBuild = readDocumentBuild,
+  readVisible = readDocumentVisible,
+}: MemoryKillSignalOptions): MemoryKillSignal => {
+  const visibleAtLoad = readVisible();
+  let marker: AliveMarker = {
+    version: killMarkerVersion,
+    finished: false,
+    startedAt: now(),
+    updatedAt: now(),
+    route: readRoute(),
+    path: readPath(),
+    buildId: readBuild(),
+    visible: visibleAtLoad,
+    hiddenAt: visibleAtLoad ? undefined : now(),
+    deviceClass,
+    liveProjectCount: 0,
+    chatCount: 0,
+    sample: undefined,
+    highWaterWasmBytes: undefined,
+    trail: [],
+    consecutiveKills: 0,
+    pending: [],
+    work: { phase: 'boot', phaseStartedAt: now() },
+  };
+  let taken = false;
+  const write = (): void => {
+    publishKillContext(marker);
+    try {
+      storage?.setItem(markerKey, serializeMarker(marker));
+    } catch {
+      // No storage, no signal; the page itself is unaffected.
+    }
+  };
+  /** Refresh what the page can always answer, so every write carries the current route and memory. */
+  const update = (patch: Partial<AliveMarker>): void => {
+    marker = {
+      ...marker,
+      route: readRoute() ?? marker.route,
+      path: readPath() ?? marker.path,
+      sample: readLastMemorySample() ?? marker.sample,
+      highWaterWasmBytes: readHighWaterWasmBytes() ?? marker.highWaterWasmBytes,
+      ...patch,
+      updatedAt: now(),
+    };
+    write();
+  };
+  /**
+   * Whether this load is the previous page coming back: a reload, whichever way the browser
+   * labelled it, or a fresh navigation to the same path soon after the marker was last written —
+   * iOS has been seen to report both, and the A3 device check settles which.
+   */
+  const isSamePageReturning = (previous: AliveMarker): boolean => {
+    if (navigationType === 'reload') {
+      return true;
+    }
+    return (
+      navigationType === 'navigate' &&
+      previous.path !== undefined &&
+      previous.path === marker.path &&
+      now() - previous.updatedAt < killDetectionWindowMilliseconds
+    );
+  };
+  const classify = (previous: AliveMarker): KillClassification => {
+    if (previous.visible) {
+      return 'foreground';
+    }
+    return previous.hiddenAt === undefined ? 'unknown' : 'background';
+  };
+  return {
+    takeDetectedKills: () => {
+      if (taken) {
+        return [];
+      }
+      taken = true;
+      let previous: AliveMarker | undefined;
+      try {
+        previous = parseMarker(storage?.getItem(markerKey) ?? undefined);
+      } catch {
+        previous = undefined;
+      }
+      if (previous === undefined) {
+        write();
+        return [];
+      }
+      const undelivered = previous.pending.map((kill) => trimPending(kill));
+      const killed = !previous.finished && isSamePageReturning(previous);
+      const consecutiveKills = killed ? previous.consecutiveKills + 1 : 0;
+      const classification = killed ? classify(previous) : undefined;
+      const kill: DetectedMemoryKill | undefined =
+        classification === undefined
+          ? undefined
+          : {
+              id: `${String(previous.startedAt)}-${String(previous.updatedAt)}`,
+              classification,
+              route: previous.route,
+              path: previous.path,
+              buildId: previous.buildId,
+              deviceClass: previous.deviceClass,
+              liveProjectCount: previous.liveProjectCount,
+              chatCount: previous.chatCount,
+              lastActivity: previous.trail.at(-1)?.name,
+              aliveForMilliseconds: previous.updatedAt - previous.startedAt,
+              diedAt: previous.updatedAt,
+              ...(classification === 'background' && previous.hiddenAt !== undefined
+                ? { hiddenForMilliseconds: previous.updatedAt - previous.hiddenAt }
+                : {}),
+              consecutiveKills,
+              ...(previous.sample === undefined ? {} : { sample: previous.sample }),
+              ...(previous.highWaterWasmBytes === undefined ? {} : { highWaterWasmBytes: previous.highWaterWasmBytes }),
+              trail: previous.trail,
+              work: previous.work,
+            };
+      const detected = [...undelivered, ...(kill === undefined ? [] : [kill])];
+      marker = {
+        ...marker,
+        consecutiveKills,
+        pending: detected.slice(-pendingKillLimit).map((kill) => trimPending(kill)),
+      };
+      write();
+      return detected;
+    },
+    settleKill: (id) => {
+      if (!marker.pending.some((kill) => kill.id === id)) {
+        return;
+      }
+      update({ pending: marker.pending.filter((kill) => kill.id !== id) });
+    },
+    breadcrumb: (name) => {
+      update({ trail: [...marker.trail.slice(-(killTrailLimit - 1)), { at: now(), name }] });
+    },
+    work: (patch) => {
+      const admitted = admitKillWork(patch);
+      if (Object.keys(admitted).length === 0) {
+        return;
+      }
+      const changesPhase = admitted.phase !== undefined && admitted.phase !== marker.work.phase;
+      update({
+        work: {
+          ...marker.work,
+          ...admitted,
+          ...(changesPhase && admitted.phaseStartedAt === undefined ? { phaseStartedAt: now() } : {}),
+        },
+      });
+    },
+    currentWork: () => marker.work,
+    setCounts: ({ liveProjectCount, chatCount }) => {
+      if (liveProjectCount !== marker.liveProjectCount || chatCount !== marker.chatCount) {
+        update({ liveProjectCount, chatCount });
+      }
+    },
+    counts: () => ({ liveProjectCount: marker.liveProjectCount, chatCount: marker.chatCount }),
+    observeVisibility: () => {
+      const visible = readVisible();
+      if (visible === marker.visible) {
+        return;
+      }
+      update({ visible, hiddenAt: visible ? undefined : now() });
+    },
+    heartbeat: () => {
+      if (!marker.visible) {
+        return;
+      }
+      const isBusy = marker.work.phase !== undefined && busyKillPhases.has(marker.work.phase);
+      if (!isBusy && now() - marker.updatedAt < killHeartbeatMilliseconds - killBusyHeartbeatMilliseconds) {
+        return;
+      }
+      update({});
+    },
+    finish: () => {
+      update({ finished: true });
+    },
+    arm: () => {
+      update({ finished: false });
+    },
+  };
+};
+
+const readNavigationType = (): string | undefined => {
+  try {
+    const [entry] = globalThis.performance.getEntriesByType('navigation');
+    return entry !== undefined && 'type' in entry && typeof entry.type === 'string' ? entry.type : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+let documentSignal: MemoryKillSignal | undefined;
+
+/**
+ * The document's signal, created on first use in the browser.
+ *
+ * @param deviceClass - The device class to record, read once.
+ * @param readRoute - The deepest route id, read at each write.
+ * @returns The signal, or `undefined` during SSR.
+ * @public
+ */
+export const getDocumentMemoryKillSignal = (
+  deviceClass: () => string,
+  readRoute: () => string | undefined,
+): MemoryKillSignal | undefined => {
+  // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- absent during SSR
+  if (globalThis.window === undefined) {
+    return undefined;
+  }
+  documentSignal ??= createMemoryKillSignal({
+    storage: readSessionStorage(),
+    navigationType: readNavigationType(),
+    deviceClass: deviceClass(),
+    readRoute,
+  });
+  return documentSignal;
+};
+
+/**
+ * Name the heavy work about to start, so a kill during it says what it was, and add it to the error
+ * tracker's `tau.activity` trail (`#lib/activity-breadcrumbs`, structure only).
+ *
+ * A memory sample is taken first (SB2): a kill happens during heavy work, so the sample taken as
+ * that work begins is the one the kill report needs. The sampler only reads values their owners
+ * have already observed, so this costs microseconds.
+ *
+ * The marker is a no-op until the reporter has created the document's signal, and during SSR.
+ *
+ * @param name - A short stable name: `open`, `render`, `export`, `capture`.
+ * @public
+ */
+export const recordMemoryBreadcrumb = (name: string): void => {
+  takeMemorySample();
+  if (name === 'export' || name === 'capture') {
+    documentSignal?.work({ phase: name });
+  }
+  documentSignal?.breadcrumb(name);
+  recordActivityBreadcrumb(name);
+};
+
+/**
+ * The live project and chat counts the document's reporter last set.
+ *
+ * @returns The counts, or `undefined` before the reporter created the document's signal.
+ * @public
+ */
+export const readDocumentSessionCounts = (): Readonly<{ liveProjectCount: number; chatCount: number }> | undefined =>
+  documentSignal?.counts();
+
+/**
+ * Record what the page is working on in the document's marker (crash capture blueprint). A no-op before the
+ * reporter created the document's signal, and during SSR. Closed names and numbers only.
+ *
+ * @param patch - The fields to record.
+ * @public
+ */
+export const recordKillWork = (patch: Readonly<Record<string, unknown>>): void => {
+  documentSignal?.work(patch);
+};
+
+/**
+ * What the document's marker has recorded so far.
+ *
+ * @returns The work block, or `undefined` before the signal exists.
+ * @public
+ */
+export const readKillWork = (): KillWork | undefined => documentSignal?.currentWork();

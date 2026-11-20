@@ -1,0 +1,854 @@
+/* eslint-disable @typescript-eslint/naming-convention -- validated provider wire keys use native snake_case. */
+import { describe, expect, it, vi } from 'vitest';
+import { mock } from 'vitest-mock-extended';
+import {
+  assertTieredRoutesAreFunded,
+  billableModelRouteIds,
+  billableModelRouteMeters,
+  CodeOwnedBillableModelQualificationResolver,
+  supplierIdentityForRoute,
+} from '#billable-model-qualification.js';
+import type {
+  BillableInvocationIntent,
+  BillableModelProviderAdapter,
+  BillableProviderWire,
+  QualifiedBillableInvocation,
+} from '#billable-model-invocation.types.js';
+import { createGatewayModelTransport } from '@taucad/agent-host';
+import { isModelListEntryEnabled, LlmGatewayError, modelList } from '@taucad/api-llm-gateway';
+
+const adapter = mock<BillableModelProviderAdapter>();
+const resolver = new CodeOwnedBillableModelQualificationResolver({
+  adapters: new Map([
+    ['openai-gpt-5.6-luna', adapter],
+    ['openai-gpt-5.6-sol', adapter],
+    ['openai-gpt-5.5', adapter],
+    ['anthropic-claude-opus-5', adapter],
+    ['together-glm-5.3', adapter],
+    ['morph-deepseek-v4.1-flash', adapter],
+    ['google-gemini-4-neon', adapter],
+    ['google-gemini-4-hydrogen', adapter],
+    ['xai-grok-4.6', adapter],
+  ]),
+  executionTimeout: 30_000,
+});
+
+const intent = (body: unknown): Omit<BillableInvocationIntent, 'authUserId' | 'signal'> => ({
+  environment: 'staging',
+  surface: 'gateway',
+  attempt: { version: 1, key: 'attempt-1' },
+  providerWire: 'openai-responses',
+  body,
+  priceHeaders: {},
+  activity: 'agent',
+});
+
+describe('CodeOwnedBillableModelQualificationResolver', () => {
+  it('should preserve every intended static funded route identity', () => {
+    expect(billableModelRouteIds).toHaveLength(30);
+    expect(new Set(billableModelRouteIds).size).toBe(30);
+    expect(billableModelRouteIds).toContain('anthropic-claude-fable-5.2');
+    expect(billableModelRouteIds).toContain('anthropic-claude-sonnet-5.5');
+    expect(billableModelRouteIds).toContain('google-gemini-4-hydrogen');
+    expect(billableModelRouteIds).toContain('morph-deepseek-v4.1-flash');
+  });
+
+  it('should qualify a configured provider without a manual account map', () => {
+    const dependencies = { adapters: new Map([['openai-gpt-5.6-luna', adapter]]), executionTimeout: 30_000 };
+    const configured = new CodeOwnedBillableModelQualificationResolver(dependencies);
+    const result = configured.resolve(
+      intent({ model: 'openai-gpt-5.6-luna', input: 'hello', max_output_tokens: 16, stream: true }),
+    );
+    expect(result).toMatchObject({ providerId: 'openai' });
+    expect(result.invocation).not.toHaveProperty('credentialAccount');
+  });
+
+  it('should answer a route without an adapter as a 503 provider outage', () => {
+    const unavailable = new CodeOwnedBillableModelQualificationResolver({
+      adapters: new Map(),
+      executionTimeout: 30_000,
+    });
+    expect(() =>
+      unavailable.resolve(
+        intent({ model: 'openai-gpt-5.6-luna', input: 'hello', max_output_tokens: 16, stream: true }),
+      ),
+    ).toThrow(LlmGatewayError);
+    try {
+      unavailable.resolve(
+        intent({ model: 'openai-gpt-5.6-luna', input: 'hello', max_output_tokens: 16, stream: true }),
+      );
+      expect.fail('Expected an unavailable provider');
+    } catch (error) {
+      expect(error).toBeInstanceOf(LlmGatewayError);
+      expect((error as LlmGatewayError).getStatus()).toBe(503);
+      expect((error as LlmGatewayError).getResponse()).toMatchObject({ error: { type: 'PROVIDER_UNAVAILABLE' } });
+    }
+  });
+
+  it('should emit the exact Vertex OpenAI compatibility model name', () => {
+    const result = resolver.resolve({
+      ...intent({
+        model: 'google-gemini-4-hydrogen',
+        messages: [{ role: 'user', content: 'hello' }],
+        max_completion_tokens: 16,
+        stream: true,
+      }),
+      providerWire: 'openai-completions',
+    });
+
+    expect(result.normalizedRequest.body).toMatchObject({
+      model: 'google/gemini-4-hydrogen',
+      messages: [{ role: 'user', content: 'hello' }],
+      max_completion_tokens: 16,
+    });
+    expect(result.invocation.jointInputMaximum).toBeUndefined();
+  });
+
+  /* A host and a route that disagree on the output field read as Tau's own fault only if the
+   * refusal names the route and the field it expects. */
+  it.each([
+    {
+      failure: 'no output maximum',
+      limits: {},
+      message:
+        'Model request must carry exactly one output-token maximum; route google-gemini-4-hydrogen expects max_completion_tokens',
+    },
+    {
+      failure: 'two output maxima',
+      limits: { max_tokens: 16, max_completion_tokens: 16 },
+      message:
+        'Model request must carry exactly one output-token maximum; route google-gemini-4-hydrogen expects max_completion_tokens',
+    },
+    {
+      failure: 'the field the route does not accept',
+      limits: { max_tokens: 16 },
+      message:
+        'Model request bounds output with a field route google-gemini-4-hydrogen does not accept; it expects max_completion_tokens',
+    },
+    {
+      failure: 'a maximum past the route ceiling',
+      limits: { max_completion_tokens: 65_537 },
+      message: "Model request max_completion_tokens of 65537 exceeds route google-gemini-4-hydrogen's maximum of 65536",
+    },
+  ])('should refuse $failure naming the route and its output field', ({ limits, message }) => {
+    expect(() =>
+      resolver.resolve({
+        ...intent({
+          model: 'google-gemini-4-hydrogen',
+          messages: [{ role: 'user', content: 'hello' }],
+          stream: true,
+          ...limits,
+        }),
+        providerWire: 'openai-completions',
+      }),
+    ).toThrow(message);
+  });
+
+  it('should bound the input by the request itself', () => {
+    const result = resolver.resolve(
+      intent({ model: 'openai-gpt-5.6-luna', input: 'hello', max_output_tokens: 100, stream: true }),
+    );
+
+    /* 85 serialized bytes, one conversation element and the per-route overhead. */
+    expect(result.maximumQuantities).toEqual([
+      { dimension: 'uncached_input', tier: null, quantity: 4245n },
+      { dimension: 'cache_read', tier: null, quantity: 4245n },
+      { dimension: 'cache_write', tier: '30m', quantity: 4245n },
+      { dimension: 'output', tier: null, quantity: 100n },
+    ]);
+    expect(result.invocation.jointInputMaximum).toEqual({ version: 'joint-input-v1', quantity: '4245' });
+    expect(result.invocation.supplierRatesValidUntil).toBeNull();
+    expect(result.normalizedRequest).not.toHaveProperty('billing');
+  });
+
+  it('should fall closed onto the provider context partition when the bound exceeds it', () => {
+    const result = resolver.resolve(
+      intent({
+        model: 'openai-gpt-5.6-luna',
+        input: 'x'.repeat(1_100_000),
+        max_output_tokens: 100,
+        stream: true,
+      }),
+    );
+
+    expect(result.maximumQuantities[0]).toEqual({ dimension: 'uncached_input', tier: null, quantity: 1_049_900n });
+    expect(result.sku).toBe('model:openai-gpt-5.6-luna:long-context');
+  });
+
+  it('should reject uncontracted provider options before returning admission data', () => {
+    expect(() =>
+      resolver.resolve(
+        intent({
+          model: 'openai-gpt-5.6-luna',
+          input: 'hello',
+          max_output_tokens: 100,
+          stream: true,
+          service_tier: 'priority',
+        }),
+      ),
+    ).toThrow('outside the funded request contract');
+  });
+
+  it('should qualify GPT-5.5 without a separately billed cache-write meter', () => {
+    const result = resolver.resolve(
+      intent({ model: 'openai-gpt-5.5', input: 'hello', max_output_tokens: 100, stream: true }),
+    );
+    expect(result.maximumQuantities.map(({ dimension }) => dimension)).toEqual([
+      'uncached_input',
+      'cache_read',
+      'output',
+    ]);
+    expect(vi.mocked(adapter.executeOnce)).not.toHaveBeenCalled();
+  });
+
+  it('should accept the host Responses tool-turn shape without admitting provider-paid options', () => {
+    const result = resolver.resolve(
+      intent({
+        model: 'openai-gpt-5.6-luna',
+        input: [
+          { role: 'developer', content: 'static\n\nworkspace\n\ndynamic' },
+          { role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
+        ],
+        stream: true,
+        stream_options: { include_usage: true },
+        store: false,
+        reasoning: { effort: 'none' },
+        max_output_tokens: 8192,
+        tools: [
+          {
+            type: 'function',
+            name: 'read_file',
+            description: 'Read a file.',
+            parameters: { type: 'object', properties: { targetFile: { type: 'string' } } },
+          },
+        ],
+      }),
+    );
+
+    expect(result.routeId).toBe('openai-gpt-5.6-luna');
+    expect(result.normalizedRequest).toMatchObject({ body: { store: false, tools: [{ name: 'read_file' }] } });
+  });
+
+  it('should accept the host Anthropic cache, thinking, tool-use and tool-result shape', () => {
+    const result = resolver.resolve({
+      ...intent({
+        model: 'anthropic-claude-opus-5',
+        system: [{ type: 'text', text: 'system', cache_control: { type: 'ephemeral' } }],
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              { type: 'thinking', thinking: 'prior', signature: 'sig-1' },
+              { type: 'tool_use', id: 'call-1', name: 'read_file', input: { targetFile: 'main.ts' } },
+            ],
+          },
+          { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-1', content: 'source' }] },
+        ],
+        stream: true,
+        thinking: { type: 'adaptive' },
+        max_tokens: 8192,
+        tools: [
+          {
+            name: 'read_file',
+            eager_input_streaming: true,
+            input_schema: { type: 'object' },
+            cache_control: { type: 'ephemeral' },
+          },
+        ],
+      }),
+      providerWire: 'anthropic',
+      priceHeaders: { 'anthropic-version': '2023-06-01' },
+    });
+
+    expect(result.routeId).toBe('anthropic-claude-opus-5');
+    expect(result.normalizedRequest).toMatchObject({ headers: { 'anthropic-version': '2023-06-01' } });
+  });
+
+  it('should admit the gateway-allowlisted anthropic-beta features and refuse any other beta', () => {
+    const body = {
+      model: 'anthropic-claude-opus-5',
+      messages: [{ role: 'user', content: 'hello' }],
+      max_tokens: 16,
+      stream: true,
+    };
+    const admitted = resolver.resolve({
+      ...intent(body),
+      providerWire: 'anthropic',
+      priceHeaders: {
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'fine-grained-tool-streaming-2025-05-14, interleaved-thinking-2025-05-14',
+      },
+    });
+    /* Forwarded normalized, exactly as the gateway allowlist rewrites it. */
+    expect(admitted.normalizedRequest).toMatchObject({
+      headers: {
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14',
+      },
+    });
+    expect(() =>
+      resolver.resolve({
+        ...intent(body),
+        providerWire: 'anthropic',
+        priceHeaders: { 'anthropic-version': '2023-06-01', 'anthropic-beta': 'computer-use-2024-10-22' },
+      }),
+    ).toThrow('Provider header is outside the funded request contract');
+  });
+
+  it('should admit the thinking binding controls at the price of the same request without them', () => {
+    const body = {
+      model: 'anthropic-claude-opus-5',
+      messages: [{ role: 'user', content: 'hello' }],
+      max_tokens: 16,
+      stream: true,
+      thinking: { type: 'adaptive' },
+    };
+    const headers = { 'anthropic-version': '2023-06-01' };
+    const plain = resolver.resolve({ ...intent(body), providerWire: 'anthropic', priceHeaders: headers });
+    const bound = resolver.resolve({
+      ...intent({
+        ...body,
+        thinking: { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } },
+      }),
+      providerWire: 'anthropic',
+      priceHeaders: { ...headers, 'anthropic-beta': 'thinking-binding-controls-2026-08-01' },
+    });
+
+    expect(bound.normalizedRequest).toMatchObject({
+      headers: { 'anthropic-beta': 'thinking-binding-controls-2026-08-01' },
+      body: { thinking: { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } } },
+    });
+    /* The control changes which replayed blocks the provider reads, never what a token costs. */
+    expect(bound.sku).toBe(plain.sku);
+    expect(bound.invocation.supplierRates).toStrictEqual(plain.invocation.supplierRates);
+  });
+
+  it('should price an effort level carried in the transcript as the same request with a top-level effort', () => {
+    const anthropic = {
+      model: 'anthropic-claude-opus-5',
+      messages: [{ role: 'user', content: 'hello' }],
+      max_tokens: 16,
+      stream: true,
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'high' },
+    };
+    const responses = {
+      model: 'openai-gpt-5.6-sol',
+      input: [{ role: 'user', content: 'hello' }],
+      max_output_tokens: 16,
+      stream: true,
+      reasoning: { effort: 'medium' },
+    };
+    const headers = { 'anthropic-version': '2023-06-01' };
+    const resolve = (providerWire: 'anthropic' | 'openai-responses', body: unknown, beta?: string) =>
+      resolver.resolve({
+        ...intent(body),
+        providerWire,
+        ...(providerWire === 'anthropic'
+          ? { priceHeaders: beta === undefined ? headers : { ...headers, 'anthropic-beta': beta } }
+          : {}),
+      });
+    const marker = { role: 'system', content: [], output_config: { effort: 'low' } };
+    const update = { type: 'configuration_update', reasoning: { effort: 'high' } };
+
+    const anthropicPlain = resolve('anthropic', anthropic);
+    const anthropicMarked = resolve(
+      'anthropic',
+      { ...anthropic, messages: [...anthropic.messages, marker] },
+      'mid-conversation-output-config-2026-07-01',
+    );
+    const responsesPlain = resolve('openai-responses', responses);
+    const responsesMarked = resolve('openai-responses', { ...responses, input: [...responses.input, update] });
+
+    expect(anthropicMarked.normalizedRequest).toMatchObject({
+      headers: { 'anthropic-beta': 'mid-conversation-output-config-2026-07-01' },
+      body: { messages: [anthropic.messages[0], marker] },
+    });
+    expect(responsesMarked.normalizedRequest).toMatchObject({ body: { input: [responses.input[0], update] } });
+    /* The marker selects how hard the model thinks, as the top-level field does; tokens cost what they cost. */
+    expect(anthropicMarked.sku).toBe(anthropicPlain.sku);
+    expect(anthropicMarked.invocation.supplierRates).toStrictEqual(anthropicPlain.invocation.supplierRates);
+    expect(responsesMarked.sku).toBe(responsesPlain.sku);
+    expect(responsesMarked.invocation.supplierRates).toStrictEqual(responsesPlain.invocation.supplierRates);
+  });
+
+  it('should accept the authoritative OpenAI-compatible host stream options and strict function shape', () => {
+    const result = resolver.resolve({
+      ...intent({
+        model: 'together-glm-5.3',
+        messages: [
+          { role: 'developer', content: 'static\n\nworkspace\n\ndynamic' },
+          { role: 'user', content: 'hello' },
+        ],
+        stream: true,
+        stream_options: { include_usage: true },
+        store: false,
+        max_tokens: 8192,
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'read_file',
+              description: 'Read a file.',
+              parameters: { type: 'object', properties: { targetFile: { type: 'string' } } },
+              strict: false,
+            },
+          },
+        ],
+      }),
+      providerWire: 'openai-completions',
+    });
+
+    expect(result.routeId).toBe('together-glm-5.3');
+    expect(result.invocation.jointInputMaximum).toBeUndefined();
+  });
+
+  it('should pin dated supplier evidence without using the process clock as authority', () => {
+    const result = resolver.resolve(
+      intent({ model: 'openai-gpt-5.6-sol', input: 'hello', max_output_tokens: 100, stream: true }),
+    );
+    expect(result.invocation.supplierRatesValidUntil).toBe('2026-11-21T23:59:59.999Z');
+    /* The bound proves the premium threshold unreachable, so the base tariff is the
+     * pinned maximum and the valuation may carry no schedule above it. */
+    expect(result.sku).toBe('model:openai-gpt-5.6-sol');
+    expect(result.invocation.supplierRates).toEqual([
+      { dimension: 'uncached_input', tier: null, numeratorPicoUsd: '4000000000000', denominatorUnits: '1000000' },
+      { dimension: 'cache_read', tier: null, numeratorPicoUsd: '400000000000', denominatorUnits: '1000000' },
+      { dimension: 'cache_write', tier: '30m', numeratorPicoUsd: '5000000000000', denominatorUnits: '1000000' },
+      { dimension: 'output', tier: null, numeratorPicoUsd: '20000000000000', denominatorUnits: '1000000' },
+    ]);
+    expect(result.invocation.supplierValuation).toMatchObject({
+      version: 'supplier-valuation-v1',
+      sourceRevision: 'official-pricing:2026-09-06:openai-gpt-5.6-sol',
+      longContextMinimumInputTokens: null,
+      longContextRates: null,
+      baseRates: [
+        { dimension: 'uncached_input', numeratorPicoUsd: '4000000000000' },
+        { dimension: 'cache_read', numeratorPicoUsd: '400000000000' },
+        { dimension: 'cache_write', tier: '30m', numeratorPicoUsd: '5000000000000' },
+        { dimension: 'output', numeratorPicoUsd: '20000000000000' },
+      ],
+    });
+  });
+
+  it('should pin the premium tariff and both valuation tables once the bound reaches the threshold', () => {
+    const result = resolver.resolve(
+      intent({
+        model: 'openai-gpt-5.6-sol',
+        input: 'x'.repeat(280_000),
+        max_output_tokens: 100,
+        stream: true,
+      }),
+    );
+
+    expect(result.sku).toBe('model:openai-gpt-5.6-sol:long-context');
+    expect(result.meterContractId).toBe('model-meter-v1:openai-gpt-5.6-sol:long-context');
+    expect(result.invocation.supplierRates[0]).toEqual({
+      dimension: 'uncached_input',
+      tier: null,
+      numeratorPicoUsd: '8000000000000',
+      denominatorUnits: '1000000',
+    });
+    expect(result.invocation.supplierValuation).toMatchObject({
+      longContextMinimumInputTokens: '272001',
+      baseRates: [
+        { dimension: 'uncached_input', numeratorPicoUsd: '4000000000000' },
+        { dimension: 'cache_read', numeratorPicoUsd: '400000000000' },
+        { dimension: 'cache_write', tier: '30m', numeratorPicoUsd: '5000000000000' },
+        { dimension: 'output', numeratorPicoUsd: '20000000000000' },
+      ],
+      longContextRates: [
+        { dimension: 'uncached_input', numeratorPicoUsd: '8000000000000' },
+        { dimension: 'cache_read', numeratorPicoUsd: '800000000000' },
+        { dimension: 'cache_write', tier: '30m', numeratorPicoUsd: '10000000000000' },
+        { dimension: 'output', numeratorPicoUsd: '30000000000000' },
+      ],
+    });
+  });
+
+  it('should retain xAI pricing-source discrepancy as the inclusive 200,000-token boundary', () => {
+    const result = resolver.resolve({
+      ...intent({
+        model: 'xai-grok-4.6',
+        input: 'x'.repeat(210_000),
+        max_output_tokens: 16,
+        stream: true,
+      }),
+      providerWire: 'openai-responses',
+    });
+    expect(result.invocation.supplierValuation).toMatchObject({
+      longContextMinimumInputTokens: '200000',
+      baseRates: [
+        { dimension: 'uncached_input', numeratorPicoUsd: '2000000000000' },
+        { dimension: 'cache_read', numeratorPicoUsd: '500000000000' },
+        { dimension: 'output', numeratorPicoUsd: '6000000000000' },
+      ],
+    });
+  });
+
+  it('should carry a supplier valuation for Vertex operations so Gemini spend can settle', () => {
+    const result = resolver.resolve({
+      ...intent({
+        model: 'google-gemini-4-hydrogen',
+        messages: [{ role: 'user', content: 'hello' }],
+        max_completion_tokens: 16,
+        stream: true,
+      }),
+      providerWire: 'openai-completions',
+    });
+
+    expect(result.invocation.supplierValuation).toEqual({
+      version: 'supplier-valuation-v1',
+      sourceRevision: 'official-pricing:2026-11-16:google-gemini-4-hydrogen',
+      longContextMinimumInputTokens: null,
+      longContextRates: null,
+      baseRates: [
+        { dimension: 'uncached_input', tier: null, numeratorPicoUsd: '1500000000000', denominatorUnits: '1000000' },
+        { dimension: 'cache_read', tier: null, numeratorPicoUsd: '75000000000', denominatorUnits: '1000000' },
+        { dimension: 'output', tier: null, numeratorPicoUsd: '7500000000000', denominatorUnits: '1000000' },
+      ],
+    });
+  });
+
+  it('should qualify Morph as uncached input, cache read and output within its combined context', () => {
+    const result = resolver.resolve({
+      ...intent({
+        model: 'morph-deepseek-v4.1-flash',
+        messages: [{ role: 'user', content: 'hello' }],
+        stream: true,
+        max_completion_tokens: 512,
+      }),
+      providerWire: 'openai-completions',
+    });
+
+    expect(result.maximumQuantities).toEqual([
+      { dimension: 'uncached_input', tier: null, quantity: 4286n },
+      { dimension: 'cache_read', tier: null, quantity: 4286n },
+      { dimension: 'output', tier: null, quantity: 512n },
+    ]);
+  });
+
+  it('should carry a supplier valuation for Together routes so their usage is metered', () => {
+    const result = resolver.resolve({
+      ...intent({
+        model: 'together-glm-5.3',
+        messages: [{ role: 'user', content: 'hello' }],
+        max_tokens: 16,
+        stream: true,
+      }),
+      providerWire: 'openai-completions',
+    });
+
+    expect(result.providerId).toBe('together');
+    expect(result.invocation.supplierValuation).toEqual({
+      version: 'supplier-valuation-v1',
+      sourceRevision: 'official-pricing:2026-11-09:together-glm-5.3',
+      longContextMinimumInputTokens: null,
+      longContextRates: null,
+      baseRates: result.invocation.supplierRates,
+    });
+  });
+});
+
+/* Enabled `/v1/models` rows deliberately left outside the funded route table,
+ * each with the reason it cannot be invoked. Adding a row here is a decision,
+ * not a silent hole. */
+const unfundedCatalogRows: Readonly<Record<string, string>> = {};
+
+const catalogRows = Object.values(modelList)
+  .flatMap((provider) => Object.values(provider))
+  .filter((row) => isModelListEntryEnabled(row));
+
+const catalogResolver = new CodeOwnedBillableModelQualificationResolver({
+  adapters: new Map(billableModelRouteIds.map((routeId) => [routeId, adapter])),
+  executionTimeout: 30_000,
+});
+
+/* The wire and output parameter belong to the route table, so the contract test
+ * probes the funded shapes instead of restating them. */
+const wireProbes = [
+  { providerWire: 'openai-responses', body: { input: 'hello', max_output_tokens: 1 }, priceHeaders: {} },
+  {
+    providerWire: 'anthropic',
+    body: { messages: [{ role: 'user', content: 'hello' }], max_tokens: 1 },
+    priceHeaders: { 'anthropic-version': '2023-06-01' },
+  },
+  {
+    providerWire: 'openai-completions',
+    body: { messages: [{ role: 'user', content: 'hello' }], max_completion_tokens: 1 },
+    priceHeaders: {},
+  },
+  {
+    providerWire: 'openai-completions',
+    body: { messages: [{ role: 'user', content: 'hello' }], max_tokens: 1 },
+    priceHeaders: {},
+  },
+] as const satisfies ReadonlyArray<{
+  providerWire: BillableProviderWire;
+  body: Record<string, unknown>;
+  priceHeaders: Readonly<Record<string, string>>;
+}>;
+
+const qualifyRoute = (routeId: string): QualifiedBillableInvocation => {
+  let lastRefusal: unknown;
+  for (const probe of wireProbes) {
+    try {
+      return catalogResolver.resolve({
+        ...intent({ ...probe.body, model: routeId, stream: true }),
+        providerWire: probe.providerWire,
+        priceHeaders: probe.priceHeaders,
+      });
+    } catch (error) {
+      // A probe for another wire is expected to be refused; the last refusal is surfaced when no wire qualifies.
+      lastRefusal = error;
+    }
+  }
+  throw new Error(`No funded wire qualifies the catalog route ${routeId}`, { cause: lastRefusal });
+};
+
+describe('catalog route vocabulary', () => {
+  it.each(['gemini-4-argon', 'gemini-4-carbon'])(
+    'should pin %s introductory pricing with an expiry and no explicit cache-write meter',
+    (model) => {
+      const result = qualifyRoute(`google-${model}`);
+
+      expect(result.normalizedRequest.body).toMatchObject({ model: `google/${model}` });
+      expect(result.invocation.supplierRatesValidUntil).toBe('2026-11-30T23:59:59.999Z');
+      expect(result.invocation.supplierRates).toEqual([
+        { dimension: 'uncached_input', tier: null, numeratorPicoUsd: '2000000000000', denominatorUnits: '1000000' },
+        { dimension: 'cache_read', tier: null, numeratorPicoUsd: '100000000000', denominatorUnits: '1000000' },
+        { dimension: 'output', tier: null, numeratorPicoUsd: '10000000000000', denominatorUnits: '1000000' },
+      ]);
+    },
+  );
+
+  it('should bill gemini-4-neon at its standard rate with no expiry', () => {
+    const result = qualifyRoute('google-gemini-4-neon');
+
+    expect(result.normalizedRequest.body).toMatchObject({ model: 'google/gemini-4-neon' });
+    expect(result.invocation.supplierRatesValidUntil).toBeNull();
+    expect(result.invocation.supplierRates).toEqual([
+      { dimension: 'uncached_input', tier: null, numeratorPicoUsd: '3000000000000', denominatorUnits: '1000000' },
+      { dimension: 'cache_read', tier: null, numeratorPicoUsd: '150000000000', denominatorUnits: '1000000' },
+      { dimension: 'output', tier: null, numeratorPicoUsd: '15000000000000', denominatorUnits: '1000000' },
+    ]);
+  });
+
+  it('should bill gemini-4-hydrogen at its standard rate with no expiry', () => {
+    const result = qualifyRoute('google-gemini-4-hydrogen');
+
+    expect(result.normalizedRequest.body).toMatchObject({ model: 'google/gemini-4-hydrogen' });
+    expect(result.invocation.supplierRatesValidUntil).toBeNull();
+    expect(result.invocation.supplierRates).toEqual([
+      { dimension: 'uncached_input', tier: null, numeratorPicoUsd: '1500000000000', denominatorUnits: '1000000' },
+      { dimension: 'cache_read', tier: null, numeratorPicoUsd: '75000000000', denominatorUnits: '1000000' },
+      { dimension: 'output', tier: null, numeratorPicoUsd: '7500000000000', denominatorUnits: '1000000' },
+    ]);
+  });
+
+  it.each([
+    { input: 'hello', suffix: '', amounts: ['1000000000000', '50000000000', '1250000000000', '5000000000000'] },
+    {
+      input: 'x'.repeat(280_000),
+      suffix: ':long-context',
+      amounts: ['2000000000000', '100000000000', '2500000000000', '7500000000000'],
+    },
+  ])('should pin the GPT-6.1 Terra $suffix tariff', ({ input, suffix, amounts }) => {
+    const result = catalogResolver.resolve(
+      intent({ model: 'openai-gpt-6.1-terra', input, max_output_tokens: 128_000, stream: true }),
+    );
+
+    expect(result.sku).toBe(`model:openai-gpt-6.1-terra${suffix}`);
+    expect(result.normalizedRequest.body).toMatchObject({ model: 'gpt-6.1-terra', max_output_tokens: 128_000 });
+    expect(result.invocation.supplierValuation).toMatchObject({
+      sourceRevision: 'official-pricing:2026-10-29:openai-gpt-6.1-terra',
+      longContextMinimumInputTokens: suffix === '' ? null : '272001',
+    });
+    expect(result.invocation.supplierRates).toEqual([
+      { dimension: 'uncached_input', tier: null, numeratorPicoUsd: amounts[0], denominatorUnits: '1000000' },
+      { dimension: 'cache_read', tier: null, numeratorPicoUsd: amounts[1], denominatorUnits: '1000000' },
+      { dimension: 'cache_write', tier: '30m', numeratorPicoUsd: amounts[2], denominatorUnits: '1000000' },
+      { dimension: 'output', tier: null, numeratorPicoUsd: amounts[3], denominatorUnits: '1000000' },
+    ]);
+  });
+
+  /* The transport may mark any Anthropic breakpoint with a one-hour lifetime, which
+   * Anthropic bills at 2× base input against 1.25× for five minutes. Every Anthropic
+   * contract prices both tiers so a split usage report always settles. */
+  it('should price both cache-write lifetimes on every Anthropic meter contract', () => {
+    const anthropicMeters = billableModelRouteMeters.filter((meter) => meter.routeId.startsWith('anthropic-'));
+    expect(anthropicMeters.length).toBeGreaterThan(0);
+    for (const meter of anthropicMeters) {
+      const rate = (key: string): bigint | undefined =>
+        meter.rates.find((entry) => `${entry.dimension}:${entry.tier ?? ''}` === key)?.numeratorPicoUsd;
+      const input = rate('uncached_input:');
+      expect(input, meter.routeId).toBeDefined();
+      expect(rate('cache_write:5m'), meter.routeId).toBe(((input ?? 0n) * 5n) / 4n);
+      expect(rate('cache_write:1h'), meter.routeId).toBe((input ?? 0n) * 2n);
+    }
+  });
+
+  it('should stamp the one-hour tariff reading on the Anthropic valuation', () => {
+    const result = qualifyRoute('anthropic-claude-opus-5.5');
+
+    expect(result.invocation.supplierValuation?.sourceRevision).toBe(
+      'official-pricing:2026-11-08:anthropic-claude-opus-5.5',
+    );
+    expect(result.invocation.supplierRates).toContainEqual({
+      dimension: 'cache_write',
+      tier: '1h',
+      numeratorPicoUsd: '8000000000000',
+      denominatorUnits: '1000000',
+    });
+  });
+
+  it('should resolve every funded route id and forward the supplier model id', () => {
+    for (const routeId of billableModelRouteIds) {
+      const resolved = qualifyRoute(routeId);
+      expect(resolved.routeId).toBe(routeId);
+      expect(resolved.normalizedRequest.body).toMatchObject({
+        model: resolved.providerId === 'vertexai' ? `google/${resolved.modelId}` : resolved.modelId,
+      });
+      expect(resolved.modelId).not.toBe(routeId);
+    }
+  });
+
+  it('should pin a supplier valuation covering the supplier tariff on every funded route', () => {
+    for (const routeId of billableModelRouteIds) {
+      const { invocation } = qualifyRoute(routeId);
+      const tariffKeys = invocation.supplierRates.map(({ dimension, tier }) => `${dimension}:${tier ?? ''}`).sort();
+      expect(invocation.supplierValuation?.version).toBe('supplier-valuation-v1');
+      expect(
+        invocation.supplierValuation?.baseRates.map(({ dimension, tier }) => `${dimension}:${tier ?? ''}`).sort(),
+      ).toEqual(tariffKeys);
+    }
+  });
+
+  it('should fund every enabled catalog row except the named unfunded rows', () => {
+    const funded = new Set(billableModelRouteIds);
+    expect(catalogRows.filter((row) => !funded.has(row.id)).map((row) => row.id)).toEqual(
+      Object.keys(unfundedCatalogRows),
+    );
+    for (const row of catalogRows.filter((row) => funded.has(row.id))) {
+      expect(qualifyRoute(row.id).normalizedRequest.body).toMatchObject({
+        model: row.provider.id === 'vertexai' ? `google/${row.model}` : row.model,
+      });
+    }
+  });
+
+  /* The model selector shows the catalog price and billing charges the route
+   * tariff. A route whose tariff expires is a supplier promotion, and the catalog
+   * deliberately keeps the standard price; every other route must agree. */
+  it('should show the billed base price in the catalog for every route without a promotion', () => {
+    const mismatches = billableModelRouteMeters
+      .filter((meter) => meter.validThrough === undefined)
+      .flatMap((meter) => {
+        const row = catalogRows.find((entry) => entry.id === meter.routeId);
+        if (!row) {
+          return [];
+        }
+        const billed = (dimension: string): number | undefined => {
+          const rate = meter.rates.find((entry) => entry.dimension === dimension);
+          return rate === undefined ? undefined : Number(rate.numeratorPicoUsd) / 1e12;
+        };
+        const { cost } = row.details;
+        return [
+          ['uncached_input', cost.inputTokens],
+          ['cache_read', cost.cacheReadTokens],
+          ['cache_write', cost.cacheWriteTokens],
+          ['output', cost.outputTokens],
+        ].flatMap(([dimension, shown]) => {
+          const charged = billed(String(dimension));
+          return charged === undefined || charged === shown
+            ? []
+            : [`${meter.routeId} ${String(dimension)}: shows ${String(shown)}, bills ${String(charged)}`];
+        });
+      });
+    expect(mismatches).toEqual([]);
+  });
+
+  it('should refuse to fund a route no catalog row names', () => {
+    expect(() => supplierIdentityForRoute('openai-not-a-catalog-row')).toThrow(
+      'Funded route openai-not-a-catalog-row has no catalog row',
+    );
+  });
+
+  it('should refuse a premium tariff that no funded route can pin', () => {
+    expect(() => {
+      assertTieredRoutesAreFunded(['openai-gpt-5.6-terrra']);
+    }).toThrow('Tiered tariff openai-gpt-5.6-terrra has no funded route');
+  });
+
+  it('should refuse a supplier model id that is not a catalog route id', () => {
+    expect(() =>
+      catalogResolver.resolve(intent({ model: 'gpt-5.6-luna', input: 'hello', max_output_tokens: 1, stream: true })),
+    ).toThrow('Model route is not qualified');
+  });
+});
+
+/* The host and the route table name the output-limit field independently, and the live matrix runs with
+ * Tau Cloud off, so only this join sees a route and its codec disagreeing. */
+describe('funded route admission of the request the host sends', () => {
+  const catalogRows = new Map(
+    Object.values(modelList)
+      .flatMap((provider) => Object.values(provider))
+      .map((row) => [row.id, row] as const),
+  );
+  const fundedResolver = new CodeOwnedBillableModelQualificationResolver({
+    adapters: new Map(billableModelRouteIds.map((routeId) => [routeId, adapter])),
+    executionTimeout: 30_000,
+  });
+  const drain = async (events: AsyncIterable<unknown>): Promise<readonly unknown[]> => {
+    const seen: unknown[] = [];
+    for await (const event of events) {
+      seen.push(event);
+    }
+    return seen;
+  };
+  const wireForUrl = (url: string): BillableProviderWire => {
+    if (url.endsWith('/responses')) {
+      return 'openai-responses';
+    }
+    return url.endsWith('/messages') ? 'anthropic' : 'openai-completions';
+  };
+
+  it.each(billableModelRouteIds)(
+    'should admit the host request for %s at its catalog output ceiling',
+    async (routeId) => {
+      const row = catalogRows.get(routeId)!;
+      let sent: { body: unknown; wire: BillableProviderWire } | undefined;
+      const transport = createGatewayModelTransport({
+        baseUrl: 'https://gateway.example',
+        async fetch(input, init) {
+          sent = {
+            body: JSON.parse(init?.body as string) as unknown,
+            wire: wireForUrl(input instanceof Request ? input.url : String(input)),
+          };
+          throw new Error('The request has been captured');
+        },
+      });
+
+      await drain(
+        transport.stream({
+          attemptId: `attempt-${routeId}`,
+          invocationPurpose: 'generation',
+          modelId: routeId,
+          providerKind: row.provider.id,
+          maxTokens: row.details.maxTokens,
+          contextWindow: row.details.contextWindow,
+          systemPrompt: 'static',
+          messages: [{ id: 'user-1', role: 'user', content: 'hello' }],
+          tools: [],
+          signal: new AbortController().signal,
+        }),
+      ).catch(() => undefined);
+
+      const qualified = fundedResolver.resolve({
+        ...intent(sent!.body),
+        providerWire: sent!.wire,
+        priceHeaders: sent!.wire === 'anthropic' ? { 'anthropic-version': '2023-06-01' } : {},
+      });
+      expect(qualified.routeId).toBe(routeId);
+    },
+  );
+});

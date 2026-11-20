@@ -9,10 +9,18 @@
  */
 
 import type { z } from 'zod';
-import type { ExportFidelity, ExportFile, FileExtension } from '@taucad/types';
+import type { ExportFile } from '@taucad/types';
 import type { KernelResult } from '#types/runtime.types.js';
-import type { RuntimeLogger } from '#types/runtime-kernel.types.js';
+import type { RuntimeImplementationAsset, RuntimeLogger } from '#types/runtime-kernel.types.js';
 import type { RuntimeSpanTracer } from '#types/runtime-tracer.types.js';
+import type { RuntimePluginDeclaration, TranscoderEdgeType, TranscoderPlugin } from '#plugins/plugin-types.js';
+import {
+  attachRuntimePluginDefinition,
+  attachRuntimePluginFactoryOptions,
+} from '#plugins/plugin-runtime-definition.js';
+import type { RuntimePluginDefinitionCarrier } from '#plugins/plugin-runtime-definition.js';
+import type { ContentKeysOf, RuntimeContentDeclaration, RuntimeContentKey } from '#types/runtime-content.types.js';
+import { validateRuntimeContentDeclarations } from '#types/runtime-content.types.js';
 
 // =============================================================================
 // Transcoder Edge and Input Types
@@ -26,20 +34,27 @@ import type { RuntimeSpanTracer } from '#types/runtime-tracer.types.js';
  * values flow into {@link TranscodeInput} via the `Edges` generic on
  * {@link TranscoderDefinition}, eliminating the need for `as` casts inside `transcode`.
  *
+ * An edge declares no fidelity: the runtime derives each transcoded export route's
+ * fidelity from the two format names, `'brep'` only when both `from` and `to` are
+ * exact B-rep formats (see `lookupExportFidelity`), otherwise `'mesh'`.
+ *
  * @template From - Source format identifier (literal when declared with `as const`)
  * @template To - Target format identifier (literal when declared with `as const`)
  * @template Schema - Zod schema for per-edge options, or `undefined` when no options are accepted
  * @public
  */
 export type TranscoderEdge<
-  From extends FileExtension = FileExtension,
-  To extends FileExtension = FileExtension,
+  From extends string = string,
+  To extends string = string,
   Schema extends z.ZodType | undefined = z.ZodType | undefined,
 > = {
   from: From;
   to: To;
-  fidelity: ExportFidelity;
   optionsSchema?: Schema;
+  /** Final content properties this edge preserves or consumes. */
+  content?: RuntimeContentDeclaration;
+  /** Source-format options pinned by the edge and removed from consumer options. */
+  sourceOptions?: Record<string, unknown>;
 };
 
 /**
@@ -89,7 +104,49 @@ export type TranscodeResult = KernelResult<ExportFile[]>;
 export type TranscoderRuntime = {
   logger: RuntimeLogger;
   tracer: RuntimeSpanTracer;
+  /** Cancellation signal owned by the active export or direct-transcode operation. */
+  signal: AbortSignal;
 };
+
+/**
+ * Fetches a transcoder's declared implementation assets on first use and checks each one against its pinned digest.
+ * @public
+ */
+export type ImplementationAssetLoader = {
+  /**
+   * Load one declared asset. The first call for an asset fetches it and checks its SHA-256 against the declared digest.
+   * Later calls in the same worker return the same verified bytes. A failed load is not cached, so the next call
+   * tries again.
+   *
+   * @param id - The `id` of an entry in the transcoder's `implementationAssets`.
+   * @returns The verified bytes. They are shared, so read them but never transfer or modify them.
+   * @throws {Error} When `id` is not declared, the fetch fails, or the digest does not match.
+   */
+  load(id: string): Promise<Uint8Array<ArrayBuffer>>;
+};
+
+/**
+ * Services provided to a transcoder's `initialize`.
+ * @public
+ */
+export type TranscoderInitializeRuntime = Omit<TranscoderRuntime, 'signal'> & {
+  /**
+   * Loader for the declared implementation assets. The runtime always provides it. It is missing only when code
+   * calls `initialize` directly, outside a runtime.
+   */
+  readonly implementationAssets?: ImplementationAssetLoader;
+};
+
+/**
+ * When the runtime fetches and verifies a transcoder's implementation assets.
+ *
+ * - `'initialize'` (default): fetch and verify every asset before `initialize` runs.
+ * - `'on-use'`: check only the declarations before `initialize`. The transcoder then fetches each asset with
+ *   `implementationAssets.load(id)` the first time it needs it, and that call verifies it. Use this when a
+ *   transcoder needs only some of its assets for a given request, as when each format has its own codec.
+ * @public
+ */
+export type ImplementationAssetLoading = 'initialize' | 'on-use';
 
 // =============================================================================
 // defineTranscoder API Types
@@ -118,6 +175,12 @@ export type TranscoderDefinition<
   /** Semantic version string for diagnostics */
   version: string;
 
+  /** Selected implementation assets whose verified digests participate in artifact identity. */
+  implementationAssets?: readonly RuntimeImplementationAsset[];
+
+  /** When the runtime fetches and verifies `implementationAssets`. Defaults to `'initialize'`. */
+  implementationAssetLoading?: ImplementationAssetLoading;
+
   /** Zod schema for validating and typing transcoder options */
   optionsSchema?: z.ZodType<Options>;
 
@@ -128,14 +191,79 @@ export type TranscoderDefinition<
   edges: Edges;
 
   /** Initialize transcoder with typed options */
-  initialize(options: Options, runtime: TranscoderRuntime): Promise<Context>;
+  initialize(options: Options, runtime: TranscoderInitializeRuntime): Promise<Context>;
 
   /** Execute the format conversion */
   transcode(input: TranscodeInput<Edges>, runtime: TranscoderRuntime, context: Context): Promise<TranscodeResult>;
 
   /** Tear down transcoder resources */
-  cleanup(context: Context): Promise<void>;
+  onDispose?(context: Context): Promise<void>;
 };
+
+type TranscoderDefinitionConfig<
+  Id extends string,
+  Context,
+  Options extends Record<string, unknown>,
+  Edges extends readonly TranscoderEdge[],
+> = RuntimePluginDeclaration & {
+  /** Unique identifier for this transcoder plugin. */
+  id: Id;
+  /** Human-readable transcoder name, used in logs and error messages */
+  name: string;
+  /** Semantic version string for diagnostics */
+  version: string;
+  /** Selected implementation assets. */
+  implementationAssets?: readonly RuntimeImplementationAsset[];
+  /** When the runtime fetches and verifies `implementationAssets`. Defaults to `'initialize'`. */
+  implementationAssetLoading?: ImplementationAssetLoading;
+  /** Statically declared format conversion edges. */
+  edges: Edges;
+  /** Initialize transcoder with typed options */
+  initialize(options: Options, runtime: TranscoderInitializeRuntime): Promise<Context>;
+  /** Execute the format conversion */
+  transcode(input: TranscodeInput<Edges>, runtime: TranscoderRuntime, context: Context): Promise<TranscodeResult>;
+  /** Tear down transcoder resources */
+  onDispose?(context: Context): Promise<void>;
+};
+
+type EdgeOptionMap<Edges extends readonly TranscoderEdge[]> = {
+  [Edge in Edges[number] as Edge['to'] & string]: TranscoderEdgeType<Edge['from'] & string, ResolveEdgeOptions<Edge>>;
+};
+
+type SourceFormat<Edges extends readonly TranscoderEdge[]> = Edges[number]['from'] & string;
+
+type EdgeContentMap<Edges extends readonly TranscoderEdge[]> = {
+  [Edge in Edges[number] as Edge['to'] & string]: Edge extends { content: infer Content }
+    ? ContentKeysOf<Content>
+    : never;
+};
+
+type EdgePinnedSourceOptionsMap<Edges extends readonly TranscoderEdge[]> = {
+  [Edge in Edges[number] as Edge['to'] & string]: Edge extends { sourceOptions: infer SourceOptions }
+    ? keyof SourceOptions
+    : never;
+};
+
+/* oxlint-disable typescript/prefer-function-type, typescript/consistent-type-definitions, typescript/no-restricted-types -- Named callable type keeps private unique-symbol carriers nameable in emitted declarations; [] is the exact no-options tuple. */
+/** @public */
+export interface TranscoderPluginFactory<
+  Id extends string,
+  EdgeMap extends Record<string, unknown>,
+  From extends string,
+  Options = undefined,
+  ContentMap extends Record<string, RuntimeContentKey> = Record<string, RuntimeContentKey>,
+  PinnedSourceOptionsMap extends Record<string, PropertyKey> = Record<string, PropertyKey>,
+> {
+  (
+    ...options: Options extends undefined
+      ? []
+      : Partial<Options> extends Options
+        ? [options?: Options]
+        : [options: Options]
+  ): TranscoderPlugin<EdgeMap, From, Id, ContentMap, PinnedSourceOptionsMap> &
+    RuntimePluginDefinitionCarrier<TranscoderDefinition>;
+}
+/* oxlint-enable typescript/prefer-function-type, typescript/consistent-type-definitions, typescript/no-restricted-types */
 
 /**
  * Define a transcoder module with full type inference.
@@ -149,32 +277,64 @@ export type TranscoderDefinition<
  *
  * @public
  *
- * @example <caption>Defining a format converter transcoder</caption>
- * ```typescript
- * import { defineTranscoder } from '@taucad/runtime';
- *
- * export default defineTranscoder({
- *   name: 'MyTranscoder',
- *   version: '1.0.0',
- *   edges: [
- *     { from: 'glb', to: 'usdz', fidelity: 'mesh' },
- *     { from: 'glb', to: 'stl', fidelity: 'mesh' },
- *   ] as const,
- *   async initialize(options, runtime) {
- *     return {};
- *   },
- *   async transcode(input, runtime, context) {
- *     // input.from is 'glb', input.to is 'usdz' | 'stl' (literal narrowing)
- *     return { success: true, data: input.files, issues: [] };
- *   },
- *   async cleanup(context) {},
- * });
- * ```
  */
 export function defineTranscoder<
+  const Id extends string,
   Context,
-  Options extends Record<string, unknown> = Record<string, unknown>,
+  OptionsSchema extends z.ZodType = z.ZodType,
   const Edges extends readonly TranscoderEdge[] = readonly TranscoderEdge[],
->(definition: TranscoderDefinition<Context, Options, Edges>): TranscoderDefinition<Context, Options, Edges> {
-  return definition;
+>(
+  definition: TranscoderDefinitionConfig<Id, Context, z.output<OptionsSchema> & Record<string, unknown>, Edges> & {
+    optionsSchema: OptionsSchema;
+  },
+): TranscoderPluginFactory<
+  Id,
+  EdgeOptionMap<Edges>,
+  SourceFormat<Edges>,
+  z.input<OptionsSchema>,
+  EdgeContentMap<Edges>,
+  EdgePinnedSourceOptionsMap<Edges>
+>;
+export function defineTranscoder<
+  const Id extends string,
+  Context,
+  const Edges extends readonly TranscoderEdge[] = readonly TranscoderEdge[],
+>(
+  definition: TranscoderDefinitionConfig<Id, Context, Record<string, unknown>, Edges> & {
+    optionsSchema?: undefined;
+  },
+): TranscoderPluginFactory<
+  Id,
+  EdgeOptionMap<Edges>,
+  SourceFormat<Edges>,
+  undefined,
+  EdgeContentMap<Edges>,
+  EdgePinnedSourceOptionsMap<Edges>
+>;
+/** @public */
+export function defineTranscoder(
+  definition: TranscoderDefinitionConfig<string, unknown, Record<string, unknown>, readonly TranscoderEdge[]>,
+): TranscoderPluginFactory<string, Record<string, unknown>, string, Record<string, unknown>> {
+  const acceptsOptions =
+    Object.hasOwn(definition, 'optionsSchema') && Reflect.get(definition, 'optionsSchema') !== undefined;
+  const { id, permissions, ...transcoderDefinition } = definition;
+  validateRuntimeContentDeclarations(
+    id,
+    transcoderDefinition.edges.map((edge, index) => [`edges.${index}.content`, edge.content] as const),
+  );
+  const factory = ((options?: Record<string, unknown>) => {
+    if (options !== undefined && !acceptsOptions) {
+      throw new TypeError(`Transcoder "${id}" does not accept options.`);
+    }
+    return attachRuntimePluginDefinition(
+      {
+        id,
+        edges: transcoderDefinition.edges.map(({ from, to }) => ({ from, to })),
+        ...(permissions === undefined ? {} : { permissions }),
+        options,
+      },
+      () => transcoderDefinition,
+    );
+  }) as TranscoderPluginFactory<string, Record<string, unknown>, string, Record<string, unknown>>;
+  return attachRuntimePluginFactoryOptions(factory, acceptsOptions);
 }

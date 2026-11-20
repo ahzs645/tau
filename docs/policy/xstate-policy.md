@@ -1,45 +1,273 @@
 ---
 title: 'XState Policy'
-description: 'State machine design, actor lifecycle, and React integration using XState v5. setup(), context rules, assign, invoke/spawn, useActorRef, cleanup patterns.'
+description: 'State machine design, actor lifecycle, and React integration using XState v6. setup() schemas, transition functions, enqueue effects, invoke/spawn, useActorRef, cleanup patterns.'
 status: active
 created: '2026-03-04'
-updated: '2026-03-09'
+updated: '2026-11-12'
 related:
   - docs/research/xstate-patterns.md
+  - docs/research/xstate-v6-migration-blueprint.md
+  - docs/research/verified-agent-substrate-charter.md
+  - docs/research/agent-substrate-machine-contract-blueprint.md
+  - docs/research/graphics-event-driven-state-charter.md
+  - docs/policy/react-policy.md
   - docs/policy/typescript-policy.md
   - docs/research/typescript-overloads.md
 ---
 
 # XState Policy
 
-Internal reference for state machine design in the Tau application. Standard patterns for state machine design, actor lifecycle, and React integration using XState v5.
+Internal reference for state machine design in Tau. Standard patterns for machine definition, actor lifecycle, and React integration using XState v6 (`xstate` `6.0.0-alpha.59`, `@xstate/react` `7.0.0-alpha.3`, pinned in the pnpm catalog).
 
 ## Rationale
 
-XState v5 provides structured state management with automatic actor lifecycle and cleanup. Consistent patterns for context updates, async operations, and React integration prevent common pitfalls: direct mutation, fire-and-forget async, and orphaned actors. Machines that own lifecycle logic keep UI components simple and testable.
+XState provides structured state management with automatic actor lifecycle and cleanup. v6 replaces named action objects with **transition functions**: a transition computes its target and a context patch from `(args, enq)`, and every side effect goes through the `enq` queue. Consistent use of that shape keeps transitions pure and ordered, keeps async work in invoked actors, and keeps UI components simple and testable.
+
+## Agent substrate contract
+
+This section binds every owner machine and fold in the agent substrate (Verified Agent Substrate Charter, D1 and D12). Other app machines adopt it with their own changes. Each rule names its sources in parentheses. The charter's machine contract blueprint (W2) names how each rule is enforced.
+
+### Form and placement
+
+**MC-R1 When a machine is warranted.** A machine is warranted where it owns a lease, a dispatch, a binding or a reservation in one process and can refuse a transition. State derived from a durable log is a `createLogic` fold. I/O is a named effect injected at a composition root. No module-level map, flag or promise holds run, lease, leadership, placement or settlement state. A machine that mirrors another owner's fact is a defect. (D1; north star.)
+
+**MC-R2 Imports.** A portable machine file imports only three things: `xstate`, its own package's modules through `#` specifiers, and types. It never imports a DOM or Node API, React, an app alias, a network client, a `?worker` URL, a sibling service or an `xstate/*` subpath. (North star rule 1.)
+
+**MC-R3 Identity in input.** Ids such as `projectId`, `chatId`, `turnId` and `runId` arrive in `input`, as does the parent ref. They are copied into context once. (North star rule 4; S2 rule 7.)
+
+**MC-R4 Composition root.** Each owner machine or tree ships one exported factory beside it.
+
+- The factory takes the host's dependencies plus `clock`, `inspect` and `onRejectedEvent`, and forwards all three to `createActor`.
+- Each call takes its own `clock`. No root keeps a module-level clock or actor, so a simulation can give each process its own clock.
+- It returns the actor unstarted.
+- Production passes none of the three options. Development may pass the console inspector and a warning hook. Tests pass the harness.
+
+(North star rule 3; PT12.)
+
+**MC-R5 Context.** Context holds scalars, plain records, refs to children this machine spawned, and correlation ids. It never holds functions, service instances, workers, ports, buffers or a second copy of a durable fact. A durable fact cached in context names its rehydration source in the file header; the `packages/revisions/src/sync.machine.ts` header is the format. (North star rule 5.)
+
+### Purity and effects
+
+**MC-R6 Purity.** These are pure: transition functions, guards, choices, context mappers, `input` factories, `entry` and `exit` bodies, `delays` and `timeout` functions.
+
+- They use no clock, randomness, `crypto`, id minting, I/O or module state, and they never read another actor's snapshot.
+- Time and ids arrive in events or input.
+- A child's facts arrive as events that the parent folds into context.
+- `snapshot.can()` and graph traversal run transition functions (N16), so impurity breaks tests as well as replay.
+
+(PT1; S2 rule 2; L7 F8.)
+
+**MC-R7 Evaluation order.** Write machines against v6's evaluation order:
+
+- A state's `invoke.input` runs before its entry patch (S10).
+- A transition reads the pre-exit context, and its patch wins over exit patches on the same key (S12, T9).
+- Entry effects run before invoked children start (S13).
+- A static context mapper runs twice per event (S14).
+- Parallel regions read the pre-event context (S15).
+- A macrostep stays under 1000 microsteps (N10).
+- `initialTransition` and actor start deliver `@xstate.init` to a fold's `run`, which ignores it (N13; MC-R20).
+
+**MC-R8 Named effects.** An effect is one of three things:
+
+- `enq(namedEffect, …args)` with a named function;
+- `enq(actions.name, …args)` with a custom action declared in `setup({ actions })`;
+- a named actor in `setup({ actors })`.
+
+An inline `enq(() => …)` is forbidden in owner machines, because its effect descriptor has an empty type (N6). An effect whose result matters has a default that throws a sentence naming what was not provided. Only a callback driver may default to a no-op.
+
+Custom actions are provided once, at the composition root, with `.provide({ actions })`, never in a machine file. Each is an arrow keyed by its effect name, so its `Function.name` equals its key (S1 H3). When the actions object is built by a call, the owner's conformance test checks the names and that every argument survives JSON.
+
+(PT2; north star rule 2.)
+
+**MC-R9 Keyed effects.** Effect arguments are JSON-safe. An external effect's idempotency key derives from durable identity (`runId`, attempt, position), never from randomness. (D15; D18 with S1's conditions.)
+
+**MC-R10 Async logic.** One-shot I/O is `createAsyncLogic({ run })`.
+
+- `run` passes `signal` to every I/O call and calls `signal.throwIfAborted()` after each `await`.
+- The machine reads the result as `event.output` in `onDone` and handles `onError`.
+- The substrate does not use `fromSafeAsync`.
+
+(A7; S2 rule 10.)
+
+**MC-R11 Wiring and ports.** Wiring that must end with a state is an invoked listener or subscription logic.
+
+- `enq.listen` and `subscribeTo` apply only to refs the machine owns, and they map to public events. `enq.listen` on a spawned child's ref receives what the child emits, including an emit from its final state's entry.
+- A listener is a separate system actor, not a child. It outlives its state, and any internal event it sends is dead-lettered (S2 surprise 5).
+- A port is a real actor ref, never a `{ send }` object (S2 rule 12, surprise 3).
+
+(S2 rule 8.)
+
+### Failure
+
+**MC-R12 Failure.** Every owner machine declares a root `onError`. The handler records the error in context and enters a modelled state that still answers every public event. The root `onError` receives:
+
+- effect failures (`xstate.error.execution`), including a choice that returned no target;
+- unhandled child failures (`xstate.error.actor`);
+- sends to an undefined or unknown child (`xstate.error.communication`).
+
+Every `invoke` also has its own `onError` (RB1; L3 D8). Every choice returns a target on every path (S2 surprise 8); without a root `onError`, a choice with no target errors the actor. (PT3; I27.)
+
+### Addressing and commands
+
+**MC-R13 Addressing.** A machine addresses peers only through:
+
+- refs from input, kept in context;
+- its own child refs and ids;
+- `listen` and `subscribeTo` on those refs.
+
+It never uses `registryKey`, `createSystem` registries, `system.get`, the `parent` argument, `sendParent`, a string `sendTo` target other than an own child id, route states, `checkStateIn(self…)`, `getNextSnapshot` or `getInitialSnapshot`. It checks an optional ref before sending to it (PT13).
+
+A spawn id names a child only while that child lives. After the child completes, a send to its id is a communication fault, so the machine checks its own record of the child first, or sends to `children[id]` after checking it. A child reports its end with an event it emits. The parent does not treat `xstate.done.actor` as that report, because it can arrive after a respawn under the same id.
+
+(PT8; S2 rule 7.)
+
+**MC-R14 Command surface.** An owner actor's `send` is never handed to untrusted code. The host exposes one typed command function per public event. The port adapter validates seam payloads and answers unreadable commands. Machines configure no validator (EQ5). (PT5.)
+
+**MC-R15 Internal events.** `schemas.internalEvents` lists only events the machine raises to itself, such as continuations and delayed timer events. Results from children, listeners, ports and hosts are public events carrying a correlation id that the machine checks.
+
+Internal events are not a security boundary. Pure `transition()` does not enforce them, and built-in `xstate.*` events can be forged (N1–N3). The deprecated top-level `internalEvents` array is not used. (PT4; S2 rule 4.)
+
+### Timers
+
+**MC-R16 Timers and timeouts.**
+
+- `after` expresses a debounce, a coalescing window, a backoff, a heartbeat or a liveness backstop. It never stands in for an in-process peer's answer; the peer answers on every edge (D13).
+- A backstop ends a state only when every durable effect it abandons is fenced, so that the effect's later writes are refused. Otherwise it cancels and keeps waiting (D13).
+- State and invoke `timeout`/`onTimeout`, and `createAsyncLogic({ timeout })`, appear only on external edges. Each such edge is listed in the owner's timeout table as an exported named constant (I30). A state `timeout` counts from entry to its state, compound states included, and is cancelled on exit.
+- A timeout is detected through `onTimeout`, or through `event.error instanceof TimeoutError` in `onError`. It is never detected through `signal.reason`, which is a plain `AbortError` (S2 g1).
+- Every timer delivery is answered. A delayed `enq.raise` or an `after` arrives as an `xstate.timer` delivery, and its handler returns a target or `{}`, never `undefined`. A timer whose reason has ended is cancelled with `enq.cancel(id)`, or its handler answers `{}` with a comment.
+- Delay functions are pure, and any jitter arrives in input (N9).
+- One injected clock drives every timer in a tree.
+
+(PT7; north star rule 7; A5, A6.)
+
+### Totality and correlation
+
+**MC-R17 Totality.** In every state, an owner machine does one of three things with each public event:
+
+- it takes a transition;
+- it answers with a refusal that echoes the request id;
+- it ignores the event because the (state, event) pair is on its declared ignore list.
+
+The ignore list is exported beside the machine as `<name>IgnoredEvents`, of type `ReadonlyArray<readonly [state: string, eventType: string]>`. Each state is a dotted path or `'*'`. A choice state is transient: no event arrives in it, and no ignore pair names it.
+
+Two cases are defects: a transition that returns `undefined` with no ancestor handling the event, and an unlisted event that nothing handles. An explicit `{}` is reserved for idempotent re-delivery and for stale answers (MC-R18), and it says so in a comment. (D13; I26; S2 rule 5.)
+
+**MC-R18 Correlation.**
+
+- Every request to a peer carries a request id, and every answer echoes it.
+- A machine drops an answer it did not ask for, or one from an earlier attempt, by returning `{}` after its correlation check. An ignore pair cannot tell a stale answer from a fresh one, so a pair is declared only for a state in which every answer of that type is stale.
+- Coalescing keeps and answers every requester.
+- Host commands carry a command id.
+- Matching on a verb-and-subject tuple is retired.
+
+(D14; D15; north star rule 6.)
+
+### Persistence and folds
+
+**MC-R19 Persistence and rehydration.** The log is the record (D3).
+
+- Product code never persists a snapshot, never restores one and never configures `migrate`. Tests may round-trip snapshots (PT9).
+- A machine is rehydrated from the fold of the records its owner appended. Memory-only facts are declared, and a restart reconstructs them to a safe state.
+- An effect result that must survive a restart is a domain event the host appends. It is never a journaled `xstate.done.actor` event (PT6; S2 surprise 1; N8).
+- Pure `transition()` serves conformance and differential tests, not rehydration.
+
+**MC-R20 Folds and selection.** Derived facts are `createLogic` folds that are pure and total over the events they receive.
+
+- A fold's `run` returns `undefined` for every event except its input, which leaves its context unchanged. `initialTransition` and actor start deliver `@xstate.init` to `run`, so a fold that folds every event corrupts its initial state.
+- Every fold's test asserts `foreignEventChanges(logic)` is empty.
+- Another actor's snapshot is read only in `select*` functions, outside transitions. Object selections use `select(selector, equal)`.
+
+(D1; S2 rule 13; A8; N13.)
+
+### Versions and the gate
+
+**MC-R21 Versions and named types.** Every substrate owner machine declares `version`. It bumps the version when the order of its effects or events, or its public alphabet, can change (PT11). The version is recorded on every trace line and in any durable journal, never in chat-log rows (D3; D16).
+
+A published machine that composes other machines exports a named interface (K17), which the package `build` checks.
+
+**MC-R22 Experimental gate and upstream pin.** The following appear only under `__spikes__`, in tests and in tooling. They stay there until a ruling adopts them after the beta freezes their contract. (PT10; D18; EQ5.)
+
+- the modules `xstate/durable`, `xstate/validation`, `xstate/fsm` (with `createFSM`) and `xstate/scxml`;
+- `executeEffects`, `getEffectDescriptor`, `machineVersions` and `createMachineFromConfig`;
+- the runtime helpers `runStep`, `deliverEvent`, `stopActor` and `terminateActor`;
+- `ActorSystemRuntime` and `system.runtime`;
+- remote handles (`embedChildren`);
+- `enq.step`.
+
+`xstate` and `@xstate/react` stay pinned to exact versions in the catalog. A bump is its own change. It re-runs the S1 and S2 spike suites (`packages/agent-host/src/__spikes__/durable/` and `v6-core/`) and the lint's export check, and a changed result reopens the rules it touches (L1 F1–F2).
+
+### Tests and lifecycle
+
+**MC-R23 Tests.** Owner machine tests use `@taucad/xstate-testing`:
+
+- `guardActors` on every actor; each test takes the dead letters, unanswered events and faults it expects;
+- `StepClock` for every timer;
+- `unansweredEvents` over the public alphabet, with the exported ignore list, and `unreachedStates`;
+- `foreignEventChanges` for every fold;
+- a numbered path table at the head of the file, kept current with `pathTable`;
+- the shared fakes for scripted effects.
+
+Never order events across actors by inspection time. Inspection reports each actor's deliveries in that actor's order, not in causal order (S2 surprise 11). Cross-actor order comes from release points or the ledger sequence.
+
+(PT12; S2 rules 5 and 14; north star rule 8.)
+
+**MC-R24 Lifecycle.** A factory returns an unstarted actor. Its owner starts it once and never restarts a stopped actor (R3). A caller treats a rejected `waitFor` as "the actor is gone" (RB2a).
+
+**MC-R25 React.**
+
+- `useSelector` throws an errored actor's error during render (RB1). Projections must therefore never throw, and every owner has a root `onError`.
+- Stores and adapters create substrate actors as roots; hooks do not. A hook-owned actor stops a microtask after unmount, and remounts overlap (RB2).
+- A reconnect after a real stop yields a fresh actor, so consumers never cache refs (RB3).
+- Per-render sync goes through `logic.sources`, provided at module level (RB4).
+- `@xstate/react` 7 has no stop-and-rehydrate cycle (RB1-1). That removes the reason `fromSafeAsync` was written.
+
+### Schemas and identity
+
+These rules come from the XState v6 maximal-use review (`synthesis/xstate-v6-maximal-use.md`, probe k).
+
+**MC-R26 Per-state context.** A fact that exists only in some states lives in those states' `schemas.context`, declared in `setup({ states })`, never as an optional root key. A transition into a narrowed state supplies its keys, which the types enforce. Code reads a narrowed key only after `snapshot.matches(…)` or inside that state's handlers. Keys survive exit at runtime, because patches are shallow merges, so nothing outside the state reads them. Records kept in a map, such as a parent's per-key slots, use a discriminated union in plain TypeScript instead. (XV1; k1, k1b, k11.)
+
+**MC-R27 Transition identity.** Every transition of an owner machine that has a TLA+ spec is a static config, or a `{ to, meta, description }` object whose `to` is the transition function. Its `meta.tla` names the spec action the transition refines, typed by `schemas.transitionMeta` as that spec's action union. A bare function transition's returned `meta` never reaches the microstep, so owners do not rely on it. When one handler both takes and refuses, the spec action covers both branches, and the outcome travels in the trace line's fields. (XV2; k3, k3b, k9.)
+
+**MC-R28 Tags.** A category that a consumer asks about an owner's snapshot is a tag declared in `schemas.tags`, and consumers read it with `hasTag`, never with a list of state values. Consumers are `select*` functions, quiescence checks, tests and W1's `Matches`. (XV3; k4.)
+
+**MC-R29 Typed outcomes.** An effect actor declares `schemas.output` as a tagged union of every expected outcome, refusals included, and `onDone` switches over it exhaustively. `onError` means a defect and enters a modelled fault state (MC-R12). Every emitted event is declared in `schemas.emitted`. (XV4; k5.)
+
+**MC-R30 Runtime schemas in tests.** In a package that already ships Zod (`@taucad/agent-host`, `@taucad/host`, `apps/ui`), owners declare runtime schemas, and `schemas.events` reuses the wire's payload schemas (D11). Reuse a wire payload schema as the value of an event's `payload` key, `{ commandId, payload }`, because alpha.59 makes a directly reused schema's optional keys required. Owner tests run the machine through the harness's `validated(machine)`, which checks events, context, per-state context, emitted events and output at every step. Product code never installs a validator (MC-R22). `packages/revisions` keeps `types<T>()`. (XV5; k6, k10.)
+
+## Graphics contract
+
+MC-R1 to MC-R26 also bind the graphics actors (graphics event-driven state charter, D4, D5 and G12). They are the camera (`packages/camera/src/camera.machine.ts`); in `packages/viewer/src/machines/`, graphics and its framing, canvas, section input, measure session, kinematics, presentation, model interaction, measure input, view cube gesture and WebGL context actors, and, in `packages/viewer/src/parameters/`, the parameter field edit lineage; and, in `apps/ui/app/workbench-records/`, the view-record binding and record sync. A rule written for the substrate's leases, runs or logs applies to a graphics actor through what it owns instead: a view's camera, canvas, cuts, measurements and presentation, and a record's reads and writes. React hands these actors host elements and events only as [React policy](react-policy.md) 5.5 allows.
+
+Each of them declares a root `onError` (MC-R12) that records a defect in its context's `fault` and stays in the state it was in, which answers every public event: a fault in a view's viewer never stops the view. The camera and the viewer actors keep the first defect, since later ones are usually its consequences (a send to the child that failed); the view-record binding keeps the last, and record sync keeps the last and counts them in `faults`. Only the e2e camera check reads the camera's `fault`; nothing else in the viewer or the camera reads it yet, so a caught defect is silent outside a test or the inspector (recorded debt).
+
+These gaps are accepted debt, each with the change that retires it:
+
+- **MC-R26.** The binding keeps `sectionPending` and `dropped` as root keys, and record sync keeps its region facts at the root. A change that narrows those states' context retires it.
+- **MC-R4 and MC-R25.** A project view's graphics is never a root: the project machine spawns each view's graphics as a child (G6b). The standalone `ModelViewer` creates its graphics root with `useActorRef`, because its artifact arrives as a prop. The same public API change that retires the C10 exception (an artifact feed outside props) retires this, and a factory that only moved the `createActor` call would not. Three other hosts also create a graphics root with `useActorRef`, outside any project: the CAD preview provider (`apps/ui/app/hooks/use-cad-preview.tsx`), the Onshape render-profile end-to-end route and the agent plugin's viewer page (`packages/agent-plugin/app/viewer-page.tsx`). Each needs an owner machine of its own (a preview session), which no G-lane builds. Three viewer hooks also create a root with `useActorRef` and export no factory: `use-webgl-context-tracker.tsx` (WebGL context), `measure-tool.tsx` (measure session) and `use-field-edits.ts` (the field edit lineage). Each becomes a child of graphics, or of its owner, in the change that gives that owner a factory.
 
 ## Machine Definition
 
-### Use `setup()` for all machine definitions
+Keep each machine in its owning `.machine.ts` file, with its context, event, input and emitted types declared before the machine. Export the machine. Consumers that only send and select take `ActorRefFrom<typeof machine>`; owners that start or stop an actor hold `Actor<typeof machine>` (K-11 — `ActorRef` has no `start`, `stop`, `id` or `sessionId`).
 
-Every machine must use the `setup()` API with explicit type declarations for `context`, `events`, and `input`:
+### Use `setup({ schemas })` for all machine definitions
+
+Declare types through `schemas`. `types<T>()` is a type-only schema for context, input, output, tags and children; events and emitted events are a map from event type to payload schema, built from the event union with `eventSchemas<TUnion>()` (`@taucad/ui-core/lib/xstate.lib` in the UI, `machine-schemas.ts` in each package):
 
 ```typescript
+import { setup, types } from 'xstate';
+import { eventSchemas } from '@taucad/ui-core/lib/xstate.lib';
+
 export const myMachine = setup({
-  types: {
-    context: {} as MyContext,
-    events: {} as MyEvent,
-    input: {} as MyInput,
+  schemas: {
+    context: types<MyContext>(),
+    events: eventSchemas<MyEvent>(),
+    emitted: eventSchemas<MyEmitted>(),
+    input: types<MyInput>(),
   },
-  actors: {
-    /* named actor logic */
-  },
-  actions: {
-    /* named action implementations */
-  },
-  guards: {
-    /* named guard implementations */
-  },
+  actors: myActors,
+  delays: { debounce: 500 },
 }).createMachine({
   id: 'my-machine',
   context: ({ input }) => ({
@@ -52,43 +280,96 @@ export const myMachine = setup({
 });
 ```
 
+`eventSchemas` omits `type` distributively, so an event whose payload is itself a union keeps every member (T19). Invoked children read through selectors are declared in `schemas.children` — v6 no longer infers them from invoke ids (T15). Tags are `schemas.tags: types<Tag>()` and a state's `tags` is always an array (K-15).
+
+### Name composed machine types
+
+v6 machine types carry their full config and their children's types, so a published machine that composes other machines overflows declaration emit (TS7056). `nx typecheck` runs with `--declaration false` and does not see it; the package `build` does. Every publishable machine exports a named interface that declarations reference by name (K-17):
+
+```typescript
+const checkoutMachineDefinition = setup({
+  /* ... */
+}).createMachine({
+  /* ... */
+});
+
+type CheckoutMachineDefinition = typeof checkoutMachineDefinition;
+
+/** @public */
+export interface CheckoutMachine extends CheckoutMachineDefinition {}
+
+/** @public */
+export const checkoutMachine: CheckoutMachine = checkoutMachineDefinition;
+```
+
 ### Machine naming
 
 - **Machine ID**: `kebab-case` (e.g., `'file-manager'`, `'kernel'`, `'project'`)
 - **States**: Nouns or adjectives (`idle`, `loading`, `ready`, `error`, `rendering`, `exporting`)
 - **Events**: `camelCase` verbs (e.g., `createGeometry`, `loadProject`, `setParameters`)
-- **Actions**: `camelCase` verb phrases (e.g., `registerParentRef`, `destroyWorkers`, `emitProjectLoaded`)
-- **Guards**: `camelCase` predicates (e.g., `isLoggedIn`, `hasValidData`, `isProjectIdChanging`)
+- **Helpers**: `camelCase` verb phrases for patch/effect helpers (`destroyKernel`, `recordFailure`); predicates read as questions (`isRootChanged`, `hasValidRepo`)
 
-> **Note on `dot.case`**: XState v5 recommends `dot.case` for event names to enable wildcard transitions (`'kernel.*'`). The current codebase uses `camelCase`. New machines may adopt `dot.case` if wildcard matching provides clear value, but consistency within a machine is more important than convention.
+Emitted events describe completed outcomes (`fileCreated`, `buildCompleted`). Active state names describe ongoing work; stable states name their outcome. Existing application actors use `Actor` for one-shot work and `Listener` for callbacks; preserve a domain's established driver naming where it conveys the actual role.
 
 ---
 
-## Context Rules
+## Transitions
 
-### Never mutate context directly
+### Static transitions and context mappers
 
-All context updates must go through `assign()`. Direct mutation (`context.foo = bar`) bypasses XState's immutability model and causes issues with devtools, state persistence, and `@xstate/react`'s snapshot rehydration.
+A transition that only moves and patches is a static object. `context` is a patch or a mapper returning a patch; unspecified fields keep their values:
 
 ```typescript
-// INCORRECT:
-actions: {
-  setWorker({ context, event }) {
-    context.worker = event.worker;  // Direct mutation
-  },
-}
-
-// CORRECT:
-actions: {
-  setWorker: assign({
-    worker: ({ event }) => event.worker,
-  }),
+on: {
+  reset: { target: 'idle', context: { error: undefined } },
+  setName: { context: ({ event }) => ({ name: event.name }) },
 }
 ```
 
-### Keep context lean
+Static `context` mappers may be evaluated more than once per event (S14): they must be pure. Anything with an effect is a transition function.
 
-Store only what the machine needs for decision-making and actor communication. Large data sets (file contents, geometry buffers) should live in external stores or dedicated actors.
+### Transition functions
+
+A transition function returns `{ target?, context?, reenter? }` when it handles the event, `{}` when it handles it with no change, and `undefined` when it does not — which lets the event fall through to an ancestor, exactly as a failing guard did:
+
+```typescript
+on: {
+  requestTurn: ({ context, event }, enq) => {
+    if (context.turn !== undefined) {
+      return undefined; // not handled here; the parent's handler runs
+    }
+    enq.emit({ type: 'statusChanged', chatId: context.chatId });
+    return { target: '.queued.admitting', reenter: true, context: { pendingGesture: event.gesture } };
+  },
+}
+```
+
+- **Guards are branches.** Inline the predicate. Keep a named guard in `setup({ guards })` only when a host or test `.provide()`s it (K-16), and call it as `guards.name(…)` from the transition.
+- **Compose patches in order.** v5 actions ran left to right and each `assign` saw the previous one's result; a transition function computes the same thing explicitly: `const next = { ...context, ...patchA }` before deriving `patchB` from `next`.
+- **Pre-exit context.** A transition function reads the context from before any exit it causes; exit patches apply before the transition patch (S12). Do not repeat in a transition what the source state's (or root's) `exit` already does — a root-level `reenter` re-runs the root `exit`.
+- **Parallel regions.** Every region's transition for one event reads the pre-event context (S15), so a sibling region's patch never changes another region's decision.
+- **Matching another region.** Use `matchesState(value, args.value)` where v5 used `stateIn`.
+
+### The `enq` queue
+
+Everything that is not the returned target or patch goes through `enq`, in the order it must happen:
+
+| v5                                 | v6                                                                                                                |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `emit(…)`                          | `enq.emit(event)`                                                                                                 |
+| `sendTo(ref, …)` / `sendParent(…)` | `enq.sendTo(ref, event)` (pass the parent ref by input)                                                           |
+| `raise(…)`                         | `enq.raise(event)`                                                                                                |
+| `spawnChild` / `spawn` in `assign` | `const ref = enq.spawn('src', { id, input })`                                                                     |
+| `stopChild(ref)`                   | `enq.stop(ref)`                                                                                                   |
+| `log`, custom action body          | A named effect: `enq(effectName, …args)` or `enq(actions.name, …args)`. An inline body only outside the substrate |
+
+`enq` effects run after the transition is taken; pass the values they need as arguments. Never perform an effect directly in a transition body or a context mapper — it would run on evaluation, not on the transition.
+
+`entry` and `exit` take the same `(args, enq)` shape and may return `{ context }`. Helper functions that take `enq` type it as `EnqueueObject<TEvent, TEmitted, SystemRegistry, typeof actors>` so `enq.spawn` knows the actor map.
+
+### Never mutate context directly
+
+Context changes only through returned patches. Direct mutation bypasses snapshots, devtools and `@xstate/react` change detection. For nested updates use Immer's `produce` on the field being replaced and return it as the patch.
 
 ### Use states, not boolean flags
 
@@ -102,105 +383,18 @@ context: { isLoading: false, hasError: false, data: null }
 states: {
   idle: {},
   loading: {
-    invoke: { src: 'fetchData', onDone: 'success', onError: 'error' },
+    invoke: { src: 'fetchData', onDone: { target: 'success' }, onError: { target: 'error' } },
   },
   success: {},
   error: {},
 }
 ```
 
----
+Write targets as `{ target: 'x' }`. String shorthand still runs but no longer typechecks in `onDone`, `onError`, `after` and `on` under `setup()`.
 
-## Actions
+### No fire-and-forget async in transitions
 
-### `assign` for context updates
-
-Use `assign` for all context updates. Prefer the property-based form for targeted updates:
-
-```typescript
-// Property-based (preferred)
-assign({
-  count: ({ context }) => context.count + 1,
-  name: ({ event }) => event.name,
-});
-
-// Function-based (for returning full context shape)
-assign(({ context, event }) => ({
-  ...context,
-  count: context.count + event.value,
-}));
-```
-
-### No side effects in `assign`
-
-`assign` callbacks must be pure — compute and return new values only. No logging, API calls, mutations, or I/O:
-
-```typescript
-// INCORRECT: mutation inside assign
-assign({
-  version({ context }) {
-    context.buffer.push(newEntry); // Side effect!
-    return context.version + 1;
-  },
-});
-
-// CORRECT: return new value
-assign(({ context }) => ({
-  buffer: context.buffer.withEntry(newEntry),
-  version: context.version + 1,
-}));
-```
-
-### `enqueueActions` for conditional multi-action composition
-
-Use `enqueueActions` when you need to conditionally execute different combinations of built-in actions:
-
-```typescript
-enqueueActions(({ enqueue, context, check }) => {
-  enqueue.assign({ status: 'processing' });
-
-  if (check('shouldNotify')) {
-    enqueue.sendTo(context.parentRef, { type: 'processing' });
-  }
-
-  for (const child of context.children) {
-    enqueue.stopChild(child);
-  }
-});
-```
-
-Do not use `enqueueActions` when `assign` alone suffices.
-
-### No fire-and-forget async in actions
-
-Actions are synchronous. Never wrap async operations in `void (async () => { ... })()`:
-
-```typescript
-// INCORRECT: invisible to XState, not cancellable
-actions: {
-  doWork({ context }) {
-    void (async () => {
-      const result = await heavyComputation();
-      context.result = result;
-    })();
-  },
-}
-```
-
-For async operations, use **invoked actors** (`fromPromise`, `fromCallback`). See [Async Operations](#async-operations).
-
-### `assertEvent` for type narrowing
-
-Use `assertEvent` in actions that handle specific events to narrow the event type:
-
-```typescript
-registerParentRef: assign({
-  parentRef({ event }) {
-    assertEvent(event, 'initializeKernel');
-    return event.parentRef;
-  },
-}),
-```
+Transitions are synchronous. Async work is a named actor (see [Async Operations](#async-operations)). Its result reaches the machine as the actor's output in `onDone`, never through an effect that writes back.
 
 ---
 
@@ -208,77 +402,77 @@ registerParentRef: assign({
 
 ### When to use each actor type
 
-| Actor                          | Lifecycle                        | Cancellation            | Use case                                          |
-| ------------------------------ | -------------------------------- | ----------------------- | ------------------------------------------------- |
-| `invoke` with `fromPromise`    | State-scoped (auto-stop on exit) | `AbortSignal`           | One-shot async (API calls, initialization)        |
-| `invoke` with `fromCallback`   | State-scoped (auto-stop on exit) | Cleanup function return | Long-running processes (event listeners, polling) |
-| `invoke` with `fromObservable` | State-scoped (auto-stop on exit) | Unsubscribe             | Streaming data sources                            |
-| `spawn` (inside `assign`)      | Manual (explicit `stopChild`)    | Manual                  | Dynamic actors needing a context reference        |
-| `spawnChild` (action)          | Manual (explicit `stopChild`)    | Manual                  | Dynamic actors without context reference          |
+| Actor                                      | Lifecycle                        | Cancellation            | Use case                                                     |
+| ------------------------------------------ | -------------------------------- | ----------------------- | ------------------------------------------------------------ |
+| `invoke` with `fromSafeAsync`              | State-scoped (auto-stop on exit) | `AbortSignal`           | App machines outside the substrate, until each migrates (A7) |
+| `invoke` with `createAsyncLogic({ run })`  | State-scoped (auto-stop on exit) | `AbortSignal`           | One-shot async; required in the substrate                    |
+| `invoke` with `createCallbackLogic`        | State-scoped (auto-stop on exit) | Cleanup function return | Long-running processes (event listeners, polling)            |
+| `invoke` with `createEventObservableLogic` | State-scoped (auto-stop on exit) | Unsubscribe             | Streaming data sources                                       |
+| `enq.spawn` / context-factory `spawn`      | Parent-scoped; explicit removal  | `enq.stop` for removal  | Dynamic actors needing a context reference                   |
 
 ### Prefer `invoke` over `spawn` when possible
 
-`invoke` provides automatic lifecycle management — the actor starts when the state is entered and stops when the state is exited. Prefer `invoke` unless the actor needs to persist across multiple states.
+`invoke` provides automatic lifecycle management — the actor starts when the state is entered and stops when it is exited. Prefer it unless the actor must persist across states.
 
-### Always stop spawned actors
+When a dynamic child must exist at parent startup, spawn it in the context factory. The factory's `spawn` takes **logic**, not a source name: use `spawn(actors.name, { id, input })` so `.provide({ actors })` overrides still apply (K-13). v6 starts invoked children after the parent's entry effects (S13).
 
-Spawned actors are NOT automatically stopped when the parent machine stops. Always pair `spawn` with explicit `stopChild`:
+When a transition must reset the current state's timer or debounce, use `reenter: true` so exit and entry actually run.
+
+### Stop spawned actors when removing or replacing them
+
+Stopping a parent cascades to its children. Stop a spawned child explicitly when removing or replacing it while the parent lives, and clear its ref in the same transition:
 
 ```typescript
-// Spawn
-entry: assign({
-  workerRef: ({ spawn }) => spawn('workerActor', { id: 'my-worker' }),
-});
-
-// Stop — in exit action or explicit cleanup
-exit: enqueueActions(({ enqueue, context }) => {
-  if (context.workerRef) {
-    enqueue.stopChild(context.workerRef);
-    enqueue.assign({ workerRef: undefined });
+destroyView: ({ context, event }, enq) => {
+  const view = context.views.get(event.viewId);
+  if (!view) {
+    return {};
   }
-});
+  enq.stop(view);
+  const views = new Map(context.views);
+  views.delete(event.viewId);
+  return { context: { views } };
+},
 ```
 
-### Always handle `onError` for invoked promises
+### Always handle `onError` for invoked async actors
 
 ```typescript
 invoke: {
   src: 'fetchData',
-  onDone: {
-    target: 'success',
-    actions: assign({ data: ({ event }) => event.output }),
-  },
-  onError: {
-    target: 'error',
-    actions: assign({ error: ({ event }) => event.error }),
-  },
+  onDone: { target: 'success', context: ({ event }) => ({ data: event.output }) },
+  onError: ({ event }) => ({ target: 'error', context: { error: toError(event.error) } }),
 }
 ```
 
-The only exception is `fromCallback`, which does not emit `onDone`/`onError` events.
+The only exception is callback logic, which does not emit `onDone`/`onError`.
+
+### Actor identity
+
+`id` and `sessionId` live on the runtime half of an actor. Read them from a ref with `actorIdOf(ref)` / `actorSessionIdOf(ref)` (`@taucad/ui-core/lib/xstate.lib`), including the `self` a state-level transition receives (typed `AnyActorRef`, K-14).
 
 ---
 
 ## Async Operations
 
-### Use `fromSafeAsync` Instead of `fromPromise`
+### `fromSafeAsync` is retired
 
-`fromSafeAsync` (from `#lib/xstate.lib.js`) is the standard async actor creator. It replaces `fromPromise` with React Strict Mode safety built in.
+The substrate does not use `fromSafeAsync` (MC-R10); its one-shot I/O is `createAsyncLogic`, read in `onDone`. `fromSafeAsync` (from `@taucad/ui-core/lib/xstate.lib`) stays only for app machines outside the substrate until each migrates (A7). It delivers its result to the parent as an **event** (which must carry a `type`), and a stopped invocation never delivers. The notes below apply to those remaining machines.
 
 #### Generic parameters — `fromSafeAsync<TReturn, TInput>`
 
-Follows the same `<TOutput, TInput>` convention as `fromPromise`. Specify both generics to type the input and return value:
+Specify both generics to type the input and return value:
 
 ```typescript
-import { fromSafeAsync } from '#lib/xstate.lib.js';
+import { fromSafeAsync } from '@taucad/ui-core/lib/xstate.lib';
 
 type LoadedEvent = { type: 'dataLoaded'; data: Data };
 type LoadInput = { id: string };
 
 // Data-returning actor — specify both TReturn and TInput
 const loadActor = fromSafeAsync<LoadedEvent, LoadInput>(async ({ input, signal }) => {
-  const data = await fetchData(input.id, { signal }); // input: LoadInput
-  return { type: 'dataLoaded', data }; // return: LoadedEvent
+  const data = await fetchData(input.id, { signal });
+  return { type: 'dataLoaded', data };
 });
 
 // Fire-and-forget actor — void return with input
@@ -292,98 +486,59 @@ const sideEffect = fromSafeAsync(async () => {
 });
 ```
 
-> **Why explicit generics?** TypeScript does not support partial type argument inference (as of TS 6.0). You must specify both `TReturn` and `TInput` when you need typed input — same limitation as `fromPromise<TOutput, TInput>`.
+> **Why explicit generics?** TypeScript does not support partial type argument inference (as of TS 6.0). You must specify both `TReturn` and `TInput` when you need typed input.
 
 **Key rules**:
 
-1. **Do not use `as const`** on individual literal values — contextual typing from generic parameters or `.provide()` already preserves literal types (see `docs/policy/typescript-policy.md` Rule 6).
-2. **Always use generic parameters** (`fromSafeAsync<TReturn, TInput>`) — never declare types inline in the function signature. Inline `_: { input: ...; signal: ... }` parameter annotations or `: Promise<T>` return annotations duplicate what the generics already express.
-3. **Never use `as never`** on `fromSafeAsync(...)` results in `provide()` calls. If the types don't match, fix the placeholder actor's generic parameters. See `docs/policy/typescript-policy.md` for resolution patterns.
+1. **Do not use `as const`** on individual literal values — contextual typing preserves literal types (see `docs/policy/typescript-policy.md` Rule 6).
+2. **Always use generic parameters** on placeholder actors — never inline `_: { input: ...; signal: ... }` parameter annotations or `: Promise<T>` return annotations.
+3. **Never use `as never`** on `fromSafeAsync(...)` results in `provide()` calls. Fix the placeholder's generics instead.
 4. **Placeholder actors must use generics for their return type** since throw-only bodies infer `Promise<never>`.
 
-```typescript
-// CORRECT: generics declare both return type and input type
-const loadActor = fromSafeAsync<LoadedEvent, LoadInput>(async () => {
-  throw new Error('loadActor not provided');
-});
+### Type provided actors against the machine
 
-// INCORRECT: inline parameter and return annotations
-const loadActor = fromSafeAsync(async (_: { input: LoadInput; signal: AbortSignal }): Promise<LoadedEvent> => {
-  throw new Error('loadActor not provided');
+v6 `provide()` infers its argument rather than typing it from the machine (K-12), so an inline logic loses its slot's input and output types. Check the provided map against the machine's own actor map:
+
+```typescript
+import type { MachineActors } from '@taucad/ui-core/lib/xstate.lib';
+
+const machine = myMachine.provide({
+  actors: {
+    loadActor: createAsyncLogic<Data, { id: string }>({
+      run: async ({ input, signal }) => {
+        const data = await load(input.id, { signal });
+        signal.throwIfAborted();
+        return data;
+      },
+    }),
+  } satisfies Partial<MachineActors<typeof myMachine>>,
 });
 ```
 
-In test `provide()` overrides, TypeScript infers types from the machine definition. Omit generics when the function body has a valid return path:
+Packages export their machine's actor map for hosts (`ParameterSetActors`, `ProjectRevisionsActors`, …). `provide()` rejects a slot typed `X | undefined`, so never pass a conditional spread or a `Partial` map value: choose between whole maps with a ternary, each checked with `satisfies`.
+
+### Use `createAsyncLogic`
 
 ```typescript
-const testMachine = myMachine.provide({
-  actors: {
-    // Inference works — return value provides the type
-    loadActor: fromSafeAsync(async () => {
-      return { type: 'dataLoaded', data: mockData };
-    }),
-    // Void actors — inference works for empty bodies
-    saveActor: fromSafeAsync(async () => {
-      await saveMockData();
-    }),
+const fetchDataActor = createAsyncLogic<Data, { url: string }>({
+  run: async ({ input, signal }) => {
+    const response = await fetch(input.url, { signal });
+    signal.throwIfAborted();
+    return response.json();
   },
 });
 ```
 
-For throw-only test overrides, avoid `never` inference by consolidating into a single factory with an option flag:
+**Key**: use the `signal`. XState aborts it when the state exits or the machine stops. Pass it to every I/O call and check `signal.throwIfAborted()` after each `await`. Aborting stops cooperative work; it does not undo a write that already reached an external authority.
+
+- The result is `event.output` in `onDone`; every invoke has an `onError` (MC-R10, MC-R12).
+- A slot the host must provide defaults to logic that throws a sentence naming what was not provided (MC-R8).
+- `createAsyncLogic({ timeout })` appears only on an external edge listed in the owner's timeout table (MC-R16). The parent sees the timeout as `event.error instanceof TimeoutError` in `onError`, or through `onTimeout`; `signal.reason` is a plain `AbortError` and cannot tell a timeout from a stop.
+
+### Use `createCallbackLogic` for long-running processes
 
 ```typescript
-// CORRECT: single factory with option — avoids never inference
-function createTestActor(options?: { throwOnLoad?: boolean }) {
-  return createActor(
-    myMachine.provide({
-      actors: {
-        loadActor: fromSafeAsync(async () => {
-          if (options?.throwOnLoad) throw new Error('load failed');
-          return { type: 'dataLoaded', data: mockData };
-        }),
-      },
-    }),
-  );
-}
-
-// INCORRECT: separate factory with inline return annotation
-function createFailingActor() {
-  return createActor(
-    myMachine.provide({
-      actors: {
-        loadActor: fromSafeAsync(async (): Promise<LoadedEvent> => {
-          throw new Error('load failed');
-        }),
-      },
-    }),
-  );
-}
-```
-
-**Why `fromSafeAsync` over `fromPromise`**: React Strict Mode's `stopRootWithRehydration` cycle (mount → stop → rehydrate → restart) creates "zombie" Promise `.then()` handlers that fire after the actor is restarted. `fromSafeAsync` wraps the async work in an Observable with a `closed` guard and `AbortController` teardown, preventing stale emissions.
-
-- Related: `docs/policy/typescript-policy.md` — type assertion rules for `fromSafeAsync` patterns
-- Related: `docs/research/typescript-overloads.md` — mock compatibility with overloaded functions
-
-### Use `fromPromise` for one-shot async (legacy)
-
-> **Note**: Prefer `fromSafeAsync` for new code. `fromPromise` is retained for contexts where React Strict Mode is not a concern (e.g., server-side, non-React consumers).
-
-```typescript
-const fetchDataActor = fromPromise(async ({ input, signal }) => {
-  const response = await fetch(input.url, { signal });
-  signal.throwIfAborted();
-  return response.json();
-});
-```
-
-**Key**: Use the `signal` parameter. XState creates an `AbortController` for each invoked promise and aborts it when the state exits or the machine stops. Check `signal.throwIfAborted()` after each `await` to ensure the operation stops promptly.
-
-### Use `fromCallback` for long-running processes
-
-```typescript
-const fileWatcherActor = fromCallback(({ sendBack, receive, input }) => {
+const fileWatcherActor = createCallbackLogic<EventObject, WatchInput>(({ sendBack, input }) => {
   const interval = setInterval(async () => {
     const changes = await pollForChanges(input.directory);
     if (changes.length > 0) {
@@ -398,89 +553,25 @@ const fileWatcherActor = fromCallback(({ sendBack, receive, input }) => {
 });
 ```
 
-The cleanup function is guaranteed to run when the actor is stopped (state exit or machine stop).
-
-### Worker lifecycle as invoked callback
-
-For workers tied to a specific machine state:
-
-```typescript
-const workerActor = fromCallback(({ sendBack }) => {
-  const worker = new Worker(workerUrl, { type: 'module' });
-  worker.onmessage = (event) => {
-    sendBack({ type: 'workerResult', data: event.data });
-  };
-  return () => {
-    worker.terminate();
-  };
-});
-
-states: {
-  active: {
-    invoke: { src: 'workerActor', id: 'worker' },
-    // Worker auto-terminates when leaving 'active' state
-  },
-}
-```
+Type a stored callback logic as `CallbackActorLogic<TEvent, TInput>`; `ReturnType<typeof createCallbackLogic<…>>` binds the schema overload.
 
 ---
 
-## Cleanup and Exit Actions
+## Cleanup and Exit
 
-### Every machine with resources must have exit actions
+### Separate graceful close from abrupt stop
 
-If a machine creates workers, opens connections, subscribes to events, or holds any resource that requires explicit cleanup, it must have a root-level `exit` action:
+Use explicit closing states and acknowledgements when a machine must drain writes, flush state or reconcile an ambiguous external effect before shutdown. Only stop the actor after that graceful flow settles.
 
-```typescript
-setup({
-  actions: {
-    cleanup({ context }) {
-      // Release all resources
-    },
-  },
-}).createMachine({
-  exit: ['cleanup'],
-  // ...
-});
-```
+An abrupt root `actor.stop()` stops invoked and spawned children, so callback cleanup functions release their resources. It does **not** run the root machine's `exit` (in v5 or v6). Keep resource disposal in owning callback actors, child actors or the React resource boundary rather than a root `exit`.
 
 ### Error-isolate cleanup chains
 
-If a cleanup action iterates over multiple resources, wrap each in try/catch to ensure all resources are released even if one cleanup fails:
-
-```typescript
-cleanup({ context }) {
-  for (const disposable of context.disposables) {
-    try {
-      disposable();
-    } catch (error) {
-      console.error('[Cleanup] failed:', error);
-    }
-  }
-  // Critical cleanup (e.g., worker.terminate()) must always run
-  context.worker?.terminate();
-}
-```
-
-See [Worker Policy, Rule 5](./worker-policy.md#rule-5-error-isolated-cleanup) for the full pattern.
+If cleanup iterates over multiple resources, wrap each in try/catch so all resources are released even if one fails; critical cleanup (e.g. `worker.terminate()`) must always run. See [Worker Policy, Rule 5](./worker-policy.md#rule-5-error-isolated-cleanup).
 
 ### Guard against post-teardown operations
 
-When a machine has exit actions that set a `destroyed` flag, check this flag at every yield point in any associated async operations:
-
-```typescript
-async function ensureResource(context: MachineContext): Promise<Resource> {
-  if (context.destroyed) {
-    throw new Error('Machine was stopped');
-  }
-  const resource = await createResource();
-  if (context.destroyed) {
-    resource.dispose();
-    throw new Error('Machine was stopped during initialization');
-  }
-  return resource;
-}
-```
+When a machine's teardown sets a `destroyed` flag, check it at every yield point of associated async work, and dispose a resource that arrives after teardown.
 
 ---
 
@@ -488,193 +579,118 @@ async function ensureResource(context: MachineContext): Promise<Resource> {
 
 ### Use `useActorRef` + `useSelector` (not `useMachine`)
 
-`useMachine` (alias: `useActor`) re-renders on every state change. Use `useActorRef` for the actor reference and `useSelector` for fine-grained subscriptions:
+`useMachine` re-renders on every change. Use `useActorRef` for the actor and `useSelector` with a stable selector for each value:
 
 ```typescript
 function MyComponent(): React.JSX.Element {
   const actorRef = useActorRef(myMachine, { input: { /* ... */ } });
   const isLoading = useSelector(actorRef, (s) => s.matches('loading'));
-  const count = useSelector(actorRef, (s) => s.context.count);
-
   return (/* ... */);
 }
 ```
 
+### Actor lifecycle under `@xstate/react` 7
+
+The effect cleanup queues `actor.stop()` in a microtask; an effect re-run for the same actor cancels it (RB1-1). So a Strict Mode double-mount never stops the actor, and a real unmount stops it one microtask later. A mount that finds its actor stopped replaces it with a fresh `createActor(machine, options)` — never a restart or a rehydrated snapshot. Tests reproduce these two paths with `strictModeRemount` and `unmountAndRemount` from `@taucad/ui-core/lib/xstate-test.utils`; fake actors handed to `useSelector` must accept an observer (`toSnapshotCallback`).
+
 ### Input is read once at initialization
 
-`useActorRef(machine, { input })` reads `input` only when the actor is created. Changing the `input` object on re-renders does NOT update the running actor. To react to external changes, send events:
+`useActorRef(machine, { input })` reads `input` only when the actor is created. To react to external changes, send events from an effect. In the graphics scope, that effect is a named exception with its reason ([React policy](react-policy.md) 5.5), allowed only where a prop or React context is the value's only source.
+
+### Hand a host element to an actor with a ref callback
+
+When an actor needs a DOM node or an R3F object, the component hands it over with a ref callback. The callback sends an attach event with the element, or an adapter built around it, and a detach event when React passes `null`; on detach it may read an actor's current value through a narrow `select*` reader, to carry to the next attach. The actor spawns callback logic around the element, and that logic owns every listener, timer and teardown. The ref callback never subscribes and never keeps the element. Graphics' `sectionInputAttached` and `viewportGizmoAttached` follow this pattern (charter D4, ruled 2026-11-12). A renderer root arrives the same way from R3F's `onCreated`: the canvas sends the canvas actor `hostCreated` and graphics `controlsAttached` from there, and its surface's ref callback sends them again when a Suspense boundary re-attaches the surface, or reports a lost context as `contextLost`.
 
 ```typescript
-// Send events when props change
-useEffect(() => {
-  actorRef.send({ type: 'loadProject', projectId });
-}, [actorRef, projectId]);
+const attachInput = useCallback<RefCallback<THREE.Group>>(
+  (group) => {
+    graphics.send(
+      group
+        ? { type: 'sectionInputAttached', inputId, adapter: createSectionInputAdapter({ group, graphics }) }
+        : { type: 'sectionInputDetached', inputId },
+    );
+  },
+  [graphics, inputId],
+);
 ```
 
 ### Use `key` prop for identity-based remounting
 
-When a component wraps a machine whose identity changes (e.g., different project ID), use a React `key` prop to force unmount/remount:
-
-```typescript
-<ProjectProvider key={projectId} projectId={projectId}>
-  {children}
-</ProjectProvider>
-```
-
-This ensures:
-
-1. Old actor is stopped (cleanup runs)
-2. New actor is created with fresh input
+When a component wraps a machine whose identity changes (e.g., a different project), key the provider by that identity so the old actor stops and a new one is created with fresh input.
 
 ### Actor propagation
 
-Pass actor references via React context or props, not by reaching into parent machine context:
-
-```typescript
-// CORRECT: Provider exposes actor ref via context
-<ProjectContext.Provider value={{ projectRef: actorRef }}>
-  {children}
-</ProjectContext.Provider>
-
-// INCORRECT: Reaching into parent machine internals
-const kernelRef = parentActor.getSnapshot().context.kernelRef;
-```
+Pass actor references via React context or props, not by reaching into a parent machine's context.
 
 ---
 
 ## Communication Patterns
 
-### Parent-to-child: `sendTo`
+### Parent-to-child and child-to-parent: `enq.sendTo`
+
+Pass the parent ref through `input` rather than relying on an implicit parent. Guard refs that may be absent:
 
 ```typescript
-sendTo(({ context }) => context.childRef, { type: 'doWork', data: 42 });
-```
-
-### Child-to-parent: `sendTo` with parent ref (preferred over `sendParent`)
-
-Pass the parent ref via `input` to avoid tight coupling:
-
-```typescript
-// Parent spawns child with self reference
-entry: assign({
-  childRef: ({ spawn, self }) =>
-    spawn('child', {
-      input: { parentRef: self },
-    }),
-});
-
-// Child sends to parent via stored ref
-entry: sendTo(({ context }) => context.parentRef, { type: 'childReady' });
-```
-
-### Guard `sendTo` targets against undefined
-
-When the target actor ref may be undefined in some machine states, use `enqueueActions` with a guard:
-
-```typescript
-// RISKY — parentRef may be undefined
-sendTo(({ context }) => context.parentRef!, { type: 'event' });
-
-// SAFE — guarded
-enqueueActions(({ context, enqueue }) => {
+entry: ({ context }, enq) => {
   if (context.parentRef) {
-    enqueue.sendTo(context.parentRef, { type: 'event' });
+    enq.sendTo(context.parentRef, { type: 'childReady' });
   }
-});
+},
 ```
 
-### Decoupled communication: `emit`
+### Decoupled communication: `enq.emit`
 
-Use `emit` for events that parent components observe via `.on()` subscriptions, without requiring the machine to know who is listening:
-
-```typescript
-// Machine emits
-emitProjectLoaded: (emit(({ event }) => ({
-  type: 'projectLoaded',
-  project: event.output,
-})),
-  // React component subscribes
-  useEffect(() => {
-    const sub = actorRef.on('projectLoaded', (event) => {
-      // Handle event
-    });
-    return () => sub.unsubscribe();
-  }, [actorRef]));
-```
+Use emitted events for observers that subscribe with `actor.on(type, handler)`; the machine does not know who listens.
 
 ---
 
 ## Testing
 
-### Test machines with `createActor`
+### Test machines with the shared harness
+
+Owner machine tests use `@taucad/xstate-testing` (MC-R23): `guardActors` on every actor, `StepClock` for every timer, the shared fakes for scripted effects, and one enumeration test per machine.
 
 ```typescript
-import { createActor, waitFor } from 'xstate';
+import { StepClock } from '@taucad/xstate-testing/clock';
+import { createFakePromiseActors } from '@taucad/xstate-testing/fakes';
+import { guardActors } from '@taucad/xstate-testing/inspect';
+import { unansweredEvents, unreachedStates } from '@taucad/xstate-testing/paths';
 
-test('transitions to ready on successful load', async () => {
-  const actor = createActor(
-    myMachine.provide({
-      actors: {
-        loadData: fromSafeAsync(async () => {
-          return { type: 'dataLoaded', items: [1, 2, 3] };
-        }),
-      },
-    }),
-    { input: { id: 'test-123' } },
-  );
-
+it('should refuse a cut while a turn holds the checkout', async () => {
+  const guard = guardActors({ ignore: { checkout: checkoutIgnoredEvents } });
+  const clock = new StepClock();
+  const promises = createFakePromiseActors();
+  const actor = createActor(checkoutMachine.provide({ actors: { cut: promises.actor('cut') /* … */ } }), {
+    input,
+    clock,
+    inspect: guard.inspect,
+  });
   actor.start();
-  actor.send({ type: 'load' });
+  // …drive the rows; take only what the row expects: expect(guard.take('deadLetter')).toEqual([]);
+});
 
-  const snapshot = await waitFor(actor, (s) => s.matches('ready'));
-  expect(snapshot.context.items).toHaveLength(3);
-
-  actor.stop();
+it('should answer every public event in every reachable state', () => {
+  const options = {
+    input,
+    events: publicEvents,
+    limit: 500,
+    serializeState: (s: AnyMachineSnapshot) => JSON.stringify(s.value),
+  };
+  expect(unansweredEvents(checkoutMachine, { ...options, ignore: checkoutIgnoredEvents })).toEqual([]);
+  expect(unreachedStates(checkoutMachine, options)).toEqual([]);
 });
 ```
 
-### Use `machine.provide()` for dependency injection
+A fold's test is one line: `expect(foreignEventChanges(chatProjectionLogic)).toEqual([])`. A test that needs runtime schema checks runs `createActor(validated(machine), …)` (MC-R30).
 
-Override actors, actions, and guards for testing:
+- A test that stops an actor holds it as `Actor<…>`.
+- `send` is a bound getter: spy on it with `vi.spyOn(actor, 'send', 'get').mockReturnValue(spy)`, wrapping `actor.send` to keep calling through.
+- Graph paths from `xstate/graph` begin with the `@xstate.init` event (T17).
+- Assert behaviour, not config shape: v6 has no named actions to find in `machine.config`.
 
-```typescript
-const testMachine = machine.provide({
-  actors: {
-    fetchData: fromSafeAsync(async () => {
-      return { type: 'dataFetched', data: mockData };
-    }),
-  },
-  actions: {
-    logAnalytics: () => {
-      /* no-op */
-    },
-  },
-  guards: {
-    isAuthenticated: () => true,
-  },
-});
-```
+### Test helpers in isolation
 
-### Test guards and actions in isolation
-
-Export guard and action functions for direct unit testing:
-
-```typescript
-// In machine file
-export function isProjectIdChanging({ context, event }: GuardArgs): boolean {
-  return event.projectId !== context.projectId;
-}
-
-// In test file
-test('isProjectIdChanging returns true for different IDs', () => {
-  expect(
-    isProjectIdChanging({
-      context: { projectId: 'a' },
-      event: { type: 'loadProject', projectId: 'b' },
-    }),
-  ).toBe(true);
-});
-```
+Export pure patch and predicate helpers from the machine module when they carry non-trivial logic, and unit-test them directly.
 
 ---
 
@@ -682,38 +698,25 @@ test('isProjectIdChanging returns true for different IDs', () => {
 
 ### Minimize context size
 
-Large context objects increase serialization overhead for devtools, persistence, and snapshot operations. If a value is only needed inside an action (not for state decisions), pass it through events rather than storing it in context.
+Large context objects increase snapshot and devtools overhead. If a value is only needed to compute one transition, pass it through the event.
 
 ### Use `useSelector` with stable selectors
 
-Define selectors outside components or memoize them to prevent unnecessary re-renders:
-
-```typescript
-// CORRECT: Stable selector reference
-const selectCount = (state: SnapshotFrom<typeof myMachine>) => state.context.count;
-
-function MyComponent({ actorRef }: Props): React.JSX.Element {
-  const count = useSelector(actorRef, selectCount);
-  return <span>{count}</span>;
-}
-```
+Define selectors outside components (or memoize them) to prevent unnecessary re-renders.
 
 ### Limit spawned actor count
 
-Each spawned actor is a live object with subscriptions. For variable-count actors (geometry units, graphics views), set reasonable limits and clean up eagerly.
+Each spawned actor is a live object with subscriptions. For variable-count actors (geometry units, graphics views), set limits and stop them eagerly.
 
 ---
 
 ## References
 
-- [XState v5 Documentation](https://stately.ai/docs)
-- [XState v5 Actions](https://stately.ai/docs/actions)
-- [XState v5 Actors](https://stately.ai/docs/actors)
-- [XState v5 Invoke](https://stately.ai/docs/invoke)
-- [XState v5 Callback Actors](https://stately.ai/docs/callback-actors)
-- [XState v5 React Integration](https://stately.ai/docs/xstate-react)
-- [Naming Conventions](https://stately.ai/blog/2024-01-23-state-machines-whats-in-a-name)
-- [Migration to v5](https://stately.ai/blog/2024-02-02-migrating-machines-to-xstate-v5)
+- [XState v6 migration guide](https://stately.ai/docs/xstate/v6/xstate-v5-to-v6)
+- [XState documentation](https://stately.ai/docs)
+- [XState v6 Migration Blueprint](../research/xstate-v6-migration-blueprint.md) — findings K-10–K-17, S12–S15, T15–T19, RB1-1
+- [Verified Agent Substrate Charter](../research/verified-agent-substrate-charter.md) — D1, D12–D16, D18
+- [Agent Substrate Machine Contract Blueprint](../research/agent-substrate-machine-contract-blueprint.md) — how each MC rule is enforced (lint, harness, conformance)
 - [Worker Policy](./worker-policy.md)
 - [XState Patterns Research](../research/xstate-patterns.md)
 - [TypeScript Policy](./typescript-policy.md) — type assertion rules, `as never` ban, mock typing patterns

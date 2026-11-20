@@ -1,0 +1,244 @@
+export { startHostDaemon } from '#host-daemon.js';
+export type {
+  HostDaemonAgentOptions,
+  HostDaemonCloseResult,
+  HostDaemonEvent,
+  HostDaemonHandle,
+  HostDaemonOptions,
+  HostSessionCloseCode,
+} from '#host-daemon.js';
+export type {
+  HostJobTaskProfile,
+  HostJobWorkerCloseResult,
+  HostJobWorkerFactory,
+  HostJobWorkerHandle,
+  HostJobWorkerStartInput,
+} from '#job-worker.js';
+export { startHostJobAttemptHost } from '#job-attempt-host.js';
+export type {
+  HostJobAttemptHostCloseResult,
+  HostJobAttemptHostEvent,
+  HostJobAttemptHostHandle,
+  HostJobAttemptIdentity,
+  HostJobAttemptLease,
+  HostJobCapabilityValue,
+  HostJobCoordinatorPort,
+  HostJobExecutionOutcome,
+  HostJobExecutor,
+  HostJobFailure,
+  HostJobProgress,
+  HostJobRunnerRegistration,
+} from '#job-attempt-host.js';
+export type { HostCredential } from '#credential-store.js';
+export { defaultConfigDirectory, defaultDependencyStore } from '#credential-store.js';
+export { computeStoreWorkspace } from '#compute-workspace.js';
+export {
+  handOffMintPath,
+  handOffSessionPath,
+  hostDescriptorPath,
+  hostSessionCookieName,
+  startAgentServer,
+} from '#agent-server.js';
+export type { AgentServerHandle, AgentServerOptions } from '#agent-server.js';
+export { startRunReporter } from '#run-reporter.js';
+export type { RunReporter, RunReporterOptions } from '#run-reporter.js';
+export type { HostRunState } from '#host.schemas.js';
+export { hostRevisionActor } from '#revision-actor.js';
+export type { HostRevisionActorInput, HostRevisionActorResolver } from '#revision-actor.js';
+export {
+  createProjectRevisionPort,
+  createProjectRevisions,
+  openProjectRevisions,
+  projectCloseMilliseconds,
+  projectReleaseMilliseconds,
+  requireRevisionToolchain,
+} from '#revisions.js';
+export type {
+  HostRevisionEvent,
+  ProjectRevisionVerbs,
+  ProjectRevisions,
+  ProjectRevisionsOptions,
+  RevisionDiscardOutcome,
+  RevisionFileRead,
+  RevisionOpenOutcome,
+  RevisionPublishOutcome,
+  RevisionBackupOutcome,
+  RevisionSaveOutcome,
+  RevisionSwitchOutcome,
+  RevisionTagOutcome,
+  TurnCheckout,
+  TurnConflictedEvent,
+  TurnFailedEvent,
+  TurnFinalizedEvent,
+} from '#revisions.js';
+export type { RevisionEngineFailure, RevisionEngineFailureCode } from '#revision-engine-failures.js';
+export { isolationHeaders, serveStaticUi } from '#static-ui.js';
+export type { StaticUiHandler, StaticUiOptions, StaticUiWasmMount } from '#static-ui.js';
+export { createProjectHost, createProjectHostActor } from '#project-host.js';
+export type {
+  ChatObservationSources,
+  ProjectFileSystem,
+  ProjectHost,
+  ProjectHostActor,
+  ProjectHostActorOptions,
+  ProjectHostCommand,
+  ProjectHostOptions,
+  ProjectHostRuntimeClient,
+  ShellCheckouts,
+} from '#project-host.js';
+export { keyedResource } from '#keyed-resource.js';
+export { openLocalParameterActors } from '#local-parameters.js';
+export type { LocalParameterActors } from '#local-parameters.js';
+export type { KeyedIncarnation, KeyedResource } from '#keyed-resource.js';
+export {
+  createMachineSecretStore,
+  createNodeMachineRuntime,
+  defaultMachineProviders,
+  localMachineFacet,
+  machineAgentGrants,
+  machineRouteGrants,
+  openMachineHostIdentity,
+  probeCertificateTrust,
+  readProjectId,
+} from '#machine-host.js';
+export type { CreateNodeMachineRuntimeOptions, MachineHostIdentity, MachineSecretStore } from '#machine-host.js';
+export {
+  agentMachineFacet,
+  observeAdmissionRefusals,
+  openLocalMachines,
+  openSharedMachineHost,
+} from '#local-machines.js';
+export type {
+  AdmissionRefusalReport,
+  LocalMachines,
+  LocalMachinesRefusal,
+  OpenLocalMachinesOptions,
+  OpenSharedMachineHostOptions,
+  SharedMachineHost,
+} from '#local-machines.js';
+export { keepAwakeWhileStreaming, platformKeepAwakeBlocker } from '#keep-awake.js';
+export type { KeepAwakeBlocker, KeepAwakeRelease, KeepAwakeWhileStreamingOptions } from '#keep-awake.js';
+export { completeMachineBinding } from '#machine-binding-ceremony.js';
+export type { CompleteMachineBindingInput, MachineBindingCeremonyEvent } from '#machine-binding-ceremony.js';
+export {
+  createFileSecretVault,
+  createKeychainSecretVault,
+  createMemorySecretVault,
+  openSecretVault,
+} from '#secret-vault.js';
+export type { SecretVault, SecretVaultFacts, SecretVaultKind, SecretVaultWriteOptions } from '#secret-vault.js';
+export { createHostToolRegistry } from '#agent-tools.js';
+export type { HostToolRegistryOptions } from '#agent-tools.js';
+export { prepareKernelToolName } from '#prepare-kernel-tool.js';
+export type { HostPreparableKernel, HostPrepareKernel, HostPrepareKernelProgress } from '#agent-tools.js';
+export type {
+  RuntimeChildClosureRequest,
+  RuntimeChildNativeKernels,
+  RuntimeChildRuntimeDamage,
+  RuntimeChildWorker,
+  RuntimeChildWorkerLaunch,
+} from '#runtime-child-supervisor.js';
+export {
+  acpAdapterEnvironment,
+  acpAdapterOverrideVariable,
+  acpAgentProfiles,
+  acpCliProbeTimeout,
+  acpEnvironmentAllowlist,
+  acpEnvironmentPrefixAllowlist,
+  acpLiveSessionLimit,
+  acpLoginLaunch,
+  acpModelProbeTimeout,
+  acpNativeToolNamePaths,
+  acpSessionIdleTimeout,
+  createAcpExternalAgentPort,
+  discoverAcpAgents,
+  externalAgentDescriptors,
+  modelChoice,
+  openAcpSession,
+  probeAcpAgentModels,
+  probeAcpAgents,
+  resolveAcpAdapterExecutable,
+  resolveAcpAdapters,
+  spawnAcpAdapter,
+  tauMcpServerName,
+} from '#acp/index.js';
+export type {
+  AcpAdapter,
+  AcpAdapterRefusal,
+  AcpAgentDiscovery,
+  AcpAgentProfile,
+  AcpExecutableFileSystem,
+  AcpExternalAgentPortOptions,
+  AcpPromptTurn,
+  AcpAgentFacts,
+  AcpLimitReset,
+  AcpLoginLaunch,
+  AcpSession,
+  AcpShellCommand,
+  AcpSupportedPlatform,
+  AcpTurnOutcome,
+  AcpWireFrame,
+  AgentMediaTranscoder,
+  AgentMediaTranscoding,
+  OpenAcpSessionOptions,
+  ReviewedAcpAgentProfile,
+  SpawnedAcpAdapter,
+} from '#acp/index.js';
+export {
+  createHostMcpEndpoint,
+  hostMcpAllowedTools,
+  hostMcpCapabilityLifetime,
+  hostMcpLeaseCeiling,
+  HostMcpCapabilityError,
+  hostMcpCapabilityPrefix,
+  serveLocalHostMcp,
+} from '#mcp-server.js';
+/* `tau mcp` reads the agent plugin's launcher descriptor with the parser of the server that names it. */
+export { parseTauMcpLaunch } from '@taucad/mcp';
+export type { TauMcpRuntime } from '@taucad/mcp';
+export type {
+  HostMcpCapabilityClaims,
+  HostMcpEndpoint,
+  HostMcpEndpointOptions,
+  LocalHostMcp,
+  LocalHostMcpOptions,
+} from '#mcp-server.js';
+export {
+  createShellService,
+  isShellError,
+  probeHostShell,
+  shellApprovalKey,
+  shellApprovalPrompt,
+  shellLimits,
+  shellLogDirectory,
+  shellNotStartedCodes,
+} from '@taucad/shell-service';
+export type {
+  ApprovedBy,
+  HostShell,
+  PermissionMode,
+  ProbeHostShellOptions,
+  ShellAccess,
+  ShellApprovalPayload,
+  ShellApprovalRecord,
+  ShellCheckout,
+  ShellExecutionHolds,
+  ShellHoldAnswer,
+  ShellIdentity,
+  ShellInput,
+  ShellLog,
+  ShellNotStartedCode,
+  ShellOutput,
+  ShellProbe,
+  ShellProjectExecutions,
+  ShellRunRequest,
+  ShellServiceOptions,
+  ShellStream,
+  ShellUnavailable,
+  ShellUnavailableCode,
+  TerminalAccess,
+  TerminalRefusalCode,
+  TerminalSession,
+  TerminalSessionOutcome,
+  TerminalSessionRequest,
+} from '@taucad/shell-service';

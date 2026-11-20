@@ -1,15 +1,41 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { renderHook } from '@testing-library/react';
-import type { ChatSnapshot, ContextPayload } from '@taucad/chat';
+import { describe, expect, expectTypeOf, it, vi, beforeEach } from 'vitest';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import type { CadAgentConfigInput, ChatSnapshot, ContextPayload } from '@taucad/chat';
+import type { GoalId, LanguageId, PersonField } from '@taucad/preferences';
+import { cookieName } from '@taucad/ui-core/constants/cookie.constants';
 import type { KernelId } from '@taucad/types/constants';
 import { resolveKernel } from '@taucad/types/constants';
-import { useCadAgentConfig } from '#hooks/use-cad-agent-config.js';
+import {
+  awaitAgentHostAvailability,
+  awaitBrowserAgentHostAvailability,
+  resetBrowserAgentHostAvailability,
+  useAgentHostPlacements,
+  useBrowserAgentHostProjectAvailability,
+  useCadAgentConfig,
+} from '#hooks/use-cad-agent-config.js';
 import { useChatComposer } from '#hooks/active-chat-provider.js';
 import type { ChatComposerContextValue } from '#hooks/active-chat-provider.js';
 import { useChatSelector } from '#hooks/use-chat.js';
-import { useCookie } from '#hooks/use-cookie.js';
+import { store as cookieStore, useCookie } from '#hooks/use-cookie.js';
+import type * as CookieModule from '#hooks/use-cookie.js';
 import { useChatSnapshot } from '#hooks/use-chat-snapshot.js';
 import { useContextPayload } from '#hooks/use-context-payload.js';
+import { probeBrowserAgentHostCapability } from '#services/agent-host-client.js';
+import { metaConfig } from '#constants/meta.constants.js';
+
+const capabilityHarness = vi.hoisted(() => ({ readError: undefined as Error | undefined, supported: true }));
+const durabilityHarness = vi.hoisted(() => ({ value: 'transactional-rewrite' }) as const);
+const bridgeHarness = vi.hoisted(() => {
+  const open = vi.fn();
+  const syncProjectRoots = vi.fn(async () => undefined);
+  return {
+    open,
+    syncProjectRoots,
+    fileManagerRef: {
+      getSnapshot: () => ({ context: { rootDirectory: '/projects/project-test', openFileSystemBridge: open } }),
+    },
+  };
+});
 
 vi.mock('#hooks/active-chat-provider.js', () => ({
   useChatComposer: vi.fn(),
@@ -17,7 +43,8 @@ vi.mock('#hooks/active-chat-provider.js', () => ({
 vi.mock('#hooks/use-chat.js', () => ({
   useChatSelector: vi.fn(),
 }));
-vi.mock('#hooks/use-cookie.js', () => ({
+vi.mock('#hooks/use-cookie.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof CookieModule>()),
   useCookie: vi.fn(),
 }));
 vi.mock('#hooks/use-chat-snapshot.js', () => ({
@@ -26,24 +53,135 @@ vi.mock('#hooks/use-chat-snapshot.js', () => ({
 vi.mock('#hooks/use-context-payload.js', () => ({
   useContextPayload: vi.fn(),
 }));
+type HarnessProfile = { version: 1; goals: string[]; tool?: string; languages: string[] };
+const personHarness = vi.hoisted((): { onboarding: boolean; profile: HarnessProfile } => ({
+  onboarding: false,
+  profile: { version: 1, goals: [], languages: [] },
+}));
+vi.mock('#flags/use-feature.js', () => ({
+  useFeature: (flag: string) => (flag === 'onboarding' ? personHarness.onboarding : false),
+}));
+vi.mock('#preferences/use-person-record.js', () => ({
+  usePersonRecord: () => ({ profile: personHarness.profile }),
+}));
+vi.mock('#hooks/use-project.js', () => ({ useProject: () => ({ projectId: 'project-test' }) }));
+vi.mock('#hooks/use-file-manager.js', () => ({
+  useFileManager: () => ({
+    fileManagerRef: bridgeHarness.fileManagerRef,
+    workspace: { syncProjectRoots: bridgeHarness.syncProjectRoots },
+  }),
+  useOptionalFileManager: () => ({
+    fileManagerRef: bridgeHarness.fileManagerRef,
+    workspace: { syncProjectRoots: bridgeHarness.syncProjectRoots },
+  }),
+}));
+vi.mock('@taucad/files-ui/filesystem/handle-store', () => ({
+  getProjectFileSystemConfig: async () => ({
+    projectId: 'project-test',
+    backend: 'indexeddb',
+    providerBasePath: 'project-test',
+  }),
+}));
+vi.mock('#providers/chat-workspace-authority-provider.js', () => ({
+  waitForRootedBridgeOpener: async (fileManagerRef: typeof bridgeHarness.fileManagerRef) =>
+    fileManagerRef.getSnapshot().context,
+  readRootedBridgeCapabilities: async (openConnection: () => { dispose(): void }) => {
+    openConnection().dispose();
+    if (capabilityHarness.readError !== undefined) {
+      throw capabilityHarness.readError;
+    }
+    return {
+      writable: true,
+      persistent: true,
+      quotaBased: true,
+      durability: durabilityHarness.value,
+    };
+  },
+}));
+vi.mock('#services/agent-host-client.js', () => ({
+  getBrowserAgentHostCapability: () =>
+    capabilityHarness.supported ? { supported: true } : { supported: false, reason: 'STORAGE_NOT_WRITABLE' },
+  probeBrowserAgentHostCapability: vi.fn(async () =>
+    capabilityHarness.supported ? { supported: true } : { supported: false, reason: 'STORAGE_NOT_WRITABLE' },
+  ),
+  isBrowserAgentHostProviderKind: (providerKind: string) => providerKind === 'openai' || providerKind === 'anthropic',
+}));
+
+/** The host directory's refusal, recorded by discovery exactly as the real one does. */
+const directoryHarness = vi.hoisted(() => ({
+  outage: undefined as string | undefined,
+  refusal: 'offline',
+  /** Targets each listing answers, shifted one per call so a retry can differ. */
+  listings: [] as Array<readonly unknown[]>,
+  calls: 0,
+  /** Whether the last listing lost a source, as the real module records it. */
+  incomplete: false,
+}));
+vi.mock('#lib/agent-host-placement.js', () => ({
+  listAgentHostPlacements: async () => {
+    directoryHarness.calls += 1;
+    directoryHarness.outage = directoryHarness.refusal;
+    return directoryHarness.listings.shift() ?? [];
+  },
+  hostDirectoryOutage: () => directoryHarness.outage,
+  hostPlacementsIncomplete: () => directoryHarness.incomplete,
+  onLoopbackAgentHostsChanged: () => () => undefined,
+}));
 
 const noop = (): void => undefined;
+
+/**
+ * A persisted Tau execution still carrying the retired `revision` ride-along
+ * (the mode moved to `ChatExecutionTarget` in V18). The assembler must carry
+ * whatever the row holds through verbatim rather than rewriting it.
+ */
+const branchExecutionFields = { kind: 'tau', model: 'openai-gpt-5.5', revision: 'branch' };
+const branchExecution = branchExecutionFields as unknown as ChatComposerContextValue['execution']['execution'];
 
 const useChatComposerMock = vi.mocked(useChatComposer);
 const useChatSelectorMock = vi.mocked(useChatSelector);
 const useCookieMock = vi.mocked(useCookie);
+const { useCookie: actualUseCookie } = await vi.importActual<typeof CookieModule>('#hooks/use-cookie.js');
 const useChatSnapshotMock = vi.mocked(useChatSnapshot);
 const useContextPayloadMock = vi.mocked(useContextPayload);
 
 type CookieReturn = ReturnType<typeof useCookie>;
 
-const buildComposer = (overrides: { modelId?: string; kernelId?: KernelId }): ChatComposerContextValue => {
+const buildComposer = (overrides: {
+  modelId?: string;
+  providerKind?: 'anthropic' | 'ollama' | 'openai';
+  kernelId?: KernelId;
+  execution?: ChatComposerContextValue['execution']['execution'];
+}): ChatComposerContextValue => {
   const kernelId: KernelId = overrides.kernelId ?? 'replicad';
+  const modelId = overrides.modelId ?? 'openai-gpt-5.5';
+  const providerKind = overrides.providerKind ?? 'openai';
   return {
     draftActorRef: { send: vi.fn() },
-    model: { modelId: overrides.modelId ?? 'openai-gpt-5.5', model: undefined, setActiveModel: noop },
-    kernel: { kernelId, kernel: resolveKernel(kernelId), setActiveKernel: noop },
+    model: {
+      modelId,
+      model: {
+        id: modelId,
+        provider: { id: providerKind, name: providerKind },
+        isResolved: true,
+        isNamePending: false,
+        model: { provider: { id: providerKind, name: providerKind } },
+      },
+      setActiveModel: noop,
+    },
+    execution: {
+      execution: overrides.execution ?? { kind: 'tau', model: modelId },
+      setActiveExecution: noop,
+    },
+    kernel: {
+      kernelId,
+      kernel: resolveKernel(kernelId),
+      setActiveKernel: noop,
+      preference: kernelId,
+      setActivePreference: noop,
+    },
     status: 'ready',
+    agentActivity: 'ready',
     stop: noop,
     contextUsage: undefined,
     session: undefined,
@@ -64,6 +202,16 @@ const mountChatSelectorMocks = (overrides: { draftMode?: string; draftToolChoice
 
 beforeEach(() => {
   vi.clearAllMocks();
+  personHarness.onboarding = false;
+  personHarness.profile = { version: 1, goals: [], languages: [] };
+  resetBrowserAgentHostAvailability();
+  directoryHarness.outage = undefined;
+  directoryHarness.listings.length = 0;
+  directoryHarness.calls = 0;
+  directoryHarness.incomplete = false;
+  capabilityHarness.supported = true;
+  capabilityHarness.readError = undefined;
+  bridgeHarness.open.mockReturnValue({ port: new MessageChannel().port1, dispose: vi.fn() });
   useChatComposerMock.mockReturnValue(buildComposer({}));
   mountChatSelectorMocks();
   useCookieMock.mockReturnValue([true, noop, noop] as unknown as CookieReturn);
@@ -72,18 +220,301 @@ beforeEach(() => {
 });
 
 describe('useCadAgentConfig', () => {
+  it('registers the active project root before reading rooted bridge capabilities', async () => {
+    const { result } = renderHook(() => useBrowserAgentHostProjectAvailability('openai'));
+
+    // Pending is not unsupported: the probe has not answered yet, and a
+    // dispatch in this window must wait rather than be refused or rerouted.
+    expect(result.current).toEqual({ status: 'pending' });
+    await waitFor(() => {
+      expect(result.current).toMatchObject({ status: 'available', durability: 'transactional-rewrite' });
+    });
+    expect(bridgeHarness.syncProjectRoots).toHaveBeenCalledOnce();
+    expect(bridgeHarness.syncProjectRoots.mock.invocationCallOrder[0]).toBeLessThan(
+      bridgeHarness.open.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('resolves an unavailable rooted bridge without an unhandled rejection', async () => {
+    capabilityHarness.readError = new Error('Rooted filesystem bridge is unavailable.');
+    const unhandled = vi.fn();
+    globalThis.addEventListener('unhandledrejection', unhandled);
+
+    try {
+      const { result } = renderHook(() => useBrowserAgentHostProjectAvailability('openai'));
+
+      await waitFor(() => {
+        expect(bridgeHarness.open).toHaveBeenCalled();
+      });
+      await new Promise<void>((resolve) => {
+        globalThis.setTimeout(resolve, 0);
+      });
+      expect(result.current).toEqual({
+        status: 'unavailable',
+        reason: 'Rooted filesystem bridge is unavailable.',
+      });
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      globalThis.removeEventListener('unhandledrejection', unhandled);
+    }
+  });
+
   it('should stamp profile=cad and compose every field from its source hooks', () => {
     const { result } = renderHook(() => useCadAgentConfig());
 
     expect(result.current).toEqual({
       profile: 'cad',
-      model: 'openai-gpt-5.5',
+      execution: { kind: 'tau', model: 'openai-gpt-5.5' },
       kernel: 'replicad',
       mode: 'agent',
       toolChoice: 'auto',
       testingEnabled: true,
       snapshot: undefined,
       contextPayload: undefined,
+    });
+  });
+
+  it('never downgrades the execution — the browser host is the only Tau placement', async () => {
+    useChatComposerMock.mockReturnValue(buildComposer({ execution: branchExecution }));
+
+    const { result } = renderHook(() => useCadAgentConfig());
+
+    // The assembler is placement-free: it carries the execution through
+    // verbatim. Capability is a *gate* on dispatch, never a silent rewrite.
+    expect(result.current.execution).toEqual({ kind: 'tau', model: 'openai-gpt-5.5', revision: 'branch' });
+    await waitFor(() => {
+      expect(result.current.execution).toEqual({ kind: 'tau', model: 'openai-gpt-5.5', revision: 'branch' });
+    });
+  });
+
+  it('reports the probe reason when this project cannot host the agent log', async () => {
+    capabilityHarness.supported = false;
+
+    const { result } = renderHook(() => useBrowserAgentHostProjectAvailability('openai'));
+
+    await waitFor(() => {
+      expect(probeBrowserAgentHostCapability).toHaveBeenCalledOnce();
+    });
+    await waitFor(() => {
+      expect(result.current).toEqual({
+        status: 'unavailable',
+        reason:
+          'The Tau agent can’t save its work in this project’s storage. Check that Tau can write to this project’s folder.',
+      });
+    });
+  });
+
+  it('resolves availability for the Anthropic gateway wire', async () => {
+    const { result } = renderHook(() => useBrowserAgentHostProjectAvailability('anthropic'));
+
+    await waitFor(() => {
+      expect(result.current).toMatchObject({ status: 'available' });
+    });
+    expect(probeBrowserAgentHostCapability).toHaveBeenCalledWith({ durability: 'transactional-rewrite' });
+  });
+
+  it('refuses a model whose provider has no gateway wire', async () => {
+    const { result } = renderHook(() => useBrowserAgentHostProjectAvailability('ollama'));
+
+    await waitFor(() => {
+      expect(result.current).toEqual({
+        status: 'unavailable',
+        reason: 'Tau cannot run the ollama provider wire in your browser. Pick a different model.',
+      });
+    });
+  });
+
+  it('stays pending for a model whose catalog row has not loaded yet', async () => {
+    // `ResolvedModel.provider` reads `unknown` until `GET /v1/models` answers.
+    // Refusing that would refuse the seeded first turn, which dispatches first.
+    const { result } = renderHook(() => useBrowserAgentHostProjectAvailability('unknown'));
+
+    await waitFor(() => {
+      expect(probeBrowserAgentHostCapability).toHaveBeenCalled();
+    });
+    expect(result.current).toEqual({ status: 'pending' });
+  });
+
+  it('makes a dispatch wait out an in-flight probe instead of refusing it', async () => {
+    // The seeded first turn dispatches at chat load, before the probe answers.
+    // Awaiting availability is what keeps it on the host.
+    const settled = awaitBrowserAgentHostAvailability('project-test');
+    renderHook(() => useBrowserAgentHostProjectAvailability('openai'));
+
+    await expect(settled).resolves.toMatchObject({ status: 'available', durability: 'transactional-rewrite' });
+  });
+
+  it('answers a dispatch with the recorded reason once the probe refuses', async () => {
+    capabilityHarness.supported = false;
+    const settled = awaitBrowserAgentHostAvailability('project-test');
+    renderHook(() => useBrowserAgentHostProjectAvailability('openai'));
+
+    await expect(settled).resolves.toEqual({
+      status: 'unavailable',
+      reason:
+        'The Tau agent can’t save its work in this project’s storage. Check that Tau can write to this project’s folder.',
+    });
+  });
+
+  it('refuses a persisted daemon placement with the directory’s own message', async () => {
+    directoryHarness.outage = 'That computer is offline. Start `tau serve` on it.';
+
+    // The dispatch arrives after discovery has already given up, so nothing
+    // will ever publish that host's key: it must refuse now, not in 20 seconds.
+    await expect(awaitAgentHostAvailability({ projectId: 'project-test', hostId: 'device-1' }, 50)).resolves.toEqual({
+      status: 'unavailable',
+      reason: 'That computer is offline. Start `tau serve` on it.',
+    });
+  });
+
+  it('should judge a desktop placement by its discovery, never refuse it by build', async () => {
+    /* XD2: a Tau chat's stored `desktop` placement is local placement on every device, so admission never asks for
+     * it off-desktop; an external agent's refusal is decided from its execution before this wait. */
+    await expect(awaitAgentHostAvailability({ projectId: 'project-test', hostId: 'desktop' }, 10)).resolves.toEqual({
+      status: 'unavailable',
+      reason: 'Timed out while looking for that agent host.',
+    });
+  });
+
+  it('does not refuse this computer over a pairing directory it never appears in', async () => {
+    /* A desktop window that booted signed out: the listing answered 401 and
+     * left its message behind, then the person signed in and sent a turn on a
+     * project whose key nothing has published yet. */
+    directoryHarness.outage = 'Tau Host refused the request (UNAUTHORIZED).';
+    const settled = awaitAgentHostAvailability({ projectId: 'project-test', hostId: 'desktop' }, 1000);
+    directoryHarness.listings = [
+      [{ hostId: 'desktop', rung: 'in-process', label: 'This computer', workspaceRoot: '', online: true }],
+    ];
+
+    renderHook(() => useAgentHostPlacements());
+
+    await expect(settled).resolves.toMatchObject({ status: 'available' });
+  });
+
+  it('should not refuse a loopback daemon handed over by URL over a pairing directory outage', async () => {
+    directoryHarness.outage = 'Tau Host refused the request (UNAUTHORIZED).';
+    const hostId = 'loopback:http://127.0.0.1:7180';
+    const settled = awaitAgentHostAvailability({ projectId: 'project-test', hostId }, 1000);
+    directoryHarness.listings = [[{ hostId, rung: 5, label: 'studio-mini', workspaceRoot: '/w', online: true }]];
+
+    renderHook(() => useAgentHostPlacements());
+
+    await expect(settled).resolves.toMatchObject({ status: 'available' });
+  });
+
+  it('settles a dispatch already waiting when the directory fails under it', async () => {
+    // The seeded first turn waits on its host before discovery answers.
+    const settled = awaitAgentHostAvailability({ projectId: 'project-test', hostId: 'device-1' }, 50);
+
+    renderHook(() => useAgentHostPlacements());
+
+    await expect(settled).resolves.toEqual({ status: 'unavailable', reason: 'offline' });
+  });
+
+  it('should retry placement discovery after a failed listing', async () => {
+    /* The external-agent IPC failed, so this computer's row lost Claude Code
+     * and Codex. Discovery runs once per project, so without a retry they stay
+     * missing until the project changes. */
+    directoryHarness.incomplete = true;
+    const recovered = [
+      {
+        hostId: 'desktop',
+        rung: 'in-process',
+        label: 'This computer',
+        workspaceRoot: '',
+        online: true,
+        externalAgents: [{ id: 'codex' }],
+      },
+    ];
+    directoryHarness.listings = [[], recovered];
+
+    const { result } = renderHook(() => useAgentHostPlacements());
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+    expect(result.current.targets).toEqual([]);
+
+    globalThis.dispatchEvent(new Event('focus'));
+
+    await waitFor(() => {
+      expect(result.current.targets).toEqual(recovered);
+    });
+    expect(directoryHarness.calls).toBe(2);
+  });
+
+  describe('a refused external agent', () => {
+    /* The host refused an agent, then the person fixed it outside Tau: main's
+     * re-discovery has the agent back, but only a fresh listing carries it to a
+     * window that is already open. */
+    const host = (agent: Readonly<Record<string, unknown>>) => ({
+      hostId: 'desktop',
+      rung: 'in-process',
+      label: 'This computer',
+      workspaceRoot: '',
+      online: true,
+      externalAgents: [{ id: 'agent-a', displayName: 'Agent A', ...agent }],
+    });
+    const refused = host({ models: [], refusal: 'EXTERNAL_AGENT_UNAVAILABLE' });
+    const recovered = host({ models: [{ id: 'model-a', name: 'Model A' }], defaultModel: 'model-a' });
+
+    it('should list again when the window regains focus', async () => {
+      directoryHarness.listings = [[refused], [recovered]];
+
+      const { result } = renderHook(() => useAgentHostPlacements());
+      await waitFor(() => {
+        expect(result.current.targets).toEqual([refused]);
+      });
+
+      globalThis.dispatchEvent(new Event('focus'));
+
+      await waitFor(() => {
+        expect(result.current.targets).toEqual([recovered]);
+      });
+      expect(directoryHarness.calls).toBe(2);
+    });
+
+    it('should list again when a surface that shows it asks', async () => {
+      directoryHarness.listings = [[refused], [recovered]];
+
+      const { result } = renderHook(() => useAgentHostPlacements());
+      await waitFor(() => {
+        expect(result.current.targets).toEqual([refused]);
+      });
+
+      act(() => {
+        result.current.refresh();
+      });
+
+      await waitFor(() => {
+        expect(result.current.targets).toEqual([recovered]);
+      });
+      expect(directoryHarness.calls).toBe(2);
+    });
+
+    it('should not list again once every agent is available', async () => {
+      directoryHarness.listings = [[recovered], [refused]];
+
+      const { result } = renderHook(() => useAgentHostPlacements());
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false);
+      });
+
+      globalThis.dispatchEvent(new Event('focus'));
+      act(() => {
+        result.current.refresh();
+      });
+
+      expect(directoryHarness.calls).toBe(1);
+      expect(result.current.targets).toEqual([recovered]);
+    });
+  });
+
+  it('bounds the dispatch wait rather than hanging a turn forever', async () => {
+    const settled = await awaitBrowserAgentHostAvailability('project-never-probed', 1);
+
+    expect(settled).toEqual({
+      status: 'unavailable',
+      reason: 'Timed out while checking whether this project can run the agent in your browser.',
     });
   });
 
@@ -131,7 +562,6 @@ describe('useCadAgentConfig', () => {
   it('should forward a present snapshot/contextPayload verbatim from the source hooks', () => {
     const snapshot: ChatSnapshot = { activeFile: { path: 'src/main.ts', name: 'main.ts' } };
     const contextPayload: ContextPayload = {
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- AGENTS.md is a fixed shared-rules filename, not a JS identifier
       memory: { 'AGENTS.md': 'shared rules' },
     };
     useChatSnapshotMock.mockReturnValue(snapshot);
@@ -141,5 +571,75 @@ describe('useCadAgentConfig', () => {
 
     expect(result.current.snapshot).toBe(snapshot);
     expect(result.current.contextPayload).toBe(contextPayload);
+  });
+});
+
+describe('the person field', () => {
+  const answered: HarnessProfile = { version: 1, goals: ['exploring'], tool: 'fusion', languages: [] };
+  // The real hook over the real device store, holding only the switch: every other preference reads its default.
+  const mountSwitch = (isOn: boolean | undefined): void => {
+    const switchKey = `${metaConfig.cookiePrefix}${cookieName.chatCtxPerson}`;
+    if (isOn === undefined) {
+      cookieStore.remove(switchKey);
+    } else {
+      cookieStore.update(switchKey, isOn);
+    }
+    useCookieMock.mockImplementation(actualUseCookie);
+  };
+
+  it.each([
+    {
+      onboarding: true,
+      switch: undefined,
+      goals: ['mechanical', 'printing'],
+      person: { makes: ['printing', 'mechanical'], reads: ['python'] },
+    },
+    { onboarding: true, switch: true, goals: ['art'], person: { makes: ['art'], reads: ['python'] } },
+    { onboarding: true, switch: false, goals: ['art'], person: undefined },
+    { onboarding: false, switch: true, goals: ['art'], person: undefined },
+    { onboarding: false, switch: false, goals: ['art'], person: undefined },
+  ])(
+    'with onboarding $onboarding and the switch $switch, should send $person',
+    ({ onboarding, switch: isOn, goals, person }) => {
+      personHarness.onboarding = onboarding;
+      personHarness.profile = { version: 1, goals, languages: ['python'] };
+      mountSwitch(isOn);
+
+      const { result } = renderHook(() => useCadAgentConfig());
+
+      expect(result.current.person).toEqual(person);
+      expect('person' in result.current).toBe(person !== undefined);
+    },
+  );
+
+  it('should send no field when the answers say nothing the agent can use', () => {
+    personHarness.onboarding = true;
+    personHarness.profile = answered;
+    mountSwitch(true);
+
+    const { result } = renderHook(() => useCadAgentConfig());
+
+    expect('person' in result.current).toBe(false);
+  });
+
+  it("should send no field on an external agent's turn", () => {
+    personHarness.onboarding = true;
+    personHarness.profile = { version: 1, goals: ['art'], languages: [] };
+    mountSwitch(true);
+    useChatComposerMock.mockReturnValue(
+      buildComposer({ execution: { kind: 'acp', hostId: 'origin', agentId: 'codex' } }),
+    );
+
+    const { result } = renderHook(() => useCadAgentConfig());
+
+    expect('person' in result.current).toBe(false);
+  });
+
+  it('should keep the two enums in step with setup', () => {
+    expectTypeOf<NonNullable<CadAgentConfigInput['person']>['makes'][number]>().toEqualTypeOf<
+      Exclude<GoalId, 'exploring'>
+    >();
+    expectTypeOf<NonNullable<CadAgentConfigInput['person']>['reads'][number]>().toEqualTypeOf<LanguageId>();
+    expectTypeOf<PersonField>().toEqualTypeOf<NonNullable<CadAgentConfigInput['person']>>();
   });
 });

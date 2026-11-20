@@ -7,31 +7,38 @@
  * @public
  */
 
+/* oxlint-disable no-barrel-files/no-barrel-files -- public Node filesystem subpath */
+
 import { _fromNodeFsHandle } from '#transport/_internal/from-node-fs-handle.js';
 import type { RuntimeFileSystem } from '#filesystem/runtime-filesystem.js';
 import { wrapAsRuntimeFileSystem } from '#transport/_internal/runtime-filesystem-handle.js';
 
+export { nodeGrepMatcherWorker } from '#filesystem/node-grep-matcher-worker.js';
+
 /**
  * Create an opaque {@link RuntimeFileSystem} backed by Node.js
  * `fs.promises`. Pass the result to
- * `inProcessTransport({ fileSystem })`,
- * `nodeWorkerTransport({ fileSystem })`, or `webWorkerTransport({ fileSystem })`.
+ * `inProcessTransport({ runtime, fileSystem })`,
+ * `nodeWorkerTransport({ url, fileSystem })`, or `webWorkerTransport({ fileSystem })`.
  *
- * @param basePath - Root path for all filesystem operations.
+ * @param basePath - Host filesystem directory used as the runtime filesystem root.
+ * Runtime paths are resolved within this directory; the host path itself is
+ * not exposed to kernels, bundlers, or middleware.
  * @public
  *
  * @example <caption>Server-side Node.js filesystem</caption>
  * ```typescript
- * import { createRuntimeClient } from '@taucad/runtime';
+ * import { createRuntimeClient, defineRuntime } from '@taucad/runtime';
+ * import type { AnyPluginInstance } from '@taucad/runtime/plugin';
  * import { inProcessTransport } from '@taucad/runtime/transport/in-process';
  * import { fromNodeFs } from '@taucad/runtime/filesystem/node';
- * import { replicad } from '@taucad/runtime/kernels';
- * import { esbuild } from '@taucad/runtime/bundler';
  *
+ * declare const kernelPlugin: AnyPluginInstance;
+ * declare const bundlerPlugin: AnyPluginInstance;
+ * const runtime = defineRuntime({ plugins: [kernelPlugin, bundlerPlugin] });
  * const client = createRuntimeClient({
- *   kernels: [replicad()],
- *   bundlers: [esbuild()],
  *   transport: inProcessTransport({
+ *     runtime,
  *     fileSystem: fromNodeFs('/path/to/project'),
  *   }),
  * });

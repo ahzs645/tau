@@ -6,7 +6,7 @@
  *
  * Carries only the cross-environment author API: the
  * {@link defineRuntimeTransport} factory, the
- * {@link runtimeProtocolSchemas} wire validators, and shared types.
+ * {@link runtimeDocumentProtocolSchemas} wire validators, and shared types.
  * Every concrete transport ships behind its own topology-tagged
  * subpath so consumers signal their target topology at import time:
  *
@@ -14,6 +14,8 @@
  * import { inProcessTransport } from '@taucad/runtime/transport/in-process';
  * import { webWorkerTransport } from '@taucad/runtime/transport/web';
  * import { nodeWorkerTransport } from '@taucad/runtime/transport/node';
+ * import { webSocketTransport } from '@taucad/runtime/transport/websocket';
+ * import { webSocketHost } from '@taucad/runtime/transport/websocket-host';
  * ```
  *
  * Why split:
@@ -28,6 +30,10 @@
  *   - `inProcessTransport` is cross-env (`MessageChannel` is global
  *     in Node 15+ and every modern browser), so it co-locates at its
  *     own subpath for architectural symmetry.
+ *   - `webSocketTransport` (client) is browser-safe, while its
+ *     `webSocketHost` server half statically imports `ws` and
+ *     `node:http` — hence two subpaths, `websocket` and
+ *     `websocket-host`.
  *
  * The pattern mirrors the filesystem split
  * (`@taucad/runtime/filesystem/{node,browser}`).
@@ -38,7 +44,7 @@
 export { defineRuntimeTransport, definePassthroughTransport } from '#transport/define-runtime-transport.js';
 
 /**
- * Wire-protocol Zod validators for every {@link RuntimeProtocol} call and
+ * Wire-protocol Zod validators for every {@link RuntimeDocumentProtocol} call and
  * notify. The bundled transports (`inProcessTransport`,
  * `webWorkerTransport`, `nodeWorkerTransport`) wire these in by
  * default; external transports (e.g. `electronUtilityTransport`)
@@ -47,32 +53,35 @@ export { defineRuntimeTransport, definePassthroughTransport } from '#transport/d
  *
  * @public
  */
-export { runtimeProtocolSchemas } from '#types/runtime-protocol.schemas.js';
+export { runtimeDocumentProtocolSchemas } from '#types/runtime-document-protocol.schemas.js';
 
 export type {
   TransportPlugin,
   RuntimeTransportClient,
+  RuntimeTransportCloseResult,
+  RuntimeTransportTimeoutRecovery,
+  RuntimeTransportFacet,
   RuntimeTransportHost,
   RuntimeInitializePayload,
   RuntimeInitializeMemoryHandle,
-  EncodedGeometry,
-  EncodedFileBytes,
+  EncodedBinary,
   HostInitializeBindings,
   HostInitializeBindingsCore,
-  HostAbortBinding,
-  HostGeometryDeliveryBinding,
-  HostFileDeliveryBinding,
+  HostBinaryDeliveryBinding,
   TransportClientReady,
   TransportHostReady,
   TransportHelloPayload,
-  TransportDescriptor,
 } from '#transport/runtime-transport.types.js';
+export type { TransportDescriptor } from '#transport/runtime-transport-descriptor.types.js';
+
+export type { Channel, ChannelServerHandle, Port, RpcProtocol, WithTransferables } from '@taucad/rpc';
 
 export type {
   TransportPluginId,
   TransportId,
   TransportProtocol,
   TransportBindingsExtra,
+  RuntimeFromTransport,
   TransportClientOptions,
   TransportHostOptions,
 } from '#transport/transport-projections.js';

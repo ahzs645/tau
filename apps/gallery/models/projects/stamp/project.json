@@ -1,0 +1,54 @@
+{
+  "title": "Stamp",
+  "entry": "Main.scad",
+  "description": "SVG-driven stamp generator using uploaded artwork",
+  "category": "Personalization",
+  "tags": [
+    "stamp",
+    "svg",
+    "text"
+  ],
+  "hidden": false,
+  "image": "poster.jpg",
+  "uploads": [
+    {
+      "fileName": "yaa.svg",
+      "accept": ".svg,image/svg+xml",
+      "label": "Artwork (SVG)"
+    }
+  ],
+  "components": {
+    "parameter": "component_selection",
+    "label": "Component",
+    "options": [
+      {
+        "value": "stamp",
+        "label": "Stamp"
+      },
+      {
+        "value": "handle",
+        "label": "Handle"
+      }
+    ],
+    "variantIds": [
+      "openscad"
+    ]
+  },
+  "variants": [
+    {
+      "id": "openscad",
+      "entry": "Main.scad",
+      "runtimeKernel": "openscad"
+    },
+    {
+      "id": "opencascade",
+      "entry": "main.occt.ts",
+      "renderTimeout": 900000,
+      "notes": "Stamp plate and SVG artwork only; the handle and template knub are available in the OpenSCAD variant."
+    }
+  ],
+  "parityExclusions": {
+    "opencascade": "The original OCCT variant intentionally models the stamp plate and SVG strokes only; it excludes the SCAD knub/handle STL templates and uses a corrected artwork scale. See main.occt.ts source documentation."
+  },
+  "runtimeKernel": "openscad"
+}

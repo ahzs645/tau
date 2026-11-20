@@ -1,0 +1,67 @@
+# @taucad/three
+
+Framework-independent Three.js capabilities for Tau.
+
+`createThreeCameraRig` adapts `@taucad/camera` to two persistent native Three.js endpoint cameras. Exactly one `PerspectiveCamera` or `OrthographicCamera` is active semantically; both stay synchronized so endpoint handoff does not allocate a camera or use a hybrid camera facade.
+
+## Copy a live camera for capture
+
+`readThreeCameraState` copies the complete world-space state of a perspective or orthographic camera. Pass the target owned by your controls; Three.js cameras do not store it.
+
+```ts
+import { readThreeCameraState } from '@taucad/three/camera';
+
+const cameraState = readThreeCameraState({
+  camera,
+  target: controls.target,
+  renderFrame,
+});
+
+worker.postMessage({ type: 'capture', camera: cameraState });
+```
+
+The returned object contains physical-metre tuples, a frame ID, and tagged projection data. The active render frame is inverted at this boundary, so no native render-local coordinate or Three.js type crosses the worker or RPC boundary.
+
+## Drive native endpoint cameras
+
+```ts
+import { createCameraView } from '@taucad/camera';
+import { createThreeCameraRig } from '@taucad/three';
+
+const rig = createThreeCameraRig({
+  initialView: createCameraView({
+    frameId: 'tau:root',
+    requestedVerticalFieldOfView: 60,
+    target: [0, 0, 0],
+    direction: [1, -1, 0.7],
+    up: [0, 0, 1],
+    verticalSpan: 10,
+    perspectiveZoom: 1,
+    viewport: { width: 1280, height: 720, pixelRatio: 1 },
+    bounds: { min: [-1, -1, -1], max: [1, 1, 1] },
+  }),
+  renderFrame: {
+    anchorFrameId: 'tau:root',
+    originMeters: [0, 0, 0],
+    metersPerRenderUnit: 1,
+  },
+});
+
+rig.actorRef.start();
+rig.setRenderFrame(nextRenderFrame); // remaps both native cameras without changing physical state
+rig.actorRef.send({ type: 'setVerticalFieldOfView', verticalFieldOfView: 0 });
+rig.setClipPlanes({
+  farPaddingVerticalSpans: 4,
+  presentationPlane: { normal: [0, 0, 1], offsetMeters: 0 },
+});
+console.log(rig.activeCamera.isOrthographicCamera); // true
+rig.dispose();
+```
+
+The rig keeps its own render frame and clip policy, and the native cameras always present the camera actor's latest view in them. `setRenderFrame` and `setClipPlanes` present at once, before the actor starts, while it runs and after it stops, and notify `onUpdate`; while the rig's own actor runs they also send it the value (`setRenderFrame`, `setClipPolicy`), and a frame or policy sent to that actor directly becomes the rig's. They throw a `RangeError` for a value the camera actor would refuse. The rig also takes `clock`, `inspect` and `onRejectedEvent`, and passes them to its camera actor (see `createCameraActor` in `@taucad/camera/machine`).
+
+To present a camera actor that something else owns, such as a viewer's graphics actor's child, pass it as `actorRef`. The rig takes that actor's view, frame and policy, and follows it only between `connect()` and the function `connect()` returns: it presents each of its changes and sends it the rig's frame and policy. A frame or policy set while not connected is sent on the next `connect()`. `dispose()` never stops a given actor.
+
+The rig derives scale-covariant clip planes and applies the fitted zoom from `@taucad/camera`. Presentation planes are explicit physical planes; their normal is independent of camera roll. `@taucad/three/spatial` supplies native point, bounds, plane, and outer-matrix adapters. The package deliberately has no React, React Three Fiber, DOM, controls, gizmo, or post-processing dependency. Hosts retarget those resources from the rig's `onUpdate` callback and must call `dispose()` when the owning viewer is destroyed.
+
+Runtime support: Node.js 24 or newer and modern browsers with Three.js 0.184 or compatible. `@taucad/camera`, `@taucad/spatial`, `three`, and `xstate` 6 (`^6.0.0-alpha.59`) are peer dependencies. This package is Apache-2.0 licensed; it uses public Three.js APIs and does not redistribute Three.js source.

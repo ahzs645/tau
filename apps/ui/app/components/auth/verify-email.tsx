@@ -3,45 +3,58 @@ import { CheckCircle2, CircleAlert, LogIn } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router';
 
-import { Button } from '#components/ui/button.js';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '#components/ui/card.js';
-import { Spinner } from '#components/ui/spinner.js';
-import { cn } from '#utils/ui.utils.js';
+import { Button } from '@taucad/ui/components/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@taucad/ui/components/card';
+import { Spinner } from '@taucad/ui-kit/components/spinner';
+import { cn } from '@taucad/ui/utils/cn';
 
 /** Milliseconds. */
 const redirectDelay = 900;
 
-type VerifyEmailStatus = 'verifying' | 'verified' | 'failed' | 'missing-token';
+/**
+ * `verified-signed-out`: the link was good but brought no session. Verification links stay valid until they expire,
+ * so this is a second open (say on a laptop after the phone) or a link for an account already verified.
+ */
+type VerifyEmailStatus = 'verifying' | 'verified' | 'verified-signed-out' | 'failed' | 'missing-token';
 
 export type VerifyEmailProps = {
   readonly className?: string;
 };
 
+/**
+ * Keeps a redirect only when it resolves to this origin. Resolving, not prefix-matching: browsers read `/\host` as
+ * `//host`, which a "starts with one slash" check let through (web UI security assessment F-6).
+ */
 export const sanitizeVerifyEmailRedirectTo = (value?: string): string => {
   if (!value) {
     return '/';
   }
 
-  if (value.startsWith('/') && !value.startsWith('//')) {
-    return value;
+  try {
+    const { origin } = globalThis.location;
+    const target = new URL(value, origin);
+    if (target.origin !== origin) {
+      return '/';
+    }
+    // Dot segments normalise `/.//host` to the path `//host`, which would leave the origin once navigated to.
+    const path = `${target.pathname}${target.search}${target.hash}`;
+    return path.startsWith('//') ? '/' : path;
+  } catch {
+    return '/';
   }
-
-  return '/';
 };
 
 export function VerifyEmail({ className }: VerifyEmailProps): React.JSX.Element {
   const { authClient, basePaths, viewPaths, navigate, Link } = useAuth();
   const location = useLocation();
-  const [status, setStatus] = useState<VerifyEmailStatus>('verifying');
-
   const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const token = searchParams.get('token');
+  const [status, setStatus] = useState<VerifyEmailStatus>(() => (token ? 'verifying' : 'missing-token'));
   const redirectTo = sanitizeVerifyEmailRedirectTo(searchParams.get('redirectTo') ?? undefined);
   const signInPath = `${basePaths.auth}/${viewPaths.auth.signIn}`;
 
   useEffect(() => {
     if (!token) {
-      setStatus('missing-token');
       return;
     }
 
@@ -59,6 +72,14 @@ export function VerifyEmail({ className }: VerifyEmailProps): React.JSX.Element 
         }
 
         if (!isMounted) {
+          return;
+        }
+
+        // With auto sign-in the answer carries the new session's user; without one there is nothing to go back to.
+        // The client types the answer as `{ status }`; the server adds `user` (null when no session was made).
+        const data: unknown = result.data;
+        if (typeof data !== 'object' || data === null || !('user' in data) || !data.user) {
+          setStatus('verified-signed-out');
           return;
         }
 
@@ -88,7 +109,7 @@ export function VerifyEmail({ className }: VerifyEmailProps): React.JSX.Element 
     <Card className={cn('w-full max-w-sm', className)}>
       <CardHeader>
         <div className='mb-2 flex size-10 items-center justify-center rounded-full bg-primary/10 text-primary'>
-          {status === 'verified' ? (
+          {status === 'verified' || status === 'verified-signed-out' ? (
             <CheckCircle2 className='size-5' aria-hidden='true' />
           ) : status === 'verifying' ? (
             <Spinner className='size-5' />
@@ -97,8 +118,8 @@ export function VerifyEmail({ className }: VerifyEmailProps): React.JSX.Element 
           )}
         </div>
 
-        <CardTitle className='text-xl font-semibold'>
-          {status === 'verified'
+        <CardTitle level={1} variant='title'>
+          {status === 'verified' || status === 'verified-signed-out'
             ? 'Email verified'
             : status === 'verifying'
               ? 'Verifying your email'
@@ -109,12 +130,14 @@ export function VerifyEmail({ className }: VerifyEmailProps): React.JSX.Element 
 
         <CardDescription>
           {status === 'verified'
-            ? 'Your Tau account is ready. Taking you back now.'
-            : status === 'verifying'
-              ? 'Hold tight while Tau confirms this verification link.'
-              : status === 'missing-token'
-                ? 'Open the verification link from your email, or sign in to request a fresh link.'
-                : 'This link may have expired or already been used. Sign in to request a fresh verification email.'}
+            ? 'Your account is ready. Taking you back now.'
+            : status === 'verified-signed-out'
+              ? 'Your email is confirmed. Sign in to continue.'
+              : status === 'verifying'
+                ? 'Hold tight while Tau confirms this verification link.'
+                : status === 'missing-token'
+                  ? 'Open the verification link from your email, or sign in to get a new one.'
+                  : "This link has expired or isn't valid. Sign in with your email and password and we'll send you a new one."}
         </CardDescription>
       </CardHeader>
 

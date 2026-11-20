@@ -21,7 +21,7 @@ type TsExtractionContext = {
  * exports through barrel files, and emits structured `declare module` blocks
  * for both the main package and each subpath (e.g. `@jscad/modeling/primitives`).
  *
- * The output is consumed by Monaco's `addExtraLib` for IntelliSense support.
+ * The output is consumed by the browser TypeScript service for IntelliSense support.
  */
 
 // =============================================================================
@@ -29,7 +29,7 @@ type TsExtractionContext = {
 // =============================================================================
 
 const jscadSourceDirectory = join(import.meta.dirname, '../../../node_modules/@jscad/modeling/src');
-const entryFile = join(jscadSourceDirectory, 'index.d.ts');
+const entryPath = join(jscadSourceDirectory, 'index.d.ts');
 
 /** Files containing cross-cutting foundation types referenced across namespaces. */
 const foundationTypeFiles = [
@@ -123,7 +123,7 @@ type FoundationType = {
 // =============================================================================
 
 function createJscadProgram(): ts.Program {
-  return ts.createProgram([entryFile], {
+  return ts.createProgram([entryPath], {
     target: ts.ScriptTarget.ESNext,
     module: ts.ModuleKind.CommonJS,
     moduleResolution: ts.ModuleResolutionKind.Node10,
@@ -802,14 +802,14 @@ export function buildApiData(): ApiData {
   const checker = program.getTypeChecker();
   const printer = ts.createPrinter({ removeComments: true });
 
-  const mainSourceFile = program.getSourceFile(entryFile);
+  const mainSourceFile = program.getSourceFile(entryPath);
   if (!mainSourceFile) {
-    throw new Error(`Could not load entry file: ${entryFile}`);
+    throw new Error(`Could not load entry path: ${entryPath}`);
   }
 
   const mainModuleSymbol = checker.getSymbolAtLocation(mainSourceFile);
   if (!mainModuleSymbol) {
-    throw new Error('Could not resolve module symbol for entry file');
+    throw new Error('Could not resolve module symbol for entry path');
   }
 
   const rootExports = checker.getExportsOfModule(mainModuleSymbol);
@@ -872,7 +872,7 @@ export function buildApiData(): ApiData {
 
 /**
  * Build the bundled type declarations as a map of module path to raw `.d.ts`
- * content. Each entry is registered at its own virtual file path in Monaco.
+ * content. Each entry is registered at its own virtual file path in the TypeScript service.
  * Exported for testing.
  */
 export function buildNamespaceBundle(): Record<string, string> {
@@ -881,14 +881,14 @@ export function buildNamespaceBundle(): Record<string, string> {
   const printer = ts.createPrinter({ removeComments: true });
 
   // Get root module
-  const mainSourceFile = program.getSourceFile(entryFile);
+  const mainSourceFile = program.getSourceFile(entryPath);
   if (!mainSourceFile) {
-    throw new Error(`Could not load entry file: ${entryFile}`);
+    throw new Error(`Could not load entry path: ${entryPath}`);
   }
 
   const mainModuleSymbol = checker.getSymbolAtLocation(mainSourceFile);
   if (!mainModuleSymbol) {
-    throw new Error('Could not resolve module symbol for entry file');
+    throw new Error('Could not resolve module symbol for entry path');
   }
 
   const rootExports = checker.getExportsOfModule(mainModuleSymbol);
@@ -950,18 +950,6 @@ function main(): void {
       mkdirSync(targetDirectory, { recursive: true });
       writeFileSync(join(targetDirectory, 'index.d.ts'), content);
     }
-
-    // Generate structured JSON
-    console.log('\n📝 Generating structured API data JSON...');
-    const apiData = buildApiData();
-    const jsonPath = join(outputDirectory, 'jscad-api-data.json');
-    writeFileSync(jsonPath, JSON.stringify(apiData, null, 2));
-    console.log(`✅ API data JSON saved to ${jsonPath}`);
-    console.log(
-      `   ${apiData.metadata.totalEntries} entries: ${Object.entries(apiData.metadata.breakdown)
-        .map(([k, v]) => `${v} ${k}s`)
-        .join(', ')}`,
-    );
 
     console.log('\n@jscad/modeling type extraction completed successfully!');
   } catch (error) {

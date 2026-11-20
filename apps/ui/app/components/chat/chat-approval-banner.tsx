@@ -1,0 +1,354 @@
+import { getToolPartName, isAnyToolPart } from '@taucad/chat';
+import { isRecord } from '@taucad/utils/schema';
+import type { CadAgentExecution, MyUIMessage } from '@taucad/chat';
+import { daemonPlacementOf, externalAgentDisplayName } from '#lib/agent-host-placement.js';
+import { useEffect } from 'react';
+import {
+  desktopAgentSignInBridge,
+  requestAgentSignIn,
+  takeAgentSignInSuccess,
+  useAgentSignInOutcome,
+} from '#components/terminal/agent-sign-ins.js';
+import { useChatActions, useChatContext, useChatSelector } from '#hooks/use-chat.js';
+import { useCadChatClient } from '#chat-clients/use-cad-chat-client.js';
+import { agentApprovalToolName, parseAgentHostApproval } from '@taucad/chat-ui/services/agent-host-event-projection';
+import type { AgentHostApproval } from '@taucad/chat-ui/services/agent-host-event-projection';
+import { ChatPermissionRequest } from '#components/chat/chat-permission-request.js';
+import { ChatLoginAffordance } from '#components/chat/chat-login-affordance.js';
+import { answerDeny, pendingMachineActionOf, recordMachineAction } from '#components/print/machine-action-approval.js';
+import { useMachinesFacet } from '#hooks/use-machines.js';
+import { operator } from '#components/print/machine-operator.js';
+import type { MachineClient } from '@taucad/runtime/machine';
+import { useProjectWorkspace } from '#routes/w.$workspace.$project/project-workspace-context.js';
+import type { RuntimeTransportFacet } from '@taucad/runtime/transport';
+import { selectOpenApprovals } from '#machines/chat-projection.logic.js';
+import type { OpenApproval } from '#machines/chat-projection.logic.js';
+
+/** One unresolved interrupt, located in the transcript that projected it. @public */
+export type PendingAgentHostApproval = AgentHostApproval & {
+  /** Assistant message whose part carries the request. */
+  readonly messageId: string;
+  /** Id the chat client resolves — the SDK approval id, which is the interrupt id for a host-projected part. */
+  readonly approvalId: string;
+  /** An ordinary Tau tool approval is not an external-agent interrupt. */
+  readonly tauTool?: true;
+};
+
+/**
+ * The message the newest run wrote, which is the only run still answerable.
+ *
+ * Every run projects exactly one assistant message (`run.lifecycle: admitted`
+ * mints it with the run id), so an interrupt in any earlier message belongs to a
+ * run that already reached a terminal state: nothing will ever resolve it, and
+ * leaving it in the pending list hides every later interrupt behind it.
+ */
+const currentRunMessage = (messages: readonly MyUIMessage[]): MyUIMessage | undefined =>
+  messages.findLast((message) => message.role === 'assistant');
+
+/**
+ * Every interrupt the chat is currently paused on.
+ *
+ * Reads the transcript, not a side channel: a host-projected interrupt becomes
+ * a `tau_agent_approval` part carrying the prompt and the options the host
+ * recorded, and a Tau tool gated by the API becomes an ordinary tool part in
+ * the same `approval-requested` state. Both are pending here, and both
+ * leave it only when the durable resolution settles the part — never on a click.
+ *
+ * @param messages - The chat's live message list.
+ * @returns The pending interrupts, in transcript order.
+ * @public
+ */
+export const pendingAgentHostApprovals = (messages: readonly MyUIMessage[]): readonly PendingAgentHostApproval[] => {
+  const pending: PendingAgentHostApproval[] = [];
+  const message = currentRunMessage(messages);
+  if (!message) {
+    return pending;
+  }
+  for (const part of message.parts) {
+    if (!isAnyToolPart(part) || part.state !== 'approval-requested') {
+      continue;
+    }
+    const projected =
+      part.type === 'dynamic-tool' && part.toolName === agentApprovalToolName
+        ? parseAgentHostApproval(part.input)
+        : undefined;
+    // A projected interrupt keeps all it carries, its ledger correlation (`context`) included: the Print pane finds a
+    // job's or a machine action's interrupt by it.
+    pending.push(
+      projected === undefined
+        ? {
+            messageId: message.id,
+            approvalId: part.approval.id,
+            interruptId: part.approval.id,
+            kind: 'approval',
+            prompt: getToolPartName(part),
+            options: [],
+            tauTool: true,
+            request: { input: part.input },
+          }
+        : { ...projected, messageId: message.id, approvalId: part.approval.id },
+    );
+  }
+  return pending;
+};
+
+const noOpenApprovals: readonly OpenApproval[] = [];
+
+/**
+ * Every interrupt the chat is paused on: the transcript's, then any open one the host log holds that the transcript
+ * does not show.
+ *
+ * The ledger is what pauses the run and what an answer is checked against, so an open interrupt is never hidden by a
+ * transcript that failed to rebuild or has not caught up: its card is drawn from the request the log recorded.
+ *
+ * @param messages - The chat's live message list.
+ * @param open - The current run's open approvals, from {@link selectOpenApprovals}.
+ * @returns The pending interrupts, the transcript's first.
+ * @public
+ */
+export const pendingApprovals = (
+  messages: readonly MyUIMessage[],
+  open: readonly OpenApproval[],
+): readonly PendingAgentHostApproval[] => {
+  const transcript = pendingAgentHostApprovals(messages);
+  const shown = new Set(transcript.map((approval) => approval.interruptId));
+  const unshown = open.filter(({ approval }) => !shown.has(approval.interruptId));
+  return unshown.length === 0
+    ? transcript
+    : [
+        ...transcript,
+        ...unshown.map(({ runId, approval }) => ({ ...approval, messageId: runId, approvalId: approval.interruptId })),
+      ];
+};
+
+/**
+ * The login the current run is stuck on, resolved record and all.
+ *
+ * A login is never *answered* in Tau (X6/VI4): the refusal settles its own
+ * record so the run does not stay flagged "approval required", and an
+ * elicitation login is settled by the agent when the user finishes the flow
+ * elsewhere. So the affordance cannot be read off the pending list — it is read
+ * off the run's own record, and stands down only once that record says the
+ * login was actually completed.
+ *
+ * @param messages - The chat's live message list.
+ * @returns The login to present, or nothing.
+ */
+const currentRunLogin = (messages: readonly MyUIMessage[]): AgentHostApproval['login'] => {
+  let login: AgentHostApproval['login'];
+  for (const part of currentRunMessage(messages)?.parts ?? []) {
+    if (!isAnyToolPart(part) || part.type !== 'dynamic-tool' || part.toolName !== agentApprovalToolName) {
+      continue;
+    }
+    const projected = parseAgentHostApproval(part.input)?.login;
+    const outcome = isRecord(part.output) ? part.output['outcome'] : undefined;
+    if (projected && (part.state === 'approval-requested' || outcome === 'cancelled')) {
+      login = projected;
+    }
+  }
+  return login;
+};
+
+/**
+ * Who is actually waiting, from the record first and the selection last.
+ *
+ * The durable interrupt names its own requester (V6), and that is the only
+ * source that survives a reload — or a composer the user has already switched
+ * to another agent while this run stays paused. `activeExecution` is the
+ * fallback for an interrupt written before the marker existed.
+ *
+ * @param agentId - Agent id the durable interrupt recorded, when it has one.
+ * @param execution - What the composer is currently selected on.
+ * @returns The requester's product name.
+ */
+const requesterName = (agentId: string | undefined, execution: CadAgentExecution | undefined): string => {
+  if (agentId !== undefined) {
+    return externalAgentDisplayName(agentId);
+  }
+  switch (execution?.kind) {
+    case 'acp': {
+      return externalAgentDisplayName(execution.agentId);
+    }
+    case 'tau': {
+      return 'Tau';
+    }
+    default: {
+      return 'The agent';
+    }
+  }
+};
+
+const unreachable = 'This computer cannot reach its machines, so Tau cannot record your answer.';
+
+type AgentJob = Readonly<{ jobId: string; machineId: string }>;
+
+/** The job, when it still waits on the person; one already settled elsewhere is left alone. */
+const isAwaiting = async (client: MachineClient, { jobId, machineId }: AgentJob): Promise<boolean> => {
+  const jobs = await client.listJobs({ machineId });
+  return jobs.some((listed) => listed.jobId === jobId && listed.state === 'awaiting-approval');
+};
+
+/**
+ * Answer one interrupt. An agent's machine action or job is recorded on the host through the person's own machines
+ * session first (R15, R16), so the paused tool finds the person's decision; any other interrupt is answered directly.
+ * A deny is always answered, recorded or not ({@link answerDeny}). A job is approved only in the Print pane, which
+ * takes the attestations every job asks for (`work-area-clear` at least), so approving one here leaves it unanswered.
+ *
+ * @param input - The interrupt, the decision, this computer's machines and how the chat is answered.
+ * @returns `print-pane` when the approval must be given there; the interrupt is then still open.
+ * @throws When an approval cannot be recorded (the interrupt stays open), or after answering a deny whose record failed.
+ */
+const answerInterrupt = async ({
+  approval,
+  approved,
+  machines,
+  answer,
+}: Readonly<{
+  approval: PendingAgentHostApproval;
+  approved: boolean;
+  machines: RuntimeTransportFacet<MachineClient>;
+  answer: (approvalId: string, approved: boolean) => Promise<void>;
+}>): Promise<'answered' | 'print-pane'> => {
+  const action = pendingMachineActionOf(approval);
+  const { jobId, machineId } = approval.context ?? {};
+  const job = jobId === undefined || machineId === undefined ? undefined : { jobId, machineId };
+  const respond = async (): Promise<void> => answer(approval.approvalId, approved);
+  if (action === undefined && job === undefined) {
+    await respond();
+    return 'answered';
+  }
+  if (action === undefined && approved) {
+    return 'print-pane';
+  }
+  const reachable = (): MachineClient => {
+    if (!machines.available) {
+      throw new Error(unreachable);
+    }
+    return machines;
+  };
+  const record = async (): Promise<void> => {
+    const client = reachable();
+    if (action !== undefined) {
+      await recordMachineAction(client, action, approved);
+    } else if (job !== undefined && (await isAwaiting(client, job))) {
+      await client.resolveJob({ jobId: job.jobId, decision: 'deny', resolvedBy: operator });
+    }
+  };
+  if (!approved) {
+    await answerDeny(record, respond);
+    return 'answered';
+  }
+  await record();
+  await respond();
+  return 'answered';
+};
+
+/**
+ * A login card that carries on by itself once the sign-in its chat asked for in Tau's tab exits 0. Another chat's
+ * card for the same agent does not: the success is bound to the chat that asked.
+ *
+ * The exit is taken once, so the turn is tried again exactly as *Try again* would, and only once: a retry that still
+ * meets a logged-out agent draws this card again and waits for another sign-in. A failed sign-in leaves the card,
+ * which says how it ended. Nothing here names an agent; the login names it.
+ *
+ * @param props - The login, the card's chat, and the action that opens its sign-in tab.
+ * @returns The affordance.
+ */
+function AgentLoginCard({
+  login,
+  chatId,
+  onSignInInTerminal,
+}: {
+  readonly login: NonNullable<AgentHostApproval['login']>;
+  readonly chatId: string;
+  readonly onSignInInTerminal: (() => void) | undefined;
+}): React.JSX.Element {
+  const { regenerate } = useChatActions();
+  const outcome = useAgentSignInOutcome(login.agentId, chatId);
+  useEffect(() => {
+    if (outcome === 'succeeded' && takeAgentSignInSuccess(login.agentId, chatId)) {
+      regenerate();
+    }
+  }, [outcome, login.agentId, chatId, regenerate]);
+  return (
+    <ChatLoginAffordance
+      login={login}
+      onSignInInTerminal={onSignInInTerminal}
+      signInFailure={typeof outcome === 'object' ? outcome : undefined}
+    />
+  );
+}
+
+/**
+ * The one presenter for a paused run's interrupt, wherever the run is placed.
+ *
+ * Mounted above the composer (`chat-textarea.tsx`), because a run that is
+ * waiting cannot be advanced from the transcript — the next thing the user does
+ * is answer it. The copy is bounded by SP-4 Result 3: approving lets the agent
+ * keep working inside this chat's tree, and Tau does **not** gate each action
+ * it takes there.
+ *
+ * @returns The banner, or nothing while the chat has no pending interrupt.
+ * @public
+ */
+export function ChatApprovalBanner(): React.JSX.Element | undefined {
+  const { respondToToolApproval } = useCadChatClient();
+  const machines = useMachinesFacet();
+  const workspace = useProjectWorkspace({ enableNoContext: true });
+  const { activeChatId } = useChatContext();
+  const activeExecution = useChatSelector((state) => state.activeExecution);
+  const attachedHostId = useChatSelector((state) => state.attachedHostId);
+  const messages = useChatSelector((state) => state.messages);
+  const open = useChatSelector((state) =>
+    state.projection === undefined ? noOpenApprovals : selectOpenApprovals(state.projection),
+  );
+  // A paused run has exactly one unresolved interrupt: it stopped on it.
+  const approval = pendingApprovals(messages, open)[0];
+  const login = currentRunLogin(messages);
+  if (login) {
+    /* Not a decision: nothing here is approved or denied, so the banner hands
+     * over to the affordance that says what the *user* has to do (V11). */
+    /* Only where this desktop runs the agent can Tau start its CLI; elsewhere the card keeps the command to copy. The
+     * host is the one whose log refused the turn, which a relaunch keeps even before the composer names an agent. */
+    const refusingHost =
+      attachedHostId ?? (activeExecution === undefined ? undefined : daemonPlacementOf(activeExecution));
+    const signsInHere =
+      workspace !== undefined && desktopAgentSignInBridge() !== undefined && refusingHost === 'desktop';
+    return (
+      <AgentLoginCard
+        key={login.agentId}
+        login={login}
+        chatId={activeChatId}
+        onSignInInTerminal={
+          signsInHere
+            ? () => {
+                requestAgentSignIn(login.agentId, activeChatId);
+                workspace.setWorkbenchOpen(true);
+              }
+            : undefined
+        }
+      />
+    );
+  }
+  if (!approval) {
+    return undefined;
+  }
+
+  const name = approval.tauTool ? 'Tau' : requesterName(approval.agentId, activeExecution);
+  return (
+    <ChatPermissionRequest
+      key={approval.approvalId}
+      approval={approval}
+      name={name}
+      onReview={approval.context?.jobId === undefined ? undefined : () => workspace?.openPanel('print')}
+      onRespond={async (approved, optionId) => {
+        await answerInterrupt({
+          approval,
+          approved,
+          machines,
+          answer: async (id, accepted) => respondToToolApproval(id, accepted, { optionId }),
+        });
+      }}
+    />
+  );
+}

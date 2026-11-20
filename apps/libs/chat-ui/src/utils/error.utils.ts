@@ -1,0 +1,303 @@
+import { errorCategory, errorCategories } from '@taucad/types/constants';
+import type { ErrorCategory, ChatError } from '@taucad/types';
+import { errorCategoryTitles, httpStatusToCategory } from '@taucad/chat/utils';
+import { isRecord } from '@taucad/utils/schema';
+import { pageHeadlineOf } from '#utils/chat-error-card.js';
+
+type DecodedProviderError = {
+  readonly httpStatus?: number;
+  readonly code?: string;
+  readonly message?: string;
+};
+
+const textDecoder = new TextDecoder();
+
+/**
+ * The code an uncoded dispatch failure carries so its card can say the turn
+ * never started.
+ *
+ * Admission runs before any run exists, which is the one failure a restart
+ * loses nothing to — and the only structural fact that separates it from a
+ * model call that stopped mid-turn. @public
+ */
+export const chatTurnNotStartedCode = 'CHAT_TURN_NOT_STARTED';
+
+/** Plain copy for compaction failures that leave the chat's history intact. */
+export const chatHistoryTidyFailureMessage = 'This chat hit a problem while Tau was tidying its history.';
+
+/** Plain copy for compaction failures caused by an oversized chat. */
+export const chatTooLongMessage = 'Tau could not make room for the next step.';
+
+/**
+ * Client-side transport failure (request never reaches the API as structured JSON).
+ * Mirrors AI SDK `Chat.makeRequest` disconnect classification in `ai` package
+ * (`ai/src/ui/chat.ts`, TypeError branch: `fetch` / `network` substrings on the message).
+ */
+function isTransportError(error: Error): boolean {
+  if (error instanceof TypeError) {
+    const lowered = error.message.toLowerCase();
+    if (lowered.includes('fetch') || lowered.includes('network')) {
+      return true;
+    }
+  }
+
+  const lowered = error.message.toLowerCase();
+  return lowered.includes('load failed') || error.message.includes('net::ERR_');
+}
+
+/**
+ * Parses a ChatError from JSON.
+ * The API always sends errors in ChatError format, so we just parse and validate.
+ */
+function tryParseChatError(message: string): ChatError | undefined {
+  if (!message.startsWith('{')) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(message) as Record<string, unknown>;
+
+    // Validate required fields
+    if (
+      typeof parsed['category'] === 'string' &&
+      typeof parsed['title'] === 'string' &&
+      typeof parsed['message'] === 'string'
+    ) {
+      // Validate category against known values, fallback to generic if unknown
+      const parsedCategory = parsed['category'];
+      const category: ErrorCategory = errorCategories.includes(parsedCategory as ErrorCategory)
+        ? (parsedCategory as ErrorCategory)
+        : errorCategory.generic;
+
+      return {
+        category,
+        title: parsed['title'],
+        message: parsed['message'],
+        code: typeof parsed['code'] === 'string' ? parsed['code'] : undefined,
+        httpStatus: typeof parsed['httpStatus'] === 'number' ? parsed['httpStatus'] : undefined,
+        raw: typeof parsed['raw'] === 'string' ? parsed['raw'] : undefined,
+        requestId: typeof parsed['requestId'] === 'string' ? parsed['requestId'] : undefined,
+        helpUrl: typeof parsed['helpUrl'] === 'string' ? parsed['helpUrl'] : undefined,
+        // The refusal's own structured fields (an INSUFFICIENT_CREDIT shortfall)
+        // survive persistence so the card still has them after a reload.
+        details: isRecord(parsed['details']) ? parsed['details'] : undefined,
+      };
+    }
+  } catch {
+    // Not valid JSON
+  }
+
+  return undefined;
+}
+
+/**
+ * A failed run named in the page's own words, for a surface that has one line for it, such as the sidebar row and the
+ * screen-reader sentence it describes the row with. A coded refusal is a card, not prose: its message is the gateway's
+ * or the host's sentence, which the page never repeats (IS3), so the line says the card's own title, or the category's
+ * title when that names more than "Error". An uncoded failure is the page's or the host's plain text and reads as is.
+ *
+ * @param text - The failure as the run's terminal row or the chat's machine recorded it.
+ * @returns The line, or `undefined` when only "the run failed" can be said.
+ * @public
+ */
+export function chatFailureSentence(text: string | undefined): string | undefined {
+  if (text === undefined || text.trim() === '') {
+    return undefined;
+  }
+  const coded = tryParseChatError(text);
+  if (coded === undefined) {
+    return text;
+  }
+  return pageHeadlineOf(coded.code) ?? (coded.category === errorCategory.generic ? undefined : coded.title);
+}
+
+function tryDecodeProviderError(message: string): DecodedProviderError | undefined {
+  const trimmed = message.trim();
+  const googlePrefix = /^google request failed with status code\s+(\d{3})(?::\s*([\S\s]*))?$/i.exec(trimmed);
+  if (googlePrefix?.[1]) {
+    const status = Number.parseInt(googlePrefix[1], 10);
+    const body = googlePrefix[2];
+    const decodedBody = body ? tryDecodeProviderError(body) : undefined;
+    return {
+      httpStatus: decodedBody?.httpStatus ?? status,
+      code: decodedBody?.code,
+      message: decodedBody?.message,
+    };
+  }
+
+  const bytes = parseDecimalByteList(trimmed);
+  if (bytes) {
+    return tryDecodeProviderError(textDecoder.decode(bytes));
+  }
+
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    const errorRecord = getProviderErrorRecord(parsed);
+    if (!errorRecord) {
+      return undefined;
+    }
+
+    return {
+      httpStatus: readNumber(errorRecord, 'code') ?? readNumber(errorRecord, 'status'),
+      code:
+        readString(errorRecord, 'status') ??
+        readString(errorRecord, 'code') ??
+        readNumber(errorRecord, 'code')?.toString(),
+      message: readString(errorRecord, 'message'),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function parseDecimalByteList(text: string): Uint8Array<ArrayBuffer> | undefined {
+  if (!/^\s*\d{1,3}(?:\s*,\s*\d{1,3})+\s*$/.test(text)) {
+    return undefined;
+  }
+
+  const values = text.split(',').map((part) => Number.parseInt(part.trim(), 10));
+  if (!values.every((value) => Number.isInteger(value) && value >= 0 && value <= 255)) {
+    return undefined;
+  }
+
+  return Uint8Array.from(values);
+}
+
+function getProviderErrorRecord(parsed: unknown): Record<string, unknown> | undefined {
+  const first: unknown = Array.isArray(parsed) ? parsed[0] : parsed;
+  const record = asRecord(first);
+  if (!record) {
+    return undefined;
+  }
+
+  const error = asRecord(record['error']);
+  if (!error) {
+    return record;
+  }
+
+  const nested = asRecord(error['error']);
+  return nested ?? error;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function readNumber(record: Record<string, unknown> | undefined, key: string): number | undefined {
+  const value = record?.[key];
+  return typeof value === 'number' ? value : undefined;
+}
+
+/**
+ * Parses an Error object into a ChatError for persistence.
+ * This is used to store errors in the chat entity so they survive page reloads.
+ *
+ * The API always sends errors in ChatError format, so this function just:
+ * 1. Handles client-side network errors (which never reach the API)
+ * 2. Parses the structured ChatError from the API response
+ * 3. Falls back to a generic error for unexpected formats
+ *
+ * One parse per Error instance: the chat banner calls this inside a
+ * `useSyncExternalStore` selector, where a fresh object per read (its nested
+ * `details` defeat a shallow compare) is a render loop.
+ */
+export function parseErrorForPersistence(error: Error): ChatError {
+  const cached = parsedErrors.get(error);
+  if (cached) {
+    return cached;
+  }
+  const parsed = parseError(error);
+  parsedErrors.set(error, parsed);
+  return parsed;
+}
+
+const parsedErrors = new WeakMap<Error, ChatError>();
+
+/** The code a thrown refusal carries on the error itself, not in a structured message. */
+const thrownCode = (error: Error): string | undefined =>
+  'code' in error && typeof error.code === 'string' ? error.code : undefined;
+
+function parseError(error: Error): ChatError {
+  // Handle client-side network errors (these never reach the API)
+  if (isTransportError(error)) {
+    return {
+      category: errorCategory.network,
+      title: errorCategoryTitles[errorCategory.network],
+      message: 'Check your connection and try again.',
+      raw: error.message,
+    };
+  }
+
+  // Parse structured ChatError from API
+  const parsed = tryParseChatError(error.message);
+  if (parsed) {
+    const compactionMessage =
+      parsed.code === 'SESSION_LOG_INTEGRITY' || parsed.code === 'SUMMARY_REQUIRED'
+        ? chatHistoryTidyFailureMessage
+        : parsed.code === 'NO_EVICTABLE_HISTORY' ||
+            parsed.code === 'CIRCUIT_BREAKER_OPEN' ||
+            parsed.code === 'REQUEST_TOO_LARGE'
+          ? chatTooLongMessage
+          : undefined;
+    return compactionMessage === undefined
+      ? parsed
+      : { ...parsed, message: compactionMessage, raw: parsed.raw ?? error.message };
+  }
+
+  const decodedProviderError = tryDecodeProviderError(error.message);
+  if (decodedProviderError?.message) {
+    const category = decodedProviderError.httpStatus
+      ? httpStatusToCategory(decodedProviderError.httpStatus)
+      : errorCategory.generic;
+    return {
+      category,
+      title: errorCategoryTitles[category],
+      message: decodedProviderError.message,
+      code: decodedProviderError.code,
+      httpStatus: decodedProviderError.httpStatus,
+      raw: error.message,
+    };
+  }
+
+  // Fallback for unexpected formats. A refusal thrown by the host or the channel keeps its code, which names its card.
+  const code = thrownCode(error);
+  return {
+    category: errorCategory.generic,
+    title: errorCategoryTitles[errorCategory.generic],
+    message: error.message,
+    raw: error.message,
+    ...(code === undefined ? {} : { code }),
+  };
+}
+
+/**
+ * Parses a dispatch that failed before its run existed.
+ *
+ * Identical to {@link parseErrorForPersistence}, except that a refusal is
+ * stamped with {@link chatTurnNotStartedCode} when it carries no code, or only
+ * a code thrown on the error itself (a host or channel refusal: nothing ran,
+ * so restarting the turn is the recovery). A code in the structured message
+ * is kept: the credit preflight throws the gateway's own 402 payload, and that
+ * still belongs on the credits card.
+ *
+ * @param error - The admission failure.
+ * @returns The persisted error the chat's card reads.
+ */
+export function parseAdmissionFailureForPersistence(error: Error): ChatError {
+  const parsed = parseErrorForPersistence(error);
+  // A thrown code is not a card of its own here: nothing ran, so the restart is the recovery.
+  return parsed.code === undefined || parsed.code === thrownCode(error)
+    ? { ...parsed, code: chatTurnNotStartedCode }
+    : parsed;
+}

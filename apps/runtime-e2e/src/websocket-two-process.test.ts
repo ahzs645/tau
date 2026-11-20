@@ -1,0 +1,845 @@
+/**
+ * Two-process UI ↔ API topology suite for the WebSocket transport (WS11b,
+ * blueprint scenarios E1–E8).
+ *
+ * The "API server" is a real child process (`src/fixtures/websocket-api-server.ts`
+ * under `node --import tsx`) hosting a kernel behind `webSocketHost`; the "UI"
+ * is this vitest process driving `createRuntimeClient` over the browser-safe
+ * `@taucad/runtime/transport/websocket` subpath. Geometry, watch events, aborts
+ * and failures all cross real localhost sockets.
+ *
+ * Every `it` owns its own server and its own `mkdtemp` roots, ports are
+ * ephemeral (reported back over IPC), and the child's stdout/stderr is folded
+ * into any failure message.
+ */
+
+import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
+import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import process from 'node:process';
+import { setTimeout as delay } from 'node:timers/promises';
+
+import { decode } from '@msgpack/msgpack';
+import { WebSocket } from 'ws';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { ChangeEventBus, MountTable, ProviderRegistry, ResourceQueue, WorkspaceFileService } from '@taucad/filesystem';
+import { tauPathPolicy } from '@taucad/filesystem/path-registry';
+import { exposeFileSystem, openFileSystemBridge, workspaceBridgeService } from '@taucad/fs-bridge';
+import { createRuntimeClient, fromFileSystemBridge } from '@taucad/runtime';
+import { fromNodeFs } from '@taucad/runtime/filesystem/node';
+import { createSqliteComputeEngine, fromSqlite } from '@taucad/runtime/node';
+import { createGeometryTestHelpers, extractGltfFromExportResult } from '@taucad/runtime-testing';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
+import { webSocketTransport } from '@taucad/runtime/transport/websocket';
+import type { WebSocketTransportOptions } from '@taucad/runtime/transport/websocket';
+import type { ViewStatus } from '@taucad/runtime/client';
+
+import { boxSource, webSocketRuntime } from '#fixtures/websocket-runtime.js';
+
+const repoRoot = resolve(import.meta.dirname, '../../..');
+const fixtureEntry = resolve(import.meta.dirname, 'fixtures/websocket-api-server.ts');
+
+/** The autonomous file-change debounce is 200 ms; 750 ms proves whether a render was scheduled. */
+const debounceSettlingWindow = 750;
+
+/**
+ * Bounding box of `makeBaseBox(10, height, 30)` as the render result reports
+ * it: metres, and Y-up (the CAD Z axis becomes glTF Y).
+ *
+ * @param height - The `height` parameter, in millimetres.
+ * @returns Expected `[x, y, z]` extent.
+ */
+const boxSize = (height: number): [number, number, number] => [0.01, 0.03, height / 1000];
+
+/** Tight enough to tell two different boxes apart (the helper's default is 0.1 m). */
+const boxTolerance = 0.0001;
+
+/** 600 fused unit boxes — measured at ~6.6 s on this machine, so E5's kill always lands mid-render. */
+const slowSource = [
+  "import { makeBaseBox } from 'replicad';",
+  '',
+  'export default function main() {',
+  '  let shape = makeBaseBox(1, 1, 1);',
+  '  for (let index = 1; index < 600; index++) {',
+  '    shape = shape.fuse(makeBaseBox(1, 1, 1).translate([index * 0.6, 0, 0]));',
+  '  }',
+  '  return shape;',
+  '}',
+  '',
+].join('\n');
+
+const geometryHelpers = createGeometryTestHelpers();
+
+const hostLocalDescriptor = {
+  id: 'web-socket',
+  wire: 'remote',
+  memory: { geometryDelivery: 'copy', abortSignal: 'wire-notify' },
+  fileSystem: 'host-local',
+} as const;
+
+/* ---------------------------------------------------------------- *
+ * Harness                                                           *
+ * ---------------------------------------------------------------- */
+
+const children: ChildProcess[] = [];
+const roots: string[] = [];
+const authorityDisposers: Array<() => void> = [];
+
+const createBrowserFileSystem = async (
+  files: Readonly<Record<string, string>>,
+): Promise<{
+  fileSystem: ReturnType<typeof fromFileSystemBridge>;
+  service: WorkspaceFileService;
+  root: string;
+}> => {
+  const projectId = 'proj_remoteauthoritytest00';
+  const root = `/projects/${projectId}`;
+  const providerRegistry = new ProviderRegistry();
+  const storageRootKey = 'memory:remote-authority';
+  const provider = await providerRegistry.getProvider({
+    backend: 'memory',
+    storageRootKey,
+  });
+  const mountTable = new MountTable();
+  mountTable.mount('/', provider, {
+    class: 'authored',
+    backend: 'memory',
+    storageRootKey,
+  });
+  const eventBus = new ChangeEventBus();
+  const service = new WorkspaceFileService({
+    providerRegistry,
+    resourceQueue: new ResourceQueue(),
+    eventBus,
+    mountTable,
+  });
+  await service.configureProjectRoots({
+    projects: [
+      {
+        projectId,
+        backend: 'memory',
+        storageRootKey,
+        providerBasePath: projectId,
+      },
+    ],
+    roots: [],
+  });
+  for (const [path, content] of Object.entries(files)) {
+    // oxlint-disable-next-line no-await-in-loop -- deterministic fixture setup
+    await service.writeFile(`${root}/${path}`, content);
+  }
+
+  const workerScope = new EventTarget();
+  const exposed = exposeFileSystem(workspaceBridgeService(service), {
+    policy: tauPathPolicy,
+    changeEventBus: eventBus,
+    handlerForRoot: (authorityRoot, context) => service.createRootedFileSystem(authorityRoot, context),
+    messageSource: workerScope,
+  });
+  const bridgeWorker = {
+    postMessage(message: unknown): void {
+      workerScope.dispatchEvent(new MessageEvent('message', { data: message }));
+    },
+  };
+  authorityDisposers.push(() => {
+    exposed.cleanup();
+    service.dispose();
+  });
+  return {
+    fileSystem: fromFileSystemBridge(() => openFileSystemBridge(bridgeWorker, { root, consumer: 'working-copy' })),
+    service,
+    root,
+  };
+};
+
+/** SIGTERM then SIGKILL to the whole process group (`server-modes.spec.ts:12-44`). */
+const stopProcess = async (child: ChildProcess): Promise<void> => {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  const exited = (async (): Promise<boolean> => {
+    await once(child, 'exit');
+    return true;
+  })();
+  if (!signalProcess(child, 'SIGTERM')) {
+    return;
+  }
+  const stopped = await Promise.race([exited, delay(5000, false)]);
+  if (!stopped && signalProcess(child, 'SIGKILL')) {
+    await Promise.race([exited, delay(5000, false)]);
+  }
+};
+
+/**
+ * Signal the child's whole process group.
+ *
+ * @param child - Spawned API server.
+ * @param signal - Signal to deliver.
+ * @returns `false` when the group is already gone.
+ */
+const signalProcess = (child: ChildProcess, signal: NodeJS.Signals): boolean => {
+  try {
+    if (process.platform !== 'win32' && child.pid !== undefined) {
+      process.kill(-child.pid, signal);
+    } else {
+      child.kill(signal);
+    }
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+      throw error;
+    }
+    return false;
+  }
+};
+
+type ApiServer = {
+  /** Base URL the transport dials; the transport appends `/runtime` and `/fs`. */
+  readonly url: string;
+  readonly child: ChildProcess;
+  /** Interleaved child stdout/stderr, for failure messages. */
+  readonly logs: string[];
+};
+
+type ApiServerOptions = {
+  /** `host-local` (W1) gives the API its own filesystem; `bridged` (W2) makes the UI the authority. */
+  readonly mode: 'host-local' | 'bridged';
+  /** Project root for `host-local`. */
+  readonly serverRoot?: string;
+  /** Comma-separated origin allowlist; the default `''` denies every browser. */
+  readonly allowedOrigins?: string;
+};
+
+/** Boot one API-server child and wait for its ephemeral port, racing an early exit. */
+const startApiServer = async (options: ApiServerOptions): Promise<ApiServer> => {
+  /* eslint-disable @typescript-eslint/naming-convention -- environment variables are SCREAMING_SNAKE. */
+  const environment = {
+    ...process.env,
+    PORT: '0',
+    TAU_WS_MODE: options.mode,
+    TAU_SERVER_ROOT: options.serverRoot ?? process.cwd(),
+    TAU_ALLOWED_ORIGINS: options.allowedOrigins ?? '',
+  };
+  /* eslint-enable @typescript-eslint/naming-convention -- restore project naming checks. */
+  const child = spawn(process.execPath, ['--import', 'tsx', fixtureEntry], {
+    cwd: repoRoot,
+    detached: process.platform !== 'win32',
+    env: environment,
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+  });
+  children.push(child);
+
+  const logs: string[] = [];
+  child.stdout?.setEncoding('utf8').on('data', (chunk: string) => logs.push(chunk));
+  child.stderr?.setEncoding('utf8').on('data', (chunk: string) => logs.push(chunk));
+
+  const listening = (async (): Promise<{ port: number }> => {
+    const [message] = (await once(child, 'message')) as [{ port: number }];
+    return message;
+  })();
+  const crashed = (async (): Promise<never> => {
+    const [code, signal] = (await once(child, 'exit')) as [number | undefined, NodeJS.Signals | undefined];
+    throw new Error(
+      `API server exited before listening (code ${String(code)}, signal ${String(signal)}).\n${logs.join('')}`,
+    );
+  })();
+  const { port } = await Promise.race([listening, crashed]);
+  return { url: `ws://127.0.0.1:${String(port)}`, child, logs };
+};
+
+const makeRoot = async (files: Record<string, string>): Promise<string> => {
+  const root = await mkdtemp(join(tmpdir(), 'tau-ws-2p-'));
+  roots.push(root);
+  await Promise.all(Object.entries(files).map(async ([name, content]) => writeFile(join(root, name), content, 'utf8')));
+  return root;
+};
+
+type StateTracker = {
+  readonly states: ViewStatus[];
+  /** Number of completed projections seen so far. */
+  mark(): number;
+  /** Completed projections since `from`. */
+  renders(from: number): ViewStatus[];
+  settle(): Promise<void>;
+  stop(): void;
+};
+
+/**
+ * Count completed projections while exposing status for in-progress wire-failure checks.
+ *
+ * @param subscribeStatus - `(handler) => view.on('status', handler)` for the view under test.
+ * @param subscribeRendered - `(handler) => view.on('rendered', handler)` for the view under test.
+ * @returns The {@link StateTracker}.
+ */
+const trackStates = (
+  subscribeStatus: (handler: (state: ViewStatus) => void) => () => void,
+  subscribeRendered: (handler: () => void) => () => void,
+): StateTracker => {
+  const states: ViewStatus[] = [];
+  const renderings: unknown[] = [];
+  const stopStatus = subscribeStatus((state) => {
+    states.push(state);
+  });
+  const stopRendered = subscribeRendered(() => renderings.push(undefined));
+  return {
+    states,
+    mark: () => renderings.length,
+    renders: (from) => renderings.slice(from).map(() => 'rendering'),
+    async settle(): Promise<void> {
+      await vi.waitFor(
+        () => {
+          expect(states.at(-1)).toBe('ready');
+        },
+        { timeout: 120_000, interval: 50 },
+      );
+    },
+    stop: () => {
+      stopStatus();
+      stopRendered();
+    },
+  };
+};
+
+type WebSocketPlugin = ReturnType<typeof webSocketTransport>;
+
+type CapturedTransport = {
+  /** Pass to `createRuntimeClient`; materialises the real plugin and remembers the handle. */
+  readonly plugin: WebSocketPlugin;
+  /** The materialised transport handle — the only route to `closed` (the client only exposes a descriptor). */
+  handle(): ReturnType<WebSocketPlugin['materialize']>;
+};
+
+/**
+ * Wrap a `webSocketTransport` plugin so the test keeps the materialised
+ * client handle `createRuntimeClient` would otherwise swallow.
+ *
+ * @param options - Transport options.
+ * @returns The {@link CapturedTransport}.
+ */
+const capturingTransport = (options: WebSocketTransportOptions): CapturedTransport => {
+  const plugin = webSocketTransport(options);
+  let materialised: ReturnType<WebSocketPlugin['materialize']> | undefined;
+  return {
+    plugin: {
+      ...plugin,
+      materialize: () => {
+        materialised = plugin.materialize();
+        return materialised;
+      },
+    },
+    handle() {
+      if (!materialised) {
+        throw new Error('transport was never materialised');
+      }
+      return materialised;
+    },
+  };
+};
+
+type SocketRecorder = {
+  readonly dialled: Array<{ readonly url: string; readonly socket: WebSocket }>;
+  readonly createSocket: NonNullable<WebSocketTransportOptions['createSocket']>;
+  /** The socket dialled for `route`, or `undefined` when the client never opened it. */
+  routed(route: 'runtime' | 'fs'): WebSocket | undefined;
+};
+
+/**
+ * `createSocket` is the sanctioned seam for reaching the transport's own
+ * sockets (the option exists for exactly this); the host wraps `ws` sockets
+ * the same way, so nothing about the wire changes.
+ *
+ * @returns The {@link SocketRecorder}.
+ */
+const recordSockets = (): SocketRecorder => {
+  const dialled: Array<{ url: string; socket: WebSocket }> = [];
+  return {
+    dialled,
+    createSocket: (url) => {
+      const socket = new WebSocket(url);
+      dialled.push({ url, socket });
+      /* `ws` narrows `binaryType` to its own union while the structural
+       * `WebSocketLike` declares `binaryType: string`; the members themselves
+       * match, which is why `webSocketHost` wraps these very sockets. */
+      return socket as unknown as ReturnType<NonNullable<WebSocketTransportOptions['createSocket']>>;
+    },
+    routed: (route) => dialled.find((entry) => new URL(entry.url).pathname === `/${route}`)?.socket,
+  };
+};
+
+afterEach(async () => {
+  await Promise.all(children.splice(0).map(async (child) => stopProcess(child)));
+  await Promise.all(roots.splice(0).map(async (root) => rm(root, { recursive: true, force: true })));
+  for (const dispose of authorityDisposers.splice(0)) {
+    dispose();
+  }
+});
+
+/* ---------------------------------------------------------------- *
+ * Scenarios                                                         *
+ * ---------------------------------------------------------------- */
+
+describe('WebSocket transport across two processes', { concurrent: false }, () => {
+  it('E1: renders host-local geometry over the socket, byte-identical to an in-process render', async () => {
+    const serverRoot = await makeRoot({ 'main.ts': boxSource(20) });
+    const server = await startApiServer({ mode: 'host-local', serverRoot });
+    const captured = capturingTransport({ url: server.url });
+    const client = createRuntimeClient({ transport: captured.plugin });
+
+    try {
+      await client.connect();
+      const ready = await captured.handle().open();
+      await ready.channel.ready;
+      expect(ready.channel.hello.payload).toMatchObject({
+        server: 'kernel-runtime-worker',
+        protocolVersion: 4,
+      });
+      expect(client.transport.id).toBe('web-socket');
+      expect(client.transport.descriptor).toEqual(hostLocalDescriptor);
+
+      const document = client.open({ source: { path: 'main.ts' } });
+      const view = document.view('model');
+      const outcome = await view.rendering();
+      if (outcome.superseded) {
+        throw new Error(`Expected the remote render to settle.\n${server.logs.join('')}`);
+      }
+      await geometryHelpers.expectValidGltf(outcome.rendering);
+      await geometryHelpers.expectMeshCount(outcome.rendering, 1);
+
+      const exported = await document.export('glb');
+      expect(exported.success, JSON.stringify(exported)).toBe(true);
+      const remote = extractGltfFromExportResult(exported);
+      expect(remote?.byteLength).toBeGreaterThan(0);
+
+      /* Hash-Parity: the same source through the same runtime definition, in
+       * this process, must produce the same bytes. */
+      const localRoot = await makeRoot({ 'main.ts': boxSource(20) });
+      const local = createRuntimeClient({
+        transport: inProcessTransport({
+          runtime: webSocketRuntime,
+          fileSystem: fromNodeFs(localRoot),
+        }),
+      });
+      try {
+        const localDocument = local.open({ source: { path: 'main.ts' } });
+        const expected = extractGltfFromExportResult(await localDocument.export('glb'));
+        expect(Buffer.from(remote!).equals(Buffer.from(expected!))).toBe(true);
+        localDocument.close();
+      } finally {
+        await local.shutdown();
+      }
+      view.close();
+      document.close();
+    } finally {
+      await client.shutdown();
+    }
+  });
+
+  it('E2: re-renders exactly once per external edit to the API server root', async () => {
+    const serverRoot = await makeRoot({ 'main.ts': boxSource(20) });
+    const entryPath = join(serverRoot, 'main.ts');
+    const server = await startApiServer({ mode: 'host-local', serverRoot });
+    const client = createRuntimeClient({
+      transport: webSocketTransport({ url: server.url }),
+    });
+    const document = client.open({ source: { path: 'main.ts' }, watch: true });
+    const view = document.view('model');
+    const tracker = trackStates(
+      (handler) => view.on('status', handler),
+      (handler) => view.on('rendered', handler),
+    );
+
+    try {
+      const initial = await view.rendering();
+      if (initial.superseded) {
+        throw new Error(`Expected the initial remote render to settle.\n${server.logs.join('')}`);
+      }
+      await geometryHelpers.expectBoundingBoxSize(initial.rendering, boxSize(20), boxTolerance);
+      await tracker.settle();
+
+      // 1. A plain external write, straight through node:fs on the server's own root.
+      let mark = tracker.mark();
+      await writeFile(entryPath, boxSource(25), 'utf8');
+      await delay(debounceSettlingWindow);
+      expect(tracker.renders(mark)).toEqual(['rendering']);
+      await tracker.settle();
+
+      // 2. An editor-style atomic save.
+      mark = tracker.mark();
+      const temporaryPath = join(serverRoot, '.main.ts.editor.tmp');
+      await writeFile(temporaryPath, boxSource(30), 'utf8');
+      await rename(temporaryPath, entryPath);
+      await delay(debounceSettlingWindow);
+      expect(tracker.renders(mark)).toEqual(['rendering']);
+      await tracker.settle();
+
+      // 3. Tau's own cache writes are excluded and must never feed back.
+      mark = tracker.mark();
+      const cacheDirectory = join(serverRoot, '.tau/cache/geometry');
+      await mkdir(cacheDirectory, { recursive: true });
+      for (let index = 0; index < 20; index++) {
+        // oxlint-disable-next-line no-await-in-loop -- sequential burst mirrors the cache writer's own ordering
+        await writeFile(join(cacheDirectory, `burst-${String(index)}.bin`), new Uint8Array([index]));
+      }
+      await delay(debounceSettlingWindow);
+      expect(tracker.renders(mark)).toEqual([]);
+
+      // The autonomous re-renders really produced the edited geometry, not the original.
+      const grown = await view.rendering();
+      if (grown.superseded) {
+        throw new Error(`Expected the post-edit render to settle.\n${server.logs.join('')}`);
+      }
+      await geometryHelpers.expectBoundingBoxSize(grown.rendering, boxSize(30), boxTolerance);
+    } finally {
+      tracker.stop();
+      view.close();
+      document.close();
+      await client.shutdown();
+    }
+  });
+
+  it('E3: serves UI filesystem and compute authorities to the remote kernel, watch included', async () => {
+    const authority = await createBrowserFileSystem({
+      'main.ts': boxSource(20),
+    });
+    const computeRoot = await mkdtemp(join(tmpdir(), 'tau-ws-compute-'));
+    roots.push(computeRoot);
+    const computeWorkspace = 'test:remote-authority';
+    const computeEngine = createSqliteComputeEngine({
+      directory: computeRoot,
+    });
+    const computeStore = fromSqlite({
+      store: computeEngine,
+      workspace: computeWorkspace,
+    });
+    const server = await startApiServer({ mode: 'bridged' });
+    const captured = capturingTransport({
+      url: server.url,
+      fileSystem: authority.fileSystem,
+      compute: { mode: 'durable', store: computeStore },
+    });
+    const client = createRuntimeClient({ transport: captured.plugin });
+    const document = client.open({ source: { path: 'main.ts' }, watch: true });
+    const view = document.view('model');
+    const tracker = trackStates(
+      (handler) => view.on('status', handler),
+      (handler) => view.on('rendered', handler),
+    );
+
+    try {
+      await client.connect();
+      expect(client.transport.descriptor).toEqual({
+        ...hostLocalDescriptor,
+        fileSystem: 'bridged',
+      });
+
+      const initial = await view.rendering();
+      if (initial.superseded) {
+        throw new Error(`Expected the bridged render to settle.\n${server.logs.join('')}`);
+      }
+      await geometryHelpers.expectMeshCount(initial.rendering, 1);
+      await tracker.settle();
+
+      // The remote kernel published its cache through the distinct `/compute`
+      // authority instead of reviving the retired filesystem cache writer.
+      const computeControl = await computeEngine.control({
+        workspace: computeWorkspace,
+      });
+      const control = computeControl;
+      await vi.waitFor(
+        async () => {
+          const inspection = await control.inspect({});
+          expect(inspection.entries).toBeGreaterThan(0);
+        },
+        { timeout: 30_000, interval: 100 },
+      );
+
+      // An external edit in the UI root: the watch registration crossed the socket.
+      let mark = tracker.mark();
+      await authority.service.writeFile(`${authority.root}/main.ts`, boxSource(25));
+      await delay(debounceSettlingWindow);
+      expect(tracker.renders(mark)).toEqual(['rendering']);
+      await tracker.settle();
+
+      // A parameter update is one render, not two.
+      mark = tracker.mark();
+      const updated = await document.update({ parameters: { height: 40 } });
+      if (updated.superseded) {
+        throw new Error(`Expected the parameter update to settle.\n${server.logs.join('')}`);
+      }
+      const updatedRendering = await view.rendering();
+      if (updatedRendering.superseded) {
+        throw new Error(`Expected the updated view to settle.\n${server.logs.join('')}`);
+      }
+      await geometryHelpers.expectBoundingBoxSize(updatedRendering.rendering, boxSize(40), boxTolerance);
+      await delay(debounceSettlingWindow);
+      expect(tracker.renders(mark)).toEqual(['rendering']);
+      await tracker.settle();
+
+      // Cache writes in the UI root are excluded from the bridged watch too.
+      mark = tracker.mark();
+      const cacheDirectory = `${authority.root}/.tau/cache/geometry`;
+      await authority.service.mkdir(cacheDirectory, { recursive: true });
+      for (let index = 0; index < 20; index++) {
+        // oxlint-disable-next-line no-await-in-loop -- sequential burst mirrors the cache writer's own ordering
+        await authority.service.writeFile(`${cacheDirectory}/burst-${String(index)}.bin`, new Uint8Array([index]));
+      }
+      await delay(debounceSettlingWindow);
+      expect(tracker.renders(mark)).toEqual([]);
+    } finally {
+      tracker.stop();
+      view.close();
+      document.close();
+      await client.shutdown();
+      await captured.handle().close();
+      await computeEngine.dispose();
+    }
+  });
+
+  it('E4: surfaces a lone /fs socket failure as a render error, leaving the runtime wire up', async () => {
+    const uiRoot = await makeRoot({
+      'main.ts': boxSource(20),
+      'other.ts': boxSource(35),
+    });
+    const server = await startApiServer({ mode: 'bridged' });
+    const sockets = recordSockets();
+    const captured = capturingTransport({
+      url: server.url,
+      fileSystem: fromNodeFs(uiRoot),
+      createSocket: sockets.createSocket,
+    });
+    const client = createRuntimeClient({ transport: captured.plugin });
+
+    try {
+      const initialDocument = client.open({ source: { path: 'main.ts' } });
+      const initial = await initialDocument.view('model').rendering();
+      if (initial.superseded) {
+        throw new Error(`Expected the bridged render to settle.\n${server.logs.join('')}`);
+      }
+      initialDocument.close();
+
+      const fileSystemSocket = sockets.routed('fs');
+      expect(fileSystemSocket).toBeDefined();
+      /* 4000 is deliberately not 1008: a 1008 is the host rejecting the socket
+       * on topology grounds, and that one does settle the transport. */
+      fileSystemSocket?.close(4000, 'filesystem socket dropped by the test');
+
+      /* Bounded, not hung: this used to wedge forever, because nothing on the
+       * host disposed the bridge proxy when the `/fs` socket died. */
+      const startedAt = Date.now();
+      let failed = true;
+      const otherDocument = client.open({ source: { path: 'other.ts' } });
+      try {
+        const outcome = await otherDocument.view('model').rendering();
+        failed = outcome.superseded ? false : !outcome.rendering.success;
+      } catch {
+        failed = true;
+      } finally {
+        otherDocument.close();
+      }
+      expect(failed).toBe(true);
+      expect(Date.now() - startedAt).toBeLessThan(10_000);
+
+      /* The runtime wire is still up: a lone `/fs` death is a render error, not
+       * a transport close. */
+      const unsettled = Symbol('unsettled');
+      await expect(Promise.race([captured.handle().closed, Promise.resolve(unsettled)])).resolves.toBe(unsettled);
+    } finally {
+      await client.shutdown();
+    }
+  }, 120_000);
+
+  it('E5: settles wire-failure when the API server dies mid-render, and a later close() cannot overwrite it', async () => {
+    const uiRoot = await makeRoot({
+      'main.ts': boxSource(20),
+      'slow.ts': slowSource,
+    });
+    const server = await startApiServer({ mode: 'bridged' });
+    const sockets = recordSockets();
+    const captured = capturingTransport({
+      url: server.url,
+      fileSystem: fromNodeFs(uiRoot),
+      createSocket: sockets.createSocket,
+    });
+    const client = createRuntimeClient({ transport: captured.plugin });
+    const document = client.open({ source: { path: 'slow.ts' } });
+    const view = document.view('model');
+    const tracker = trackStates(
+      (handler) => view.on('status', handler),
+      (handler) => view.on('rendered', handler),
+    );
+
+    try {
+      const pending = view.rendering();
+      /* Never let the rejection float between the kill and the assertion. */
+      const settled = (async (): Promise<{ rejected: boolean }> => {
+        try {
+          await pending;
+          return { rejected: false };
+        } catch {
+          return { rejected: true };
+        }
+      })();
+      await vi.waitFor(
+        () => {
+          expect(tracker.states).toContain('rendering');
+        },
+        { timeout: 120_000, interval: 25 },
+      );
+
+      const killedAt = Date.now();
+      expect(signalProcess(server.child, 'SIGKILL')).toBe(true);
+
+      await expect(settled).resolves.toEqual({ rejected: true });
+      const neverSettled = (async (): Promise<{ cause: string }> => {
+        await delay(10_000);
+        return { cause: 'never settled' };
+      })();
+      const result = await Promise.race([captured.handle().closed, neverSettled]);
+      const settleDuration = Date.now() - killedAt;
+      expect(result.cause).toBe('wire-failure');
+      expect(settleDuration).toBeLessThan(10_000);
+
+      /* A late close() must not overwrite the first cause. */
+      await captured.handle().close();
+      await expect(captured.handle().closed).resolves.toMatchObject({
+        cause: 'wire-failure',
+      });
+
+      /* The UI's own `/fs` bridge server went down with the transport. */
+      await vi.waitFor(
+        () => {
+          expect(sockets.dialled).toHaveLength(2);
+          expect(sockets.dialled.map((entry) => entry.socket.readyState)).toEqual([WebSocket.CLOSED, WebSocket.CLOSED]);
+        },
+        { timeout: 10_000, interval: 50 },
+      );
+    } finally {
+      tracker.stop();
+      view.close();
+      document.close();
+      await client.shutdown();
+    }
+  });
+
+  it('E6: serves two UI clients from one API server without cross-talk', async () => {
+    const serverRoot = await makeRoot({
+      'main-a.ts': boxSource(20),
+      'main-b.ts': boxSource(70),
+    });
+    const server = await startApiServer({ mode: 'host-local', serverRoot });
+    const first = createRuntimeClient({
+      transport: webSocketTransport({ url: server.url }),
+    });
+    const second = createRuntimeClient({
+      transport: webSocketTransport({ url: server.url }),
+    });
+    const firstDocument = first.open({ source: { path: 'main-a.ts' } });
+    const secondDocument = second.open({ source: { path: 'main-b.ts' } });
+    const firstView = firstDocument.view('model');
+    const secondView = secondDocument.view('model');
+
+    try {
+      const [one, two] = await Promise.all([firstView.rendering(), secondView.rendering()]);
+      if (one.superseded || two.superseded) {
+        throw new Error(`Expected both remote renders to settle.\n${server.logs.join('')}`);
+      }
+      await geometryHelpers.expectBoundingBoxSize(one.rendering, boxSize(20), boxTolerance);
+      await geometryHelpers.expectBoundingBoxSize(two.rendering, boxSize(70), boxTolerance);
+
+      // Closing one connection leaves the other's kernel alone.
+      await first.shutdown();
+      const again = await secondView.rendering();
+      if (again.superseded) {
+        throw new Error(`Expected the surviving client to keep rendering.\n${server.logs.join('')}`);
+      }
+      await geometryHelpers.expectBoundingBoxSize(again.rendering, boxSize(70), boxTolerance);
+    } finally {
+      firstView.close();
+      secondView.close();
+      firstDocument.close();
+      secondDocument.close();
+      await first.shutdown();
+      await second.shutdown();
+    }
+  });
+
+  it('E7: exports STL bytes over the socket identical to a deterministic in-process export', async () => {
+    const serverRoot = await makeRoot({ 'main.ts': boxSource(20) });
+    const server = await startApiServer({ mode: 'host-local', serverRoot });
+    const client = createRuntimeClient({
+      transport: webSocketTransport({ url: server.url }),
+    });
+    const localRoot = await makeRoot({ 'main.ts': boxSource(20) });
+    const local = createRuntimeClient({
+      transport: inProcessTransport({
+        runtime: webSocketRuntime,
+        fileSystem: fromNodeFs(localRoot),
+      }),
+    });
+
+    const stlBytes = async (
+      result: Awaited<ReturnType<ReturnType<typeof client.open>['export']>>,
+    ): Promise<Uint8Array<ArrayBuffer>> => {
+      if (!result.success) {
+        throw new Error(`STL export failed.\n${server.logs.join('')}`);
+      }
+      expect(result.files).toHaveLength(1);
+      return result.files[0].bytes;
+    };
+
+    try {
+      const localDocument = local.open({ source: { path: 'main.ts' } });
+      const remoteDocument = client.open({ source: { path: 'main.ts' } });
+      // The format has to be deterministic before it can prove anything about the wire.
+      const localOnce = await stlBytes(await localDocument.export('stl'));
+      const localTwice = await stlBytes(await localDocument.export('stl'));
+      expect(localOnce).toEqual(localTwice);
+      expect(localOnce.byteLength).toBeGreaterThan(0);
+
+      const remote = await stlBytes(await remoteDocument.export('stl'));
+      expect(remote.byteLength).toBeGreaterThan(0);
+      expect(remote).toEqual(localOnce);
+      localDocument.close();
+      remoteDocument.close();
+    } finally {
+      await client.shutdown();
+      await local.shutdown();
+    }
+  });
+
+  it('E8: enforces the origin allowlist at the HTTP upgrade across processes', async () => {
+    const serverRoot = await makeRoot({ 'main.ts': boxSource(20) });
+    const server = await startApiServer({
+      mode: 'host-local',
+      serverRoot,
+      allowedOrigins: 'http://ui.test',
+    });
+
+    const allowed = new WebSocket(`${server.url}/runtime`, {
+      origin: 'http://ui.test',
+    });
+    const [frame] = (await once(allowed, 'message')) as [Uint8Array<ArrayBuffer>];
+    /* The wire is msgpack and the runtime hello is the first frame the host
+     * posts — decoding it here is the codec assertion E7's parity cannot make. */
+    expect(decode(frame)).toMatchObject({
+      v: 1,
+      k: 'lh',
+      d: { server: 'kernel-runtime-worker', protocolVersion: 4 },
+    });
+    allowed.close();
+
+    const denied = new WebSocket(`${server.url}/runtime`, {
+      origin: 'http://evil.test',
+    });
+    const [error] = (await once(denied, 'error')) as [Error];
+    expect(error.message).toContain('403');
+
+    const anonymous = new WebSocket(`${server.url}/runtime`);
+    await once(anonymous, 'open');
+    anonymous.close();
+  });
+});

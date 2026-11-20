@@ -1,0 +1,748 @@
+/* eslint-disable @typescript-eslint/naming-convention -- provider wire keys use native snake_case. */
+import { describe, expect, it, vi } from 'vitest';
+import type { Context, UserMessage } from '@earendil-works/pi-ai';
+import { z } from 'zod';
+import type { AgentLogEvent, ProviderMessage } from '#log/event-types.js';
+import type { MaterializedDocument, ModelStreamEvent, ModelStreamRequest } from '#waist/ports.js';
+import { documentSentinel } from '#harness/session-record.js';
+import { createMemoryEventLog } from '#harness/harness.fixture.js';
+import { createAgentSession } from '#harness/session.js';
+import {
+  attachmentBudgetCharacters,
+  attachmentImageLimit,
+  fitAttachmentBudget,
+  omitAttachments,
+  planAttachmentEvictions,
+  planAttachmentOmissions,
+  rewriteDocuments,
+} from '#transport/document-payload.js';
+import { GatewayModelTransportError } from '#transport/gateway-model-transport.js';
+import { createTauCloudGatewayModelTransport } from '#transport/tau-cloud-gateway-model-transport.js';
+import { authoritativeGatewayWireFixtures } from '#transport/gateway-wire.fixture.js';
+import { stampedHistory } from '#transport/prefix-stamp.fixture.js';
+
+/*
+ * W11c's admission schemas (apps/libs/api-llm-gateway/src/billable-model-request.ts),
+ * restated: a published package cannot depend on the private API app. Keep these
+ * in step with `anthropicDocumentSchema`, `inputFileSchema` and
+ * `completionsFileSchema` there — a drift means the gateway refuses every PDF turn.
+ */
+const pdfDataUrl = z.string().regex(/^data:application\/pdf;base64,[A-Za-z\d+/]*={0,2}$/u);
+const documentName = z.string().min(1).max(256);
+const gatewayDocumentSchemas = {
+  'anthropic-messages': z
+    .object({
+      type: z.literal('document'),
+      title: documentName.optional(),
+      source: z
+        .object({
+          type: z.literal('base64'),
+          media_type: z.literal('application/pdf'),
+          data: z.string().regex(/^[A-Za-z\d+/]*={0,2}$/u),
+        })
+        .strict(),
+      cache_control: z
+        .object({ type: z.literal('ephemeral'), ttl: z.enum(['5m', '1h']).optional() })
+        .strict()
+        .optional(),
+    })
+    .strict(),
+  'openai-responses': z
+    .object({ type: z.literal('input_file'), filename: documentName, file_data: pdfDataUrl })
+    .strict(),
+  'openai-completions': z
+    .object({
+      type: z.literal('file'),
+      file: z.object({ filename: documentName, file_data: pdfDataUrl }).strict(),
+    })
+    .strict(),
+} as const;
+
+const pdfBytes = new TextEncoder().encode('%PDF-1.4 bracket spec');
+const pdfData = Buffer.from(pdfBytes).toString('base64');
+const hash = 'a'.repeat(64);
+const pdf: MaterializedDocument = { data: pdfData, mediaType: 'application/pdf', filename: 'bracket-spec.pdf' };
+const sentinel = documentSentinel(hash);
+const sentinelOpening = '⟃tau:document:';
+
+type Wire = keyof typeof gatewayDocumentSchemas;
+
+const wires = [
+  { wire: 'anthropic-messages', providerKind: 'anthropic', messagesKey: 'messages' },
+  { wire: 'openai-responses', providerKind: 'openai', messagesKey: 'input' },
+  { wire: 'openai-completions', providerKind: 'vertexai', messagesKey: 'messages' },
+] as const satisfies ReadonlyArray<{
+  wire: Wire;
+  providerKind: ModelStreamRequest['providerKind'];
+  messagesKey: string;
+}>;
+
+const sseBody = (frames: readonly string[]): Response =>
+  new Response(frames.join(''), {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream', 'x-tau-operation-id': 'operation-document-1' },
+  });
+
+const replyFor = (wire: Wire): Response =>
+  sseBody(
+    wire === 'anthropic-messages'
+      ? authoritativeGatewayWireFixtures.anthropicToolTurn
+      : wire === 'openai-responses'
+        ? authoritativeGatewayWireFixtures.openAiResponsesToolTurn
+        : authoritativeGatewayWireFixtures.browserTurn,
+  );
+
+const request = (overrides: Partial<ModelStreamRequest>): ModelStreamRequest => ({
+  attemptId: 'attempt-document-1',
+  invocationPurpose: 'generation',
+  modelId: 'fixture-model',
+  maxTokens: 512,
+  systemPrompt: 'You are a CAD assistant.',
+  messages: [
+    {
+      id: 'user-1',
+      role: 'user',
+      content: [
+        { type: 'text', text: 'What hole diameter does the attached spec require?' },
+        { type: 'text', text: sentinel },
+        { type: 'text', text: 'Answer in millimetres.' },
+      ],
+    },
+  ],
+  documents: new Map([[hash, pdf]]),
+  tools: [],
+  signal: new AbortController().signal,
+  ...overrides,
+});
+
+const capturingTransport = (wire: Wire) => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    bodies.push(JSON.parse(init?.body as string) as Record<string, unknown>);
+    return replyFor(wire);
+  });
+  const transport = createTauCloudGatewayModelTransport({
+    baseUrl: 'https://gateway.example',
+    fetch,
+    model: { contextWindow: 200_000 },
+  });
+  return { transport, fetch, bodies };
+};
+
+const drain = async (stream: AsyncIterable<ModelStreamEvent>): Promise<void> => {
+  // oxlint-disable-next-line no-unused-vars -- Draining is the point.
+  for await (const _event of stream) {
+    // Drain.
+  }
+};
+
+const userContent = (body: Record<string, unknown>, key: string): unknown[] => {
+  const messages = body[key] as Array<{ role: string; content: unknown }>;
+  const user = messages.find((message) => message.role === 'user');
+  return user?.content as unknown[];
+};
+
+describe('rewriteDocuments', () => {
+  it('returns undefined and leaves the payload untouched when there is nothing to rewrite', () => {
+    const payload = { messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }] };
+    const before = structuredClone(payload);
+
+    expect(rewriteDocuments(undefined, 'anthropic-messages')(payload)).toBeUndefined();
+    expect(rewriteDocuments(new Map([[hash, pdf]]), 'openai-completions')(payload)).toBeUndefined();
+    expect(payload).toEqual(before);
+  });
+
+  it('falls back to <hash>.pdf when the document has no usable name', () => {
+    const tooLong = `${'x'.repeat(253)}.pdf`;
+    for (const filename of [undefined, tooLong]) {
+      const payload = { input: [{ role: 'user', content: [{ type: 'input_text', text: sentinel }] }] };
+      const document: MaterializedDocument = { data: pdfData, mediaType: 'application/pdf', filename };
+
+      rewriteDocuments(new Map([[hash, document]]), 'openai-responses')(payload);
+
+      expect(payload.input[0]?.content[0]).toEqual({
+        type: 'input_file',
+        filename: `${hash}.pdf`,
+        file_data: `data:application/pdf;base64,${pdfData}`,
+      });
+    }
+  });
+
+  it('keeps the Anthropic cache breakpoint on the document block that replaces its sentinel (P33)', () => {
+    const payload = {
+      messages: [{ role: 'user', content: [{ type: 'text', text: sentinel, cache_control: { type: 'ephemeral' } }] }],
+    };
+
+    rewriteDocuments(new Map([[hash, pdf]]), 'anthropic-messages')(payload);
+
+    const [block] = payload.messages[0]!.content;
+    expect(gatewayDocumentSchemas['anthropic-messages'].parse(block)).toEqual({
+      type: 'document',
+      title: 'bracket-spec.pdf',
+      source: { type: 'base64', media_type: 'application/pdf', data: pdfData },
+      cache_control: { type: 'ephemeral' },
+    });
+  });
+
+  it('turns an embedded sentinel into a neutral marker, named when the side table names it (P32)', () => {
+    const embedded = (text: string) => ({ messages: [{ role: 'user', content: [{ type: 'text', text }] }] });
+    const named = embedded(`[User]: read this\n${sentinel}\n\n[Assistant]: ok`);
+    const unnamed = embedded(`<conversation>\n[User]: ${sentinel}\n</conversation>`);
+    const bare = { messages: [{ role: 'user', content: `see ${sentinel}` }] };
+
+    expect(rewriteDocuments(new Map([[hash, pdf]]), 'openai-completions')(named)).toBe(named);
+    rewriteDocuments(undefined, 'anthropic-messages')(unnamed);
+    rewriteDocuments(undefined, 'openai-completions')(bare);
+
+    expect(named.messages[0]?.content[0]?.text).toBe(
+      '[User]: read this\n[attached document: bracket-spec.pdf]\n\n[Assistant]: ok',
+    );
+    expect(unnamed.messages[0]?.content[0]?.text).toBe('<conversation>\n[User]: [attached document]\n</conversation>');
+    expect(bare.messages[0]?.content).toBe('see [attached document]');
+  });
+
+  it('should give an assistant block that echoes a sentinel the neutral marker, not a document (G7)', () => {
+    const payload = {
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: sentinel }] },
+        { role: 'assistant', content: [{ type: 'text', text: sentinel }] },
+      ],
+    };
+
+    rewriteDocuments(new Map([[hash, pdf]]), 'anthropic-messages')(payload);
+
+    expect(payload.messages[0]!.content[0]).toMatchObject({ type: 'document' });
+    expect(payload.messages[1]!.content[0]).toEqual({ type: 'text', text: '[attached document: bracket-spec.pdf]' });
+  });
+
+  it('refuses a standalone sentinel the side table cannot resolve (D21)', () => {
+    const payload = { messages: [{ role: 'user', content: [{ type: 'text', text: sentinel }] }] };
+
+    expect(() => rewriteDocuments(undefined, 'anthropic-messages')(payload)).toThrow(
+      `names a document this request does not carry`,
+    );
+    expect(() => rewriteDocuments(new Map([['b'.repeat(64), pdf]]), 'anthropic-messages')(payload)).toThrow(
+      `names a document this request does not carry`,
+    );
+  });
+
+  it('refuses a payload that still holds a sentinel sequence after the rewrite (D21)', () => {
+    const malformed = {
+      messages: [{ role: 'user', content: [{ type: 'text', text: `${sentinelOpening}NOT-A-HASH⟄` }] }],
+    };
+
+    expect(() => rewriteDocuments(new Map([[hash, pdf]]), 'openai-completions')(malformed)).toThrow(
+      'a document sentinel would reach the provider',
+    );
+  });
+
+  it('refuses a document the gateway cannot admit', () => {
+    const payload = { messages: [{ role: 'user', content: [{ type: 'text', text: sentinel }] }] };
+    const text: MaterializedDocument = { data: pdfData, mediaType: 'text/plain' };
+
+    expect(() => rewriteDocuments(new Map([[hash, text]]), 'openai-completions')(payload)).toThrow(
+      'text/plain documents are not supported',
+    );
+  });
+});
+
+describe('fitAttachmentBudget', () => {
+  const otherHash = 'b'.repeat(64);
+  const context = (): Context => ({
+    systemPrompt: 'CAD',
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'image', mimeType: 'image/png', data: 'AAAAAAAA' },
+          { type: 'text', text: documentSentinel(otherHash) },
+        ],
+        timestamp: 1,
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'c',
+        toolName: 'screenshot',
+        content: [{ type: 'image', mimeType: 'image/png', data: 'AAAA' }],
+        isError: false,
+        timestamp: 2,
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'again' },
+          { type: 'text', text: sentinel },
+        ],
+        timestamp: 3,
+      },
+    ],
+    tools: [],
+  });
+  const documents = new Map<string, MaterializedDocument>([
+    [hash, { ...pdf, data: 'AAAAAAAA' }],
+    [otherHash, { data: 'AAAAAAAA', mediaType: 'application/pdf', filename: 'old-spec.pdf' }],
+  ]);
+
+  it('should return the same context when every attachment fits', () => {
+    const input = context();
+    expect(fitAttachmentBudget(input, documents, { budget: 28 })).toEqual({ context: input, omitted: 0 });
+  });
+
+  it('should evict the oldest attachments in a batch and name the ones it omits', () => {
+    const input = context();
+    const before = structuredClone(input);
+
+    /* Sizes 8, 8, 4, 8 against a budget of 12 (floor 8.4): the second overflow evicts both the 8 and the 4. */
+    const fitted = fitAttachmentBudget(input, documents, { budget: 12 });
+
+    expect(fitted.omitted).toBe(3);
+    expect(fitted.context.messages.map((message) => message.content)).toEqual([
+      [
+        { type: 'text', text: '[attachment omitted]' },
+        { type: 'text', text: '[attachment omitted: old-spec.pdf]' },
+      ],
+      [{ type: 'text', text: '[attachment omitted]' }],
+      [
+        { type: 'text', text: 'again' },
+        { type: 'text', text: sentinel },
+      ],
+    ]);
+    expect(input).toEqual(before);
+  });
+});
+
+describe('fitAttachmentBudget batch eviction (I1)', () => {
+  const attachments = (count: number, size = 10): Context => ({
+    systemPrompt: 'CAD',
+    messages: Array.from(
+      { length: count },
+      (_, index): UserMessage => ({
+        role: 'user',
+        content: [{ type: 'image', mimeType: 'image/png', data: 'A'.repeat(size) }],
+        timestamp: index,
+      }),
+    ),
+    tools: [],
+  });
+  const omittedIndexes = (context: Context): number[] =>
+    context.messages.flatMap((message, index) =>
+      typeof message.content !== 'string' && message.content.some((block) => block.type === 'text') ? [index] : [],
+    );
+
+  it('should rewrite history only when the budget overflows, evicting the oldest down to the floor in one batch', () => {
+    const omitted = Array.from(
+      { length: 15 },
+      (_, index) => fitAttachmentBudget(attachments(index + 1), undefined, { budget: 100 }).omitted,
+    );
+    /* Ten fit; the eleventh overflows and evicts four, which lasts until the fifteenth overflows again. */
+    expect(omitted).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 4, 4, 8]);
+  });
+
+  it('should keep every earlier eviction when a later attachment arrives, so replays agree byte for byte', () => {
+    for (let count = 1; count < 15; count++) {
+      const before = omittedIndexes(fitAttachmentBudget(attachments(count), undefined, { budget: 100 }).context);
+      const after = omittedIndexes(fitAttachmentBudget(attachments(count + 1), undefined, { budget: 100 }).context);
+      expect(after.slice(0, before.length), `count ${String(count)}`).toEqual(before);
+      /* Evictions take the oldest attachments, never one in the middle. */
+      expect(after).toEqual(after.map((_, index) => index));
+    }
+  });
+
+  it('should keep the newest attachment unless it alone exceeds the budget', () => {
+    const pair = fitAttachmentBudget(attachments(2, 80), undefined, { budget: 100 });
+    expect(pair.omitted).toBe(1);
+    expect(omittedIndexes(pair.context)).toEqual([0]);
+    expect(fitAttachmentBudget(attachments(1, 150), undefined, { budget: 100 }).omitted).toBe(1);
+  });
+});
+
+describe('fitAttachmentBudget image count ceiling (I1)', () => {
+  const images = (count: number): Context => ({
+    systemPrompt: 'CAD',
+    messages: Array.from(
+      { length: count },
+      (_, index): UserMessage => ({
+        role: 'user',
+        content: [{ type: 'image', mimeType: 'image/png', data: 'AA' }],
+        timestamp: index,
+      }),
+    ),
+    tools: [],
+  });
+  const omittedIndexes = (context: Context): number[] =>
+    context.messages.flatMap((message, index) =>
+      typeof message.content !== 'string' && message.content.some((block) => block.type === 'text') ? [index] : [],
+    );
+
+  it('should refuse more images than the Anthropic Messages API accepts in one request', () => {
+    expect(attachmentImageLimit).toBe(100);
+    expect(fitAttachmentBudget(images(attachmentImageLimit), undefined).omitted).toBe(0);
+    const over = fitAttachmentBudget(images(attachmentImageLimit + 1), undefined);
+    expect(over.omitted).toBeGreaterThan(0);
+    expect(over.context.messages.length - omittedIndexes(over.context).length).toBeLessThanOrEqual(
+      attachmentImageLimit,
+    );
+  });
+
+  it('should evict the oldest images down to the floor in one batch when the count overflows', () => {
+    const omitted = Array.from(
+      { length: 15 },
+      (_, index) => fitAttachmentBudget(images(index + 1), undefined, { imageLimit: 10 }).omitted,
+    );
+    /* Ten fit; the eleventh overflows and evicts four, which lasts until the fifteenth overflows again. */
+    expect(omitted).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 4, 4, 8]);
+  });
+
+  it('should keep every earlier eviction when a later image arrives, so replays agree byte for byte', () => {
+    for (let count = 1; count < 15; count++) {
+      const before = omittedIndexes(fitAttachmentBudget(images(count), undefined, { imageLimit: 10 }).context);
+      const after = omittedIndexes(fitAttachmentBudget(images(count + 1), undefined, { imageLimit: 10 }).context);
+      expect(after.slice(0, before.length), `count ${String(count)}`).toEqual(before);
+      expect(after).toEqual(after.map((_, index) => index));
+    }
+  });
+
+  it('should count documents toward the bytes only, never toward the images', () => {
+    const documents = new Map<string, MaterializedDocument>([[hash, { ...pdf, data: 'AAAA' }]]);
+    const context: Context = {
+      systemPrompt: 'CAD',
+      messages: Array.from(
+        { length: 12 },
+        (_, index): UserMessage => ({ role: 'user', content: [{ type: 'text', text: sentinel }], timestamp: index }),
+      ),
+      tools: [],
+    };
+    expect(fitAttachmentBudget(context, documents, { imageLimit: 10 }).omitted).toBe(0);
+  });
+});
+
+describe('planAttachmentEvictions: each bound evicts by its own rule', () => {
+  const document = (size: number) => ({ size, image: false });
+  const image = { size: 0, image: true };
+
+  it('should evict down to the byte floor alone when only the bytes overflow, leaving the images under their limit', () => {
+    /* 1,100 characters against 1,000: the first document alone brings the total to the floor of 700. */
+    const measures = [document(600), ...Array.from({ length: 90 }, () => image), document(500)];
+    expect([...planAttachmentEvictions(measures, { budget: 1000, imageLimit: 100 })]).toEqual([0]);
+  });
+
+  it('should evict only the oldest images when only the images overflow, whatever bytes a document weighs', () => {
+    /* 101 images against 100 while the bytes sit between the floor and the budget: the document stays. */
+    const measures = [document(75), ...Array.from({ length: 101 }, () => image)];
+    const evicted = [...planAttachmentEvictions(measures, { budget: 100, imageLimit: 100 })];
+    expect(evicted).not.toContain(0);
+    /* Down to the image floor of 70: the oldest 31 images. */
+    expect(evicted).toEqual(Array.from({ length: 31 }, (_, index) => index + 1));
+  });
+
+  it('should apply both rules when one attachment overflows both bounds', () => {
+    const measures = [...Array.from({ length: 10 }, () => ({ size: 10, image: true })), { size: 100, image: true }];
+    const evicted = [...planAttachmentEvictions(measures, { budget: 100, imageLimit: 10 })];
+    /* Bytes: 200 down to a floor of 70 takes the ten oldest; images were then under their floor of 7 as well. */
+    expect(evicted).toEqual(Array.from({ length: 10 }, (_, index) => index));
+  });
+});
+
+describe('attachment omissions decided from the durable rows (I1 across devices)', () => {
+  const imageRef = (index: number, byteLength?: number): ProviderMessage => ({
+    id: `user-${String(index)}`,
+    role: 'user',
+    content: [
+      { type: 'text', text: `capture ${String(index)}` },
+      {
+        type: 'file-ref',
+        path: `attachments/${String(index).padStart(64, '0')}.png`,
+        mimeType: 'image/png',
+        filename: `view-${String(index)}.png`,
+        ...(byteLength === undefined ? {} : { byteLength }),
+      },
+    ],
+  });
+  const documentRef: ProviderMessage = {
+    id: 'user-doc',
+    role: 'user',
+    content: [{ type: 'file-ref', path: `attachments/${hash}.pdf`, mimeType: 'application/pdf', byteLength: 30 }],
+  };
+  const stored = (index: number): ProviderMessage => ({
+    id: `shot-${String(index)}`,
+    role: 'tool-output',
+    toolCallId: `call-${String(index)}`,
+    toolName: 'screenshot',
+    content: {
+      images: [
+        { view: 'front', path: `attachments/${'f'.repeat(64)}.webp`, mimeType: 'image/webp', byteLength: 3 },
+        { view: 'top', dataUrl: 'data:image/png;base64,AAAA' },
+      ],
+    },
+    isError: false,
+  });
+
+  it('should evict the oldest images past the limit, whatever device reads them, and leave documents alone', () => {
+    const history = [
+      imageRef(0, 3),
+      imageRef(1, 3),
+      documentRef,
+      stored(2),
+      ...[3, 4, 5, 6, 7, 8, 9].map((i) => imageRef(i, 3)),
+    ];
+    /* Eleven images (two per capture) against a limit of ten: the oldest four go, down to the floor of seven. */
+    const omissions = planAttachmentOmissions(history, { imageLimit: 10 });
+    expect([...omissions.entries()].map(([id, omission]) => [id, [...omission.blocks], [...omission.images]])).toEqual([
+      ['user-0', [1], []],
+      ['user-1', [1], []],
+      ['shot-2', [], [0, 1]],
+    ]);
+    expect(omitAttachments(history[0]!, omissions.get('user-0')!).content).toEqual([
+      { type: 'text', text: 'capture 0' },
+      { type: 'text', text: '[attachment omitted: view-0.png]' },
+    ]);
+    expect(omitAttachments(stored(2), omissions.get('shot-2')!).content).toEqual({ images: [] });
+    /* The copy is transient: the durable row is untouched. */
+    expect(history[0]).toEqual(imageRef(0, 3));
+  });
+
+  it('should weigh a reference by the bytes its row records and count one it does not size as an image of no bytes', () => {
+    /* 36 bytes encode to 48 characters each; three overflow a budget of 100 and evict down to the floor of 70. */
+    expect([
+      ...planAttachmentOmissions([imageRef(0, 36), imageRef(1, 36), imageRef(2, 36)], { budget: 100 }).keys(),
+    ]).toEqual(['user-0', 'user-1']);
+    expect(planAttachmentOmissions([imageRef(0), imageRef(1), imageRef(2)], { budget: 100 }).size).toBe(0);
+    /* Three images against a limit of two: the floor is one, so the oldest two go. */
+    expect([...planAttachmentOmissions([imageRef(0), imageRef(1), imageRef(2)], { imageLimit: 2 }).keys()]).toEqual([
+      'user-0',
+      'user-1',
+    ]);
+  });
+});
+
+describe('gateway transport document rewrite (D21, D22)', () => {
+  it.each(wires)(
+    'posts the $wire native document block with the PDF bytes, in the sentinel position and with no sentinel',
+    async ({ wire, providerKind, messagesKey }) => {
+      const { transport, bodies } = capturingTransport(wire);
+
+      await drain(transport.stream(request({ providerKind })));
+
+      expect(bodies).toHaveLength(1);
+      const body = bodies[0]!;
+      const serialized = JSON.stringify(body);
+      expect(serialized).not.toContain(sentinelOpening);
+      expect(serialized).toContain(pdfData);
+      const content = userContent(body, messagesKey);
+      expect(content).toHaveLength(3);
+      // Position: prompt caching keys on the prefix, so the block takes the sentinel's slot.
+      expect(content[0]).toMatchObject({ text: 'What hole diameter does the attached spec require?' });
+      expect(content[2]).toMatchObject({ text: 'Answer in millimetres.' });
+      expect(gatewayDocumentSchemas[wire].safeParse(content[1]).success).toBe(true);
+    },
+  );
+
+  it('posts a trailing Anthropic PDF as the rolling cache breakpoint (P33)', async () => {
+    const { transport, bodies } = capturingTransport('anthropic-messages');
+    const trailing: ProviderMessage = {
+      id: 'user-1',
+      role: 'user',
+      content: [
+        { type: 'text', text: 'What hole diameter does the attached spec require?' },
+        { type: 'text', text: sentinel },
+      ],
+    };
+
+    await drain(transport.stream(request({ providerKind: 'anthropic', messages: [trailing] })));
+
+    const content = userContent(bodies[0]!, 'messages');
+    expect(content.at(-1)).toEqual({
+      type: 'document',
+      title: 'bracket-spec.pdf',
+      source: { type: 'base64', media_type: 'application/pdf', data: pdfData },
+      cache_control: { type: 'ephemeral', ttl: '1h' },
+    });
+    expect(gatewayDocumentSchemas['anthropic-messages'].safeParse(content.at(-1)).success).toBe(true);
+    expect(content[0]).not.toHaveProperty('cache_control');
+  });
+
+  it.each(wires)(
+    'fails a $wire request whose sentinel has no side-table entry with INVALID_REQUEST before fetch',
+    async ({ wire, providerKind }) => {
+      const { transport, fetch } = capturingTransport(wire);
+
+      const failure = await drain(transport.stream(request({ providerKind, documents: undefined }))).catch(
+        (error: unknown) => error,
+      );
+
+      expect(failure).toBeInstanceOf(GatewayModelTransportError);
+      expect(failure).toMatchObject({ code: 'INVALID_REQUEST' });
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it('fails a request that would leak a sentinel with INVALID_REQUEST before fetch', async () => {
+    const { transport, fetch } = capturingTransport('anthropic-messages');
+    const leaking: ProviderMessage = {
+      id: 'user-1',
+      role: 'user',
+      content: [{ type: 'text', text: `${sentinelOpening}${'A'.repeat(64)}⟄` }],
+    };
+
+    const failure = await drain(transport.stream(request({ providerKind: 'anthropic', messages: [leaking] }))).catch(
+      (error: unknown) => error,
+    );
+
+    expect(failure).toMatchObject({ name: 'GatewayModelTransportError', code: 'INVALID_REQUEST' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('passes a request with no documents and no sentinels through byte-identical', async () => {
+    const plain = { messages: [{ id: 'user-1', role: 'user', content: 'hello' }] as ProviderMessage[] };
+    const withTable = capturingTransport('openai-completions');
+    const without = capturingTransport('openai-completions');
+
+    await drain(withTable.transport.stream(request({ providerKind: 'cerebras', ...plain })));
+    await drain(without.transport.stream(request({ providerKind: 'cerebras', ...plain, documents: undefined })));
+
+    expect(withTable.bodies).toEqual(without.bodies);
+    expect(JSON.stringify(without.bodies[0])).toContain('"content":"hello"');
+  });
+
+  it('composes with the Vertex thought-signature echo: one request carries both', async () => {
+    const { transport, bodies } = capturingTransport('openai-completions');
+    const signature = 'opaque-Gemini+/=signature';
+    const continuing = request({
+      providerKind: 'vertexai',
+      messages: [
+        {
+          id: 'user-1',
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Read this.' },
+            { type: 'text', text: sentinel },
+          ],
+        },
+        {
+          id: 'assistant-1',
+          role: 'assistant',
+          content: [
+            { type: 'toolCall', id: 'call-signed', name: 'read_file', arguments: {}, thoughtSignature: signature },
+          ],
+          metadata: {
+            api: 'openai-completions',
+            provider: 'vertexai',
+            model: 'fixture-model',
+            stopReason: 'toolUse',
+          },
+        },
+        {
+          id: 'tool-1',
+          role: 'tool-output',
+          toolCallId: 'call-signed',
+          toolName: 'read_file',
+          content: 'x',
+          isError: false,
+        },
+      ],
+    });
+
+    /* The signed call replays under the stamp its own request left (P2). */
+    await drain(transport.stream({ ...continuing, messages: await stampedHistory(continuing) }));
+
+    const messages = bodies[0]!['messages'] as Array<Record<string, unknown>>;
+    const user = messages.find((message) => message['role'] === 'user');
+    const assistant = messages.find((message) => message['role'] === 'assistant');
+    expect(user?.['content']).toHaveProperty([1], {
+      type: 'file',
+      file: { filename: 'bracket-spec.pdf', file_data: `data:application/pdf;base64,${pdfData}` },
+    });
+    expect(assistant?.['tool_calls']).toMatchObject([
+      { id: 'call-signed', extra_content: { google: { thought_signature: signature } } },
+    ]);
+  });
+
+  it('should post only the newest PDF when two exceed the request budget (R1)', async () => {
+    const olderHash = 'c'.repeat(64);
+    const large = 'A'.repeat(Math.ceil(attachmentBudgetCharacters / 2) + 4);
+    const { transport, bodies } = capturingTransport('openai-responses');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await drain(
+      transport.stream(
+        request({
+          providerKind: 'openai',
+          messages: [
+            { id: 'user-0', role: 'user', content: [{ type: 'text', text: documentSentinel(olderHash) }] },
+            { id: 'user-1', role: 'user', content: [{ type: 'text', text: sentinel }] },
+          ],
+          documents: new Map([
+            [olderHash, { data: large, mediaType: 'application/pdf', filename: 'older.pdf' }],
+            [hash, { ...pdf, data: large }],
+          ]),
+        }),
+      ),
+    );
+
+    const input = bodies[0]!['input'] as Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    const users = input.filter((message) => message.role === 'user');
+    expect(users[0]!.content).toEqual([{ type: 'input_text', text: '[attachment omitted: older.pdf]' }]);
+    expect(users[1]!.content[0]).toMatchObject({ type: 'input_file', filename: 'bracket-spec.pdf' });
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
+  it('compacts history holding a PDF through the real summariser, with a marker and no sentinel on the wire (P32)', async () => {
+    const pdfPath = `attachments/${hash}.pdf`;
+    const base = {
+      version: 1,
+      leaderEpoch: 'history-epoch',
+      recordedAt: '2026-09-16T00:00:00.000Z',
+      runId: 'history-run',
+      type: 'message.appended',
+    } as const;
+    const history: AgentLogEvent[] = [
+      {
+        ...base,
+        sequence: 0,
+        message: {
+          id: 'history-pdf',
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Here is the bracket spec.' },
+            { type: 'file-ref', path: pdfPath, mimeType: 'application/pdf', filename: 'bracket-spec.pdf' },
+          ],
+        },
+      },
+      ...Array.from(
+        { length: 8 },
+        (_, index): AgentLogEvent => ({
+          ...base,
+          sequence: index + 1,
+          message: { id: `history-${index}`, role: 'user', content: String(index).repeat(4000) },
+        }),
+      ),
+    ];
+    const { transport, bodies, fetch } = capturingTransport('openai-completions');
+    const session = await createAgentSession({
+      chatId: 'chat-compaction',
+      runId: 'run-compaction',
+      leaderEpoch: 'compaction-epoch',
+      systemPrompt: 'system',
+      model: { id: 'fixture-model', providerKind: 'vertexai', contextWindow: 8192 },
+      modelTransport: transport,
+      toolRegistry: { list: () => [], invoke: vi.fn() },
+      eventLog: await createMemoryEventLog(history),
+      attachments: { read: async (_chatId, path) => (path === pdfPath ? pdfBytes : undefined) },
+    });
+
+    await session.prompt({ id: 'turn-after', role: 'user', content: 'continue' });
+    const snapshot = await session.snapshot();
+    await session.close();
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const [summary, generation] = bodies.map((body) => JSON.stringify(body));
+    expect(summary).toContain('You are a context summarization assistant');
+    // Pi's contentText joins the blocks with no separator; the side table names the document (G6).
+    expect(summary).toContain('[User]: Here is the bracket spec.[attached document: bracket-spec.pdf]');
+    for (const body of [summary, generation]) {
+      expect(body).not.toContain(sentinelOpening);
+    }
+    expect(snapshot.messages.some((message) => JSON.stringify(message).includes('<summary>'))).toBe(true);
+  });
+});

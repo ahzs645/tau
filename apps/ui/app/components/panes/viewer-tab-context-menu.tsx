@@ -1,7 +1,9 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback } from 'react';
 import type { IDockviewPanelHeaderProps } from 'dockview-react';
-import { Columns2, Copy, FileCode, FolderTree, Rows2, X, XCircle } from 'lucide-react';
-import { ContextMenuItem, ContextMenuSeparator } from '#components/ui/context-menu.js';
+import { Columns2, Copy, FileCode, FolderTree, Plus, Printer, Rows2, X, XCircle } from 'lucide-react';
+import { ContextMenuItem, ContextMenuSeparator } from '@taucad/ui/components/context-menu';
+import { DropdownMenuItem, DropdownMenuSeparator } from '@taucad/ui/components/dropdown-menu';
+import { isPrinterFileName } from '#components/printer/printer-file-kind.js';
 import {
   closeOtherPanels,
   closePanelsToTheRight,
@@ -9,12 +11,16 @@ import {
   closeAllPanelsInGroup,
   copyPathToClipboard,
 } from '#components/panes/tab-context-menu-actions.js';
+import { useSelector } from '@xstate/react';
 import { useProject } from '#hooks/use-project.js';
+import { NativeFileManagerIcon, useRevealInFileManager } from '#hooks/use-native-file-manager.js';
 import { withTabContextMenu } from '#components/panes/with-tab-context-menu.js';
+import type { DockviewTabIconRenderer } from '#components/panes/dockview-tab.js';
+import { useProjectWorkspace } from '#routes/w.$workspace.$project/project-workspace-context.js';
 
 type ViewerPanelParameters = {
   viewId: string;
-  entryFile: string | undefined;
+  entryPath: string | undefined;
 };
 
 /**
@@ -23,22 +29,27 @@ type ViewerPanelParameters = {
  * Provides close operations, path copying, split controls,
  * and cross-dock navigation (open in editor, reveal in file tree).
  */
-function ViewerTabContextMenu(properties: IDockviewPanelHeaderProps): React.JSX.Element {
-  const { api, containerApi } = properties;
-  const { editorRef } = useProject();
+export function ViewerTabContextMenu(
+  properties: Pick<IDockviewPanelHeaderProps, 'api' | 'params'> & {
+    readonly variant?: 'context' | 'dropdown';
+    readonly onNavigate?: (surface: 'editor' | 'files') => void;
+  },
+): React.JSX.Element {
+  const { api, onNavigate, variant = 'context' } = properties;
+  const Item = variant === 'dropdown' ? DropdownMenuItem : ContextMenuItem;
+  const Separator = variant === 'dropdown' ? DropdownMenuSeparator : ContextMenuSeparator;
+  const { editorRef, projectRef } = useProject();
+  const projectId = useSelector(projectRef, (state) => state.context.project?.id);
+  const revealInFileManager = useRevealInFileManager(projectId);
+  const workspace = useProjectWorkspace({ enableNoContext: true });
 
-  const entryFile = (properties.params as ViewerPanelParameters | undefined)?.entryFile;
+  const entryPath = (properties.params as ViewerPanelParameters | undefined)?.entryPath;
 
-  const { hasOthers, hasRight, hasLeft } = useMemo(() => {
-    const { panels } = api.group;
-    const currentIndex = panels.findIndex((panel) => panel.id === api.id);
-
-    return {
-      hasOthers: panels.length > 1,
-      hasRight: currentIndex < panels.length - 1,
-      hasLeft: currentIndex > 0,
-    };
-  }, [api]);
+  const { panels } = api.group;
+  const currentIndex = panels.findIndex((panel) => panel.id === api.id);
+  const hasOthers = panels.length > 1;
+  const hasRight = currentIndex < panels.length - 1;
+  const hasLeft = currentIndex > 0;
 
   // ── Close actions ──
   const handleClose = useCallback(() => {
@@ -63,89 +74,108 @@ function ViewerTabContextMenu(properties: IDockviewPanelHeaderProps): React.JSX.
 
   // ── Copy path ──
   const handleCopyPath = useCallback(() => {
-    if (entryFile) {
-      void copyPathToClipboard(entryFile);
+    if (entryPath) {
+      void copyPathToClipboard(entryPath);
     }
-  }, [entryFile]);
+  }, [entryPath]);
 
   // ── Split actions ──
   const handleSplitRight = useCallback(() => {
-    containerApi.addGroup({
-      referenceGroup: api.group,
-      direction: 'right',
-    });
-  }, [api, containerApi]);
+    api.moveTo({ group: api.group, position: 'right' });
+  }, [api]);
 
   const handleSplitDown = useCallback(() => {
-    containerApi.addGroup({
-      referenceGroup: api.group,
-      direction: 'below',
-    });
-  }, [api, containerApi]);
+    api.moveTo({ group: api.group, position: 'bottom' });
+  }, [api]);
 
   // ── Navigation actions ──
   const handleOpenInEditor = useCallback(() => {
-    if (entryFile) {
-      editorRef.send({ type: 'openFile', path: entryFile, source: 'user' });
+    if (entryPath) {
+      editorRef.send({ type: 'openFile', path: entryPath, source: 'user' });
+      onNavigate?.('editor');
     }
-  }, [editorRef, entryFile]);
+  }, [editorRef, entryPath, onNavigate]);
 
   const handleRevealInFileTree = useCallback(() => {
-    if (entryFile) {
-      editorRef.send({ type: 'revealFileInTree', path: entryFile });
+    if (entryPath) {
+      if (onNavigate) {
+        onNavigate('files');
+      } else {
+        workspace?.openPanel('files');
+      }
+      requestAnimationFrame(() => {
+        editorRef.send({ type: 'revealFileInTree', path: entryPath });
+      });
     }
-  }, [editorRef, entryFile]);
+  }, [editorRef, entryPath, onNavigate, workspace]);
 
   return (
     <>
       {/* ── Close group ── */}
-      <ContextMenuItem onSelect={handleClose}>
+      <Item onSelect={handleClose}>
         <X />
         Close
-      </ContextMenuItem>
-      <ContextMenuItem disabled={!hasOthers} onSelect={handleCloseOthers}>
+      </Item>
+      <Item disabled={!hasOthers} onSelect={handleCloseOthers}>
         <XCircle />
         Close Others
-      </ContextMenuItem>
-      <ContextMenuItem disabled={!hasRight} onSelect={handleCloseRight}>
+      </Item>
+      <Item disabled={!hasRight} onSelect={handleCloseRight}>
         Close to the Right
-      </ContextMenuItem>
-      <ContextMenuItem disabled={!hasLeft} onSelect={handleCloseLeft}>
+      </Item>
+      <Item disabled={!hasLeft} onSelect={handleCloseLeft}>
         Close to the Left
-      </ContextMenuItem>
-      <ContextMenuItem onSelect={handleCloseAll}>Close All</ContextMenuItem>
+      </Item>
+      <Item onSelect={handleCloseAll}>Close All</Item>
 
-      <ContextMenuSeparator />
+      <Separator />
 
       {/* ── Copy path ── */}
-      <ContextMenuItem disabled={!entryFile} onSelect={handleCopyPath}>
+      <Item disabled={!entryPath} onSelect={handleCopyPath}>
         <Copy />
         Copy Path
-      </ContextMenuItem>
+      </Item>
 
-      <ContextMenuSeparator />
+      <Separator />
 
-      {/* ── Split group ── */}
-      <ContextMenuItem onSelect={handleSplitRight}>
-        <Columns2 />
-        Split Right
-      </ContextMenuItem>
-      <ContextMenuItem onSelect={handleSplitDown}>
-        <Rows2 />
-        Split Down
-      </ContextMenuItem>
+      {variant === 'context' ? (
+        <>
+          {/* ── Split group ── */}
+          <Item onSelect={handleSplitRight}>
+            <Columns2 />
+            Split Right
+          </Item>
+          <Item onSelect={handleSplitDown}>
+            <Rows2 />
+            Split Down
+          </Item>
 
-      <ContextMenuSeparator />
+          <Separator />
+        </>
+      ) : null}
 
       {/* ── Navigation group ── */}
-      <ContextMenuItem disabled={!entryFile} onSelect={handleOpenInEditor}>
+      <Item disabled={!entryPath} onSelect={handleOpenInEditor}>
         <FileCode />
         Open in Editor
-      </ContextMenuItem>
-      <ContextMenuItem disabled={!entryFile} onSelect={handleRevealInFileTree}>
+      </Item>
+      <Item disabled={!entryPath} onSelect={handleRevealInFileTree}>
         <FolderTree />
         Reveal in File Tree
-      </ContextMenuItem>
+      </Item>
+      {revealInFileManager ? (
+        <Item
+          disabled={!entryPath}
+          onSelect={() => {
+            if (entryPath) {
+              void revealInFileManager.reveal(entryPath);
+            }
+          }}
+        >
+          <NativeFileManagerIcon icon={revealInFileManager.icon} />
+          {revealInFileManager.label}
+        </Item>
+      ) : null}
     </>
   );
 }
@@ -154,6 +184,17 @@ function ViewerTabContextMenu(properties: IDockviewPanelHeaderProps): React.JSX.
  * Viewer tab component with a right-click context menu.
  * Use as `defaultTabComponent` in the viewer Dockview.
  */
+export const getViewerTabIcon: DockviewTabIconRenderer = (properties) => {
+  const params = properties.params as { mode?: unknown; entryPath?: unknown } | undefined;
+  if (params?.mode === 'launcher') {
+    return <Plus aria-hidden className='size-3 shrink-0' />;
+  }
+  return typeof params?.entryPath === 'string' && isPrinterFileName(params.entryPath) ? (
+    <Printer aria-hidden className='size-3 shrink-0' />
+  ) : undefined;
+};
+
 export const ViewerDockviewTab = withTabContextMenu(ViewerTabContextMenu, {
   leadingIcon: 'viewer',
+  getIcon: getViewerTabIcon,
 });

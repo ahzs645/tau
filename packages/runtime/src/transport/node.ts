@@ -16,16 +16,15 @@
  * (`@taucad/runtime`, `@taucad/runtime/transport`) intentionally
  * exclude these symbols.
  *
- * Per `docs/research/runtime-transport-authoring-simplification.md` (R2),
- * the standalone {@link nodeWorkerHost} factory is also exported here
- * so custom worker entries can import it without pulling in the
- * client's `new URL(...)` chunk-emit literal.
+ * The standalone {@link nodeWorkerHost} factory is also exported here so
+ * application-owned worker entries can import it without pulling in the
+ * client transport.
  *
  * @public
  */
 
 export { nodeWorkerTransport } from '#transport/node-worker-transport.js';
-export type { NodeWorkerLike, NodeWorkerClientOptions } from '#transport/node-worker-client.js';
+export type { NodeWorkerLike, NodeWorkerClientOptions, NodeWorkerData } from '#transport/node-worker-client.js';
 export type { NodeWorkerHostOptions } from '#transport/node-worker-host.js';
 export { nodeWorkerHost } from '#transport/node-worker-host.js';
 export { nodeWorkerClient } from '#transport/node-worker-client.js';

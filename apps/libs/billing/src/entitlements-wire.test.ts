@@ -1,0 +1,58 @@
+import { describe, expect, it } from 'vitest';
+import { entitlementsFromTier } from '#entitlements.js';
+import { parseEntitlements, serializeEntitlements } from '#entitlements-wire.js';
+
+describe('entitlements wire round-trip', () => {
+  it('should round-trip every tier projection losslessly', () => {
+    for (const tier of ['free', 'pro', 'enterprise'] as const) {
+      const original = entitlementsFromTier(tier);
+      expect(parseEntitlements(serializeEntitlements(original))).toStrictEqual(original);
+    }
+  });
+
+  /* The funded admission boundary decides eligibility from source funds, debt
+   * and route state for every tier, so the account-tier AI switch is gone from
+   * the wire and a stale payload carrying it cannot resurrect a gate. */
+  it('should no longer carry the retired aiEnabled gate in either direction', () => {
+    const wire = serializeEntitlements(entitlementsFromTier('free'));
+
+    expect(wire).not.toHaveProperty('aiEnabled');
+    expect(parseEntitlements({ ...wire, aiEnabled: false })).not.toHaveProperty('aiEnabled');
+  });
+
+  it('should represent unlimited quotas as null on the wire instead of silently corrupting them', () => {
+    const wire = serializeEntitlements(entitlementsFromTier('enterprise'));
+
+    expect(wire.apiCadGatewayMonthlyLimit).toBeNull();
+    expect(wire.geospecValidationMonthlyLimit).toBeNull();
+    // The whole point: JSON.stringify(Infinity) is 'null' — the wire form must survive JSON.
+    // oxlint-disable-next-line prefer-structured-clone -- structuredClone preserves Infinity, defeating the JSON-fidelity assertion
+    const rehydrated = parseEntitlements(JSON.parse(JSON.stringify(wire)));
+    expect(rehydrated.apiCadGatewayMonthlyLimit).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it('should round-trip a saved payment method (object and null)', () => {
+    const withCard = { ...entitlementsFromTier('pro'), paymentMethod: { brand: 'visa', last4: '4242' } };
+    expect(parseEntitlements(serializeEntitlements(withCard))).toStrictEqual(withCard);
+
+    const withoutCard = entitlementsFromTier('free');
+    expect(withoutCard.paymentMethod).toBeUndefined();
+    expect(parseEntitlements(serializeEntitlements(withoutCard)).paymentMethod).toBeUndefined();
+  });
+
+  it('should round-trip the paid-through date through ISO strings', () => {
+    const paidThrough = new Date('2026-08-17T00:00:00.000Z');
+    const original = { ...entitlementsFromTier('pro'), paidThrough, cancelAtPeriodEnd: true };
+
+    // oxlint-disable-next-line prefer-structured-clone -- structuredClone preserves Date, defeating the JSON-fidelity assertion
+    const rehydrated = parseEntitlements(JSON.parse(JSON.stringify(serializeEntitlements(original))));
+
+    expect(rehydrated.paidThrough).toStrictEqual(paidThrough);
+    expect(rehydrated.cancelAtPeriodEnd).toBe(true);
+  });
+
+  it('should reject malformed wire payloads', () => {
+    expect(() => parseEntitlements({ tier: 'platinum' })).toThrow();
+    expect(() => parseEntitlements(null)).toThrow();
+  });
+});

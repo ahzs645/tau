@@ -6,9 +6,9 @@ import Bowser from 'bowser';
 import { LogOut, Monitor, Smartphone, X } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { Button } from '#components/ui/button.js';
-import { Card, CardContent } from '#components/ui/card.js';
-import { Spinner } from '#components/ui/spinner.js';
+import { SettingsRow } from '@taucad/settings-ui/components/settings/settings-item';
+import { Spinner } from '@taucad/ui-kit/components/spinner';
+import { Button } from '@taucad/ui/components/button';
 
 function timeAgo(date: Date) {
   const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
@@ -46,7 +46,7 @@ export type ActiveSessionProps = {
  * @param session - The session object containing id, token, userAgent, ipAddress, and createdAt
  * @returns A JSX element containing the active session row
  */
-export function ActiveSession({ activeSession }: ActiveSessionProps) {
+export function ActiveSession({ activeSession }: ActiveSessionProps): React.JSX.Element {
   const { authClient, basePaths, localization, viewPaths, navigate } = useAuth();
   const { data: session } = useSession(authClient, { refetchOnMount: false });
 
@@ -58,34 +58,29 @@ export function ActiveSession({ activeSession }: ActiveSessionProps) {
   const ua = Bowser.parse(activeSession.userAgent ?? '');
   const isMobile = ua.platform.type === 'mobile' || ua.platform.type === 'tablet';
 
-  return (
-    <Card className='border-0 bg-transparent shadow-none ring-0'>
-      <CardContent className='flex items-center justify-between gap-3'>
-        <div className='flex size-10 shrink-0 items-center justify-center rounded-md bg-muted'>
-          {isMobile ? <Smartphone className='size-4.5' /> : <Monitor className='size-4.5' />}
-        </div>
+  const DeviceIcon = isMobile ? Smartphone : Monitor;
 
-        <div className='flex min-w-0 flex-col'>
-          <span className='truncate text-sm font-medium'>
+  return (
+    <SettingsRow
+      title={
+        <>
+          <DeviceIcon aria-hidden className='size-4 shrink-0' />
+          <span className='truncate'>
             {ua.browser.name ?? 'Unknown Browser'}
             {ua.os.name ? `, ${ua.os.name}` : ''}
           </span>
-
-          {isCurrentSession ? (
-            <span className='w-fit rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary'>
-              {localization.settings.currentSession}
-            </span>
-          ) : (
-            activeSession.createdAt && (
-              <span className='text-xs text-muted-foreground capitalize'>{timeAgo(activeSession.createdAt)}</span>
-            )
-          )}
-        </div>
-
+        </>
+      }
+      description={
+        isCurrentSession ? (
+          <span className='font-medium text-primary'>{localization.settings.currentSession}</span>
+        ) : (
+          <span className='block first-letter:uppercase'>{timeAgo(activeSession.createdAt)}</span>
+        )
+      }
+      control={
         <Button
-          className='ml-auto shrink-0'
           variant='outline'
-          size='sm'
           onClick={() => {
             if (isCurrentSession) {
               navigate({
@@ -102,7 +97,7 @@ export function ActiveSession({ activeSession }: ActiveSessionProps) {
 
           {isCurrentSession ? localization.auth.signOut : localization.settings.revoke}
         </Button>
-      </CardContent>
-    </Card>
+      }
+    />
   );
 }

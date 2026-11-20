@@ -1,0 +1,569 @@
+import { act, render, screen } from '@testing-library/react';
+import { createElement, useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
+import type { DockviewApi, DockviewReadyEvent, IDockviewPanelProps } from 'dockview-react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { WorkbenchView } from '@taucad/workbench';
+import { newViewRecord } from '@taucad/workbench-panes/records/view-record';
+import type * as ProjectWorkspaceContext from '#routes/w.$workspace.$project/project-workspace-context.js';
+import { createActor } from 'xstate';
+import type { Actor } from 'xstate';
+import { viewerAdapterLogic } from '#workbench-records/viewer-adapter.js';
+import type { ViewerDockReady } from '#workbench-records/viewer-adapter.js';
+
+const fixture = vi.hoisted(() => ({
+  projectSend: vi.fn(),
+  nextProjectSend: vi.fn(),
+  editorSend: vi.fn(),
+  setViewEntryPath: vi.fn(),
+  viewEdit: vi.fn(async (_viewId: string, _change: (current: WorkbenchView | undefined) => WorkbenchView) => true),
+  viewRecords: new Map<string, WorkbenchView>(),
+  addRestoredPanel: (_id: string): void => undefined,
+  mainEntryPath: 'main.ts',
+  /** The project workspace the viewer reads; absent (as in a shared embed) unless a row provides one. */
+  workspace: undefined as ReturnType<typeof ProjectWorkspaceContext.useProjectWorkspace> | undefined,
+  availability: 'ready',
+  emptyMain: false,
+  notifyAvailability: () => undefined,
+  revealSecondary: () => undefined,
+  hideSecondary: () => undefined,
+  switchProject: () => undefined,
+  resetProject: () => undefined,
+  editorSnapshot: {
+    context: {
+      viewerLayout: { restored: true },
+      viewSettings: {},
+      unitSettings: {},
+    },
+  },
+}));
+
+vi.mock('#hooks/use-project-availability.js', () => {
+  const useAvailability = () => {
+    const [, refresh] = useState(0);
+    fixture.notifyAvailability = () => {
+      refresh((value) => value + 1);
+    };
+    return fixture.availability;
+  };
+  return { useProjectAvailability: useAvailability, useModelAvailability: useAvailability };
+});
+
+/** The viewer adapter the editor double spawned, as the editor does on a page without a layout. */
+const dock: { adapter: Actor<typeof viewerAdapterLogic> | undefined; id: string } = { adapter: undefined, id: '' };
+
+vi.mock('#hooks/use-project.js', () => {
+  const projectSnapshot = { matches: (state: string) => state === 'ready' };
+  const projectRef = {
+    send: fixture.projectSend,
+    getSnapshot: () => projectSnapshot,
+    subscribe: () => ({ unsubscribe: () => undefined }),
+    on: () => ({ unsubscribe: () => undefined }),
+  };
+  const nextProjectRef = { ...projectRef, send: fixture.nextProjectSend };
+  const project = {
+    projectRef,
+    editorRef: {
+      // The editor hosts the viewer's adapter on a page without a layout: it spawns it on `dockReady` (A8d).
+      send: (event: Readonly<{ type: string }> | ViewerDockReady) => {
+        if ('api' in event) {
+          dock.adapter?.stop();
+          dock.adapter = createActor(viewerAdapterLogic, { input: { api: event.api, ports: event.ports } });
+          dock.id = event.dockId;
+          dock.adapter.start();
+          return;
+        }
+        if (event.type === 'dockReleased') {
+          dock.adapter?.stop();
+          dock.adapter = undefined;
+          return;
+        }
+        fixture.editorSend(event);
+      },
+      getSnapshot: () => ({
+        ...fixture.editorSnapshot,
+        children: dock.adapter === undefined ? {} : { [`viewerAdapter:${dock.id}`]: dock.adapter },
+      }),
+      subscribe: () => ({ unsubscribe: () => undefined }),
+    },
+    get mainEntryPath() {
+      return fixture.mainEntryPath;
+    },
+    get viewRecords() {
+      return fixture.viewRecords;
+    },
+    setViewEntryPath: fixture.setViewEntryPath,
+    entriesRecord: undefined,
+    geometryUnits: new Map(),
+  };
+  fixture.switchProject = () => {
+    project.projectRef = nextProjectRef;
+  };
+  fixture.resetProject = () => {
+    project.projectRef = projectRef;
+  };
+  return { useProject: () => project };
+});
+
+vi.mock('#routes/w.$workspace.$project/project-workspace-context.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof ProjectWorkspaceContext>()),
+  useProjectWorkspace: () => fixture.workspace,
+}));
+
+vi.mock('#workbench-records/view-actions.js', () => ({
+  useWorkbenchViewCommands: () => ({ edit: fixture.viewEdit, remove: vi.fn(async () => true) }),
+}));
+
+vi.mock('#routes/w.$workspace.$project/chat-viewer.js', () => ({
+  ChatViewer: ({ entryPath }: { entryPath: string }) => <div data-testid={`content:${entryPath}`} />,
+}));
+
+vi.mock('#components/panes/dockview.js', () => ({
+  Dockview: ({
+    components,
+    onReady,
+  }: {
+    components: { viewer: (properties: IDockviewPanelProps) => ReactNode };
+    onReady: (event: DockviewReadyEvent) => void;
+  }) => {
+    const [, refresh] = useState(0);
+    const [api] = useState(() => {
+      const visibilityListeners = new Set<() => void>();
+      const main = {
+        id: 'main-view',
+        params: { viewId: 'main-view', entryPath: fixture.emptyMain ? undefined : 'main.ts' },
+        api: {
+          isVisible: true,
+          setTitle: vi.fn(),
+          updateParameters: (next: { entryPath: string }) => {
+            Object.assign(main.params, next);
+          },
+          onDidVisibilityChange: () => ({ dispose: () => undefined }),
+        },
+      };
+      const secondary = {
+        id: 'secondary-view',
+        params: { viewId: 'secondary-view', entryPath: 'other.ts' },
+        api: {
+          isVisible: false,
+          onDidVisibilityChange: (listener: () => void) => {
+            visibilityListeners.add(listener);
+            return { dispose: () => visibilityListeners.delete(listener) };
+          },
+        },
+      };
+      const panels: Array<typeof main | typeof secondary> = [main, secondary];
+      fixture.revealSecondary = () => {
+        secondary.api.isVisible = true;
+        for (const listener of visibilityListeners) {
+          listener();
+        }
+        refresh((value) => value + 1);
+      };
+      fixture.hideSecondary = () => {
+        secondary.api.isVisible = false;
+        for (const listener of visibilityListeners) {
+          listener();
+        }
+        refresh((value) => value + 1);
+      };
+      const subscribe = () => ({ dispose: () => undefined });
+      const addListeners = new Set<(panel: (typeof panels)[number]) => void>();
+      fixture.addRestoredPanel = (id) => {
+        const params: { viewId: string; entryPath?: string } = { viewId: id };
+        const restored = {
+          id,
+          params,
+          api: {
+            isVisible: true,
+            setTitle: vi.fn(),
+            updateParameters: (next: { entryPath: string }) => {
+              Object.assign(restored.params, next);
+            },
+            onDidVisibilityChange: () => ({ dispose: () => undefined }),
+          },
+        };
+        panels.push(restored as typeof main);
+        for (const listener of addListeners) {
+          listener(restored as typeof main);
+        }
+        refresh((value) => value + 1);
+      };
+      return {
+        panels,
+        groups: [{}],
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- Dockview's public API spells this method fromJSON.
+        fromJSON: () => {
+          panels.splice(0, panels.length, main, secondary);
+          refresh((value) => value + 1);
+        },
+        addPanel: ({ id, params }: { id: string; params: { viewId: string; entryPath: string } }) => {
+          panels.push({ id, params, api: main.api });
+          refresh((value) => value + 1);
+        },
+        clear: () => {
+          panels.length = 0;
+          refresh((value) => value + 1);
+        },
+        onDidLayoutChange: subscribe,
+        onDidActivePanelChange: subscribe,
+        onDidAddPanel: (listener: (panel: (typeof panels)[number]) => void) => {
+          addListeners.add(listener);
+          return { dispose: () => addListeners.delete(listener) };
+        },
+        onDidRemovePanel: subscribe,
+        onDidRemoveGroup: subscribe,
+        onWillDragPanel: subscribe,
+        onUnhandledDragOver: subscribe,
+      } as unknown as DockviewApi;
+    });
+    useEffect(() => {
+      onReady({ api } as DockviewReadyEvent);
+      // oxlint-disable-next-line react-hooks/exhaustive-deps -- Dockview emits ready once per mounted API.
+    }, [api]);
+    return createElement(
+      'div',
+      undefined,
+      api.panels.map((panel) =>
+        createElement(components.viewer, {
+          key: panel.id,
+          api: panel.api,
+          params: panel.params,
+        } as unknown as IDockviewPanelProps),
+      ),
+    );
+  },
+}));
+
+const { ViewerDockview } = await import('./chat-viewer-dockview.js');
+const { WorkspaceLayoutReadyContext } = await import('#routes/w.$workspace.$project/project-workspace-context.js');
+
+describe('restored viewer layout admission', () => {
+  beforeEach(() => {
+    fixture.resetProject();
+    fixture.projectSend.mockClear();
+    fixture.nextProjectSend.mockClear();
+    fixture.editorSend.mockClear();
+    fixture.setViewEntryPath.mockClear();
+    fixture.viewEdit.mockClear();
+    fixture.viewRecords = new Map();
+    fixture.mainEntryPath = 'main.ts';
+    fixture.emptyMain = false;
+    fixture.availability = 'ready';
+    fixture.workspace = undefined;
+  });
+
+  // A0.3 row 2, Y8/I12: unmounting Dockview detaches the viewer adapter (the host then reads the applied revision as
+  // unknown), and a remounted Dockview attaches again.
+  // A8d: the layout spawns the adapter on `dockReady` (sent from the dock's ref) and stops it on `dockReleased`; the
+  // adapter registers with the controller, so the row reads the same attach and detach through it.
+  it('should detach the viewer adapter on unmount and attach again on remount', () => {
+    const detach = vi.fn();
+    const registerViewer = vi.fn(() => detach);
+    const layoutDock: { adapter: Actor<typeof viewerAdapterLogic> | undefined; id: string } = {
+      adapter: undefined,
+      id: '',
+    };
+    fixture.workspace = {
+      layoutController: {
+        registerViewer,
+        personViewerChanged: vi.fn(),
+        connectViewerIntents: () => () => undefined,
+        requestViewerFile: vi.fn(),
+      },
+      layout: {
+        getSnapshot: () => ({
+          children: layoutDock.adapter === undefined ? {} : { [`viewerAdapter:${layoutDock.id}`]: layoutDock.adapter },
+        }),
+        send: (event: Readonly<{ type: string }> | ViewerDockReady) => {
+          layoutDock.adapter?.stop();
+          layoutDock.adapter = undefined;
+          if ('api' in event) {
+            layoutDock.adapter = createActor(viewerAdapterLogic, { input: { api: event.api, ports: event.ports } });
+            layoutDock.id = event.dockId;
+            layoutDock.adapter.start();
+          }
+        },
+      },
+    } as unknown as NonNullable<typeof fixture.workspace>;
+    const view = render(<ViewerDockview profile='editor' />);
+    expect(registerViewer).toHaveBeenCalledOnce();
+    expect(detach).not.toHaveBeenCalled();
+    view.unmount();
+    expect(detach).toHaveBeenCalledOnce();
+    render(<ViewerDockview profile='editor' />);
+    expect(registerViewer).toHaveBeenCalledTimes(2);
+    expect(detach).toHaveBeenCalledOnce();
+  });
+
+  // A8d review round 1: a project switch hands the dock over again, and the new adapter starts on that render's facts,
+  // so it registers with the new project's layout only, never again with the old one's.
+  it('should register the re-handed viewer with the new project layout only', () => {
+    const layoutDock: { adapter: Actor<typeof viewerAdapterLogic> | undefined; id: string } = {
+      adapter: undefined,
+      id: '',
+    };
+    const workspaceWith = (registerViewer: () => () => void): NonNullable<typeof fixture.workspace> =>
+      ({
+        layoutController: {
+          registerViewer,
+          personViewerChanged: vi.fn(),
+          connectViewerIntents: () => () => undefined,
+          requestViewerFile: vi.fn(),
+        },
+        layout: {
+          getSnapshot: () => ({
+            children:
+              layoutDock.adapter === undefined ? {} : { [`viewerAdapter:${layoutDock.id}`]: layoutDock.adapter },
+          }),
+          send: (event: Readonly<{ type: string }> | ViewerDockReady) => {
+            layoutDock.adapter?.stop();
+            layoutDock.adapter = undefined;
+            if ('api' in event) {
+              layoutDock.adapter = createActor(viewerAdapterLogic, { input: { api: event.api, ports: event.ports } });
+              layoutDock.id = event.dockId;
+              layoutDock.adapter.start();
+            }
+          },
+        },
+      }) as unknown as NonNullable<typeof fixture.workspace>;
+    const registerA = vi.fn(() => () => undefined);
+    const registerB = vi.fn(() => () => undefined);
+    fixture.workspace = workspaceWith(registerA);
+    render(<ViewerDockview profile='editor' />);
+    expect(registerA).toHaveBeenCalledOnce();
+    fixture.switchProject();
+    fixture.workspace = workspaceWith(registerB);
+    // The viewer is memoised on its props, so the switch reaches it through a hook it reads, as the runtime's does.
+    act(() => {
+      fixture.notifyAvailability();
+    });
+    expect(registerA).toHaveBeenCalledOnce();
+    expect(registerB).toHaveBeenCalledOnce();
+  });
+
+  /* #2293: a returning project's layout lands as its dock attaches, before the lanes are laid out; a canvas mounted
+   * then keeps the 100 px box's aspect. The viewer mounts only at layout-ready, and shows its frame until then. */
+  it('should mount the viewer only once the workspace is layout-ready', () => {
+    const view = render(
+      <WorkspaceLayoutReadyContext.Provider value={false}>
+        <ViewerDockview />
+      </WorkspaceLayoutReadyContext.Provider>,
+    );
+    expect(screen.queryByTestId('content:main.ts')).not.toBeInTheDocument();
+    expect(view.container.querySelector('[data-slot=viewer-frame]')).toBeInTheDocument();
+
+    view.rerender(
+      <WorkspaceLayoutReadyContext.Provider value>
+        <ViewerDockview />
+      </WorkspaceLayoutReadyContext.Provider>,
+    );
+    expect(screen.getByTestId('content:main.ts')).toBeInTheDocument();
+    expect(view.container.querySelector('[data-slot=viewer-frame]')).not.toBeInTheDocument();
+  });
+
+  it('should publish the resolved main entry when a viewer starts before its manifest', () => {
+    fixture.mainEntryPath = '';
+    fixture.emptyMain = true;
+    const view = render(<ViewerDockview />);
+    fixture.setViewEntryPath.mockClear();
+    fixture.mainEntryPath = 'main.ts';
+    view.rerender(<ViewerDockview profile='shared' />);
+    expect(fixture.setViewEntryPath).toHaveBeenCalledWith('main-view', 'main.ts');
+  });
+
+  it('should keep the durable entry of a restored view whose record is still loading', () => {
+    fixture.emptyMain = true;
+    fixture.mainEntryPath = 'main.scad';
+    render(<ViewerDockview profile='editor' />);
+    const edits = fixture.viewEdit.mock.calls.filter(([viewId]) => viewId === 'main-view');
+    expect(edits).not.toHaveLength(0);
+    const restored = newViewRecord('exports/result.ply');
+    for (const [, change] of edits) {
+      expect(change(restored).entryPath).toBe('exports/result.ply');
+    }
+    expect(edits[0]?.[1](undefined).entryPath).toBe('main.scad');
+  });
+
+  it('should admit a panel adopted after readiness with its recorded entry', () => {
+    fixture.mainEntryPath = 'main.scad';
+    fixture.viewRecords = new Map([['v-ply', newViewRecord('exports/result.ply')]]);
+    render(<ViewerDockview profile='editor' />);
+    act(() => {
+      fixture.addRestoredPanel('v-ply');
+    });
+    expect(fixture.viewEdit).not.toHaveBeenCalledWith('v-ply', expect.anything());
+    expect(fixture.setViewEntryPath).toHaveBeenCalledWith('v-ply', 'exports/result.ply');
+    expect(fixture.setViewEntryPath).not.toHaveBeenCalledWith('v-ply', 'main.scad');
+    expect(fixture.projectSend).toHaveBeenCalledWith({
+      type: 'setViewerGeometryDemand',
+      viewId: 'v-ply',
+      entryPath: 'exports/result.ply',
+    });
+    expect(screen.getByTestId('content:exports/result.ply')).toBeInTheDocument();
+  });
+
+  it('waits for cloud materialization before binding the manifest entry', () => {
+    fixture.emptyMain = true;
+    fixture.mainEntryPath = 'main.scad';
+    fixture.availability = 'downloading';
+    render(<ViewerDockview profile='editor' />);
+    expect(fixture.projectSend).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'createGeometryUnit' }));
+    expect(fixture.setViewEntryPath).not.toHaveBeenCalledWith('main-view', 'main.scad');
+    fixture.mainEntryPath = 'models/main.ts';
+    fixture.availability = 'ready';
+    act(() => {
+      fixture.notifyAvailability();
+    });
+    expect(fixture.setViewEntryPath).toHaveBeenCalledWith('main-view', 'models/main.ts');
+    expect(fixture.setViewEntryPath).not.toHaveBeenCalledWith('main-view', 'main.scad');
+  });
+
+  /* Open the UI, model waits: the files are open, and no render starts until every large object is here. */
+  it('starts no geometry while model files are still downloading', () => {
+    fixture.availability = 'files';
+    render(<ViewerDockview profile='editor' />);
+    expect(fixture.projectSend).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'createGeometryUnit' }));
+    expect(fixture.projectSend).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'setViewerGeometryDemand', entryPath: expect.any(String) as string }),
+    );
+    fixture.availability = 'ready';
+    act(() => {
+      fixture.notifyAvailability();
+    });
+    expect(fixture.projectSend).toHaveBeenCalledWith(expect.objectContaining({ type: 'createGeometryUnit' }));
+  });
+
+  /* A15e (D4): a file check admits the view, so the stage and its canvas stay; a project-level wait admits nothing. */
+  it('binds the view through a check of the model files and not before the project is here', () => {
+    fixture.availability = 'connecting';
+    const view = render(<ViewerDockview profile='editor' />);
+    expect(fixture.setViewEntryPath).not.toHaveBeenCalled();
+    view.unmount();
+
+    fixture.availability = 'filesChecking';
+    render(<ViewerDockview profile='editor' />);
+    expect(fixture.setViewEntryPath).toHaveBeenCalledWith('main-view', fixture.mainEntryPath);
+    expect(fixture.projectSend).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'createGeometryUnit' }));
+  });
+
+  it('admits hidden editor view settings without geometry or canvas demand', () => {
+    render(<ViewerDockview profile='editor' />);
+    expect(screen.queryByTestId('content:other.ts')).not.toBeInTheDocument();
+    expect(fixture.projectSend).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'createViewGraphics', viewId: 'secondary-view' }),
+    );
+    expect(fixture.projectSend).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'createGeometryUnit', entryPath: 'other.ts' }),
+    );
+    expect(fixture.projectSend).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'setViewerGeometryDemand', viewId: 'secondary-view', entryPath: 'other.ts' }),
+    );
+  });
+
+  it('defers hidden shared-profile view settings and geometry until reveal', () => {
+    render(<ViewerDockview profile='shared' />);
+    expect(screen.queryByTestId('content:other.ts')).not.toBeInTheDocument();
+    expect(fixture.projectSend).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'createViewGraphics', viewId: 'secondary-view' }),
+    );
+    expect(fixture.projectSend).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'createGeometryUnit', entryPath: 'other.ts' }),
+    );
+    expect(fixture.projectSend).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'setViewerGeometryDemand', viewId: 'secondary-view', entryPath: 'other.ts' }),
+    );
+  });
+
+  it('admits main immediately and defers a distinct hidden entry until reveal', () => {
+    render(<ViewerDockview />);
+
+    expect(screen.getByTestId('content:main.ts')).toBeInTheDocument();
+    expect(screen.queryByTestId('content:other.ts')).not.toBeInTheDocument();
+    expect(fixture.projectSend).toHaveBeenCalledWith({
+      type: 'createGeometryUnit',
+      entryPath: 'main.ts',
+      operationTimeout: undefined,
+    });
+    expect(fixture.projectSend).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'createGeometryUnit', entryPath: 'other.ts' }),
+    );
+
+    act(() => {
+      fixture.revealSecondary();
+    });
+    expect(screen.getByTestId('content:other.ts')).toBeInTheDocument();
+    expect(fixture.projectSend).toHaveBeenCalledWith({
+      type: 'createGeometryUnit',
+      entryPath: 'other.ts',
+      operationTimeout: undefined,
+    });
+
+    act(() => {
+      fixture.hideSecondary();
+    });
+    expect(screen.queryByTestId('content:other.ts')).not.toBeInTheDocument();
+    act(() => {
+      fixture.revealSecondary();
+    });
+    expect(screen.getByTestId('content:other.ts')).toBeInTheDocument();
+    expect(
+      fixture.projectSend.mock.calls.filter(
+        ([event]) => event.type === 'createGeometryUnit' && event.entryPath === 'other.ts',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('re-admits visible panel IDs when the project actor changes', () => {
+    const view = render(<ViewerDockview />);
+    fixture.switchProject();
+    view.rerender(<ViewerDockview profile='shared' />);
+
+    expect(fixture.nextProjectSend).toHaveBeenCalledWith({
+      type: 'createGeometryUnit',
+      entryPath: 'main.ts',
+      operationTimeout: undefined,
+    });
+    expect(fixture.nextProjectSend).not.toHaveBeenCalledWith(expect.objectContaining({ entryPath: 'other.ts' }));
+  });
+
+  // A8d review round 3: a dock handed to a new project actor attaches its new adapter on that render's facts, so it
+  // admits nothing for a model still downloading, and admits it once it is ready.
+  it('should admit a re-handed project only on its own availability', () => {
+    render(<ViewerDockview profile='shared' />);
+    fixture.switchProject();
+    fixture.availability = 'downloading';
+    act(() => {
+      fixture.notifyAvailability();
+    });
+    expect(fixture.nextProjectSend).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'createGeometryUnit' }));
+    expect(fixture.nextProjectSend).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'setViewerGeometryDemand', entryPath: 'main.ts' }),
+    );
+    fixture.availability = 'ready';
+    act(() => {
+      fixture.notifyAvailability();
+    });
+    expect(fixture.nextProjectSend).toHaveBeenCalledWith(expect.objectContaining({ type: 'createGeometryUnit' }));
+  });
+
+  it('releases only the hidden secondary viewer demand after reveal', () => {
+    render(<ViewerDockview />);
+    act(() => {
+      fixture.revealSecondary();
+    });
+    expect(fixture.projectSend).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'createGeometryUnit', entryPath: 'other.ts' }),
+    );
+
+    fixture.projectSend.mockClear();
+    act(() => {
+      fixture.hideSecondary();
+    });
+    expect(screen.queryByTestId('content:other.ts')).not.toBeInTheDocument();
+    expect(fixture.projectSend).toHaveBeenCalledWith({ type: 'setViewerGeometryDemand', viewId: 'secondary-view' });
+    expect(fixture.projectSend).not.toHaveBeenCalledWith({ type: 'setViewerGeometryDemand', viewId: 'main-view' });
+    expect(fixture.projectSend).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'parkRuntime' }));
+    expect(fixture.projectSend).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'destroyGeometryUnit' }));
+  });
+});

@@ -1,5 +1,7 @@
-import type { ConsoleMessage, Page } from '@playwright/test';
-import { test, expect } from '@playwright/test';
+import { beforeEach, expect, test } from 'vitest';
+import { page as selectors } from 'vitest/browser';
+import * as target from '#support/external-target.js';
+import type { SectionViewTestBridgeApi } from '@taucad/app/test-bridges/section-view';
 
 /**
  * Graphics-backend regression spec.
@@ -16,12 +18,7 @@ import { test, expect } from '@playwright/test';
  * - `/depth-stencil format mismatch/` — composite-quad depth-write contract violation (rule 12).
  *
  * Whenever the in-canvas WebGPU path matches one of those, the test fails fast with the captured
- * line attached so reviewers see the validation message directly in the Playwright report.
- *
- * The screenshot-at-three-angles assertion from the audit's R-test plan
- * (`webgpu-grid-{angle}.png`) is parked as `test.fixme` below until the editor exposes a
- * scriptable camera-orbit API — the gizmo currently requires synthetic pointer drags whose
- * deterministic stop-position varies across headless GPUs.
+ * line attached so reviewers see the validation message directly in the Vitest report.
  *
  * A pixel-histogram fallback (`assertCanvasHasNonBackgroundPixels`) supplements the console
  * listener: it samples the rendered canvas via `drawImage`-into-2D and asserts the frame is not
@@ -37,33 +34,80 @@ const webgpuValidationPatterns: readonly RegExp[] = [
   /Vertex buffer slot \d+ required/,
   /Invalid CommandBuffer/,
   /depth-stencil format mismatch/,
+  /gpuvalidationerror|error while parsing wgsl|error while validating shader|uncaptured.*error/i,
 ];
 
-function attachWebGpuValidationListener(page: Page): {
-  failuresRef: { lines: string[] };
-  detach(): void;
-} {
-  const failuresRef: { lines: string[] } = { lines: [] };
+type GraphicsBackend = 'webgl' | 'webgpu';
 
-  const listener = (message: ConsoleMessage): void => {
-    const text = message.text();
-    for (const pattern of webgpuValidationPatterns) {
-      if (pattern.test(text)) {
-        failuresRef.lines.push(`[${message.type()}] ${text}`);
-        break;
-      }
-    }
-  };
+type GraphicsTestCameraState = ReturnType<SectionViewTestBridgeApi['getCamera']>;
 
-  page.on('console', listener);
+type CanvasSampleRegion = Readonly<{
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}>;
 
-  return {
-    failuresRef,
-    detach: () => {
-      page.off('console', listener);
-    },
-  };
-}
+type EdgeOcclusionSampleStats = Readonly<{
+  totalSampled: number;
+  blueSurfacePixels: number;
+  edgeLikePixels: number;
+  redLeakPixels: number;
+}>;
+
+type CanvasFrameDifference = Readonly<{
+  beforeDistinctBuckets: number;
+  afterDistinctBuckets: number;
+  meanAbsoluteChannelDifference: number;
+  changedPixelRatio: number;
+  totalSampled: number;
+}>;
+
+/** Displayed overlay brightness: the grid's darkest line pixel and each axis's summed ink. */
+type OverlayBrightness = Readonly<{
+  gridMinimumLuminance: number;
+  gridLineMeanLuminance: number;
+  axisInk: Readonly<Record<'x' | 'y' | 'z', number>>;
+}>;
+
+type GridFadeRowProfile = Readonly<{
+  peakDetail: number;
+  maximumAbsoluteNormalizedStep: number;
+  maximumNegativeNormalizedStep: number;
+  maximumNegativeStepRow: number;
+  maximumPositiveNormalizedStep: number;
+  maximumPositiveStepRow: number;
+  fallRows: number;
+  riseRows: number;
+  rowDetail: readonly number[];
+}>;
+
+const previewCanvasSelector =
+  '[data-testid="cad-viewer-canvas-region"] canvas, [role="img"][aria-label*="3D model preview" i] canvas, canvas[role="img"][aria-label*="3D model preview" i]';
+const edgeOcclusionFixturePath = '/__e2e/example-fixture?locator=jscad.edge-occlusion-fixture';
+const birdhouseFixturePath = '/s/builtin~replicad.birdhouse';
+
+const edgeOcclusionCenterRegion: CanvasSampleRegion = {
+  // Stay inside the front slab so its legitimate black perimeter is not
+  // misclassified as a leaked rear edge on backends with different AA.
+  x: 0.42,
+  y: 0.38,
+  width: 0.16,
+  height: 0.24,
+};
+
+const consoleMessageCount = async (): Promise<number> => {
+  const events = await target.events();
+  return events.consoleMessages.length;
+};
+
+const webGpuValidationFailures = async (from: number): Promise<string[]> => {
+  const events = await target.events();
+  return events.consoleMessages
+    .slice(from)
+    .filter(({ text }) => webgpuValidationPatterns.some((pattern) => pattern.test(text)))
+    .map(({ text, type }) => `[${type}] ${text}`);
+};
 
 /**
  * Sample the rendered canvas via `drawImage`-into-2D and return a histogram of pixel-colour
@@ -72,16 +116,27 @@ function attachWebGpuValidationListener(page: Page): {
  * — either uninitialised, fully-cleared background, or fully-cleared depth that culled every
  * draw) from a "real render" (≥ N distinct buckets each with non-trivial weight).
  *
- * Runs entirely in the page so we don't take a Playwright dependency on `sharp` / `pngjs` for
+ * Runs entirely in the page so we don't take a Node image-decoder dependency on `sharp` / `pngjs` for
  * PNG decode. `drawImage(HTMLCanvasElement, ...)` is canvas-context-agnostic — it copies the
  * presented framebuffer regardless of whether the source is WebGL, WebGPU, or 2D.
  */
-async function assertCanvasHasNonBackgroundPixels(page: Page, canvasSelector: string, context: string): Promise<void> {
-  const stats = await page.evaluate((selector) => {
-    const canvas = document.querySelector<HTMLCanvasElement>(selector);
-    if (canvas === null) {
-      return { distinctBuckets: 0, totalSampled: 0, dominantWeight: 0, error: 'canvas not found' };
-    }
+async function assertCanvasHasNonBackgroundPixels(canvasSelector: string, context: string): Promise<void> {
+  const canvas = selectors.getByCss(canvasSelector).first();
+  await target.expectVisible(canvas, 60_000);
+  const screenshot = await target.screenshot(canvas);
+
+  const stats = await target.evaluate(async (pngBase64) => {
+    const image = new Image();
+    const imageLoaded = new Promise<void>((resolve, reject) => {
+      image.addEventListener('load', () => {
+        resolve();
+      });
+      image.addEventListener('error', () => {
+        reject(new Error('3D preview canvas screenshot could not be decoded.'));
+      });
+    });
+    image.src = `data:image/png;base64,${pngBase64}`;
+    await imageLoaded;
 
     // Sample at a fixed grid resolution so the test stays deterministic across viewport sizes.
     const sampleWidth = 64;
@@ -94,7 +149,7 @@ async function assertCanvasHasNonBackgroundPixels(page: Page, canvasSelector: st
     if (offscreenContext === null) {
       return { distinctBuckets: 0, totalSampled: 0, dominantWeight: 0, error: '2d context unavailable' };
     }
-    offscreenContext.drawImage(canvas, 0, 0, sampleWidth, sampleHeight);
+    offscreenContext.drawImage(image, 0, 0, sampleWidth, sampleHeight);
 
     const { data } = offscreenContext.getImageData(0, 0, sampleWidth, sampleHeight);
     const histogram = new Map<number, number>();
@@ -122,7 +177,7 @@ async function assertCanvasHasNonBackgroundPixels(page: Page, canvasSelector: st
       dominantWeight,
       error: undefined as string | undefined,
     };
-  }, canvasSelector);
+  }, screenshot);
 
   expect(stats.error, `${context}: canvas sampling failed`).toBeUndefined();
   expect(stats.totalSampled, `${context}: total sampled pixels must be > 0`).toBeGreaterThan(0);
@@ -145,77 +200,1466 @@ async function assertCanvasHasNonBackgroundPixels(page: Page, canvasSelector: st
   ).toBeLessThan(0.99);
 }
 
-test.describe('Graphics backend regression guard', () => {
-  test('no WebGPU validation errors emit during a Birdhouse preview render', async ({ page }) => {
-    const listener = attachWebGpuValidationListener(page);
+async function compareCanvasFrames(
+  beforePngBase64: string,
+  afterPngBase64: string,
+  sampleRegion: 'center' | 'perimeter' = 'perimeter',
+): Promise<CanvasFrameDifference> {
+  return target.evaluate(
+    async ({ beforePng, afterPng, region }) => {
+      const decode = async (pngBase64: string): Promise<HTMLImageElement> => {
+        const image = new Image();
+        const loaded = new Promise<void>((resolve, reject) => {
+          image.addEventListener('load', () => {
+            resolve();
+          });
+          image.addEventListener('error', () => {
+            reject(new Error('3D preview canvas screenshot could not be decoded.'));
+          });
+        });
+        image.src = `data:image/png;base64,${pngBase64}`;
+        await loaded;
+        return image;
+      };
 
-    try {
-      await page.goto('/projects/proj_birdhouse/preview');
+      const [beforeImage, afterImage] = await Promise.all([decode(beforePng), decode(afterPng)]);
+      const sampleWidth = 64;
+      const sampleHeight = 64;
+      const readPixels = (image: HTMLImageElement): Uint8ClampedArray => {
+        const canvas = document.createElement('canvas');
+        canvas.width = sampleWidth;
+        canvas.height = sampleHeight;
+        const context = canvas.getContext('2d');
+        if (context === null) {
+          throw new Error('2d context unavailable');
+        }
+        context.drawImage(image, 0, 0, sampleWidth, sampleHeight);
+        return context.getImageData(0, 0, sampleWidth, sampleHeight).data;
+      };
 
-      const canvas = page.getByRole('img', { name: /3d model preview/i });
-      await expect(canvas).toBeVisible({ timeout: 60_000 });
+      const before = readPixels(beforeImage);
+      const after = readPixels(afterImage);
+      const beforeBuckets = new Set<number>();
+      const afterBuckets = new Set<number>();
+      let totalDifference = 0;
+      let changedPixels = 0;
+      let totalSampled = 0;
 
-      // Wait for the diagnostic panel to confirm a non-empty render — the same surface the
-      // birdhouse-preview spec uses. Once it appears the WebGPU pipelines have been compiled,
-      // the scenePass has rasterised at least once, and the composite quad has drawn,
-      // which is the window during which override-material / composite-depth bugs surface.
-      const bboxViewer = page.getByTestId('bbox-viewer');
-      await expect(bboxViewer).toBeVisible({ timeout: 60_000 });
+      for (let y = 0; y < sampleHeight; y += 1) {
+        for (let x = 0; x < sampleWidth; x += 1) {
+          const isCenter = x >= 16 && x < 48 && y >= 16 && y < 48;
+          if ((region === 'perimeter' && isCenter) || (region === 'center' && !isCenter)) {
+            continue;
+          }
 
-      // Drain any async console messages that have not flushed yet.
-      await page.waitForTimeout(250);
+          const index = (y * sampleWidth + x) * 4;
+          const differences = [0, 1, 2].map((channel) => Math.abs(before[index + channel]! - after[index + channel]!));
+          totalDifference += differences[0]! + differences[1]! + differences[2]!;
+          if (Math.max(...differences) > 16) {
+            changedPixels += 1;
+          }
+          beforeBuckets.add(
+            Math.floor(before[index]! / 8) * 1024 +
+              Math.floor(before[index + 1]! / 8) * 32 +
+              Math.floor(before[index + 2]! / 8),
+          );
+          afterBuckets.add(
+            Math.floor(after[index]! / 8) * 1024 +
+              Math.floor(after[index + 1]! / 8) * 32 +
+              Math.floor(after[index + 2]! / 8),
+          );
+          totalSampled += 1;
+        }
+      }
 
-      expect(
-        listener.failuresRef.lines,
-        `WebGPU validation errors leaked to the console:\n${listener.failuresRef.lines.join('\n')}`,
-      ).toEqual([]);
-    } finally {
-      listener.detach();
+      return {
+        beforeDistinctBuckets: beforeBuckets.size,
+        afterDistinctBuckets: afterBuckets.size,
+        meanAbsoluteChannelDifference: totalDifference / (totalSampled * 3),
+        changedPixelRatio: changedPixels / totalSampled,
+        totalSampled,
+      };
+    },
+    { beforePng: beforePngBase64, afterPng: afterPngBase64, region: sampleRegion },
+  );
+}
+
+async function sampleGridFadeRows(pngBase64: string): Promise<GridFadeRowProfile> {
+  return target.evaluate(async (png) => {
+    const image = new Image();
+    const loaded = new Promise<void>((resolve, reject) => {
+      image.addEventListener('load', () => {
+        resolve();
+      });
+      image.addEventListener('error', () => {
+        reject(new Error('Grid fade screenshot could not be decoded.'));
+      });
+    });
+    image.src = `data:image/png;base64,${png}`;
+    await loaded;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('2d context unavailable');
     }
+    context.drawImage(image, 0, 0);
+    const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+    const bands = [
+      [0.05, 0.35],
+      [0.65, 0.95],
+    ] as const;
+    const luminanceAt = (x: number, y: number): number => {
+      const index = (y * canvas.width + x) * 4;
+      return data[index]! * 0.2126 + data[index + 1]! * 0.7152 + data[index + 2]! * 0.0722;
+    };
+    // The median ignores a debug overlay in these rows, such as the WebGPU inspector's FPS panel.
+    const backgroundSamples: number[] = [];
+    const backgroundRows = Math.max(1, Math.floor(canvas.height * 0.08));
+    for (let y = 0; y < backgroundRows; y += 1) {
+      for (const [start, end] of bands) {
+        for (let x = Math.floor(canvas.width * start); x < Math.floor(canvas.width * end); x += 1) {
+          backgroundSamples.push(luminanceAt(x, y));
+        }
+      }
+    }
+    backgroundSamples.sort((a, b) => a - b);
+    const background = backgroundSamples[Math.floor(backgroundSamples.length / 2)]!;
+    const rawRows = Array.from({ length: canvas.height }, (_, y) => {
+      let total = 0;
+      let samples = 0;
+      for (const [start, end] of bands) {
+        for (let x = Math.floor(canvas.width * start); x < Math.floor(canvas.width * end); x += 1) {
+          total += Math.abs(luminanceAt(x, y) - background);
+          samples += 1;
+        }
+      }
+      return total / samples;
+    });
+    const smoothingRadius = 2;
+    const rowDetail = rawRows.map((_value, row) => {
+      const start = Math.max(0, row - smoothingRadius);
+      const end = Math.min(rawRows.length, row + smoothingRadius + 1);
+      return rawRows.slice(start, end).reduce((sum, value) => sum + value, 0) / (end - start);
+    });
+    const analysisStart = Math.floor(canvas.height * 0.12);
+    const analysisEnd = Math.floor(canvas.height * 0.88);
+    const analysed = rowDetail.slice(analysisStart, analysisEnd);
+    const peakDetail = Math.max(...analysed);
+    const lowThreshold = peakDetail * 0.1;
+    const highThreshold = peakDetail * 0.6;
+    const transitionWidth = (values: readonly number[]): number => {
+      const lowRow = values.findIndex((value) => value >= lowThreshold);
+      const highOffset = lowRow === -1 ? -1 : values.slice(lowRow).findIndex((value) => value >= highThreshold);
+      return lowRow === -1 || highOffset === -1 ? 0 : highOffset;
+    };
+    const riseRows = transitionWidth(analysed);
+    const fallRows = transitionWidth([...analysed].reverse());
+    let maximumPositiveStep = 0;
+    let maximumNegativeStep = 0;
+    let maximumPositiveStepRow = analysisStart;
+    let maximumNegativeStepRow = analysisStart;
+    for (let row = 1; row < analysed.length; row += 1) {
+      const step = analysed[row]! - analysed[row - 1]!;
+      if (step > maximumPositiveStep) {
+        maximumPositiveStep = step;
+        maximumPositiveStepRow = analysisStart + row;
+      }
+      if (-step > maximumNegativeStep) {
+        maximumNegativeStep = -step;
+        maximumNegativeStepRow = analysisStart + row;
+      }
+    }
+
+    return {
+      peakDetail,
+      maximumAbsoluteNormalizedStep:
+        peakDetail > 0 ? Math.max(maximumPositiveStep, maximumNegativeStep) / peakDetail : 1,
+      maximumNegativeNormalizedStep: peakDetail > 0 ? maximumNegativeStep / peakDetail : 1,
+      maximumNegativeStepRow,
+      maximumPositiveNormalizedStep: peakDetail > 0 ? maximumPositiveStep / peakDetail : 1,
+      maximumPositiveStepRow,
+      fallRows,
+      riseRows,
+      rowDetail,
+    };
+  }, pngBase64);
+}
+
+/**
+ * Measure the overlays as displayed: grid lines in a band left of the model, and each axis's ink
+ * (hue excess, summed) over the pixels whose dominant channel is that axis's hue.
+ */
+async function sampleOverlayBrightness(pngBase64: string): Promise<OverlayBrightness> {
+  return target.evaluate(async (png) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${png}`;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('2d context unavailable');
+    }
+    context.drawImage(image, 0, 0);
+    const { data, width, height } = context.getImageData(0, 0, canvas.width, canvas.height);
+    const luminanceAt = (index: number): number =>
+      data[index]! * 0.2126 + data[index + 1]! * 0.7152 + data[index + 2]! * 0.0722;
+
+    let gridMinimumLuminance = 255;
+    let lineTotal = 0;
+    let lineSamples = 0;
+    for (let y = Math.floor(height * 0.45); y < Math.floor(height * 0.55); y += 1) {
+      for (let x = Math.floor(width * 0.02); x < Math.floor(width * 0.25); x += 1) {
+        const luminance = luminanceAt((y * width + x) * 4);
+        gridMinimumLuminance = Math.min(gridMinimumLuminance, luminance);
+        if (luminance < 252) {
+          lineTotal += luminance;
+          lineSamples += 1;
+        }
+      }
+    }
+
+    // Hue excess (the dominant channel over the mean of the others) is linear in coverage over a
+    // neutral background, and neutral grid and model pixels add nothing. A darkness sum over
+    // pixels past a hue threshold instead flickers with where each backend puts its fringe.
+    const axisInk = { x: 0, y: 0, z: 0 };
+    for (let index = 0; index < data.length; index += 4) {
+      const channels = [data[index]!, data[index + 1]!, data[index + 2]!];
+      const dominant = Math.max(...channels);
+      const excess = dominant - (channels[0]! + channels[1]! + channels[2]! - dominant) / 2;
+      if (excess < 3) {
+        continue;
+      }
+      axisInk[(['x', 'y', 'z'] as const)[channels.indexOf(dominant)]!] += excess;
+    }
+
+    return {
+      gridMinimumLuminance,
+      gridLineMeanLuminance: lineSamples > 0 ? lineTotal / lineSamples : 255,
+      axisInk,
+    };
+  }, pngBase64);
+}
+
+/**
+ * Compare two captures' central half at full resolution: mean luminance difference and the share
+ * of pixels differing by more than 12 levels. A downsampled comparison aliases thin edge lines.
+ */
+async function compareCentreLuminance(
+  firstPngBase64: string,
+  secondPngBase64: string,
+): Promise<
+  Readonly<{
+    meanLuminanceDifference: number;
+    differingPixelRatio: number;
+    firstDarkPixels: number;
+    secondDarkPixels: number;
+  }>
+> {
+  return target.evaluate(
+    async ({ first, second }) => {
+      const read = async (png: string): Promise<ImageData> => {
+        const image = new Image();
+        image.src = `data:image/png;base64,${png}`;
+        await image.decode();
+        const canvas = document.createElement('canvas');
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        const context = canvas.getContext('2d');
+        if (!context) {
+          throw new Error('2d context unavailable');
+        }
+        context.drawImage(image, 0, 0);
+        return context.getImageData(0, 0, canvas.width, canvas.height);
+      };
+      const [a, b] = await Promise.all([read(first), read(second)]);
+      const luminanceAt = ({ data }: ImageData, index: number): number =>
+        data[index]! * 0.2126 + data[index + 1]! * 0.7152 + data[index + 2]! * 0.0722;
+      let total = 0;
+      let differing = 0;
+      let samples = 0;
+      let firstDarkPixels = 0;
+      let secondDarkPixels = 0;
+      for (let y = Math.floor(a.height * 0.25); y < Math.floor(a.height * 0.75); y += 1) {
+        for (let x = Math.floor(a.width * 0.25); x < Math.floor(a.width * 0.75); x += 1) {
+          const index = (y * a.width + x) * 4;
+          const difference = Math.abs(luminanceAt(a, index) - luminanceAt(b, index));
+          total += difference;
+          firstDarkPixels += luminanceAt(a, index) < 80 ? 1 : 0;
+          secondDarkPixels += luminanceAt(b, index) < 80 ? 1 : 0;
+          differing += difference > 12 ? 1 : 0;
+          samples += 1;
+        }
+      }
+      return {
+        meanLuminanceDifference: total / samples,
+        differingPixelRatio: differing / samples,
+        firstDarkPixels,
+        secondDarkPixels,
+      };
+    },
+    { first: firstPngBase64, second: secondPngBase64 },
+  );
+}
+
+async function driveEdgeOcclusionCamera({
+  distance,
+  fov,
+}: {
+  readonly distance: number;
+  readonly fov: number;
+}): Promise<void> {
+  await waitForGraphicsTestBridge();
+  await target.evaluate(
+    ({ cameraDistance, cameraFov }) => {
+      const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+      if (!bridge) {
+        throw new Error('Graphics e2e bridge is not installed.');
+      }
+
+      bridge.setCamera({
+        position: [0, -cameraDistance, 0],
+        target: [0, 0.004, 0],
+        fov: cameraFov === 0 ? 90 : cameraFov,
+        zoom: 1,
+      });
+      if (cameraFov === 0) {
+        bridge.setFovAngle(0);
+      }
+    },
+    { cameraDistance: distance, cameraFov: fov },
+  );
+}
+
+async function waitForGraphicsTestBridge(): Promise<void> {
+  await target.waitFor(() => Boolean(globalThis.__TAU_SECTION_VIEW_TEST__));
+  const requestedBackend = await target.evaluate(() => new URL(location.href).searchParams.get('graphicsBackend'));
+  if (requestedBackend === 'webgl' || requestedBackend === 'webgpu') {
+    await target.expectPresentedGraphicsBackend(requestedBackend);
+  }
+  await target.expectGeometryFramed();
+}
+
+async function waitForGraphicsViewer(): Promise<void> {
+  try {
+    await target.expectVisible(selectors.getByCss(previewCanvasSelector).first(), 60_000);
+  } catch (error) {
+    const [events, url] = await Promise.all([target.events(), target.currentUrl()]);
+    throw new Error(`Graphics viewer did not become ready at ${url}: ${JSON.stringify(events)}`, { cause: error });
+  }
+}
+
+function calculateProjectedScale(camera: GraphicsTestCameraState): number {
+  return 1 / camera.verticalSpan;
+}
+
+function distanceBetweenPositions(
+  first: readonly [number, number, number],
+  second: readonly [number, number, number],
+): number {
+  return Math.hypot(first[0] - second[0], first[1] - second[1], first[2] - second[2]);
+}
+
+function quaternionAngularDistance(
+  first: readonly [number, number, number, number],
+  second: readonly [number, number, number, number],
+): number {
+  const dot = Math.abs(first[0] * second[0] + first[1] * second[1] + first[2] * second[2] + first[3] * second[3]);
+  return 2 * Math.acos(Math.min(1, dot));
+}
+
+async function dragMainPreviewCanvas(): Promise<void> {
+  const canvas = selectors.getByCss(previewCanvasSelector).first();
+  await target.expectVisible(canvas, 60_000);
+  const box = await target.boundingBox(canvas);
+  expect(box, 'main preview canvas should have a measurable bounding box').toBeDefined();
+
+  if (!box) {
+    return;
+  }
+
+  const startX = box.x + box.width * 0.52;
+  const startY = box.y + box.height * 0.52;
+  await target.mouseMove(startX, startY);
+  await target.mouseDown();
+  await target.mouseMove(startX + 140, startY + 60, { steps: 8 });
+  await target.mouseUp();
+}
+
+async function sampleCameraFrames(frameCount: number): Promise<GraphicsTestCameraState[]> {
+  return target.evaluate(async (count) => {
+    const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+    if (!bridge) {
+      throw new Error('Graphics e2e bridge is not installed.');
+    }
+
+    const samples: GraphicsTestCameraState[] = [];
+    const collectSample = async (remainingCount: number): Promise<void> => {
+      if (remainingCount <= 0) {
+        return;
+      }
+
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          resolve();
+        });
+      });
+      samples.push(bridge.getCamera());
+      await collectSample(remainingCount - 1);
+    };
+
+    await collectSample(count);
+
+    return samples;
+  }, frameCount);
+}
+
+async function waitForCameraToSettle(): Promise<GraphicsTestCameraState> {
+  const samples = await sampleCameraFrames(40);
+  return samples.at(-1)!;
+}
+
+function expectGizmoAnimationProgress(samples: readonly GraphicsTestCameraState[], backend: GraphicsBackend): void {
+  expect(samples.length, `${backend}: camera samples must be collected`).toBeGreaterThanOrEqual(8);
+
+  const initial = samples[0]!;
+  const distancesFromInitial = samples.map((sample) => distanceBetweenPositions(sample.position, initial.position));
+  const totalMovement = distancesFromInitial.at(-1) ?? 0;
+
+  expect(totalMovement, `${backend}: viewport gizmo click should move the camera`).toBeGreaterThan(1);
+
+  const firstVisibleMovement = distancesFromInitial.slice(1, 5).some((distance) => distance > totalMovement * 0.05);
+  expect(
+    firstVisibleMovement,
+    `${backend}: viewport gizmo animation should start promptly. Distances=${JSON.stringify(distancesFromInitial)}`,
+  ).toBe(true);
+
+  for (let index = 2; index < distancesFromInitial.length; index += 1) {
+    const previous = distancesFromInitial[index - 1]!;
+    const current = distancesFromInitial[index]!;
+    expect(
+      current + totalMovement * 0.1,
+      `${backend}: viewport gizmo animation should not visibly backtrack. Distances=${JSON.stringify(distancesFromInitial)}`,
+    ).toBeGreaterThanOrEqual(previous);
+  }
+
+  const frameSteps = samples
+    .slice(1)
+    .map((sample, index) => distanceBetweenPositions(sample.position, samples[index]!.position));
+  const largestStep = Math.max(...frameSteps);
+  expect(
+    largestStep,
+    `${backend}: viewport gizmo animation has a large snap step. Steps=${JSON.stringify(frameSteps)}`,
+  ).toBeLessThan(totalMovement * 0.75);
+}
+
+function expectMainCanvasDragChangedCamera(
+  before: GraphicsTestCameraState,
+  after: GraphicsTestCameraState,
+  backend: GraphicsBackend,
+): void {
+  const positionDistance = distanceBetweenPositions(before.position, after.position);
+  const quaternionDistance = quaternionAngularDistance(before.quaternion, after.quaternion);
+  expect(
+    positionDistance > 0.5 || quaternionDistance > 0.005,
+    `${backend}: main canvas drag should change the camera after gizmo animation. Before=${JSON.stringify(before)}, after=${JSON.stringify(after)}`,
+  ).toBe(true);
+}
+
+function expectMainCanvasControlsAvailable(camera: GraphicsTestCameraState, backend: GraphicsBackend): void {
+  expect(camera.controlsEnabled, `${backend}: CameraControls should be enabled after viewport gizmo animation`).toBe(
+    true,
+  );
+  expect(camera.viewportGizmoLockActive, `${backend}: viewport gizmo interaction lock should be released`).toBe(false);
+}
+
+async function setFovAngleAndWait(angle: number): Promise<GraphicsTestCameraState> {
+  const previousFrames = await target.evaluate(() => {
+    const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+    return bridge?.getCameraTransitionDiagnostics().frames ?? 0;
+  });
+  await target.evaluate((nextAngle) => {
+    const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+    if (!bridge) {
+      throw new Error('Graphics e2e bridge is not installed.');
+    }
+
+    bridge.setFovAngle(nextAngle);
+  }, angle);
+
+  try {
+    await target.waitFor(
+      ({ expected, expectedFrames }) => {
+        const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+        const camera = bridge?.getCamera();
+        const diagnostics = bridge?.getCameraTransitionDiagnostics();
+        return (
+          camera?.requestedFov === expected &&
+          camera.projection === (expected === 0 ? 'orthographic' : 'perspective') &&
+          diagnostics !== undefined &&
+          diagnostics.frames >= expectedFrames
+        );
+      },
+      { expected: angle, expectedFrames: previousFrames + 1 },
+    );
+  } catch (error) {
+    const state = await target.evaluate(() => {
+      return (globalThis.__TAU_SECTION_VIEW_TEST_BRIDGES__ ?? []).map((bridge) => ({
+        backend: bridge.getGraphicsBackend(),
+        camera: bridge.getCamera(),
+        diagnostics: bridge.getCameraTransitionDiagnostics(),
+        geometryFramed: bridge.isGeometryFramed(),
+      }));
+    });
+    throw new Error(`Camera FOV ${angle} did not settle: ${JSON.stringify(state)}`, { cause: error });
+  }
+
+  return target.evaluate(() => {
+    const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+    if (!bridge) {
+      throw new Error('Graphics e2e bridge is not installed.');
+    }
+
+    return bridge.getCamera();
+  });
+}
+
+async function sampleEdgeOcclusionCanvas(fileName: string): Promise<EdgeOcclusionSampleStats> {
+  const canvas = selectors.getByCss(previewCanvasSelector).first();
+  await target.expectVisible(canvas, 60_000);
+  const screenshot = await target.screenshot(canvas, fileName);
+
+  return target.evaluate(
+    async ({ pngBase64, region }) => {
+      const sampleWidth = 128;
+      const sampleHeight = 128;
+      const image = new Image();
+      const imageLoaded = new Promise<void>((resolve, reject) => {
+        image.addEventListener('load', () => {
+          resolve();
+        });
+        image.addEventListener('error', () => {
+          reject(new Error('3D preview canvas screenshot could not be decoded.'));
+        });
+      });
+      image.src = `data:image/png;base64,${pngBase64}`;
+      await imageLoaded;
+
+      const sourceX = Math.floor(image.naturalWidth * region.x);
+      const sourceY = Math.floor(image.naturalHeight * region.y);
+      const sourceWidth = Math.max(1, Math.floor(image.naturalWidth * region.width));
+      const sourceHeight = Math.max(1, Math.floor(image.naturalHeight * region.height));
+
+      const offscreen = document.createElement('canvas');
+      offscreen.width = sampleWidth;
+      offscreen.height = sampleHeight;
+      const context = offscreen.getContext('2d');
+      if (!context) {
+        return { totalSampled: 0, blueSurfacePixels: 0, edgeLikePixels: 0, redLeakPixels: 0 };
+      }
+
+      context.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, sampleWidth, sampleHeight);
+      const { data } = context.getImageData(0, 0, sampleWidth, sampleHeight);
+      const isBlue = (r: number, g: number, b: number): boolean => b > 90 && b > r + 30 && g > r + 8;
+      const isEdge = (r: number, g: number, b: number): boolean => r < 80 && g < 80 && b < 80;
+      let blueSurfacePixels = 0;
+      let edgeLikePixels = 0;
+      let redLeakPixels = 0;
+
+      for (let index = 0; index < data.length; index += 4) {
+        const r = data[index]!;
+        const g = data[index + 1]!;
+        const b = data[index + 2]!;
+
+        if (isBlue(r, g, b)) {
+          blueSurfacePixels += 1;
+        }
+
+        if (isEdge(r, g, b)) {
+          edgeLikePixels += 1;
+        }
+
+        if (r > 120 && r > g * 1.4 && r > b * 1.4) {
+          redLeakPixels += 1;
+        }
+      }
+
+      return {
+        totalSampled: sampleWidth * sampleHeight,
+        blueSurfacePixels,
+        edgeLikePixels,
+        redLeakPixels,
+      };
+    },
+    {
+      pngBase64: screenshot,
+      region: edgeOcclusionCenterRegion,
+    },
+  );
+}
+
+async function renderAndSampleEdgeOcclusionFixture(
+  backend: GraphicsBackend,
+  camera: { readonly distance: number; readonly fov: number },
+): Promise<EdgeOcclusionSampleStats> {
+  await target.navigate(`${edgeOcclusionFixturePath}&graphicsBackend=${backend}`);
+
+  await waitForGraphicsViewer();
+  await waitForGraphicsTestBridge();
+
+  await driveEdgeOcclusionCamera(camera);
+  await target.delay(1000);
+
+  return sampleEdgeOcclusionCanvas(`edge-occlusion-${backend}-${camera.fov}-degrees.png`);
+}
+
+function expectFrontSlabDominates(stats: EdgeOcclusionSampleStats, context: string): void {
+  expect(stats.totalSampled, `${context}: sampled region must contain pixels`).toBeGreaterThan(0);
+  expect(
+    stats.blueSurfacePixels,
+    `${context}: front blue slab should dominate the central sample. Stats: ${JSON.stringify(stats)}`,
+  ).toBeGreaterThan(stats.totalSampled * 0.25);
+}
+
+function expectRearEdgesStayOccluded(stats: EdgeOcclusionSampleStats, context: string): void {
+  expect(
+    stats.edgeLikePixels / stats.totalSampled,
+    `${context}: too much of the center region is edge-like. Stats: ${JSON.stringify(stats)}`,
+  ).toBeLessThan(0.012);
+  expect(
+    stats.redLeakPixels,
+    `${context}: rear cuboid surface color leaked into the central sample. Stats: ${JSON.stringify(stats)}`,
+  ).toBeLessThan(32);
+}
+
+test.describe('Graphics backend regression guard', () => {
+  // The consent banner overlaps the sampled canvas bands; a stored decision keeps it closed.
+  beforeEach(async () => {
+    await target.addCookies([
+      {
+        domain: 'localhost',
+        name: 'tau-cookie-consent',
+        path: '/',
+        value: encodeURIComponent(JSON.stringify({ status: 'declined', version: 1 })),
+      },
+    ]);
   });
 
-  test('canvas pixel histogram detects "render went invisible" regressions', async ({ page }) => {
-    const listener = attachWebGpuValidationListener(page);
+  for (const backend of ['webgl', 'webgpu'] as const satisfies readonly GraphicsBackend[]) {
+    test(`FOV changes preserve projected size through CameraControls on ${backend}`, async () => {
+      await target.navigate(`${edgeOcclusionFixturePath}&graphicsBackend=${backend}`);
 
-    try {
-      await page.goto('/projects/proj_birdhouse/preview');
+      await waitForGraphicsViewer();
 
-      const canvas = page.getByRole('img', { name: /3d model preview/i });
-      await expect(canvas).toBeVisible({ timeout: 60_000 });
+      await waitForGraphicsTestBridge();
+      await target.evaluate(() => {
+        const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+        if (!bridge) {
+          throw new Error('Graphics e2e bridge is not installed.');
+        }
 
-      // Wait for the first non-empty render — the bbox-viewer mounting is the
-      // synchronisation point that proves geometry has been delivered to the renderer.
-      const bboxViewer = page.getByTestId('bbox-viewer');
-      await expect(bboxViewer).toBeVisible({ timeout: 60_000 });
+        bridge.setCamera({
+          position: [0, -500, 0],
+          target: [0, 0, 0],
+          zoom: 1,
+        });
+      });
 
-      // Give the canvas a few frames after geometry arrival to let the post-pipeline warmup
-      // resolve (compileAsync IIFE in PostProcessingWebGPU) and the priority-2 overlay scene
-      // (grid + axes) to land at least one frame into the canvas depth + colour attachments.
-      await page.waitForTimeout(750);
+      const nearOrthographicCamera = await setFovAngleAndWait(0);
+      const perspectiveCamera = await setFovAngleAndWait(0.1);
 
-      await assertCanvasHasNonBackgroundPixels(
-        page,
-        'canvas[role="img"][aria-label*="3D model preview" i]',
-        'Birdhouse preview canvas after first render',
+      const nearOrthographicScale = calculateProjectedScale(nearOrthographicCamera);
+      const perspectiveScale = calculateProjectedScale(perspectiveCamera);
+      const ratio = perspectiveScale / nearOrthographicScale;
+
+      expect(
+        ratio,
+        `${backend}: projected scale changed after FOV update. Before=${JSON.stringify(nearOrthographicCamera)}, after=${JSON.stringify(perspectiveCamera)}`,
+      ).toBeGreaterThan(0.98);
+      expect(
+        ratio,
+        `${backend}: projected scale changed after FOV update. Before=${JSON.stringify(nearOrthographicCamera)}, after=${JSON.stringify(perspectiveCamera)}`,
+      ).toBeLessThan(1.02);
+    });
+
+    test(`render-frame rebase and rescale are pixel-invariant on ${backend}`, async () => {
+      await target.navigate(`${edgeOcclusionFixturePath}&graphicsBackend=${backend}`);
+      await waitForGraphicsViewer();
+      await waitForGraphicsTestBridge();
+      await target.delay(250);
+      const canvas = selectors.getByCss(previewCanvasSelector).first();
+      const beforePixels = await target.screenshot(canvas);
+      const before = await target.evaluate(() => {
+        const bridge = globalThis.__TAU_SECTION_VIEW_TEST__!;
+        return {
+          camera: bridge.getCamera(),
+          point: bridge.projectWorldPoint([0, 0, 0]),
+          frame: bridge.getRenderFrame(),
+        };
+      });
+      await target.evaluate((current) => {
+        const bridge = globalThis.__TAU_SECTION_VIEW_TEST__!;
+        const scale = current.metersPerRenderUnit * 1000;
+        bridge.setRenderFrame({
+          anchorFrameId: current.anchorFrameId,
+          originMeters: [scale * 10, -scale * 20, scale * 30],
+          metersPerRenderUnit: scale,
+        });
+      }, before.frame);
+      await target.delay(250);
+      const afterPixels = await target.screenshot(canvas);
+      const after = await target.evaluate(() => {
+        const bridge = globalThis.__TAU_SECTION_VIEW_TEST__!;
+        return { camera: bridge.getCamera(), point: bridge.projectWorldPoint([0, 0, 0]) };
+      });
+
+      expect(distanceBetweenPositions(after.camera.position, before.camera.position)).toBeLessThan(1e-12);
+      expect(distanceBetweenPositions(after.camera.target, before.camera.target)).toBeLessThan(1e-12);
+      expect(Math.hypot(after.point.x - before.point.x, after.point.y - before.point.y)).toBeLessThanOrEqual(0.25);
+      const pixelDifference = await compareCanvasFrames(beforePixels, afterPixels);
+      expect(pixelDifference.totalSampled).toBeGreaterThan(0);
+      expect(
+        pixelDifference.beforeDistinctBuckets,
+        `${backend}: the pre-rebase grid-only perimeter must contain visible detail`,
+      ).toBeGreaterThanOrEqual(4);
+      expect(
+        pixelDifference.afterDistinctBuckets,
+        `${backend}: the post-rebase grid-only perimeter must contain visible detail`,
+      ).toBeGreaterThanOrEqual(4);
+      expect(
+        pixelDifference.meanAbsoluteChannelDifference,
+        `${backend}: grid-only pixels changed after render-frame rebase: ${JSON.stringify(pixelDifference)}`,
+      ).toBeLessThan(3);
+      expect(
+        pixelDifference.changedPixelRatio,
+        `${backend}: too many grid-only pixels changed after render-frame rebase: ${JSON.stringify(pixelDifference)}`,
+      ).toBeLessThan(0.08);
+
+      await target.evaluate((frame) => {
+        const bridge = globalThis.__TAU_SECTION_VIEW_TEST__!;
+        bridge.setRenderFrame(frame);
+      }, before.frame);
+      await target.delay(750);
+      const beforeAoPixels = await target.screenshot(canvas);
+      await target.evaluate((current) => {
+        const bridge = globalThis.__TAU_SECTION_VIEW_TEST__!;
+        const scale = current.metersPerRenderUnit * 1000;
+        bridge.setRenderFrame({
+          anchorFrameId: current.anchorFrameId,
+          originMeters: [scale * 10, -scale * 20, scale * 30],
+          metersPerRenderUnit: scale,
+        });
+      }, before.frame);
+      await target.delay(250);
+      const afterAoPixels = await target.screenshot(canvas);
+      const aoDifference = await compareCanvasFrames(beforeAoPixels, afterAoPixels, 'center');
+      expect(
+        aoDifference.meanAbsoluteChannelDifference,
+        `${backend}: central model/AO pixels changed after render-frame rebase: ${JSON.stringify(aoDifference)}`,
+      ).toBeLessThan(3);
+      expect(
+        aoDifference.changedPixelRatio,
+        `${backend}: too many central model/AO pixels changed after render-frame rebase: ${JSON.stringify(aoDifference)}`,
+      ).toBeLessThan(0.08);
+      await assertCanvasHasNonBackgroundPixels(previewCanvasSelector, `${backend} render-frame rebase`);
+    });
+
+    test(`framed GLTF grid fade distinguishes near and far clipping controls on ${backend}`, async () => {
+      await target.navigate(`${edgeOcclusionFixturePath}&graphicsBackend=${backend}`);
+      await waitForGraphicsViewer();
+      await waitForGraphicsTestBridge();
+      await target.evaluate(() => {
+        const bridge = globalThis.__TAU_SECTION_VIEW_TEST__!;
+        bridge.setPresentation({ surfaces: false, lines: false });
+        bridge.setCamera({ position: [1, -1, 0.7], target: [0, 0, 0], fov: 60, zoom: 1 });
+      });
+      await target.delay(500);
+
+      const canvas = selectors.getByCss(previewCanvasSelector).first();
+      const paddedPixels = await target.screenshot(canvas, `grid-fade-padded-${backend}.png`);
+      const paddedCamera = await target.evaluate(() => {
+        return globalThis.__TAU_SECTION_VIEW_TEST__!.getCamera();
+      });
+
+      await target.evaluate(() => {
+        globalThis.__TAU_SECTION_VIEW_TEST__!.setGridPresentationClipPolicy({
+          far: true,
+          near: false,
+        });
+      });
+      await target.delay(250);
+      const nearClippedPixels = await target.screenshot(canvas, `grid-fade-no-near-control-${backend}.png`);
+      const farOnlyCamera = await target.evaluate(() => {
+        return globalThis.__TAU_SECTION_VIEW_TEST__!.getCamera();
+      });
+
+      await target.evaluate(() => {
+        globalThis.__TAU_SECTION_VIEW_TEST__!.setGridPresentationClipPolicy({
+          far: false,
+          near: true,
+        });
+      });
+      await target.delay(250);
+      const farClippedPixels = await target.screenshot(canvas, `grid-fade-no-far-control-${backend}.png`);
+      const nearOnlyCamera = await target.evaluate(() => {
+        return globalThis.__TAU_SECTION_VIEW_TEST__!.getCamera();
+      });
+
+      await target.evaluate(() => {
+        globalThis.__TAU_SECTION_VIEW_TEST__!.setGridPresentationClipPolicy({
+          far: true,
+          near: true,
+        });
+      });
+      await target.delay(250);
+      const restoredPixels = await target.screenshot(canvas, `grid-fade-restored-${backend}.png`);
+      const [paddedProfile, nearClippedProfile, farClippedProfile, restoredProfile] = await Promise.all([
+        sampleGridFadeRows(paddedPixels),
+        sampleGridFadeRows(nearClippedPixels),
+        sampleGridFadeRows(farClippedPixels),
+        sampleGridFadeRows(restoredPixels),
+      ]);
+      const summarizeProfile = ({ rowDetail: _rowDetail, ...summary }: GridFadeRowProfile) => summary;
+      const context = JSON.stringify({
+        paddedCamera,
+        farOnlyCamera,
+        nearOnlyCamera,
+        paddedProfile: summarizeProfile(paddedProfile),
+        nearClippedProfile: summarizeProfile(nearClippedProfile),
+        farClippedProfile: summarizeProfile(farClippedProfile),
+        restoredProfile: summarizeProfile(restoredProfile),
+      });
+
+      expect(paddedCamera.clipping.near).toBeLessThan(farOnlyCamera.clipping.near);
+      expect(paddedCamera.clipping.far).toBe(farOnlyCamera.clipping.far);
+      expect(paddedCamera.clipping.near).toBe(nearOnlyCamera.clipping.near);
+      expect(paddedCamera.clipping.far - nearOnlyCamera.clipping.far).toBeCloseTo(paddedCamera.verticalSpan * 4, 10);
+      expect(paddedCamera.nativeClipping.far - nearOnlyCamera.nativeClipping.far).toBeCloseTo(
+        (paddedCamera.verticalSpan * 4) / (paddedCamera.clipping.far / paddedCamera.nativeClipping.far),
+        8,
+      );
+      expect(restoredProfile.peakDetail, `${backend}: restored grid must contain detail. ${context}`).toBeGreaterThan(
+        1,
+      );
+      expect(
+        restoredProfile.maximumAbsoluteNormalizedStep,
+        `${backend}: restored fade retained a row-wide hard edge. ${context}`,
+      ).toBeLessThan(0.1);
+      expect(
+        nearClippedProfile.maximumNegativeNormalizedStep,
+        `${backend}: no-near positive control did not reproduce the lower row-wide clip. ${context}`,
+      ).toBeGreaterThan(restoredProfile.maximumNegativeNormalizedStep * 1.4);
+      expect(
+        nearClippedProfile.fallRows,
+        `${backend}: no-near positive control did not collapse the lower fade envelope. ${context}`,
+      ).toBeLessThan(restoredProfile.fallRows * 0.25);
+      expect(
+        farClippedProfile.maximumPositiveNormalizedStep,
+        `${backend}: no-far positive control did not reproduce the upper row-wide clip. ${context}`,
+      ).toBeGreaterThan(restoredProfile.maximumPositiveNormalizedStep * 3);
+      expect(restoredProfile.riseRows, `${backend}: restored fade must span multiple rows. ${context}`).toBeGreaterThan(
+        8,
+      );
+      expect(
+        Math.abs(restoredProfile.maximumAbsoluteNormalizedStep - paddedProfile.maximumAbsoluteNormalizedStep),
+        `${backend}: restoring the policy did not reproduce the initial padded frame. ${context}`,
+      ).toBeLessThan(0.02);
+    });
+
+    for (const cameraCase of [
+      { label: 'perspective-above', fov: 60, position: [1, -1, 0.7], crossesPlane: false },
+      { label: 'perspective-below', fov: 60, position: [1, -1, -0.7], crossesPlane: false },
+      { label: 'orthographic-above', fov: 0, position: [1, -1, 0.7], crossesPlane: false },
+      { label: 'orthographic-below', fov: 0, position: [1, -1, -0.7], crossesPlane: false },
+      { label: 'orthographic-shallow-above', fov: 0, position: [1, -1, 0.01], crossesPlane: true },
+      { label: 'orthographic-shallow-below', fov: 0, position: [1, -1, -0.01], crossesPlane: true },
+    ] as const) {
+      test(`framed GLTF keeps the complete radial grid fade for ${cameraCase.label} on ${backend}`, async () => {
+        await target.navigate(`${edgeOcclusionFixturePath}&graphicsBackend=${backend}`);
+        await waitForGraphicsViewer();
+        await waitForGraphicsTestBridge();
+        await target.evaluate(({ fov, position }) => {
+          const bridge = globalThis.__TAU_SECTION_VIEW_TEST__!;
+          bridge.setPresentation({ surfaces: false, lines: false });
+          bridge.setCamera({ position, target: [0, 0, 0], fov, zoom: 1 });
+          bridge.setGridPresentationClipPolicy({ far: true, near: true });
+        }, cameraCase);
+        await target.delay(500);
+
+        const canvas = selectors.getByCss(previewCanvasSelector).first();
+        const protectedPixels = await target.screenshot(
+          canvas,
+          `grid-fade-${cameraCase.label}-protected-${backend}.png`,
+        );
+        const protectedCamera = await target.evaluate(() => {
+          return globalThis.__TAU_SECTION_VIEW_TEST__!.getCamera();
+        });
+
+        await target.evaluate(() => {
+          globalThis.__TAU_SECTION_VIEW_TEST__!.setGridPresentationClipPolicy({
+            far: true,
+            near: false,
+          });
+        });
+        await target.delay(250);
+        const unprotectedPixels = await target.screenshot(
+          canvas,
+          `grid-fade-${cameraCase.label}-no-near-control-${backend}.png`,
+        );
+        const farOnlyCamera = await target.evaluate(() => {
+          return globalThis.__TAU_SECTION_VIEW_TEST__!.getCamera();
+        });
+
+        await target.evaluate(() => {
+          globalThis.__TAU_SECTION_VIEW_TEST__!.setGridPresentationClipPolicy({
+            far: true,
+            near: true,
+          });
+        });
+        await target.delay(250);
+        const restoredPixels = await target.screenshot(canvas, `grid-fade-${cameraCase.label}-restored-${backend}.png`);
+        const [protectedProfile, unprotectedProfile, restoredProfile, clippedPixels, restoredPixelDifference] =
+          await Promise.all([
+            sampleGridFadeRows(protectedPixels),
+            sampleGridFadeRows(unprotectedPixels),
+            sampleGridFadeRows(restoredPixels),
+            compareCanvasFrames(protectedPixels, unprotectedPixels),
+            compareCanvasFrames(protectedPixels, restoredPixels),
+          ]);
+        const summarizeProfile = ({ rowDetail: _rowDetail, ...summary }: GridFadeRowProfile) => summary;
+        const context = JSON.stringify({
+          backend,
+          cameraCase,
+          protectedCamera,
+          farOnlyCamera,
+          protectedProfile: summarizeProfile(protectedProfile),
+          unprotectedProfile: summarizeProfile(unprotectedProfile),
+          restoredProfile: summarizeProfile(restoredProfile),
+          clippedPixels,
+          restoredPixelDifference,
+        });
+
+        expect(
+          protectedCamera.clipping.near,
+          `${backend}/${cameraCase.label}: presentation near did not contain the guarded plane. ${context}`,
+        ).toBeLessThan(farOnlyCamera.clipping.near);
+        expect(protectedCamera.clipping.far).toBe(farOnlyCamera.clipping.far);
+        if (cameraCase.crossesPlane) {
+          expect(
+            protectedCamera.nativeClipping.near,
+            `${backend}/${cameraCase.label}: native orthographic near did not contain the signed guarded depth. ${context}`,
+          ).toBeLessThanOrEqual(0);
+          expect(farOnlyCamera.nativeClipping.near).toBeGreaterThan(0);
+          expect(
+            Math.abs(protectedCamera.clipping.near / (protectedCamera.controlsDistance * 1e-9) - 1),
+            `${backend}/${cameraCase.label}: crossing did not select the distance-relative near floor. ${context}`,
+          ).toBeLessThan(1e-10);
+          expect(
+            restoredProfile.peakDetail,
+            `${backend}/${cameraCase.label}: protected crossing did not recover clipped grid detail. ${context}`,
+          ).toBeGreaterThan(unprotectedProfile.peakDetail * 1.2);
+          expect(
+            clippedPixels.changedPixelRatio,
+            `${backend}/${cameraCase.label}: no-near control did not change visible grid pixels. ${context}`,
+          ).toBeGreaterThan(0.005);
+        } else {
+          expect(
+            restoredProfile.maximumAbsoluteNormalizedStep,
+            `${backend}/${cameraCase.label}: restored underside fade retained a hard edge. ${context}`,
+          ).toBeLessThan(0.1);
+          expect(
+            unprotectedProfile.maximumAbsoluteNormalizedStep,
+            `${backend}/${cameraCase.label}: no-near control did not reproduce an underside hard edge. ${context}`,
+          ).toBeGreaterThan(restoredProfile.maximumAbsoluteNormalizedStep * 1.4);
+        }
+        expect(
+          Math.abs(restoredProfile.maximumAbsoluteNormalizedStep - protectedProfile.maximumAbsoluteNormalizedStep),
+          `${backend}/${cameraCase.label}: restoring the policy did not reproduce the protected frame. ${context}`,
+        ).toBeLessThan(0.02);
+        expect(
+          restoredPixelDifference.changedPixelRatio,
+          `${backend}/${cameraCase.label}: restoring the policy changed protected pixels. ${context}`,
+        ).toBeLessThan(0.005);
+      });
+    }
+
+    test(`zero-FOV crossings render continuously without stale camera frames on ${backend}`, async () => {
+      await target.navigate(`${edgeOcclusionFixturePath}&graphicsBackend=${backend}`);
+      await waitForGraphicsViewer();
+      await waitForGraphicsTestBridge();
+      await target.evaluate(() => {
+        const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+        bridge?.resetCameraTransitionDiagnostics();
+      });
+
+      const orthographicCamera = await setFovAngleAndWait(0);
+      expect(orthographicCamera.handoffFov).toBeGreaterThan(0);
+      const matrix = [orthographicCamera.handoffFov!, 0, 0.1, 60] as const;
+      const crossings = Array.from({ length: 40 }, (_, index) => (index % 2 === 0 ? 0 : 0.1));
+      const angles = [...matrix, ...crossings];
+      /* oxlint-disable no-await-in-loop -- each assertion must observe the frame produced by the preceding camera state. */
+      for (const angle of angles) {
+        await setFovAngleAndWait(angle);
+        await assertCanvasHasNonBackgroundPixels(
+          previewCanvasSelector,
+          `${backend} camera handoff at ${angle} degrees`,
+        );
+      }
+      /* oxlint-enable no-await-in-loop -- sequential camera observation ends. */
+
+      const diagnostics = await target.evaluate(() => {
+        const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+        return bridge?.getCameraTransitionDiagnostics();
+      });
+      expect(diagnostics?.requests).toBe(angles.length + 1);
+      expect(diagnostics?.frames).toBe(angles.length + 1);
+      expect(diagnostics?.actorSyncFailures).toBe(0);
+      expect(diagnostics?.staleFrames).toBe(0);
+      expect(
+        diagnostics?.maximumRequestToActorSyncMilliseconds,
+        `${backend}: actor-to-native-camera synchronization must remain synchronous`,
+      ).toBeLessThan(50);
+      if (target.currentWebGpuProfile() === 'hardware') {
+        expect(
+          diagnostics?.maximumRequestToFrameMilliseconds,
+          `${backend}: hardware endpoint switches should reach a rendered frame without a transition delay`,
+        ).toBeLessThan(100);
+      }
+    });
+
+    test(`post-processing keeps one live render owner across zero-FOV crossings on ${backend}`, async () => {
+      await target.navigate(`${edgeOcclusionFixturePath}&graphicsBackend=${backend}`);
+      await waitForGraphicsViewer();
+      await waitForGraphicsTestBridge();
+      await target.evaluate(() => {
+        const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+        bridge?.resetCameraTransitionDiagnostics();
+      });
+
+      /* oxlint-disable no-await-in-loop -- each assertion must observe the frame produced by the preceding camera state. */
+      for (const angle of [0, 0.1, 0] as const) {
+        await setFovAngleAndWait(angle);
+        await assertCanvasHasNonBackgroundPixels(
+          previewCanvasSelector,
+          `${backend} post-processing camera handoff at ${angle} degrees`,
+        );
+      }
+      /* oxlint-enable no-await-in-loop -- sequential camera observation ends. */
+
+      const diagnostics = await target.evaluate(() => {
+        const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+        return bridge?.getCameraTransitionDiagnostics();
+      });
+      expect(diagnostics?.requests).toBe(3);
+      expect(diagnostics?.frames).toBe(3);
+      expect(diagnostics?.actorSyncFailures).toBe(0);
+      expect(diagnostics?.staleFrames).toBe(0);
+    });
+
+    test(`viewport gizmo animation progresses smoothly through Tau CameraControls on ${backend}`, async () => {
+      await target.navigate(`${edgeOcclusionFixturePath}&graphicsBackend=${backend}`);
+
+      await waitForGraphicsViewer();
+
+      await waitForGraphicsTestBridge();
+      await target.evaluate(() => {
+        const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+        if (!bridge) {
+          throw new Error('Graphics e2e bridge is not installed.');
+        }
+
+        bridge.setCamera({
+          position: [125, -180, 95],
+          target: [0, 0, 0],
+          zoom: 1,
+        });
+      });
+
+      await waitForCameraToSettle();
+      const samples = await target.sampleCameraDuringClick<GraphicsTestCameraState>(
+        selectors.getByCss('.viewport-gizmo-cube').first(),
+        20,
       );
 
-      // Cross-check: pixel-histogram regressions should not be paired with WebGPU validation
-      // noise; if they are, the validation message is more diagnostic than the pixel check.
-      expect(
-        listener.failuresRef.lines,
-        `Pixel-histogram check passed but WebGPU validation errors were observed:\n${listener.failuresRef.lines.join('\n')}`,
-      ).toEqual([]);
-    } finally {
-      listener.detach();
+      expectGizmoAnimationProgress(samples, backend);
+
+      const beforeCanvasDrag = await waitForCameraToSettle();
+      expectMainCanvasControlsAvailable(beforeCanvasDrag, backend);
+
+      await dragMainPreviewCanvas();
+      const afterCanvasDragSamples = await sampleCameraFrames(4);
+      const afterCanvasDrag = afterCanvasDragSamples.at(-1)!;
+
+      expectMainCanvasDragChangedCamera(beforeCanvasDrag, afterCanvasDrag, backend);
+    });
+  }
+
+  test('Prefer WebGPU defaults on and switches the live viewer in both directions', async () => {
+    // Since #1057 (da8fd25a34) the `webGpu` flag is the Experimental "Prefer WebGPU" switch, and it defaults on.
+    await target.navigate('/__e2e/example-fixture?locator=replicad.birdhouse&settings=experimental');
+    await waitForGraphicsViewer();
+    await waitForGraphicsTestBridge();
+    await target.expectPresentedGraphicsBackend('webgpu');
+    const toggle = selectors.getByRole('switch', { name: 'Prefer WebGPU' });
+    await target.expectVisible(toggle);
+    await target.expectAttribute(toggle, 'aria-checked', 'true');
+    await target.screenshot(selectors.getByRole('dialog', { name: 'Settings' }), 'webgpu-feature-flag.png');
+    /*
+     * Where a WebGPU canvas presents, each switch remounts the viewer on a new renderer. Where it cannot (the software
+     * adapter), the viewer already draws on its WebGL fallback after the canvas loss and the page answers WebGL for
+     * either preference, so both switches keep that canvas instead of mounting another.
+     */
+    const webGpuPresents = target.presentedGraphicsBackend('webgpu') === 'webgpu';
+    const initialRenderer = await target.rendererGeneration();
+    await target.click(toggle);
+    await target.expectAttribute(toggle, 'aria-checked', 'false');
+    await target.expectGraphicsBackend('webgl');
+    await target.expectGeometryFramed();
+    const switchedRenderer = await target.rendererGeneration();
+    if (webGpuPresents) {
+      expect(switchedRenderer).not.toBe(initialRenderer);
+    } else {
+      expect(switchedRenderer).toBe(initialRenderer);
+    }
+    await target.click(toggle);
+    await target.expectAttribute(toggle, 'aria-checked', 'true');
+    await target.expectPresentedGraphicsBackend('webgpu');
+    await target.expectGeometryFramed();
+    const restoredRenderer = await target.rendererGeneration();
+    if (webGpuPresents) {
+      expect(restoredRenderer).not.toBe(switchedRenderer);
+    } else {
+      expect(restoredRenderer).toBe(switchedRenderer);
+    }
+    await target.keyboardPress('Escape');
+    await assertCanvasHasNonBackgroundPixels(previewCanvasSelector, 'preference switched back to WebGPU');
+  });
+
+  test('timed camera motion restores non-default perspective zoom', async () => {
+    await target.navigate('/__e2e/example-fixture?locator=replicad.birdhouse&graphicsBackend=webgpu');
+    await waitForGraphicsViewer();
+    await waitForGraphicsTestBridge();
+    await target.expectGeometryFramed();
+    const result = await target.evaluate(async () => {
+      const bridge = globalThis.__TAU_SECTION_VIEW_TEST__!;
+      const original = bridge.getCamera();
+      bridge.setCamera({ position: original.position, target: original.target, fov: 60, zoom: 2 });
+      const before = bridge.getCamera();
+      await bridge.measureRenderFrames({ orbit: true });
+      return { before, after: bridge.getCamera() };
+    });
+    expect(result.before.zoom).toBe(2);
+    expect(result.after.zoom).toBe(2);
+    for (const axis of [0, 1, 2]) {
+      expect(result.after.position[axis]).toBeCloseTo(result.before.position[axis]!, 9);
+      expect(result.after.target[axis]).toBeCloseTo(result.before.target[axis]!, 9);
     }
   });
 
-  test.fixme('webgpu + grid screenshot golden at top-down/oblique/bottom-up angles', async () => {
-    /* Pending a scriptable camera-orbit API. The orbit-controls integration today only accepts
-     * synthetic pointer drags, whose final camera pose varies across headless GPUs because the
-     * drag-trajectory is integrated against the canvas's render-frame rate. Re-enable when the
-     * editor exposes a `data-testid='camera-orbit'` programmatic seek (issue tracker entry to be
-     * filed). The console-listener test above already covers the validation-error regression
-     * surface this golden was meant to catch. */
+  for (const fixture of ['replicad.birdhouse', 'replicad.v8-engine'] as const) {
+    for (const scenario of [
+      { id: 'core', dpr: 1, fov: 60, orbit: false, repeats: 3 },
+      { id: 'orthographic', dpr: 1, fov: 0, orbit: false, repeats: 1 },
+      { id: 'orbit', dpr: 1, fov: 60, orbit: true, repeats: 1 },
+      { id: 'dpr2', dpr: 2, fov: 60, orbit: false, repeats: 1 },
+    ]) {
+      test(`records warmed whole-frame benchmark ${fixture} ${scenario.id}`, async () => {
+        await target.commands.uiOpenTarget({ deviceScaleFactor: scenario.dpr });
+        await target.setViewport({ width: 1280, height: 900 });
+        const results = [];
+        const messageStart = await consoleMessageCount();
+        /* oxlint-disable no-await-in-loop -- counterbalanced cases own one renderer at a time. */
+        for (let repetition = 0; repetition < scenario.repeats; repetition++) {
+          const order = repetition % 2 === 0 ? (['webgl', 'webgpu'] as const) : (['webgpu', 'webgl'] as const);
+          for (const backend of order) {
+            const openedAt = performance.now();
+            await target.navigate(`/__e2e/example-fixture?locator=${fixture}&graphicsBackend=${backend}`);
+            expect(await target.evaluate(() => globalThis.devicePixelRatio)).toBe(scenario.dpr);
+            await waitForGraphicsViewer();
+            await waitForGraphicsTestBridge();
+            await target.expectGeometryFramed();
+            const readyMilliseconds = performance.now() - openedAt;
+            const camera =
+              fixture === 'replicad.birdhouse'
+                ? {
+                    position: [0.12857841861747968, -0.12857841861747965, 0.15198383757294057] as const,
+                    target: [0, 0, 0.047] as const,
+                  }
+                : await target.evaluate(() => {
+                    const view = globalThis.__TAU_SECTION_VIEW_TEST__!.getCamera();
+                    return { position: view.position, target: view.target };
+                  });
+            {
+              await target.evaluate(
+                ({ view, configuration }) => {
+                  const bridge = globalThis.__TAU_SECTION_VIEW_TEST__!;
+                  bridge.setCamera({ ...view, fov: 60 });
+                  bridge.setFovAngle(configuration.fov);
+                },
+                {
+                  view: camera,
+                  configuration: scenario,
+                },
+              );
+              // Require sustained rest across asynchronous texture readiness, then independently check idle draws.
+              await expect
+                .poll(
+                  async () =>
+                    target.evaluate(async () => {
+                      const bridge = globalThis.__TAU_SECTION_VIEW_TEST__!;
+                      const before = bridge.getRendererIdentity().frame;
+                      await new Promise<void>((resolve) => {
+                        setTimeout(resolve, 2000);
+                      });
+                      return bridge.getRendererIdentity().frame === before;
+                    }),
+                  { timeout: 10_000 },
+                )
+                .toBe(true);
+              const frameBeforeIdle = await target.evaluate(
+                () => globalThis.__TAU_SECTION_VIEW_TEST__!.getRendererIdentity().frame,
+              );
+              await target.delay(500);
+              const idleFrames = await target.evaluate(
+                (before) => globalThis.__TAU_SECTION_VIEW_TEST__!.getRendererIdentity().frame - before,
+                frameBeforeIdle,
+              );
+              for (const gpuTiming of [false, true]) {
+                const measurements = await target.evaluate(
+                  async (options) => {
+                    const bridge = globalThis.__TAU_SECTION_VIEW_TEST__!;
+                    const frames = await bridge.measureRenderFrames(options);
+                    return {
+                      ...frames,
+                      userAgent: navigator.userAgent,
+                      backend: bridge.getGraphicsBackend(),
+                      renderer: bridge.getRendererIdentity(),
+                      cssWidth: bridge.getViewportCanvas().clientWidth,
+                      cssHeight: bridge.getViewportCanvas().clientHeight,
+                    };
+                  },
+                  { gpuTiming, orbit: scenario.orbit },
+                );
+                expect(measurements.backend).toBe(backend);
+                expect(measurements.pixelRatio).toBe(scenario.dpr);
+                expect(measurements.width).toBe(measurements.cssWidth * scenario.dpr);
+                expect(measurements.height).toBe(measurements.cssHeight * scenario.dpr);
+                expect(idleFrames, `${fixture}/${scenario.id}/${backend}/repeat=${repetition}`).toBe(0);
+                expect(measurements.submission).toHaveLength(120);
+                expect(measurements.completion).toHaveLength(120);
+                expect(measurements.drawCalls).toBeGreaterThan(0);
+                expect(measurements.triangles).toBeGreaterThan(0);
+                expect(measurements.completion.every((value) => Number.isFinite(value) && value > 0)).toBe(true);
+                if (gpuTiming && measurements.gpuMethod !== 'unsupported') {
+                  expect(
+                    measurements.gpu.filter((value) => typeof value === 'number' && value > 0).length,
+                  ).toBeGreaterThan(100);
+                  expect(
+                    measurements.gpu.every(
+                      (value) => typeof value !== 'number' || (Number.isFinite(value) && value > 0),
+                    ),
+                  ).toBe(true);
+                }
+                results.push({
+                  repetition,
+                  gpuTiming,
+                  readyMilliseconds,
+                  idleFrames,
+                  camera,
+                  ...measurements,
+                });
+                await target.writeArtifact(
+                  `benchmark-${fixture}-${scenario.id}.json`,
+                  JSON.stringify(
+                    {
+                      fixture,
+                      scenario,
+                      warmup: 20,
+                      unit: 'milliseconds',
+                      results,
+                    },
+                    null,
+                    2,
+                  ),
+                );
+              }
+              if (repetition === 0) {
+                await target.screenshot(
+                  selectors.getByCss(previewCanvasSelector).first(),
+                  `benchmark-${fixture}-${scenario.id}-${backend}.png`,
+                );
+              }
+            }
+          }
+        }
+        /* oxlint-enable no-await-in-loop -- sequential measurements end. */
+        const gl = results.find((row) => row.backend === 'webgl')!.triangles;
+        const gpu = results.find((row) => row.backend === 'webgpu')!.triangles;
+        expect(gpu / gl, 'whole-scene workload equivalence').toBeGreaterThan(0.95);
+        expect(gpu / gl, 'whole-scene workload equivalence').toBeLessThan(1.05);
+        expect(await webGpuValidationFailures(messageStart)).toEqual([]);
+      });
+    }
+  }
+
+  test('no WebGPU validation errors emit during a Birdhouse preview render', async () => {
+    const messageStart = await consoleMessageCount();
+
+    await target.navigate(`${birdhouseFixturePath}?graphicsBackend=webgpu`);
+
+    await waitForGraphicsViewer();
+    await waitForGraphicsTestBridge();
+
+    // Drain any async console messages that have not flushed yet.
+    await target.delay(250);
+
+    const failures = await webGpuValidationFailures(messageStart);
+    expect(failures, `WebGPU validation errors leaked to the console:\n${failures.join('\n')}`).toEqual([]);
   });
+
+  test('grid, axes and model shading display the same on WebGL and WebGPU', async () => {
+    const samples: Record<string, OverlayBrightness> = {};
+    const screenshots: Record<string, string> = {};
+    /* oxlint-disable no-await-in-loop -- each capture must observe the backend set before it. */
+    for (const backend of ['webgl', 'webgpu'] as const satisfies readonly GraphicsBackend[]) {
+      await target.navigate(`${birdhouseFixturePath}?graphicsBackend=${backend}`);
+      await waitForGraphicsViewer();
+      await waitForGraphicsTestBridge();
+      await target.evaluate(() => {
+        const bridge = globalThis.__TAU_SECTION_VIEW_TEST__!;
+        bridge.setCamera({
+          position: [0.12857841861747968, -0.12857841861747965, 0.15198383757294057],
+          target: [0, 0, 0.047],
+          fov: 60,
+        });
+      });
+      await target.delay(750);
+      const canvas = selectors.getByCss(previewCanvasSelector).first();
+      screenshots[backend] = await target.screenshot(canvas, `overlay-brightness-${backend}.png`);
+      samples[backend] = await sampleOverlayBrightness(screenshots[backend]);
+    }
+    /* oxlint-enable no-await-in-loop -- sequential captures end. */
+
+    // Dark-pixel counts are retained to expose edge loss that the average-luminance gate can miss.
+    // The model's shading matches too. WebGPU once sampled the camera-rotated environment through
+    // a flipped PMREM lookup and lit faces from the wrong side (mean 22.8, 42% differing); matched,
+    // edge anti-aliasing leaves about 3.7 and 4%.
+    const modelDifference = await compareCentreLuminance(screenshots['webgl']!, screenshots['webgpu']!);
+    expect(modelDifference.firstDarkPixels).toBeGreaterThan(1000);
+    expect(
+      modelDifference.secondDarkPixels / modelDifference.firstDarkPixels,
+      'visible CAD edges must survive surface rendering; whole-image averages hide missing lines',
+    ).toBeGreaterThan(0.75);
+    expect(modelDifference.secondDarkPixels / modelDifference.firstDarkPixels).toBeLessThan(1.6);
+    expect(modelDifference.meanLuminanceDifference, JSON.stringify(modelDifference)).toBeLessThan(8);
+    expect(modelDifference.differingPixelRatio, JSON.stringify(modelDifference)).toBeLessThan(0.15);
+
+    await target.writeArtifact('graphics-backend-parity.json', JSON.stringify({ samples, modelDifference }, null, 2));
+    const reference = samples['webgl']!;
+    // The 0.3-opacity grey grid over white bottoms out at 213 when blended in sRGB space; a
+    // straight-alpha canvas drew it at 189 and WebGPU's linear blend with AO at 164.
+    expect(reference.gridMinimumLuminance, JSON.stringify(samples)).toBeGreaterThanOrEqual(208);
+    for (const [label, sample] of Object.entries(samples)) {
+      expect(Math.abs(sample.gridMinimumLuminance - reference.gridMinimumLuminance), label).toBeLessThanOrEqual(3);
+      expect(Math.abs(sample.gridLineMeanLuminance - reference.gridLineMeanLuminance), label).toBeLessThanOrEqual(3);
+      for (const axis of ['x', 'y', 'z'] as const) {
+        // WebGPU once drew the axes at half their WebGL ink, and near black before that. The sum
+        // covers the whole canvas, so it includes the gizmo cube's axis lines in their sub-viewport.
+        expect(sample.axisInk[axis] / reference.axisInk[axis], `${label} ${axis} axis ink`).toBeGreaterThan(0.85);
+        expect(sample.axisInk[axis] / reference.axisInk[axis], `${label} ${axis} axis ink`).toBeLessThan(1.15);
+      }
+    }
+  });
+
+  test('canvas pixel histogram detects "render went invisible" regressions', async () => {
+    const messageStart = await consoleMessageCount();
+
+    await target.navigate(`${birdhouseFixturePath}?graphicsBackend=webgpu`);
+
+    await waitForGraphicsViewer();
+    await waitForGraphicsTestBridge();
+
+    // Give the canvas a few frames after geometry arrival to let the post-pipeline warmup
+    // resolve (compileAsync IIFE in PostProcessingWebGPU) and the priority-2 overlay scene
+    // (grid + axes) to land at least one frame into the canvas depth + colour attachments.
+    await target.delay(750);
+
+    await assertCanvasHasNonBackgroundPixels(previewCanvasSelector, 'Birdhouse preview canvas after first render');
+
+    // Cross-check: pixel-histogram regressions should not be paired with WebGPU validation
+    // noise; if they are, the validation message is more diagnostic than the pixel check.
+    const failures = await webGpuValidationFailures(messageStart);
+    expect(
+      failures,
+      `Pixel-histogram check passed but WebGPU validation errors were observed:\n${failures.join('\n')}`,
+    ).toEqual([]);
+  });
+
+  test('WebGPU harness reports invalid WGSL, exact compute, and expected device loss', async () => {
+    await target.navigate(`${birdhouseFixturePath}?graphicsBackend=webgpu`);
+    await waitForGraphicsViewer();
+    await waitForGraphicsTestBridge();
+    const result = await target.qualifyWebGpu();
+
+    expect(result.deviceAvailable).toBe(true);
+    expect(result.validShaderErrors).toBe(0);
+    expect(result.invalidShaderErrors).toBeGreaterThan(0);
+    expect(result.computeReadback).toBe(42);
+    expect(result.expectedDeviceLossReason).toBe('destroyed');
+    expect(result.uncapturedErrors).toEqual([]);
+    expect(result.qualificationErrors).toEqual([]);
+  });
+
+  test('WebGL harness observes a deliberately invalid shader compile', async () => {
+    const result = await target.evaluate(() => {
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('webgl2');
+      if (!context) {
+        return undefined;
+      }
+      const shader = context.createShader(context.VERTEX_SHADER);
+      if (!shader) {
+        return undefined;
+      }
+      context.shaderSource(shader, '#version 300 es\nthis is not valid GLSL');
+      context.compileShader(shader);
+      const compiled = context.getShaderParameter(shader, context.COMPILE_STATUS) as boolean;
+      const log = context.getShaderInfoLog(shader);
+      context.deleteShader(shader);
+      return { compiled, log };
+    });
+
+    expect(result).toBeDefined();
+    expect(result?.compiled).toBe(false);
+    expect(result?.log).toBeTruthy();
+  });
+
+  const edgeOcclusionCameras = [
+    { label: 'orthographic', distance: 0.16, fov: 0 },
+    { label: '0.1-degree', distance: 180, fov: 0.1 },
+    { label: '30-degree', distance: 0.6, fov: 30 },
+    { label: '60-degree', distance: 0.28, fov: 60 },
+    { label: '90-degree', distance: 0.16, fov: 90 },
+  ] as const;
+
+  for (const backend of ['webgl', 'webgpu'] as const satisfies readonly GraphicsBackend[]) {
+    for (const camera of edgeOcclusionCameras) {
+      test(`${camera.label} ${backend} keeps nearby rear GLTF edges occluded behind the front slab`, async () => {
+        const messageStart = backend === 'webgpu' ? await consoleMessageCount() : 0;
+        const stats = await renderAndSampleEdgeOcclusionFixture(backend, camera);
+        const context = `${backend} ${camera.label} edge occlusion fixture`;
+        expectFrontSlabDominates(stats, context);
+        expectRearEdgesStayOccluded(stats, context);
+
+        if (backend === 'webgpu') {
+          const failures = await webGpuValidationFailures(messageStart);
+          expect(failures, `WebGPU validation errors leaked to the console:\n${failures.join('\n')}`).toEqual([]);
+        }
+      });
+    }
+  }
 });

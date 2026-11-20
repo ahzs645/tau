@@ -1,0 +1,19 @@
+{
+  "title": "OpenCascade direct",
+  "entry": "main.ts",
+  "kernel": "OpenCascade",
+  "language": "typescript",
+  "description": "Raw opencascade.js shape returned through Tau.",
+  "exportFormats": [
+    "step",
+    "stl",
+    "glb"
+  ],
+  "initialParameters": {
+    "width": 52,
+    "depth": 34,
+    "height": 20,
+    "fillet": 3,
+    "profile": "soft"
+  }
+}

@@ -1,0 +1,370 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
+import type { AcpAgentExecution, TauAgentExecution } from '@taucad/chat';
+import { useModels } from '#hooks/use-models.js';
+import type { Model } from '#hooks/use-models.js';
+import { store } from '#hooks/use-cookie.js';
+import { cookieName } from '@taucad/ui-core/constants/cookie.constants';
+import { metaConfig } from '#constants/meta.constants.js';
+import { redeemLoopbackHandOff, resetLoopbackAgentHosts } from '#lib/agent-host-placement.js';
+
+const flags = vi.hoisted(() => ({ modelPinning: true }));
+vi.mock('#flags/use-feature.js', () => ({ useFeature: (name: 'modelPinning') => flags[name] }));
+
+const codex: AcpAgentExecution = {
+  kind: 'acp',
+  hostId: 'desktop',
+  agentId: 'codex',
+  model: 'gpt-6-astra',
+  config: { mode: 'high' },
+};
+const catalogRow = (id: string, recommended = false, isDefault = false) => ({
+  id,
+  name: id,
+  recommended,
+  ...(isDefault ? { default: true } : {}),
+  provider: { id: 'anthropic', name: 'Anthropic' },
+  details: { family: 'claude', contextWindow: 200_000 },
+});
+
+const storageKeys = [
+  cookieName.chatExecution,
+  cookieName.chatModel,
+  cookieName.chatEffort,
+  cookieName.chatModelOverrides,
+  cookieName.chatModelPinned,
+].map((name) => `${metaConfig.cookiePrefix}${name}`);
+
+let queryClient: QueryClient;
+const wrapper = ({ children }: { readonly children: ReactNode }) => (
+  <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+);
+const respond = (body: unknown, init?: ResponseInit) => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => new Response(JSON.stringify(body), init)),
+  );
+};
+
+beforeEach(() => {
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+});
+
+afterEach(() => {
+  resetLoopbackAgentHosts();
+  flags.modelPinning = true;
+  for (const key of storageKeys) {
+    store.remove(key);
+  }
+  queryClient.clear();
+  vi.unstubAllGlobals();
+});
+
+describe('useModels', () => {
+  it('should reuse a fresh catalog when another consumer mounts', async () => {
+    respond([catalogRow('anthropic-claude-opus-4.8', true)]);
+    const first = renderHook(() => useModels(), { wrapper });
+    await waitFor(() => {
+      expect(first.result.current.availableModels).toHaveLength(1);
+    });
+
+    const second = renderHook(() => useModels(), { wrapper });
+
+    expect(second.result.current.availableModels).toHaveLength(1);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  describe('new-chat default execution', () => {
+    it('should start the next chat on the external agent last used, with its model and config', async () => {
+      respond([catalogRow('anthropic-claude-opus-4.8', true)]);
+      const { result } = renderHook(() => useModels(), { wrapper });
+      act(() => {
+        result.current.rememberExecution(codex);
+      });
+      expect(result.current.defaultExecution).toEqual(codex);
+    });
+
+    it('should keep the last Tau choice for switching back from an external agent', () => {
+      respond([]);
+      const { result } = renderHook(() => useModels(), { wrapper });
+      const tau: TauAgentExecution = { kind: 'tau', model: 'anthropic-claude-haiku-5.5', effort: 'low' };
+      act(() => {
+        result.current.rememberExecution(tau);
+        result.current.rememberExecution(codex);
+      });
+      expect(result.current.lastTauExecution).toEqual(tau);
+      expect(result.current.defaultExecution).toEqual(codex);
+    });
+
+    it('should ignore a stored execution that fails the execution schema', async () => {
+      respond([catalogRow('anthropic-claude-opus-5.5', true, true)]);
+      store.update(`${metaConfig.cookiePrefix}${cookieName.chatExecution}`, { kind: 'acp', agentId: 'codex' });
+      const { result } = renderHook(() => useModels(), { wrapper });
+      await waitFor(() => {
+        expect(result.current.defaultExecution).toEqual({ kind: 'tau', model: 'anthropic-claude-opus-5.5' });
+      });
+    });
+
+    it('should start a first visit on the model the catalog marks as default', async () => {
+      respond([catalogRow('anthropic-claude-sonnet-5.5', true), catalogRow('anthropic-claude-opus-5.5', true, true)]);
+      const { result } = renderHook(() => useModels(), { wrapper });
+      expect(result.current.selectedModelId).toBe('');
+      await waitFor(() => {
+        expect(result.current.selectedModelId).toBe('anthropic-claude-opus-5.5');
+      });
+      expect(result.current.defaultExecution).toEqual({ kind: 'tau', model: 'anthropic-claude-opus-5.5' });
+    });
+
+    it('should keep a chosen Tau model over the catalog default', async () => {
+      respond([catalogRow('anthropic-claude-opus-5.5', true, true), catalogRow('anthropic-claude-haiku-5.5')]);
+      const { result } = renderHook(() => useModels(), { wrapper });
+      act(() => {
+        result.current.setSelectedModelId('anthropic-claude-haiku-5.5');
+      });
+      await waitFor(() => {
+        expect(result.current.data).toHaveLength(2);
+      });
+      expect(result.current.selectedModelId).toBe('anthropic-claude-haiku-5.5');
+    });
+
+    it('should move a remembered Tau model the catalog no longer offers to the recommended model', async () => {
+      respond([catalogRow('other'), catalogRow('anthropic-claude-opus-4.9', true)]);
+      const { result } = renderHook(() => useModels(), { wrapper });
+      act(() => {
+        result.current.rememberExecution({ kind: 'tau', model: 'retired', effort: 'high' });
+      });
+      await waitFor(() => {
+        expect(result.current.defaultExecution).toEqual({
+          kind: 'tau',
+          model: 'anthropic-claude-opus-4.9',
+          effort: 'high',
+        });
+      });
+    });
+  });
+
+  describe('loopback daemon placement', () => {
+    const daemon = 'http://127.0.0.1:4100';
+    const onDaemon: TauAgentExecution = {
+      kind: 'tau',
+      model: 'anthropic-claude-opus-4.8',
+      hostId: `loopback:${daemon}`,
+    };
+    /** Redeem a hand-off of the daemon in this tab, as `tau open --desktop` does. */
+    const handOver = async (): Promise<void> => {
+      const daemonFetch = vi.fn(async (url: string) =>
+        url.endsWith('/.well-known/tau-host/session')
+          ? new Response(JSON.stringify({ v: 1, session: 'tab-session' }))
+          : new Response('{}', { status: 404 }),
+      );
+      await redeemLoopbackHandOff(
+        { origin: daemon, code: 'one-time-code' },
+        { fetch: daemonFetch as unknown as typeof fetch },
+      );
+    };
+
+    it('should start a new chat locally when another tab remembered a loopback daemon this tab was never handed', () => {
+      respond([]);
+      store.update(`${metaConfig.cookiePrefix}${cookieName.chatExecution}`, onDaemon);
+      const { result } = renderHook(() => useModels(), { wrapper });
+      expect(result.current.defaultExecution).toEqual({ kind: 'tau', model: 'anthropic-claude-opus-4.8' });
+    });
+
+    it('should start a new chat on the remembered loopback daemon once this tab is handed it', async () => {
+      respond([]);
+      store.update(`${metaConfig.cookiePrefix}${cookieName.chatExecution}`, onDaemon);
+      const { result } = renderHook(() => useModels(), { wrapper });
+      await act(async () => {
+        await handOver();
+      });
+      expect(result.current.defaultExecution).toEqual(onDaemon);
+    });
+  });
+
+  describe('catalog state', () => {
+    it('should report the catalog unavailable when the API answers with an error', async () => {
+      respond({ message: 'Bad Gateway' }, { status: 502 });
+      const { result } = renderHook(() => useModels(), { wrapper });
+      /* The catalog retries once before it reports a failure. */
+      await waitFor(
+        () => {
+          expect(result.current.catalog).toEqual({ status: 'unavailable' });
+        },
+        { timeout: 3000 },
+      );
+      expect(result.current.availableModels).toEqual([]);
+    });
+
+    it('should report the catalog unavailable when the API cannot be reached', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => {
+          throw new TypeError('Failed to fetch');
+        }),
+      );
+      const { result } = renderHook(() => useModels(), { wrapper });
+      /* The catalog retries once before it reports a failure. */
+      await waitFor(
+        () => {
+          expect(result.current.catalog).toEqual({ status: 'unavailable' });
+        },
+        { timeout: 3000 },
+      );
+    });
+
+    it('should let a caller await the in-flight catalog and resolve against it', async () => {
+      respond([catalogRow('anthropic-claude-opus-4.8', true)]);
+      const { result } = renderHook(() => useModels(), { wrapper });
+      const catalog = await result.current.ensureModelCatalog();
+      expect(catalog.status).toBe('loaded');
+      expect(result.current.resolveModel('anthropic-claude-opus-4.8').provider.id).toBe('anthropic');
+    });
+
+    it('should fill a Tau execution chosen before the catalog answered with the catalog default', async () => {
+      respond([catalogRow('anthropic-claude-sonnet-5.5', true), catalogRow('anthropic-claude-opus-5.5', true, true)]);
+      const { result } = renderHook(() => useModels(), { wrapper });
+      const execution = result.current.defaultExecution;
+      expect(execution).toEqual({ kind: 'tau', model: '' });
+      await expect(result.current.withCatalogDefaultModel(execution)).resolves.toEqual({
+        kind: 'tau',
+        model: 'anthropic-claude-opus-5.5',
+      });
+      await expect(result.current.withCatalogDefaultModel(codex)).resolves.toBe(codex);
+    });
+  });
+
+  describe('model label before and after the catalog', () => {
+    const neverAnswers = async (): Promise<Response> =>
+      new Promise<Response>(() => {
+        /* The catalog is still in flight for the whole test. */
+      });
+
+    it('should mark a stored model as pending, not named by its id, while the catalog has not answered', () => {
+      vi.stubGlobal('fetch', vi.fn(neverAnswers));
+      store.update(`${metaConfig.cookiePrefix}${cookieName.chatModel}`, 'anthropic-claude-haiku-5.5');
+      const { result } = renderHook(() => useModels(), { wrapper });
+
+      expect(result.current.selectedModel.isNamePending).toBe(true);
+      expect(result.current.selectedModel.isResolved).toBe(false);
+    });
+
+    it('should mark a first visit with no model as pending rather than an empty name', () => {
+      vi.stubGlobal('fetch', vi.fn(neverAnswers));
+      const { result } = renderHook(() => useModels(), { wrapper });
+
+      expect(result.current.selectedModelId).toBe('');
+      expect(result.current.selectedModel.isNamePending).toBe(true);
+    });
+
+    it('should name a model the loaded catalog no longer offers by its id, without a pending placeholder', async () => {
+      respond([catalogRow('anthropic-claude-opus-5.5', true, true)]);
+      const { result } = renderHook(() => useModels(), { wrapper });
+      await waitFor(() => {
+        expect(result.current.catalog.status).toBe('loaded');
+      });
+
+      const retired = result.current.resolveModel('anthropic-claude-haiku-3');
+
+      expect(retired).toMatchObject({ name: 'anthropic-claude-haiku-3', isResolved: false, isNamePending: false });
+    });
+  });
+
+  describe('pinned models and availability', () => {
+    const pinnedKey = `${metaConfig.cookiePrefix}${cookieName.chatModelPinned}`;
+    const overridesKey = `${metaConfig.cookiePrefix}${cookieName.chatModelOverrides}`;
+    const catalog = [catalogRow('opus', true), catalogRow('sonnet', true), catalogRow('hidden')];
+    const loaded = async () => {
+      respond(catalog);
+      const hook = renderHook(() => useModels(), { wrapper });
+      await waitFor(() => {
+        expect(hook.result.current.data).toHaveLength(3);
+      });
+      return hook;
+    };
+    const row = (id: string) => catalog.find((entry) => entry.id === id) as unknown as Model;
+
+    it('should keep pins in pin order and leave a pinned model where it is', async () => {
+      const { result } = await loaded();
+      act(() => {
+        result.current.setPinned(row('sonnet'), true);
+        result.current.setPinned(row('opus'), true);
+        result.current.setPinned(row('sonnet'), true);
+      });
+      expect(result.current.pinnedIds).toEqual(['sonnet', 'opus']);
+      act(() => {
+        result.current.setPinned(row('sonnet'), false);
+      });
+      expect(result.current.pinnedIds).toEqual(['opus']);
+      expect(store.get(pinnedKey)).toEqual(['opus']);
+    });
+
+    it('should keep a pinned model in the picker, even switched off before or reset after', async () => {
+      const { result } = await loaded();
+      act(() => {
+        result.current.setAvailable(row('hidden'), false);
+      });
+      expect(result.current.isAvailable(row('hidden'))).toBe(false);
+      act(() => {
+        result.current.setPinned(row('hidden'), true);
+      });
+      expect(result.current.isAvailable(row('hidden'))).toBe(true);
+      act(() => {
+        result.current.resetAvailability();
+      });
+      expect(result.current.isAvailable(row('hidden'))).toBe(true);
+      act(() => {
+        result.current.setPinned(row('hidden'), false);
+      });
+      expect(result.current.isAvailable(row('hidden'))).toBe(false);
+    });
+
+    it('should ignore unknown pins on read, prune them on write, and read a malformed list as empty', async () => {
+      store.update(pinnedKey, ['retired', 'opus']);
+      const { result } = await loaded();
+      expect(result.current.pinnedIds).toEqual(['opus']);
+      act(() => {
+        result.current.setPinned(row('sonnet'), true);
+      });
+      expect(store.get(pinnedKey)).toEqual(['opus', 'sonnet']);
+
+      act(() => {
+        store.update(pinnedKey, { opus: true });
+      });
+      expect(result.current.pinnedIds).toEqual([]);
+    });
+
+    it('should ignore stored pins while the pinning flag is off', async () => {
+      flags.modelPinning = false;
+      store.update(pinnedKey, ['hidden']);
+      const { result } = await loaded();
+      expect(result.current.isPinningEnabled).toBe(false);
+      expect(result.current.pinnedIds).toEqual([]);
+      expect(result.current.isAvailable(row('hidden'))).toBe(false);
+    });
+
+    it('should keep pins the catalog cannot confirm while it is unavailable', () => {
+      respond({ message: 'Bad Gateway' }, { status: 502 });
+      store.update(pinnedKey, ['retired']);
+      const { result } = renderHook(() => useModels(), { wrapper });
+      expect(result.current.pinnedIds).toEqual(['retired']);
+    });
+
+    it('should store a toggle that agrees with the recommendation, prune unknown ids, and reset', async () => {
+      store.update(overridesKey, { retired: true });
+      const { result } = await loaded();
+      act(() => {
+        result.current.setAvailable(row('opus'), false);
+        result.current.setAvailable(row('opus'), true);
+      });
+      expect(result.current.overrides).toEqual({ opus: true });
+      act(() => {
+        result.current.resetAvailability();
+      });
+      expect(result.current.overrides).toEqual({});
+      expect(result.current.isAvailable(row('opus'))).toBe(true);
+    });
+  });
+});

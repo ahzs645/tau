@@ -1,17 +1,31 @@
 import type { ContextUsageData } from '@taucad/chat';
 import { useChatComposer } from '#hooks/active-chat-provider.js';
-import { formatNumberAbbreviation } from '#utils/number.utils.js';
-import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
+import { formatNumberAbbreviation } from '@taucad/ui-core/utils/number.utils';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@taucad/ui/components/tooltip';
 
-const size = 28;
-const strokeWidth = 4;
+// A 16 px ring: the meter sits beside the model it measures, and reads at a glance (D6).
+const size = 16;
+const strokeWidth = 2.5;
 const radius = (size - strokeWidth) / 2;
 const circumference = 2 * Math.PI * radius;
 
 /** @public */
-export function getFillColor(percent: number): string {
+export function getFillColor(
+  percent: number,
+  status?: ContextUsageData['lastCompactionStatus'],
+  scheduleStatus?: ContextUsageData['compactionScheduleStatus'],
+): string {
+  if (scheduleStatus === 'scheduled_next_turn') {
+    return 'stroke-feature';
+  }
+  if (status === 'compacted') {
+    return 'stroke-success';
+  }
+  if (status === 'failed' || status === 'overflow_retry_succeeded') {
+    return 'stroke-warning';
+  }
   if (percent >= 85) {
-    return 'stroke-destructive';
+    return 'stroke-feature';
   }
   if (percent >= 60) {
     return 'stroke-warning';
@@ -20,9 +34,22 @@ export function getFillColor(percent: number): string {
 }
 
 /** @public */
-export function getTrackColor(percent: number): string {
+export function getTrackColor(
+  percent: number,
+  status?: ContextUsageData['lastCompactionStatus'],
+  scheduleStatus?: ContextUsageData['compactionScheduleStatus'],
+): string {
+  if (scheduleStatus === 'scheduled_next_turn') {
+    return 'stroke-feature/20';
+  }
+  if (status === 'compacted') {
+    return 'stroke-success/20';
+  }
+  if (status === 'failed' || status === 'overflow_retry_succeeded') {
+    return 'stroke-warning/20';
+  }
   if (percent >= 85) {
-    return 'stroke-destructive/20';
+    return 'stroke-feature/20';
   }
   if (percent >= 60) {
     return 'stroke-warning/20';
@@ -39,12 +66,15 @@ export function ChatContextIndicatorDisplay({ data }: { readonly data: ContextUs
   const offset = circumference - (clamped / 100) * circumference;
   const used = formatNumberAbbreviation(data.totalInputTokens);
   const total = formatNumberAbbreviation(data.contextWindow);
+  const compactionStatus = formatCompactionStatus(data);
+  const scheduledStatus = formatScheduledStatus(data);
+  const triggerReason = formatTriggerReason(data.triggerReason);
 
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <div
-          className='flex size-5 cursor-default items-center justify-center'
+          className='flex size-4 shrink-0 cursor-default items-center justify-center'
           role='meter'
           aria-valuenow={clamped}
           aria-valuemin={0}
@@ -58,7 +88,7 @@ export function ChatContextIndicatorDisplay({ data }: { readonly data: ContextUs
               r={radius}
               fill='none'
               strokeWidth={strokeWidth}
-              className={getTrackColor(data.percentUsed)}
+              className={getTrackColor(data.percentUsed, data.lastCompactionStatus, data.compactionScheduleStatus)}
             />
             <circle
               cx={size / 2}
@@ -69,7 +99,7 @@ export function ChatContextIndicatorDisplay({ data }: { readonly data: ContextUs
               strokeDasharray={circumference}
               strokeDashoffset={offset}
               strokeLinecap='round'
-              className={getFillColor(data.percentUsed)}
+              className={getFillColor(data.percentUsed, data.lastCompactionStatus, data.compactionScheduleStatus)}
               style={{ transition: 'stroke-dashoffset 300ms ease' }}
             />
           </svg>
@@ -80,9 +110,61 @@ export function ChatContextIndicatorDisplay({ data }: { readonly data: ContextUs
         <p className='opacity-70'>
           {used} / {total} tokens
         </p>
+        {scheduledStatus ? <p className='opacity-70'>{scheduledStatus}</p> : null}
+        {compactionStatus ? <p className='opacity-70'>{compactionStatus}</p> : null}
+        {triggerReason ? <p className='opacity-70'>Trigger: {triggerReason}</p> : null}
       </TooltipContent>
     </Tooltip>
   );
+}
+
+function formatScheduledStatus(data: ContextUsageData): string | undefined {
+  if (data.compactionScheduleStatus !== 'scheduled_next_turn') {
+    return undefined;
+  }
+  return 'Compaction scheduled next turn';
+}
+
+function formatCompactionStatus(data: ContextUsageData): string | undefined {
+  switch (data.lastCompactionStatus) {
+    case 'compacted': {
+      return 'Context summarized';
+    }
+    case 'failed': {
+      return 'Compaction blocked';
+    }
+    case 'overflow_retry_succeeded': {
+      return 'Overflow retry trimmed context';
+    }
+    case 'skipped':
+    case undefined: {
+      return undefined;
+    }
+    default: {
+      return undefined;
+    }
+  }
+}
+
+function formatTriggerReason(reason: ContextUsageData['triggerReason']): string | undefined {
+  switch (reason) {
+    case 'estimate': {
+      return 'estimated budget';
+    }
+    case 'previous_usage': {
+      return 'previous provider usage';
+    }
+    case 'overflow': {
+      return 'provider overflow';
+    }
+    case 'none':
+    case undefined: {
+      return undefined;
+    }
+    default: {
+      return undefined;
+    }
+  }
 }
 
 /**

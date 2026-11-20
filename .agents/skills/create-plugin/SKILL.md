@@ -1,0 +1,107 @@
+---
+name: create-plugin
+description: Create or update a publishable Tau runtime plugin toolkit with the workspace plugin generator. Use when adding kernel, transcoder, middleware, bundler, job, or machine capabilities under packages/plugins or completing their package and host integration. Agents should select this skill autonomously when the request clearly creates or changes that toolkit boundary.
+---
+
+# Create Plugin
+
+Create or update one `@taucad/*` runtime plugin toolkit. For a kernel-specific
+implementation, use `.agents/skills/create-kernel/SKILL.md` after this routing step.
+
+## Resolve
+
+Inspect the request, `tools/workspace-plugin/src/generators/plugin/schema.json`,
+the nearest same-role package, and every applicable host runtime. Infer:
+
+- one or more requested capabilities: `kernel`, `transcoder`, `middleware`,
+  `bundler`, `job`, or `machine`;
+- `hostTarget`: `browser`, `node`, `daemon`, `python`, or `native`;
+- whether the package already exists.
+
+Ask only when an unresolved choice changes the public capability or supported
+host. Do not select speculative roles.
+
+## Create
+
+The generator is the only supported scaffold:
+
+```bash
+pnpm nx g @taucad/workspace-plugin:plugin <name> \
+  --capabilities=<comma-separated-roles> \
+  --hostTarget=<target> \
+  --description="<one-line description>"
+```
+
+If the package exists, update it in place instead of rerunning the generator.
+
+A `kernel` with `hostTarget` `python` or `native` runs out of process from a
+prepared closure, so the generator also emits its native deployment: a light
+`src/native.ts` (`definePythonKernelAdopter` from `@taucad/python-kernel-core`,
+or `defineNativeKernelDeployment` from `@taucad/native-process-core/adopter`
+for a single binary), a placeholder `tau-plugin.json`, the `./native` and
+`./tau-plugin.json` exports, a kernel wrapped in `withNativeDeployment` that
+binds its closure in `initialize`, and for Python the `tau-python-kernel`
+targets. A .NET kernel swaps in `defineDotnetKernelAdopter` from
+`@taucad/dotnet-kernel-core/adopter`. Hosts list the plugin like any other;
+see `/create-kernel` section 3.8.
+
+New plugin projects receive a local `AGENTS.md` naming only the selected
+capabilities, host target, generated entrypoints and real Nx commands.
+The shared writer preserves authored instruction bytes and creates only a missing
+`AGENTS.md`. Maintain these instructions in place after creation.
+
+## Complete
+
+Generation is not completion. Implement every requested role, replace generated
+failure stubs and placeholder budgets, and derive dependencies from actual
+imports. Preserve the package-named plugin factory and `plugin` alias, one
+role-named source file per selected capability, public JSDoc, Apache-2.0
+metadata, and browser payload isolation where applicable.
+
+Use public runtime authoring subpaths only. Never import runtime internals or app
+code. Route kernel details and product surfaces through `/create-kernel`; do not
+duplicate that workflow here.
+
+Author jobs through `@taucad/runtime/job`, machines through
+`@taucad/runtime/machine`, and their schemas through the pure
+`@taucad/runtime/schema` entrypoint. A machine declares a manifest
+`version: 3` under `protocolVersion: 2`: its actions come from
+`standardMachineAction` or `defineMachineAction`, each `designed` until a
+qualification profile names it, with `holds`, `jobs` and `stop` declared
+explicitly. Retain Zod as a peer only when selected
+capabilities import it. Job and machine roles belong to host composition, not
+the four-role CAD executor. ABI 2 plugins must declare a runtime peer range that
+excludes ABI 1 releases before publication; a generated range is not release
+qualification.
+
+A kernel or transcoder that drives a wasm or native library follows
+`docs/policy/cad-performance-policy.md` Rule 3: render, edge, topology and
+export paths call the library once per operation per shape, never per
+triangle, node, sample, edge or face; a `<name>.call-count.test.ts` pins the
+counts; a summary tracer exposes the calls; and every embind handle is freed.
+
+Wire only the consumers and host runtimes in the request. Record why an
+incompatible runtime is skipped. Remove superseded code after behavior parity.
+
+## Verify
+
+Run installation when dependencies changed, then repair every applicable gate:
+
+```bash
+pnpm install --no-frozen-lockfile
+pnpm nx lint <project>
+pnpm nx test <project> --watch=false
+pnpm nx typecheck <project>
+pnpm nx build <project>
+pnpm nx pkgcheck <project>
+```
+
+Also inspect strict public imports, packed files, package size, generated
+declarations, payload isolation, host wiring, README quick start, and license
+provenance. Do not hand off with stubs, placeholder budgets, leaked host
+dependencies, or failing checks.
+
+When changing the generator, exercise mixed, job-only and machine-only output
+and the python and native kernel deployments: schema literals, six capability
+buckets and presets, role-selected dependencies, and generated type/build checks
+must agree with the public authoring APIs.

@@ -4,22 +4,28 @@ import { createPortal } from 'react-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   FloatingPanel,
+  FloatingPanelClose,
   FloatingPanelContentHeader,
   FloatingPanelContentHeaderActions,
   FloatingPanelMenuButton,
+  FloatingPanelButtonGroup,
   FloatingPanelContentTitle,
+  FloatingPanelContent,
 } from '#components/ui/floating-panel.js';
+import { TooltipProvider } from '@taucad/ui/components/tooltip';
 
 // ── Mocks ──────────────────────────────────────────────────────────────
 
 const mockUseIsMobile = vi.fn(() => false);
-vi.mock('#hooks/use-mobile.js', () => ({
+vi.mock('@taucad/ui/hooks/use-mobile', () => ({
   useIsMobile: () => mockUseIsMobile(),
 }));
 
 const mockUseIsInsideDrawer = vi.fn(() => false);
-vi.mock('#components/ui/drawer.js', () => ({
+vi.mock('@taucad/ui/components/drawer', () => ({
   useIsInsideDrawer: () => mockUseIsInsideDrawer(),
+  drawerActionClass: 'drawer-action',
+  drawerGrabStrip: { 'data-drawer-grab-strip': '', className: 'drawer-grab-strip' },
   DrawerHandle: ({ children, ...props }: React.ComponentProps<'div'>) => (
     <div data-testid='drawer-handle' {...props}>
       {children}
@@ -31,6 +37,9 @@ vi.mock('#components/ui/drawer.js', () => ({
     </div>
   ),
 }));
+
+const reportUiError = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('#lib/error-reporting.js', () => ({ reportUiError }));
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -49,10 +58,154 @@ function setMobileDrawerContext(): void {
 
 // ── Tests ──────────────────────────────────────────────────────────────
 
+describe('FloatingPanelContentHeader', () => {
+  it('matches the desktop Dockview tab-strip height', () => {
+    renderInPanel(<FloatingPanelContentHeader>Title</FloatingPanelContentHeader>);
+
+    expect(screen.getByText('Title')).toHaveClass('h-9');
+  });
+
+  it('is no grab strip on a desktop', () => {
+    renderInPanel(<FloatingPanelContentHeader>Title</FloatingPanelContentHeader>);
+
+    expect(screen.getByText('Title')).not.toHaveAttribute('data-drawer-grab-strip');
+  });
+
+  it('is the sheet’s grab strip in a phone drawer, so the grabber’s target reaches over it (I3, W1)', () => {
+    setMobileDrawerContext();
+    renderInPanel(
+      <FloatingPanelContent>
+        <FloatingPanelContentHeader>Title</FloatingPanelContentHeader>
+      </FloatingPanelContent>,
+    );
+
+    const header = screen.getByText('Title');
+    expect(header).toHaveAttribute('data-drawer-grab-strip');
+    expect(header).toHaveClass('drawer-grab-strip');
+  });
+
+  it('leaves a header nested in another panel’s content an ordinary row: only the outermost is under the grabber', () => {
+    setMobileDrawerContext();
+    renderInPanel(
+      <FloatingPanelContent>
+        <FloatingPanelContentHeader>Editor</FloatingPanelContentHeader>
+        <FloatingPanelContent>
+          <FloatingPanelContentHeader>Open file</FloatingPanelContentHeader>
+        </FloatingPanelContent>
+      </FloatingPanelContent>,
+    );
+
+    expect(screen.getByText('Editor')).toHaveAttribute('data-drawer-grab-strip');
+    expect(screen.getByText('Open file')).not.toHaveAttribute('data-drawer-grab-strip');
+  });
+});
+
+describe('FloatingPanelClose', () => {
+  beforeEach(() => {
+    mockUseIsMobile.mockReset().mockReturnValue(false);
+    mockUseIsInsideDrawer.mockReset().mockReturnValue(false);
+  });
+
+  it('is a circle with one border on a phone, the shape of every other header button', () => {
+    renderInPanel(
+      <TooltipProvider>
+        <FloatingPanelClose icon={<span />} tooltipContent={() => 'Close'} />
+      </TooltipProvider>,
+    );
+
+    const close = screen.getByRole('button', { name: 'Close panel' });
+    expect(close).toHaveClass('max-md:size-8', 'max-md:rounded-full', 'max-md:border');
+    expect(close).not.toHaveClass('max-md:rounded-md');
+  });
+
+  // `DrawerClose` is Radix `Dialog.Close`; outside a drawer it throws "`DialogClose` must be used within `Dialog`".
+  it('should not wrap the button in DrawerClose on mobile outside a drawer', () => {
+    mockUseIsMobile.mockReturnValue(true);
+    mockUseIsInsideDrawer.mockReturnValue(false);
+
+    renderInPanel(
+      <TooltipProvider>
+        <FloatingPanelClose icon={<span />} tooltipContent={() => 'Close'} />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByRole('button', { name: 'Close panel' })).toBeInTheDocument();
+    expect(screen.queryByTestId('drawer-close')).not.toBeInTheDocument();
+  });
+
+  it('should wrap the button in DrawerClose on mobile inside a drawer', () => {
+    setMobileDrawerContext();
+
+    renderInPanel(
+      <TooltipProvider>
+        <FloatingPanelClose icon={<span />} tooltipContent={() => 'Close'} />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByTestId('drawer-close')).toContainElement(screen.getByRole('button', { name: 'Close panel' }));
+  });
+
+  // A translucent blur behind the drawer's close drew compositor noise inside the circle on a phone.
+  it('should draw the close as a solid action inside a drawer, without the floating blur', () => {
+    setMobileDrawerContext();
+
+    renderInPanel(
+      <TooltipProvider>
+        <FloatingPanelClose icon={<span />} tooltipContent={() => 'Close'} />
+      </TooltipProvider>,
+    );
+
+    const close = screen.getByRole('button', { name: 'Close panel' });
+    expect(close).toHaveClass('drawer-action');
+    expect(close).not.toHaveClass('max-md:bg-background/70');
+    expect(close).not.toHaveClass('max-md:backdrop-blur-lg');
+  });
+
+  it('should name the button with its label, the panel it closes', () => {
+    renderInPanel(
+      <TooltipProvider>
+        <FloatingPanelClose label='Close Files' icon={<span />} tooltipContent={() => 'Close Files'} />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByRole('button', { name: 'Close Files' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Close panel' })).not.toBeInTheDocument();
+  });
+});
+
 describe('FloatingPanelContentHeaderActions', () => {
   beforeEach(() => {
     mockUseIsMobile.mockReset().mockReturnValue(false);
     mockUseIsInsideDrawer.mockReset().mockReturnValue(false);
+  });
+
+  describe('desktop reveal', () => {
+    it('should stay visible for a focused action and finish the name fade under it', () => {
+      renderInPanel(
+        <FloatingPanelContentHeader>
+          <FloatingPanelContentTitle>Title</FloatingPanelContentTitle>
+          <FloatingPanelContentHeaderActions>
+            <FloatingPanelMenuButton aria-label='Test action'>Action</FloatingPanelMenuButton>
+          </FloatingPanelContentHeaderActions>
+        </FloatingPanelContentHeader>,
+      );
+
+      const slot = screen
+        .getByRole('button', { name: 'Test action' })
+        .closest('[data-slot=floating-panel-content-header-actions]');
+      // Hidden at rest on md+, revealed by pane hover — and by keyboard focus, so a tabbed-to
+      // action is never an invisible focus ring. The slot also carries the fade scrim so a
+      // `fade-label` beside it dissolves into the header rather than stopping at a glyph.
+      expect(slot?.parentElement).toHaveClass('fade-row', '[--fade-scrim-into:var(--sidebar-background)]');
+      expect(slot).toHaveClass(
+        'md:opacity-0',
+        'group-hover/floating-panel:opacity-100',
+        'md:focus-within:opacity-100',
+        'fade-action',
+        'relative',
+        'bg-(--fade-scrim-into)',
+      );
+    });
   });
 
   describe('mobile drawer context', () => {
@@ -287,5 +440,56 @@ describe('FloatingPanelContentHeaderActions', () => {
       expect(handleClick).toHaveBeenCalledOnce();
       expect(handleParentClick).toHaveBeenCalledOnce();
     });
+  });
+});
+
+describe('FloatingPanelContent error boundary', () => {
+  it('reports what its content throws once, with the component stack, and shows the fallback (SB4)', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const failure = new Error('panel content failed');
+    function Failing(): React.JSX.Element {
+      throw failure;
+    }
+
+    renderInPanel(
+      <FloatingPanelContent errorFallback={() => <p>Panel failed</p>}>
+        <Failing />
+      </FloatingPanelContent>,
+    );
+
+    expect(screen.getByText('Panel failed')).toBeInTheDocument();
+    expect(reportUiError).toHaveBeenCalledExactlyOnceWith(failure, {
+      contexts: { react: { componentStack: expect.stringContaining('Failing') as unknown } },
+      tags: { boundary: 'floating-panel' },
+    });
+    consoleError.mockRestore();
+  });
+});
+
+describe('phone header actions', () => {
+  beforeEach(() => {
+    mockUseIsMobile.mockReset().mockReturnValue(true);
+    mockUseIsInsideDrawer.mockReset().mockReturnValue(true);
+  });
+
+  it('should draw each action as a 32px circle with a single border, and the group as nothing around them', () => {
+    renderInPanel(
+      <FloatingPanelContentHeader>
+        <FloatingPanelContentHeaderActions>
+          <FloatingPanelButtonGroup>
+            <FloatingPanelMenuButton aria-label='Chat options'>⋮</FloatingPanelMenuButton>
+          </FloatingPanelButtonGroup>
+        </FloatingPanelContentHeaderActions>
+      </FloatingPanelContentHeader>,
+    );
+
+    const options = screen.getByRole('button', { name: 'Chat options' });
+    expect(options).toHaveClass('size-8', 'rounded-full!', 'border');
+    expect(options).not.toHaveClass('rounded-md');
+    // A bordered group around a bordered button drew the ⋯ a double border.
+    const group = screen.getByRole('group');
+    for (const drawn of ['border', 'max-md:border', 'max-md:rounded-full', 'max-md:bg-background/70']) {
+      expect(group).not.toHaveClass(drawn);
+    }
   });
 });

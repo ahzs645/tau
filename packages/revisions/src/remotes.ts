@@ -1,0 +1,1194 @@
+/**
+ * A project's remotes, as git's own remotes list holds them (S24, S34).
+ *
+ * There is no Tau table of remotes: the store already has one, `git remote` on
+ * a disk host and the same `remote.<name>.url` config in the browser, so a
+ * second one could only disagree with it. The pane shows one remote at a time
+ * (A23) and this module is the whole model behind that choice — a name, a URL,
+ * and which of the two kinds it is.
+ *
+ * The kind is read from the *name*, not the URL: Tau writes the Tau Cloud
+ * remote under a reserved name, so a project that has one can be recognised
+ * without knowing which API origin this host was configured with (and a user
+ * who adds `origin` by hand still gets a *Git remote*). W12 adds the third
+ * kind's UI; the data model already holds it.
+ */
+
+import { isIncompleteRepositoryRefusal, isStorageRefusal, refusalCodeLineDetail } from '#refusal-markers.js';
+import { RevisionPortError } from '#revision-port.js';
+import type { Remote, RemoteKind, RevisionPortErrorCode } from '#revision-port.js';
+import type { PublishPublicationActorInput, PublishPublicationActorOutput } from '#publish.types.js';
+import type { RemoteStorage } from '#remote.types.js';
+
+// oxlint-disable-next-line no-barrel-files/no-barrel-files -- Preserve the existing remote contract names.
+export type { Remote, RemoteKind } from '#revision-port.js';
+
+/**
+ * The reserved name of a project's Tau Cloud remote.
+ *
+ * @public
+ */
+export const tauRemoteName = 'tau';
+
+/**
+ * Which kind a remote of this name is.
+ *
+ * @param name - The remote's name in git's config.
+ * @returns `'tau'` for the reserved name, `'git'` for every other.
+ * @public
+ */
+export const remoteKindOf = (name: string): RemoteKind => (name === tauRemoteName ? 'tau' : 'git');
+
+/**
+ * Where one project's Tau Cloud repository is.
+ *
+ * The smart-HTTP root the Tau API serves (`/v1/git/<projectId>.git`), so the
+ * same URL is what a stock `git clone` is given.
+ *
+ * @param apiBaseUrl - Origin the Tau API is reachable at, with or without a trailing slash.
+ * @param projectId - Identifies the project whose repository this is: word characters and `-` only.
+ * @returns The smart-HTTP URL a client clones and pushes.
+ * @throws RevisionPortError `INVALID_TRANSPORT` for an id that could leave the `/v1/git/` path (`../x`).
+ * @public
+ *
+ * @example <caption>Where Tau Cloud keeps one project</caption>
+ * ```typescript
+ * import { tauRemoteUrl } from '@taucad/revisions';
+ *
+ * tauRemoteUrl('https://api.tau.new/', 'p1'); // 'https://api.tau.new/v1/git/p1.git'
+ * ```
+ */
+export const tauRemoteUrl = (apiBaseUrl: string, projectId: string): string => {
+  if (!/^[\w-]+$/u.test(projectId)) {
+    throw new RevisionPortError('INVALID_TRANSPORT', `"${projectId}" is not a Tau project id.`);
+  }
+  return `${apiBaseUrl.replace(/\/+$/u, '')}/v1/git/${projectId}.git`;
+};
+
+/**
+ * Where the hosted catalogue of a Tau repository is (charter D8).
+ *
+ * Only a project's own Tau Cloud repository on the API's origin has one; any
+ * other URL — a third-party remote, another origin — answers `undefined`, and
+ * a fetch from it goes over smart HTTP as before.
+ *
+ * @param apiBaseUrl - Origin the Tau API is reachable at, or `undefined` before the page has said.
+ * @param remoteUrl - A remote's smart-HTTP URL.
+ * @returns `GET /v1/projects/<projectId>/git/catalogue` on that origin, or `undefined`.
+ * @public
+ *
+ * @example <caption>A project's catalogue, from its remote</caption>
+ * ```typescript
+ * import { tauCatalogueUrl } from '@taucad/revisions';
+ *
+ * tauCatalogueUrl('https://api.tau.new', 'https://api.tau.new/v1/git/p1.git');
+ * // 'https://api.tau.new/v1/projects/p1/git/catalogue'
+ * ```
+ */
+export const tauCatalogueUrl = (apiBaseUrl: string | undefined, remoteUrl: string): string | undefined => {
+  if (apiBaseUrl === undefined || !isTauApiUrl(apiBaseUrl, remoteUrl)) {
+    return undefined;
+  }
+  const base = apiBaseUrl.replace(/\/+$/u, '');
+  const projectId = /\/v1\/git\/([\w-]+)\.git\/?$/u.exec(remoteUrl)?.[1];
+  return projectId === undefined || remoteUrl.replace(/\/+$/u, '') !== tauRemoteUrl(base, projectId)
+    ? undefined
+    : `${base}/v1/projects/${projectId}/git/catalogue`;
+};
+
+/**
+ * One remote record from a name and a URL.
+ *
+ * @param name - Name git's config holds this remote under.
+ * @param url - Where the remote is.
+ * @returns The record, with its kind derived from the name.
+ * @public
+ */
+export const remoteOf = (
+  name: string,
+  url: string,
+  metadata?: Readonly<{ provider?: 'github'; repositoryId?: string; fetchOnly?: boolean }>,
+): Remote =>
+  Object.freeze({
+    name,
+    url,
+    kind: remoteKindOf(name),
+    ...metadata,
+    ...(isGithubRemoteUrl(url) || /^(?:[^@]+@)?github\.com:/iu.test(url) ? { provider: 'github' } : {}),
+  });
+
+/**
+ * The ref namespaces that are this host's own and never cross a wire.
+ *
+ * The server's `pre-receive` allow-list refuses them too, but a client that
+ * offered one would be asking to be refused — so the guard is here, in the one
+ * module both legs' transports read (W3a R4; architecture "Ref allow-list").
+ *
+ * `refs/tau/{chats,evidence,artifacts}` are deliberately absent: they are the
+ * record set the design pushes (D14, A15, A30, review 3 F13). So are conflict
+ * lines, `refs/heads/conflicts/*`: a conflicted revision travels (charter D14).
+ */
+const hostLocalRefPrefixes: readonly string[] = Object.freeze([
+  'refs/tau/owners',
+  'refs/tau/workspaces',
+  'refs/tau/revisions',
+  'refs/tau/transactions',
+  'refs/tau/head',
+  /* Server-owned roots that keep revision ids embedded in record JSON alive. */
+  'refs/tau/retention',
+  /* A line this device gave way on at connect, kept here and never offered. */
+  'refs/tau/superseded',
+  /* Fetch's own half of the store: a remote-tracking ref is what this host
+   * last saw *of* a remote, so offering one back is meaningless. */
+  'refs/remotes',
+]);
+
+/**
+ * Whether one fully-qualified ref is host-local.
+ *
+ * @param ref - The ref name, e.g. `refs/heads/main`.
+ * @returns `true` when the ref never leaves this host.
+ * @public
+ */
+export const isHostLocalRef = (ref: string): boolean =>
+  hostLocalRefPrefixes.some((prefix) => ref === prefix || ref.startsWith(`${prefix}/`));
+
+/**
+ * The refs a *refspec* may never name, on either side.
+ *
+ * Narrower than {@link isHostLocalRef} by `refs/remotes/*`: it never leaves this
+ * host, but it is precisely where a fetch writes, so a refspec naming it is
+ * correct rather than an attack.
+ *
+ * What remains is `refs/tau/*`'s host-local half: namespaces no refspec has any
+ * business naming, in either direction.
+ */
+const managedRefPrefixes: readonly string[] = Object.freeze(
+  hostLocalRefPrefixes.filter((prefix) => prefix !== 'refs/remotes'),
+);
+
+/**
+ * Whether a ref *pattern* can expand into a Tau-managed ref.
+ *
+ * @param pattern - A ref or a wildcard pattern, from either side of a refspec.
+ * @returns `true` when anything the pattern names is Tau-managed.
+ * @public
+ */
+export const refPatternIsHostLocal = (pattern: string): boolean => {
+  const wildcard = pattern.indexOf('*');
+  if (wildcard === -1) {
+    return managedRefPrefixes.some((prefix) => pattern === prefix || pattern.startsWith(`${prefix}/`));
+  }
+  const prefix = pattern.slice(0, wildcard);
+  return managedRefPrefixes.some((managed) => managed.startsWith(prefix) || prefix.startsWith(`${managed}/`));
+};
+
+/**
+ * Where one fetched ref lands in this store.
+ *
+ * `refs/heads/main` becomes `refs/remotes/<remote>/main` — git's own layout, so
+ * `--force-with-lease` and every git tool read the same place — and everything
+ * else keeps its namespace under the remote (`refs/tau/chats/c1` becomes
+ * `refs/remotes/<remote>/tau/chats/c1`).
+ *
+ * @param remote - The remote's name.
+ * @param ref - The fully-qualified ref on the remote.
+ * @returns The remote-tracking ref this host writes.
+ * @public
+ */
+export const remoteTrackingRef = (remote: string, ref: string): string => {
+  const tail = ref.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length) : ref.replace(/^refs\//u, '');
+  return `refs/remotes/${remote}/${tail}`;
+};
+
+/**
+ * Whether a URL is on the Tau API's own origin.
+ *
+ * The one question the browser leg has to answer before every request: Tau's
+ * own git server is reached directly with the session cookie, and every other
+ * remote is reached through the API's git proxy with *that remote's*
+ * credential. Getting it backwards either breaks the connection or hands a Tau
+ * session to a third party, so the rule is one function and both legs read it
+ * (W11b review Q2 — the `HttpClient` has no origin guard of its own).
+ *
+ * @param apiBaseUrl - Origin the Tau API is reachable at.
+ * @param url - The URL a request is about to be made to.
+ * @returns `true` when the URL is Tau's own API origin.
+ * @public
+ */
+export const isTauApiUrl = (apiBaseUrl: string, url: string): boolean => {
+  try {
+    return new URL(url).origin === new URL(apiBaseUrl).origin;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Where a third-party git request goes instead: the API's git proxy (S25, P17).
+ *
+ * A browser cannot reach `https://github.com/…/info/refs` itself — no git host
+ * sends CORS headers — so the request is made to Tau's API, which forwards
+ * exactly the three git smart-HTTP endpoints and nothing else. The remote URL
+ * travels as a query parameter and the *credential* never does (I8): it rides
+ * `x-tau-proxy-authorization`, which is the only header the proxy forwards.
+ *
+ * @param apiBaseUrl - Origin the Tau API is reachable at, with or without a trailing slash.
+ * @param url - The remote URL the client wants to reach.
+ * @returns The proxy URL to request instead.
+ * @internal
+ *
+ * @example <caption>Reaching GitHub from the page</caption>
+ * ```typescript
+ * import { gitProxyUrl } from '#remotes.js';
+ *
+ * gitProxyUrl('https://api.tau.new', 'https://github.com/o/r.git/info/refs?service=git-upload-pack');
+ * // 'https://api.tau.new/v1/git/proxy?url=https%3A%2F%2Fgithub.com%2Fo%2Fr.git%2Finfo%2Frefs%3Fservice%3Dgit-upload-pack'
+ * ```
+ */
+export const gitProxyUrl = (apiBaseUrl: string, url: string): string =>
+  `${apiBaseUrl.replace(/\/+$/u, '')}/v1/git/proxy?url=${encodeURIComponent(url)}`;
+
+/**
+ * Whether this remote is on GitHub, and therefore whether the GitHub sign-in on
+ * the session is the credential for it (S34).
+ *
+ * @param url - The remote's URL.
+ * @returns `true` for a `github.com` remote.
+ * @public
+ */
+export const isGithubRemoteUrl = (url: string): boolean => {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === 'github.com' || hostname === 'www.github.com';
+  } catch {
+    return false;
+  }
+};
+
+/* The proxy's own list, so the dialog refuses what the wire would refuse
+ * (`git-proxy.controller.ts` `credentialQueryKeys`). */
+const credentialQueryKeys = new Set(['access_token', 'token', 'authorization', 'password', 'api_key', 'apikey']);
+
+/* The name-shaped half of the proxy's host refusal. Its numeric private ranges
+ * are not mirrored — that is a whole address parser for a check the wire makes
+ * anyway (W12 review R8). */
+const blockedHostNames: readonly string[] = Object.freeze(['.localhost', '.internal', '.local']);
+
+/**
+ * Why this URL cannot be a Git remote, in words a person can act on.
+ *
+ * These are *some* of the proxy's own refusals (W11a `git-proxy.controller.ts`),
+ * brought forward so they arrive while the person is still typing rather than as
+ * a failed connection two steps later. Two of the proxy's checks are
+ * deliberately **not** mirrored — its numeric private-address ranges, and the
+ * empty-path rule here has no counterpart there — so a `400` with a code is
+ * still the last word (W12 review R8).
+ *
+ * `allowPrivate` is ruling P50, and it is the host's to pass: the page cannot
+ * read the API's environment, so each host says what its own deployment allows
+ * (`TAU_GIT_REMOTE_ALLOW_PRIVATE=1` on the API relaxes the same two refusals on
+ * the wire). Omitted, nothing changes — a private address stays refused, which
+ * is what every caller that does not opt in gets.
+ *
+ * @param url - What the person typed.
+ * @param options - `allowPrivate` relaxes the scheme and address refusals (P50).
+ * @returns The reason it cannot be used, or `undefined` when it can.
+ * @public
+ */
+export const gitRemoteUrlProblem = (
+  url: string,
+  options: Readonly<{ allowPrivate?: boolean }> = {},
+): string | undefined => {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return 'Enter the full address of the repository, starting with https://';
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (parsed.protocol !== 'https:' && !(options.allowPrivate === true && parsed.protocol === 'http:')) {
+    return 'Only https addresses can be connected.';
+  }
+  if (parsed.username !== '' || parsed.password !== '') {
+    return 'Remove the user name and password from the address; Tau asks for permission instead.';
+  }
+  for (const key of parsed.searchParams.keys()) {
+    if (credentialQueryKeys.has(key.toLowerCase())) {
+      return 'Remove the token from the address; Tau asks for permission instead.';
+    }
+  }
+  if (
+    options.allowPrivate !== true &&
+    blockedHostNames.some((suffix) => host === suffix.slice(1) || host.endsWith(suffix))
+  ) {
+    return 'That address is on this machine or a private network; Tau cannot reach it for you.';
+  }
+  if (parsed.pathname.replaceAll('/', '') === '') {
+    return 'Add the repository to the address, for example https://github.com/owner/repository.git';
+  }
+  return undefined;
+};
+
+/**
+ * The `code` a failure carries when the remote's credential has to be granted
+ * again.
+ *
+ * A *type*, so that `remote.machine` — which may import nothing from this module
+ * but types (I20, the machine import boundary) — can write the same literal and
+ * have a rename red both files. It travels as a `code` on an ordinary `Error`
+ * because it crosses `isomorphic-git`, a `fetch` and an invoked actor before the
+ * machine reads it, and none of those preserves a class.
+ *
+ * @public
+ */
+export type RemoteReauthorizationCode = 'REMOTE_REAUTHORIZATION_REQUIRED';
+
+/**
+ * The error a host throws when the remote's credential has to be granted again.
+ *
+ * The distinction it carries is the whole of the charter's *Reconnect GitHub*
+ * row: a rotated `AUTH_SECRET` invalidates every stored OAuth token, and
+ * surfacing that as a failed push tells the person nothing they can act on.
+ *
+ * @param message - What to tell the person.
+ * @returns An error `remote.machine` routes to `reconnectRequired`, not `failed`.
+ * @public
+ */
+export const reauthorizationRequired = (message: string): Error =>
+  Object.assign(new Error(message), {
+    code: 'REMOTE_REAUTHORIZATION_REQUIRED' satisfies RemoteReauthorizationCode,
+  });
+
+/**
+ * What this leg knows about a remote refusal beyond the error itself (N1).
+ *
+ * @public
+ */
+export type RemoteTransportContext = Readonly<{
+  /**
+   * The remote's name in git's config.
+   *
+   * It decides *whose* credential was refused, which is the whole difference
+   * between *Sign in* and *Reconnect*: the reserved Tau name is reached with
+   * this device's own session, and every other name is reached through the
+   * API's git proxy with a credential minted for that remote (P17, W12). So a
+   * 401 or 403 on a non-Tau remote is a credential to grant again, not a
+   * session to renew.
+   */
+  remote?: string;
+  /** Git's own stderr, on the leg that has one. */
+  stderr?: string;
+  /** A 429's `Retry-After` header, on the leg that can read it. */
+  retryAfter?: string;
+  /** A 401's or 403's `WWW-Authenticate` header, on the leg that can read it. */
+  authenticate?: string;
+}>;
+
+/**
+ * A rate limit's wait when the remote named none the leg could read: the Tau
+ * git budget's window is 60 s, so half of it on average (W13d).
+ */
+const defaultRateLimitWaitMilliseconds = 30_000;
+
+/**
+ * `Retry-After` in milliseconds: delta-seconds or an HTTP date.
+ *
+ * @param header - The header's value.
+ * @returns The wait, or `undefined` when the value says nothing usable.
+ */
+const retryAfterMilliseconds = (header: string | undefined): number | undefined => {
+  if (header === undefined || header.trim() === '') {
+    return undefined;
+  }
+  const seconds = Number(header);
+  const wait = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(header) - Date.now();
+  return Number.isFinite(wait) ? Math.max(0, wait) : undefined;
+};
+
+/** What a remote answered, however this leg learned it. */
+/**
+ * What one remote refusal said: its status, the `code` of its JSON envelope,
+ * its sentence, and the hook's machine-readable `Tau-Code:` line (`detail`),
+ * which is never part of the sentence.
+ */
+type RemoteRefusal = Readonly<{ status?: number; code?: string; message?: string; detail?: string }>;
+
+/** The `code` values this classifier will hand back untouched when it finds one. */
+const remoteErrorCodes: ReadonlySet<string> = new Set<RevisionPortErrorCode>([
+  'REMOTE_DAMAGED',
+  'REMOTE_FORBIDDEN',
+  'REMOTE_MOVED',
+  'REMOTE_NOT_ENTITLED',
+  'REMOTE_NOT_FOUND',
+  'REMOTE_QUOTA_EXCEEDED',
+  'REMOTE_REAUTHORIZATION_REQUIRED',
+  'REMOTE_REJECTED',
+  'REMOTE_UNAUTHORIZED',
+  'REMOTE_UNAVAILABLE',
+]);
+
+/** The JSON envelope every Tau refusal carries, when the body is one. */
+const refusalBody = (body: string | undefined): RemoteRefusal => {
+  if (body === undefined) {
+    return {};
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    /* GitHub's git endpoint refuses in plain text ("Write access to repository
+     * not granted."), and that sentence is the remote's answer (N4). An HTML
+     * error page is not a sentence. */
+    const said = body.trim().split('\n')[0]?.trim() ?? '';
+    return said === '' || said.startsWith('<') || said.length > 300 ? {} : { message: said };
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    return {};
+  }
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- a parsed body is `unknown` until read.
+  const record = parsed as Readonly<{ code?: unknown; message?: unknown; error?: unknown }>;
+  /* The git-lfs batch body names its sentence `message`; the API's envelope,
+   * which is what every browser request receives, names it `error`. */
+  const sentence = [record.message, record.error].find(
+    (candidate): candidate is string => typeof candidate === 'string' && candidate !== '',
+  );
+  return {
+    ...(typeof record.code === 'string' ? { code: record.code } : {}),
+    ...(sentence === undefined ? {} : { message: sentence }),
+  };
+};
+
+/**
+ * Git's own sideband line for "a hook said no".
+ *
+ * `receive-pack` writes it beside whatever the hook itself printed, so it is
+ * git's restatement of the per-ref status rather than anything the server said —
+ * and it names a hook, a word no surface may render (Rule 1).
+ */
+const gitHookSideband = /^(?:error: )?(?:pre-receive )?hook declined(?: to update \S+)?$/u;
+
+/**
+ * What git's own stderr says about a refusal, for the leg that has no response
+ * object (S24).
+ *
+ * `git` prints the status in one of three spellings, and prints the server's own
+ * sentence on the `remote:` sideband — which is exactly where the Tau API's
+ * `pre-receive` messages arrive. A 401 is the odd one out: `git` answers a
+ * `WWW-Authenticate` by asking for a user name, so with prompts disabled the
+ * *absence* of a status and the presence of that refusal is the 401.
+ *
+ * A `Tau-Code:` line on the sideband is the hook's key for the refusal, not a
+ * sentence: it is read into `detail` and left out of the message, so with no
+ * such line the message is exactly the hook's sentences.
+ *
+ * @param stderr - Everything the command wrote to its error stream.
+ * @returns The status and sentence, as far as they can be read.
+ */
+const gitStderrRefusal = (stderr: string): RemoteRefusal => {
+  const status =
+    /(?:The requested URL returned error|RPC failed; HTTP|error: HTTP)[: ]\s*(?<status>\d{3})/u.exec(stderr)?.groups?.[
+      'status'
+    ] ??
+    /* Git answers a `WWW-Authenticate` by asking for a user name, so with
+     * prompts disabled *that* refusal is the 401, and the status never appears. */
+    (/could not read (?:Username|Password) for|Authentication failed/u.test(stderr)
+      ? '401'
+      : /* A 404 on the advertisement is reported as git's own sentence, too. */
+        /repository .* not found|Repository not found/iu.test(stderr)
+        ? '404'
+        : undefined);
+  const lines = [...stderr.matchAll(/^remote: (?<said>.+)$/gmu)]
+    .map((match) => (match.groups?.['said'] ?? '').trim())
+    .filter((line) => line !== '' && !gitHookSideband.test(line));
+  const detail = lines.map((line) => refusalCodeLineDetail(line)).find((read) => read !== undefined);
+  const said = lines.filter((line) => refusalCodeLineDetail(line) === undefined);
+  return {
+    ...(status === undefined ? {} : { status: Number(status) }),
+    ...(said.length === 0 ? {} : { message: said.join(' ') }),
+    ...(detail === undefined ? {} : { detail }),
+  };
+};
+
+/*
+ * The server's own compare-and-set refusing a command: the ref was not at
+ * the old value this push sent, so another writer moved it. What git says
+ * about that ref on the sideband decides: `cannot lock ref '<ref>': is at
+ * <oid> but expected <oid>`, `reference already exists` for a create, a bare
+ * `unable to resolve reference '<ref>'` for a ref removed since, or
+ * reftable's `reference is missing but expected <oid>` and `incorrect old
+ * value provided`. A lock another process holds (`Unable to create
+ * '<ref>.lock': File exists`) is contention, not a moved ref, and so is a ref
+ * the server cannot read (`…: reference broken`, or a permission or I/O
+ * error): both keep git's own text.
+ *
+ * The per-ref status cannot decide while the sideband names the ref: git
+ * 2.43 reports every failed transaction as `failed to update ref`, and the
+ * batched receive-pack of git 2.51 and later reports a held lock as
+ * `reference already exists`, the same words as a create that lost. Only a
+ * server that said nothing about the ref is read from its status, and then
+ * `reference already exists` is not taken as moved.
+ */
+const movedRefSaying =
+  /is at [\da-f]+ but expected [\da-f]+|reference is missing but expected [\da-f]+|reference already exists|reference does not exist|unable to resolve reference '[^']*'$|incorrect old value provided/iu;
+/**
+ * Whether the server's compare-and-set refused one ref because another writer
+ * moved it: a lost lease (D39). Both legs ask it, so they answer alike.
+ *
+ * @internal
+ * @param remoteName - The ref on the remote.
+ * @param reason - The per-ref status the server reported.
+ * @param said - The remote's sideband lines.
+ * @returns Whether the ref moved.
+ */
+export const refMoved = (remoteName: string, reason: string, said: readonly string[]): boolean => {
+  const about = said.filter((line) => line.includes(`'${remoteName}'`));
+  return about.length > 0
+    ? about.some((line) => movedRefSaying.test(line))
+    : movedRefSaying.test(reason) && !/already exists/iu.test(reason);
+};
+
+/**
+ * The sentence a refused ref carries, preferring the server's own (N4).
+ *
+ * `hook declined` is git's *placeholder* for "the server said no and told you
+ * why on the sideband" — it is what both legs report per ref, and it is the
+ * only per-ref status that carries no information at all. Since the Tau API
+ * moved its compare-and-set rule into `pre-receive` (contract §4) that
+ * placeholder is what a refused rewind looks like on the wire, so a Sync row
+ * rendering it would show a person the word *hook* and nothing else (Rule 1).
+ *
+ * Narrow on purpose: every other per-ref status git reports is already the
+ * server's or git's own words, and a sideband line beside one of those is
+ * progress rather than a refusal. The hook's `Tau-Code:` line is a key, never
+ * part of the sentence, on this leg as in `gitStderrRefusal`.
+ *
+ * @internal
+ * @param reported - What the per-ref status said.
+ * @param said - The remote's sideband lines, git's own restatements included.
+ * @returns The sentence to show.
+ */
+export const remoteRefusalSaid = (reported: string, said: readonly string[]): string => {
+  const sentence = said
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !gitHookSideband.test(line) && refusalCodeLineDetail(line) === undefined)
+    .join(' ');
+  return sentence !== '' && /hook declined/iu.test(reported) ? sentence : reported;
+};
+
+/**
+ * One short sentence naming the class, when the server sent none of its own.
+ *
+ * @param code - The refusal's class.
+ * @param remote - The remote's name in git's config, which says whether a credential was saved for it.
+ * @returns The sentence to show.
+ */
+const refusalSentence = (code: RevisionPortErrorCode, remote: string | undefined): string => {
+  switch (code) {
+    case 'REMOTE_REAUTHORIZATION_REQUIRED': {
+      /* D94: only a connected GitHub repository carries a saved credential;
+       * `writeRemote` (revision-effects) names it `github-<id>`. Every other
+       * Git remote is anonymous, and a host such as GitLab answers a private
+       * or missing repository with 401. */
+      return remote?.startsWith('github-')
+        ? 'GitHub didn’t accept Tau’s saved sign-in. Connect GitHub again in Tau.'
+        : 'This Git host asked for a sign-in Tau doesn’t have, or there’s no repository at this address.';
+    }
+    case 'REMOTE_UNAUTHORIZED': {
+      return 'Sign in again to keep backing up.';
+    }
+    case 'REMOTE_NOT_ENTITLED': {
+      return 'Syncing files to the cloud is a paid plan feature.';
+    }
+    case 'REMOTE_FORBIDDEN': {
+      return remote?.startsWith('github-')
+        ? 'The connected GitHub account can’t open this repository.'
+        : 'You don’t have access to this project’s backup.';
+    }
+    case 'REMOTE_NOT_FOUND': {
+      return 'This remote has no repository at this address for your account.';
+    }
+    case 'REMOTE_MOVED': {
+      return 'This repository moved to a new address.';
+    }
+    case 'REMOTE_QUOTA_EXCEEDED': {
+      return 'This project doesn’t fit in its backup.';
+    }
+    case 'REMOTE_REJECTED': {
+      return 'Couldn’t back up the latest changes. Tau will get the newer changes and try again.';
+    }
+    case 'REMOTE_DAMAGED': {
+      return 'This project’s cloud backup is damaged and needs repair before it can back up again.';
+    }
+    default: {
+      return 'Your backup is busy. Tau will try again.';
+    }
+  }
+};
+
+/* Whether a refusal says its credential expired: in a `WWW-Authenticate` challenge, a reconnect code, or its own words. */
+const tokenExpired = (answered: RemoteRefusal, authenticate: string | undefined): boolean =>
+  (authenticate !== undefined && /invalid_token|expired/iu.test(authenticate)) ||
+  answered.code === 'GITHUB_RECONNECT_REQUIRED' ||
+  (answered.message !== undefined && /expired|bad credentials/iu.test(answered.message));
+
+/**
+ * One remote refusal, classified — the single place either leg turns what a
+ * remote said into a code a machine and a person can both act on (N1).
+ *
+ * The rule is one sentence long: **a status means the remote answered**. So
+ * every HTTP status becomes a named code carrying the server's own message when
+ * it sent one, and only a failure with *no* status — offline, DNS, TLS, an
+ * aborted socket — stays `ENGINE_FAILED 'The remote could not be reached.'`
+ * That sentence was previously the answer to nine of the ten failure classes a
+ * push can produce, which is why a lapsed subscription read as a network
+ * outage.
+ *
+ * An error that already carries one of these codes is preserved: a host that
+ * knew before the request (a credential frame the page already marked
+ * unavailable) has said something this cannot improve on.
+ *
+ * @param error - What the transport threw.
+ * @param context - The remote's name, and git's stderr on the leg that has one.
+ * @returns The typed refusal to throw.
+ * @public
+ *
+ * @example <caption>A free-tier push, as the Sync row now reads it</caption>
+ * ```typescript
+ * import { remoteTransportError } from '@taucad/revisions';
+ *
+ * const error = Object.assign(new Error('HTTP Error: 403 Forbidden'), {
+ *   data: { statusCode: 403, response: '{"code":"GIT_SYNC_NOT_ENTITLED","message":"Syncing files to the cloud is a paid plan feature."}' },
+ * });
+ * remoteTransportError(error, { remote: 'tau' }).code; // 'REMOTE_NOT_ENTITLED'
+ * ```
+ */
+export const remoteTransportError = (error: unknown, context: RemoteTransportContext = {}): RevisionPortError => {
+  if (error instanceof RevisionPortError) {
+    return error;
+  }
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- library errors are `unknown` until read.
+  const thrown = (error ?? {}) as Readonly<{
+    code?: unknown;
+    name?: unknown;
+    message?: unknown;
+    data?: Readonly<{ statusCode?: unknown; response?: unknown }>;
+  }>;
+  const held = typeof thrown.code === 'string' && remoteErrorCodes.has(thrown.code) ? thrown.code : undefined;
+  if (held !== undefined) {
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- narrowed by the set above.
+    const preserved = held as RevisionPortErrorCode;
+    return new RevisionPortError(
+      preserved,
+      typeof thrown.message === 'string' && thrown.message !== ''
+        ? thrown.message
+        : refusalSentence(preserved, context.remote),
+      { cause: error },
+    );
+  }
+  const answered: RemoteRefusal = {
+    ...(context.stderr === undefined ? {} : gitStderrRefusal(context.stderr)),
+    ...refusalBody(typeof thrown.data?.response === 'string' ? thrown.data.response : undefined),
+    ...(typeof thrown.data?.statusCode === 'number' ? { status: thrown.data.statusCode } : {}),
+  };
+  const { status } = answered;
+  if (status === undefined) {
+    /* A sentence on the `remote:` sideband is the remote answering, even though
+     * git reports no status for it: Tau Cloud's `pre-receive` hook refuses a
+     * rewind or a deletion on every ref family that way (contract §4). Its own
+     * words, never one of Tau's (N4). */
+    if (answered.message !== undefined) {
+      /* D20's ceiling and D17's plan quota are two of those sentences, and each
+         is a *quota* answer rather than a rule the caller broke: the affordance must not
+         offer "Sync now" again. `isStorageRefusal` (`refusal-markers.ts`) is
+         the one place that question is answered, for this leg and for the
+         scheduler's. The remote's own words, list of files and all, are still
+         what is shown. */
+      return new RevisionPortError(
+        isStorageRefusal(answered.message)
+          ? 'REMOTE_QUOTA_EXCEEDED'
+          : isIncompleteRepositoryRefusal(answered.message)
+            ? 'REMOTE_DAMAGED'
+            : 'REMOTE_REJECTED',
+        answered.message,
+        { cause: error },
+      );
+    }
+    /* The caller's own deadline is not the remote's answer (P36). An aborted
+     * request is this host giving up on purpose, and saying "the remote could
+     * not be reached" would hide the one bound that did its job — so the abort
+     * keeps its own words. */
+    const aborted = typeof thrown.name === 'string' && (thrown.name === 'AbortError' || thrown.name === 'TimeoutError');
+    return new RevisionPortError(
+      'ENGINE_FAILED',
+      aborted && typeof thrown.message === 'string' && thrown.message !== ''
+        ? thrown.message
+        : 'The remote could not be reached.',
+      { cause: error },
+    );
+  }
+  /* A remote that is not Tau's own is credited by a token the person granted to
+   * *it*, so refusing that token is something they can grant again (W12). */
+  const proxied = context.remote !== undefined && remoteKindOf(context.remote) === 'git';
+  /* GitHub answers a token it no longer honours with 401; its 403 to a live
+   * token is this repository's access withdrawn, which no reconnect restores,
+   * unless the answer itself says the token expired. */
+  const githubAccessWithdrawn =
+    status === 403 && context.remote?.startsWith('github-') === true && !tokenExpired(answered, context.authenticate);
+  const code: RevisionPortErrorCode =
+    status === 401
+      ? proxied
+        ? 'REMOTE_REAUTHORIZATION_REQUIRED'
+        : 'REMOTE_UNAUTHORIZED'
+      : status === 403
+        ? answered.code === 'GIT_SYNC_NOT_ENTITLED'
+          ? 'REMOTE_NOT_ENTITLED'
+          : proxied && !githubAccessWithdrawn
+            ? 'REMOTE_REAUTHORIZATION_REQUIRED'
+            : 'REMOTE_FORBIDDEN'
+        : status === 404 || status === 410
+          ? /* 410 is a project the hosted remote has tombstoned (charter NI12):
+               it existed, it is gone, and no amount of retrying brings it back.
+               It joins 404 rather than getting a code of its own because the
+               two ask the person for exactly the same thing — stop syncing to
+               this address — and the server's own sentence below is what tells
+               them which of the two happened. */
+            'REMOTE_NOT_FOUND'
+          : status === 409 && answered.code === 'GIT_PROXY_REDIRECTED_CREDENTIAL'
+            ? /* The proxy will not carry a credential across a redirect (D11):
+                 the repository moved, and only the person can confirm where. */
+              'REMOTE_MOVED'
+            : status === 413
+              ? 'REMOTE_QUOTA_EXCEEDED'
+              : status === 422
+                ? /* The refs themselves were not committable: loose objects, or a
+                     connectivity check the pushed packs failed. The remote said
+                     so in its own words and a blind re-push reproduces it, so
+                     this is a rejection carrying that sentence, not a retry. */
+                  'REMOTE_REJECTED'
+                : status === 500 &&
+                    (answered.code === 'GIT_REPOSITORY_INCOMPLETE' || isIncompleteRepositoryRefusal(answered.message))
+                  ? /* The manifest names a pack the store does not hold (D22):
+                       no retry repairs it, so it must not ride the 5xx
+                       backoff forever. Every other 5xx and 429 stays
+                       retryable, 503 race-lost included. */
+                    'REMOTE_DAMAGED'
+                  : 'REMOTE_UNAVAILABLE';
+  /* D77: a 401 to a minted credential is the grant withdrawn, and GitHub's body
+   * for it ("Invalid username or token. Password authentication is not
+   * supported…") describes a password nobody typed. A 403 keeps its words. */
+  const sentence = code === 'REMOTE_REAUTHORIZATION_REQUIRED' && status === 401 ? undefined : answered.message;
+  return new RevisionPortError(code, sentence ?? refusalSentence(code, context.remote), {
+    cause: error,
+    status,
+    ...(status === 429
+      ? { retryAfterMilliseconds: retryAfterMilliseconds(context.retryAfter) ?? defaultRateLimitWaitMilliseconds }
+      : {}),
+  });
+};
+
+/**
+ * How one Tau Cloud API request proves who is asking (A21, I8, W10.5).
+ *
+ * The only thing that differs between the browser leg and a terminal's: a
+ * document has the session cookie the page signed in with and no token to
+ * carry, and a terminal has no cookie jar and carries a bearer value. Both
+ * reach the same endpoints and read the same refusals, which is why the pair is
+ * one parameter rather than two copies of the request.
+ *
+ * @public
+ */
+export type TauCloudAuth = Readonly<{ kind: 'cookie' }> | Readonly<{ kind: 'bearer'; authorization: string }>;
+
+/* The headers and credential mode one leg's request carries. */
+const tauCloudRequestInit = (auth: TauCloudAuth): RequestInit => ({
+  ...(auth.kind === 'cookie' ? { credentials: 'include' } : {}),
+  /* eslint-disable @typescript-eslint/naming-convention -- HTTP header names retain TitleCase on the wire. */
+  headers: {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+    ...(auth.kind === 'bearer' ? { Authorization: auth.authorization } : {}),
+  },
+  /* eslint-enable @typescript-eslint/naming-convention -- end wire header names. */
+});
+
+/** The `code` in the API's JSON envelope, or `undefined` when it sent none. */
+const answeredCode = async (response: Response): Promise<Readonly<{ code?: string; message?: string }>> => {
+  const body: unknown = await response.json().catch(() => undefined);
+  const answered = (body ?? {}) as Readonly<{ code?: unknown; message?: unknown }>;
+  return {
+    ...(typeof answered.code === 'string' ? { code: answered.code } : {}),
+    ...(typeof answered.message === 'string' ? { message: answered.message } : {}),
+  };
+};
+
+/**
+ * What to tell a person whose version could not be published (A18, C6).
+ *
+ * One owner, for the same reason {@link registerProjectFailureMessage} has one:
+ * the worker and the daemon each carried a copy and they disagreed about two
+ * classes — 401, where the daemon printed a `TAU_AUTH_TOKEN` hint the browser
+ * never could, and a version too large to share, which the daemon reported as
+ * *"Try again."* One sentence per response, whichever host asked.
+ *
+ * @param status - The HTTP status the API answered.
+ * @param code - The `code` in its JSON envelope, when it sent one.
+ * @returns One sentence to render.
+ * @public
+ */
+export const publishFailureMessage = (status: number, code?: string): string => {
+  if (status === 401) {
+    return 'Sign in to publish this project.';
+  }
+  if (code === 'ENTITLEMENT_REQUIRED') {
+    return 'Private links need the Pro plan.';
+  }
+  if (code === 'MISSING_ENTRY_PATH') {
+    return 'This version does not contain the file this project opens with.';
+  }
+  if (status === 413 || code === 'PAYLOAD_TOO_LARGE') {
+    return 'This version is larger than a shared link may be.';
+  }
+  return 'Couldn’t publish this version. Try again.';
+};
+
+/**
+ * Record one publication on Tau Cloud, from either host (S32, A21, W10.5).
+ *
+ * Nothing is written under the project: the row lives on the API, and the tag
+ * the publication points at was already pushed with the credential this call's
+ * {@link TauCloudAuth} names. The answer is the project's one cloud link, which
+ * stays the same across publishes.
+ *
+ * @param apiBaseUrl - The API origin, with or without a trailing slash.
+ * @param auth - How this host proves who is asking.
+ * @param input - The pointer, the project's name and description, and who can open the link.
+ * @returns The publication's id, the link to copy and who can open it.
+ * @throws Error When Tau Cloud refused, in the words a person can act on.
+ * @public
+ */
+export const publishOverHttp = async (
+  apiBaseUrl: string,
+  auth: TauCloudAuth,
+  input: PublishPublicationActorInput,
+): Promise<PublishPublicationActorOutput> => {
+  /* Named field by field, so nothing a draft carries for the machine (a note, the auto-name flag) reaches the API. */
+  const request = {
+    projectId: input.projectId,
+    projectName: input.projectName,
+    tag: input.tag,
+    revisionId: input.revisionId,
+    entryPath: input.entryPath,
+    ...(input.description === undefined ? {} : { description: input.description }),
+    ...(input.visibility === undefined ? {} : { visibility: input.visibility }),
+    ...(input.defaultVisibility === undefined ? {} : { defaultVisibility: input.defaultVisibility }),
+  };
+  const response = await globalThis.fetch(`${apiBaseUrl.replace(/\/$/u, '')}/v1/publications`, {
+    method: 'POST',
+    ...tauCloudRequestInit(auth),
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    const answered = await answeredCode(response);
+    throw new Error(publishFailureMessage(response.status, answered.code));
+  }
+  const body = (await response.json()) as Readonly<{
+    id?: string;
+    share?: Readonly<{ url?: string; visibility?: string }>;
+  }>;
+  const url = body.share?.url;
+  const visibility = body.share?.visibility;
+  if (body.id === undefined || url === undefined || (visibility !== 'private' && visibility !== 'public')) {
+    throw new Error('Couldn’t create the link. Try again.');
+  }
+  return { publicationId: body.id, url, visibility };
+};
+
+/**
+ * Claim this project on Tau Cloud, so connecting to it can take (P51, W18 DEF-1).
+ *
+ * `PUT /v1/projects/<id>` creates the caller's project row and its bare
+ * repository and is idempotent, so a retried *Connect* costs one request — the
+ * API's insert is `onConflictDoNothing`. Until that row exists both git
+ * advertisements answer `404`.
+ *
+ * @param apiBaseUrl - The API origin, with or without a trailing slash.
+ * @param auth - How this host proves who is asking.
+ * @param project - The id and the manifest name this host knows, and `origin:
+ *   'github'` for a project linked to a GitHub repository, whose commits Tau did
+ *   not record and which the push's authorship check then admits (B4).
+ * @returns Nothing.
+ * @throws Error When Tau Cloud refused, in the words a person can act on (A18).
+ * @public
+ */
+export const registerProjectOverHttp = async (
+  apiBaseUrl: string,
+  auth: TauCloudAuth,
+  project: Readonly<{ id: string; name: string | undefined; origin?: 'github' }>,
+): Promise<void> => {
+  const response = await globalThis.fetch(
+    `${apiBaseUrl.replace(/\/$/u, '')}/v1/projects/${encodeURIComponent(project.id)}`,
+    {
+      method: 'PUT',
+      ...tauCloudRequestInit(auth),
+      body: JSON.stringify({
+        ...(project.name === undefined ? {} : { name: project.name }),
+        ...(project.origin === undefined ? {} : { origin: project.origin }),
+      }),
+    },
+  );
+  if (!response.ok) {
+    const answered = await answeredCode(response);
+    throw new Error(registerProjectFailureMessage(response.status, answered.code, answered.message));
+  }
+};
+
+/**
+ * What the owner's Tau Cloud account stores against its plan (D18), for a Sync
+ * region to render as `x of 1 GB` before any push is refused.
+ *
+ * Answers only for the project's owner: a collaborator is refused (`403`) and
+ * draws no meter, as does a signed-out host or a plan that cannot sync. The
+ * figures are the ones a later quota refusal quotes — account-wide, because
+ * the allowance is.
+ *
+ * @param apiBaseUrl - The API origin, with or without a trailing slash.
+ * @param auth - How this host proves who is asking.
+ * @param projectId - The project whose owner's account is asked about.
+ * @returns Bytes used and the allowance, or `undefined` when there is no figure to show.
+ * @public
+ */
+export const readRemoteStorageOverHttp = async (
+  apiBaseUrl: string,
+  auth: TauCloudAuth,
+  projectId: string,
+): Promise<RemoteStorage | undefined> => {
+  const response = await globalThis.fetch(
+    `${apiBaseUrl.replace(/\/$/u, '')}/v1/projects/${encodeURIComponent(projectId)}/usage`,
+    tauCloudRequestInit(auth),
+  );
+  if (!response.ok) {
+    return undefined;
+  }
+  const body = (await response.json()) as Readonly<Record<string, unknown>>;
+  const { storageBytes, lfsBytes, storageLimitBytes, retainedBytes } = body;
+  if (typeof storageBytes !== 'number' || typeof lfsBytes !== 'number' || typeof storageLimitBytes !== 'number') {
+    return undefined;
+  }
+  if (storageLimitBytes <= 0) {
+    return undefined;
+  }
+  const used = storageBytes + lfsBytes;
+  /* An API that predates the column sends no `retainedBytes`: no second figure. */
+  return typeof retainedBytes === 'number' && retainedBytes > 0
+    ? { used, quota: storageLimitBytes, retained: retainedBytes }
+    : { used, quota: storageLimitBytes };
+};
+
+/**
+ * What to tell a person whose project could not be registered on Tau Cloud (C6).
+ *
+ * One owner, because the two legs had written two ladders and both were wrong
+ * in the same place: they mapped `403` to *"belongs to another account"*, which
+ * the API answers `404` for, while `403` is the project ceiling — so the one
+ * refusal a person can act on was reported as *"Try again."*
+ *
+ * @param status - The HTTP status the API answered.
+ * @param code - The `code` in its JSON envelope, when it sent one.
+ * @param message - The API's own sentence, used where it names a limit this
+ *   module cannot know.
+ * @returns One sentence to render.
+ * @public
+ */
+export const registerProjectFailureMessage = (status: number, code?: string, message?: string): string => {
+  if (status === 401) {
+    return 'Sign in to back this project up to the cloud.';
+  }
+  if (status === 403) {
+    /* The ceiling names itself, so the server's own sentence is the only one
+     * that can carry the number; the entitlement refusal is a fixed sentence
+     * shared with `git.service.ts`. */
+    if (code === 'PROJECT_LIMIT_REACHED' && message !== undefined && message !== '') {
+      return message;
+    }
+    if (code === 'GIT_SYNC_NOT_ENTITLED') {
+      return 'Syncing files to the cloud is a paid plan feature.';
+    }
+    /* D27: registration needs `owner`, so a collaborator pressing *Connect* is
+     * refused by role rather than by plan or by quota. Without its own rung it
+     * fell through to "Try again", which is the one thing retrying cannot fix. */
+    if (code === 'PROJECT_ROLE_INSUFFICIENT') {
+      return 'Only the project owner can back this project up to the cloud.';
+    }
+  }
+  if (status === 404) {
+    return 'This project isn’t in the cloud for this account.';
+  }
+  if (status === 429) {
+    return 'You’ve started backing up too many projects today. Try again tomorrow.';
+  }
+  if (status === 400) {
+    return 'Couldn’t back up this project. Email support@tau.new.';
+  }
+  return 'Couldn’t start backing up this project. Try again.';
+};
+
+/**
+ * Whether this remote can carry a project's large objects (P20).
+ *
+ * Tau Cloud can, and so can a GitHub remote, whose LFS batch requests the API
+ * relays under the same repository-bound credential. Any other Git remote
+ * cannot: the proxy carries its smart-HTTP endpoints and nothing else (P17), and
+ * the disk leg would reach its LFS server with a credential Tau never asked for,
+ * so the two legs would disagree about what a push means (A15).
+ *
+ * One input type (C34, L2-F12): the answer depends on the recorded provider,
+ * which a bare name cannot carry, so a GitHub remote used to be refused or
+ * allowed depending on whether its config row happened to be found.
+ *
+ * @param remote - The remote as git's config records it.
+ * @returns `true` when large objects may be offered to it.
+ * @public
+ */
+export const remoteCarriesLargeObjects = (remote: Remote): boolean =>
+  remote.kind === 'tau' || remote.provider === 'github';
+
+/**
+ * What to tell a person whose project cannot be backed up to this remote (P20).
+ *
+ * Files, not counts: a refusal the person can act on names what to move
+ * (D16, AC16).
+ *
+ * @param paths - Project-relative paths of the large files in the push.
+ * @returns One sentence naming them.
+ * @public
+ */
+export const lfsRemoteUnsupportedMessage = (paths: readonly string[]): string =>
+  `Large files can’t be backed up to this Git host: ${[...paths].toSorted().join(', ')}. Back up to Tau instead, or remove them from the project.`;
+
+/**
+ * What the page told a browser host about reaching a third-party remote.
+ *
+ * `apiBaseUrl` decides *routing* and arrives as soon as a port opens; `origin`
+ * and `authorization` decide *crediting* and arrive at *Connect*. They are
+ * separate because a credential minted for one remote must never be offered to
+ * the next one (W12 review R1) — a project that disconnects GitHub and connects
+ * GitLab sends a frame with a new origin and no authorization, which is also
+ * what clears the old one.
+ *
+ * @public
+ */
+export type GitRemoteCredential = Readonly<{
+  /** Origin the Tau API is reachable at. Without it nothing can be routed. */
+  apiBaseUrl: string;
+  /** The remote origin this credential was minted for, e.g. `https://github.com`. */
+  origin?: string;
+  /** Exact repository base URL when the provider credential is repository-scoped. */
+  repositoryUrl?: string;
+  /** The whole header value, e.g. `Bearer gho_…`. */
+  authorization?: string;
+  /**
+   * When `authorization` stops working, as an ISO timestamp (D2).
+   *
+   * The page's re-mint deadline, not a guard: a transport never refuses on it,
+   * because the page's clock is not the provider's. A genuine 401 is the
+   * authority, and the page re-mints once on that too.
+   */
+  expiresAt?: string;
+  /** Why there is none, when the session could not mint one. */
+  unavailable?: string;
+}>;
+
+/** The two `createRevisionHttpClient` options a browser host needs. @public */
+export type GitRemoteTransport = Readonly<{
+  proxyAuthorization: (url: string) => string | undefined;
+  fetch: typeof globalThis.fetch;
+}>;
+
+const originOf = (url: string): string | undefined => {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * How a browser reaches a remote, and which credential it may carry.
+ *
+ * `createRevisionHttpClient` sets whatever its resolvers return and guards
+ * nothing itself, so this pair *is* the guard:
+ *
+ * - a **Tau** URL is requested as it stands, with the session cookie and no
+ *   `x-tau-proxy-authorization`;
+ * - every **other** URL goes through the API's git proxy (P17), and carries the
+ *   remote's own credential **only when the credential was minted for exactly
+ *   that origin**;
+ * - before the page has said which origin is Tau's, nothing is requested at all.
+ *
+ * The resolver sees the *unrewritten* URL, because the client resolves its
+ * headers before it calls `fetch` — which is what lets one predicate answer both
+ * "which credential" and "which URL".
+ *
+ * @param credential - Reads what the page last sent for this project.
+ * @returns The `proxyAuthorization` resolver and the `fetch` that routes.
+ * @public
+ *
+ * @example <caption>The browser worker's whole auth story</caption>
+ * ```typescript
+ * import { createGitRemoteTransport, createRevisionHttpClient } from '@taucad/revisions';
+ *
+ * declare const held: () => { apiBaseUrl: string } | undefined;
+ * const http = createRevisionHttpClient({ credentials: 'include', ...createGitRemoteTransport(held) });
+ * ```
+ */
+export const createGitRemoteTransport = (credential: () => GitRemoteCredential | undefined): GitRemoteTransport => {
+  /** The held credential, but only when it was minted for *this* URL's origin. */
+  const credited = (url: string): GitRemoteCredential | undefined => {
+    const held = credential();
+    if (held === undefined || isTauApiUrl(held.apiBaseUrl, url)) {
+      return undefined;
+    }
+    const origin = originOf(url);
+    if (origin === undefined || origin !== held.origin) {
+      return undefined;
+    }
+    if (held.repositoryUrl === undefined) {
+      return held;
+    }
+    try {
+      const repository = new URL(held.repositoryUrl);
+      const target = new URL(url);
+      const base = repository.pathname.replace(/\/+$/u, '');
+      return target.pathname === base || target.pathname.startsWith(`${base}/`) ? held : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  return {
+    proxyAuthorization: (url) => {
+      const held = credited(url);
+      if (held === undefined) {
+        return undefined;
+      }
+      if (held.unavailable !== undefined) {
+        throw reauthorizationRequired(held.unavailable);
+      }
+      /* No credential and no stated problem is an anonymous read of a public
+       * repository, which is a request git makes without one. */
+      return held.authorization;
+    },
+    fetch: async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const held = credential();
+      if (held === undefined) {
+        /* Routing is not decidable yet, and guessing "this is Tau's" would send
+         * the viewer's own cookies for a third-party host (`credentials:
+         * 'include'` is set on every request). The page posts the frame the
+         * moment a port opens, so this is a programming error, not a race. */
+        throw new Error('This host has not been told where the Tau API is; no remote can be reached yet.');
+      }
+      return globalThis.fetch(isTauApiUrl(held.apiBaseUrl, url) ? input : gitProxyUrl(held.apiBaseUrl, url), init);
+    },
+  };
+};

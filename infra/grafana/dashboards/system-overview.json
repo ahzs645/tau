@@ -9,19 +9,29 @@
   "templating": {
     "list": [
       {
+        "name": "app",
+        "label": "Application",
+        "type": "constant",
+        "query": ".*",
+        "description": "Local default matches unlabeled series. Hosted provisioning binds this to exactly one application.",
+        "current": { "text": ".*", "value": ".*" },
+        "hide": 2
+      },
+      {
         "name": "service",
-        "type": "query",
-        "datasource": "Prometheus",
-        "query": "label_values(up, service_name)",
+        "label": "Service",
+        "type": "custom",
+        "query": "tau-api",
+        "description": "Tau runs one service. A constant, so panels never lose their filter when the API's own series go stale during an outage.",
         "current": { "text": "tau-api", "value": "tau-api" },
-        "includeAll": false,
-        "refresh": 1
+        "options": [{ "text": "tau-api", "value": "tau-api", "selected": true }],
+        "includeAll": false
       },
       {
         "name": "instance",
         "type": "query",
-        "datasource": "Prometheus",
-        "query": "label_values(up{service_name=\"$service\"}, instance)",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(process_uptime{app=~\"$app\",service_name=\"$service\"}, instance)",
         "current": { "text": "All", "value": "$__all" },
         "includeAll": true,
         "allValue": ".*",
@@ -37,30 +47,57 @@
       "icon": "dashboard",
       "targetBlank": false
     },
-    { "title": "API (REST)", "type": "link", "url": "/d/tau-api-overview", "icon": "dashboard", "targetBlank": false },
     {
-      "title": "WebSocket / RPC",
+      "title": "API (REST)",
+      "type": "link",
+      "url": "/d/tau-api-overview",
+      "icon": "dashboard",
+      "targetBlank": false
+    },
+    {
+      "title": "WebSocket Gateways",
       "type": "link",
       "url": "/d/tau-websocket-rpc",
       "icon": "dashboard",
       "targetBlank": false
     },
-    { "title": "AI Agent", "type": "link", "url": "/d/tau-ai-agent", "icon": "dashboard", "targetBlank": false },
-    { "title": "CAD Kernel", "type": "link", "url": "/d/tau-cad-kernel", "icon": "dashboard", "targetBlank": false },
+    {
+      "title": "AI Agent",
+      "type": "link",
+      "url": "/d/tau-ai-agent",
+      "icon": "dashboard",
+      "targetBlank": false
+    },
+    {
+      "title": "CAD Kernel",
+      "type": "link",
+      "url": "/d/tau-cad-kernel",
+      "icon": "dashboard",
+      "targetBlank": false
+    },
     {
       "title": "Infrastructure",
       "type": "link",
       "url": "/d/tau-infrastructure",
       "icon": "dashboard",
       "targetBlank": false
-    }
+    },
+    {
+      "title": "Storage — critical",
+      "type": "link",
+      "url": "/d/tau-storage-critical",
+      "icon": "dashboard",
+      "targetBlank": false
+    },
+    { "title": "Storage capability", "type": "link", "url": "/d/tau-sync", "icon": "dashboard", "targetBlank": false }
   ],
   "panels": [
     {
       "type": "row",
       "title": "Health at a Glance",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
-      "collapsed": false
+      "collapsed": false,
+      "id": 1
     },
     {
       "title": "API Availability",
@@ -69,7 +106,7 @@
       "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
       "targets": [
         {
-          "expr": "(1 - (sum(rate(http_server_duration_count{service_name=~\"$service\",http_status_code=~\"5..\"}[5m])) or vector(0)) / clamp_min(sum(rate(http_server_duration_count{service_name=~\"$service\"}[5m])), 1e-10)) * 100",
+          "expr": "(1 - (sum(rate(http_server_request_duration_count{app=~\"$app\",service_name=~\"$service\",http_response_status_code=~\"5..\"}[5m])) or vector(0)) / clamp_min(sum(rate(http_server_request_duration_count{app=~\"$app\",service_name=~\"$service\"}[5m])), 1e-10)) * 100",
           "legendFormat": "availability"
         }
       ],
@@ -85,7 +122,8 @@
             ]
           }
         }
-      }
+      },
+      "id": 2
     },
     {
       "title": "API Error Rate",
@@ -94,7 +132,7 @@
       "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
       "targets": [
         {
-          "expr": "(sum(rate(http_server_duration_count{service_name=~\"$service\",http_status_code=~\"5..\"}[5m])) or vector(0)) / clamp_min(sum(rate(http_server_duration_count{service_name=~\"$service\"}[5m])), 1e-10) * 100"
+          "expr": "(sum(rate(http_server_request_duration_count{app=~\"$app\",service_name=~\"$service\",http_response_status_code=~\"5..\"}[5m])) or vector(0)) / clamp_min(sum(rate(http_server_request_duration_count{app=~\"$app\",service_name=~\"$service\"}[5m])), 1e-10) * 100"
         }
       ],
       "fieldConfig": {
@@ -109,46 +147,64 @@
             ]
           }
         }
-      }
+      },
+      "id": 3
     },
     {
       "title": "WebSocket Clients",
       "description": "Active WebSocket connections",
       "type": "stat",
       "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
-      "targets": [{ "expr": "ws_connections_active{service_name=~\"$service\"}" }],
+      "targets": [
+        {
+          "expr": "sum(ws_connections_active{app=~\"$app\",service_name=~\"$service\"}) or vector(0)"
+        }
+      ],
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "thresholds": { "steps": [{ "value": 0, "color": "blue" }] }
+          "thresholds": {
+            "steps": [{ "value": 0, "color": "blue" }]
+          }
         }
-      }
+      },
+      "id": 4
     },
     {
       "title": "Redis",
       "description": "Redis connection health",
       "type": "stat",
       "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
-      "targets": [{ "expr": "redis_connection_state{service_name=~\"$service\"}" }],
+      "targets": [
+        {
+          "expr": "redis_connection_state{app=~\"$app\",service_name=~\"$service\"}"
+        }
+      ],
       "fieldConfig": {
         "defaults": {
           "mappings": [
             {
-              "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } },
+              "options": {
+                "0": { "text": "DOWN", "color": "red" },
+                "1": { "text": "UP", "color": "green" }
+              },
               "type": "value"
             }
           ],
           "noValue": "N/A"
         }
-      }
+      },
+      "id": 5
     },
     {
-      "title": "AI Cost",
-      "description": "Estimated LLM spend in the selected time range",
+      "title": "User-Charged LLM Spend",
+      "description": "User-charged LLM spend in the selected time range: what Tau bills the user for the call (priced from the model catalog), not the supplier invoice.",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 1 },
       "targets": [
-        { "expr": "sum(increase(gen_ai_client_cost_total{service_name=~\"$service\"}[$__range])) or vector(0)" }
+        {
+          "expr": "sum(increase(gen_ai_client_cost_total{app=~\"$app\",service_name=~\"$service\"}[$__range])) or vector(0)"
+        }
       ],
       "fieldConfig": {
         "defaults": {
@@ -162,27 +218,15 @@
             ]
           }
         }
-      }
+      },
+      "id": 6
     },
-    {
-      "title": "SSE Streams",
-      "description": "Active server-sent event streams (AI chat)",
-      "type": "stat",
-      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
-      "targets": [{ "expr": "sse_connections_active{service_name=~\"$service\"} or vector(0)" }],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "thresholds": { "steps": [{ "value": 0, "color": "blue" }] }
-        }
-      }
-    },
-
     {
       "type": "row",
       "title": "Traffic",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
-      "collapsed": false
+      "collapsed": false,
+      "id": 7
     },
     {
       "title": "HTTP Request Rate",
@@ -191,54 +235,60 @@
       "gridPos": { "h": 7, "w": 8, "x": 0, "y": 6 },
       "targets": [
         {
-          "expr": "sum(rate(http_server_duration_count{service_name=~\"$service\"}[5m]))",
+          "expr": "sum(rate(http_server_request_duration_count{app=~\"$app\",service_name=~\"$service\"}[5m]))",
           "legendFormat": "req/s"
         }
       ],
       "fieldConfig": {
-        "defaults": { "custom": { "fillOpacity": 15, "lineWidth": 2 } }
-      }
+        "defaults": {
+          "custom": { "fillOpacity": 15, "lineWidth": 2 }
+        }
+      },
+      "id": 8
     },
     {
-      "title": "RPC Call Rate",
-      "description": "Socket.IO RPC calls per second",
+      "title": "WebSocket Frame Rate",
+      "description": "Frames per second across the hosts and kernels gateways, both directions",
       "type": "timeseries",
       "gridPos": { "h": 7, "w": 8, "x": 8, "y": 6 },
       "targets": [
         {
-          "expr": "sum(rate(rpc_server_call_duration_count{service_name=~\"$service\"}[5m])) or vector(0)",
-          "legendFormat": "calls/s"
+          "expr": "sum(rate(ws_message_size_count{app=~\"$app\",service_name=~\"$service\"}[5m])) or vector(0)",
+          "legendFormat": "frames/s"
         }
       ],
       "fieldConfig": {
-        "defaults": { "custom": { "fillOpacity": 15, "lineWidth": 2 } }
-      }
+        "defaults": {
+          "unit": "cps",
+          "custom": { "fillOpacity": 15, "lineWidth": 2 }
+        }
+      },
+      "id": 9
     },
     {
       "title": "Active Connections",
-      "description": "WebSocket + SSE connections over time",
+      "description": "WebSocket connections over time, by gateway",
       "type": "timeseries",
       "gridPos": { "h": 7, "w": 8, "x": 16, "y": 6 },
       "targets": [
         {
-          "expr": "ws_connections_active{service_name=~\"$service\"}",
-          "legendFormat": "WebSocket"
-        },
-        {
-          "expr": "sse_connections_active{service_name=~\"$service\"}",
-          "legendFormat": "SSE"
+          "expr": "sum by (ws_gateway) (ws_connections_active{app=~\"$app\",service_name=~\"$service\"})",
+          "legendFormat": "WebSocket {{ws_gateway}}"
         }
       ],
       "fieldConfig": {
-        "defaults": { "custom": { "fillOpacity": 15, "lineWidth": 2 } }
-      }
+        "defaults": {
+          "custom": { "fillOpacity": 15, "lineWidth": 2 }
+        }
+      },
+      "id": 10
     },
-
     {
       "type": "row",
       "title": "Latency Across the Stack",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
-      "collapsed": false
+      "collapsed": false,
+      "id": 11
     },
     {
       "title": "HTTP p95",
@@ -247,37 +297,51 @@
       "gridPos": { "h": 7, "w": 6, "x": 0, "y": 14 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_bucket{service_name=~\"$service\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(http_server_request_duration_bucket{app=~\"$app\",service_name=~\"$service\"}[5m])) by (le))",
           "legendFormat": "HTTP p95"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "fillOpacity": 10, "lineWidth": 2 } } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "fillOpacity": 10, "lineWidth": 2 }
+        }
+      },
+      "id": 12
     },
     {
-      "title": "RPC p95",
-      "description": "Socket.IO RPC call latency (95th percentile)",
+      "title": "Tau Sync p95",
+      "description": "Hosted git and project sync request latency (95th percentile). Detail: the Storage capability dashboard (title link).",
       "type": "timeseries",
       "gridPos": { "h": 7, "w": 6, "x": 6, "y": 14 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(rpc_server_call_duration_bucket{service_name=~\"$service\"}[5m])) by (le))",
-          "legendFormat": "RPC p95"
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_bucket{app=~\"$app\",service_name=~\"$service\",http_route=~\"/v1/git/.*|/v1/projects/:projectId\"}[5m])))",
+          "legendFormat": "Sync p95"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 10, "lineWidth": 2 } } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "fillOpacity": 10, "lineWidth": 2 }
+        }
+      },
+      "id": 13,
+      "links": [{ "title": "Storage capability", "url": "/d/tau-sync" }]
     },
     {
-      "title": "DB p95",
-      "description": "PostgreSQL query latency (95th percentile)",
+      "title": "PostgreSQL Transactions",
+      "description": "Commits and rollbacks per second across every database (PostgreSQL receiver)",
       "type": "timeseries",
       "gridPos": { "h": 7, "w": 6, "x": 12, "y": 14 },
       "targets": [
-        {
-          "expr": "histogram_quantile(0.95, sum(rate(db_client_operation_duration_bucket{service_name=~\"$service\",db_system=\"postgresql\"}[5m])) by (le))",
-          "legendFormat": "DB p95"
-        }
+        { "expr": "sum(rate(postgresql_commits_total[5m]))", "legendFormat": "commits" },
+        { "expr": "sum(rate(postgresql_rollbacks_total[5m]))", "legendFormat": "rollbacks" }
       ],
-      "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 10, "lineWidth": 2 } } }
+      "fieldConfig": {
+        "defaults": { "unit": "ops" }
+      },
+      "id": 14
     },
     {
       "title": "LLM p95",
@@ -286,41 +350,50 @@
       "gridPos": { "h": 7, "w": 6, "x": 18, "y": 14 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(gen_ai_client_operation_duration_bucket{service_name=~\"$service\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(gen_ai_client_operation_duration_bucket{app=~\"$app\",service_name=~\"$service\"}[5m])) by (le))",
           "legendFormat": "LLM p95"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 10, "lineWidth": 2 } } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "fillOpacity": 10, "lineWidth": 2 }
+        }
+      },
+      "id": 15
     },
-
     {
       "type": "row",
       "title": "Errors",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
-      "collapsed": false
+      "collapsed": false,
+      "id": 16
     },
     {
       "title": "Error Rates by Subsystem",
-      "description": "Errors/sec across HTTP, RPC, and kernel execution",
+      "description": "Errors/sec across HTTP, WebSocket and kernel execution",
       "type": "timeseries",
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 22 },
       "targets": [
         {
-          "expr": "sum(rate(http_server_duration_count{service_name=~\"$service\",http_status_code=~\"5..\"}[5m])) or vector(0)",
+          "expr": "sum(rate(http_server_request_duration_count{app=~\"$app\",service_name=~\"$service\",http_response_status_code=~\"5..\"}[5m])) or vector(0)",
           "legendFormat": "HTTP 5xx"
         },
         {
-          "expr": "sum(rate(rpc_server_call_duration_count{service_name=~\"$service\",rpc_status=\"error\"}[5m])) or vector(0)",
-          "legendFormat": "RPC errors"
+          "expr": "sum(rate(ws_disconnections_total{app=~\"$app\",service_name=~\"$service\",ws_close_reason=~\"error|other\"}[5m])) or vector(0)",
+          "legendFormat": "WS abnormal closes"
         },
         {
-          "expr": "sum(rate(kernel_executions_total{service_name=~\"$service\",kernel_status=\"error\"}[5m])) or vector(0)",
+          "expr": "sum(rate(tau_runtime_operations_total{app=~\"$app\",service_name=~\"$service\",tau_runtime_operation=~\"evaluate|render\",tau_runtime_outcome=~\"issue|failed|timed-out|terminated|discarded\"}[5m])) or vector(0)",
           "legendFormat": "Kernel errors"
         }
       ],
       "fieldConfig": {
-        "defaults": { "custom": { "fillOpacity": 15, "lineWidth": 2, "drawStyle": "bars" } }
-      }
+        "defaults": {
+          "custom": { "fillOpacity": 15, "lineWidth": 2, "drawStyle": "bars" }
+        }
+      },
+      "id": 17
     },
     {
       "title": "WS Disconnections",
@@ -329,20 +402,23 @@
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 22 },
       "targets": [
         {
-          "expr": "sum(rate(ws_disconnections_total{service_name=~\"$service\",ws_close_reason!=\"\"}[5m])) by (ws_close_reason)",
-          "legendFormat": "{{ws_close_reason}}"
+          "expr": "sum by (ws_gateway, ws_close_reason) (rate(ws_disconnections_total{app=~\"$app\",service_name=~\"$service\"}[5m]))",
+          "legendFormat": "{{ws_gateway}} {{ws_close_reason}}"
         }
       ],
       "fieldConfig": {
-        "defaults": { "custom": { "fillOpacity": 15, "lineWidth": 2 } }
-      }
+        "defaults": {
+          "custom": { "fillOpacity": 15, "lineWidth": 2 }
+        }
+      },
+      "id": 18
     },
-
     {
       "type": "row",
       "title": "AI & CAD",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 },
-      "collapsed": false
+      "collapsed": false,
+      "id": 19
     },
     {
       "title": "LLM Token Throughput",
@@ -351,13 +427,17 @@
       "gridPos": { "h": 7, "w": 8, "x": 0, "y": 30 },
       "targets": [
         {
-          "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=~\"$service\"}[5m])) by (gen_ai_request_model)",
+          "expr": "sum(rate(gen_ai_client_token_usage_sum{app=~\"$app\",service_name=~\"$service\"}[5m])) by (gen_ai_request_model)",
           "legendFormat": "{{gen_ai_request_model}}"
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "short", "custom": { "fillOpacity": 15, "lineWidth": 2 } }
-      }
+        "defaults": {
+          "unit": "short",
+          "custom": { "fillOpacity": 15, "lineWidth": 2 }
+        }
+      },
+      "id": 20
     },
     {
       "title": "Tool Invocations",
@@ -366,13 +446,16 @@
       "gridPos": { "h": 7, "w": 8, "x": 8, "y": 30 },
       "targets": [
         {
-          "expr": "sum(rate(gen_ai_tool_invocations_total{service_name=~\"$service\"}[5m])) by (gen_ai_tool_name)",
-          "legendFormat": "{{gen_ai_tool_name}}"
+          "expr": "sum by (agent_id, tool_kind) (rate(tau_agent_tool_calls_total{app=~\"$app\",service_name=~\"$service\"}[5m]))",
+          "legendFormat": "{{agent_id}} {{tool_kind}}"
         }
       ],
       "fieldConfig": {
-        "defaults": { "custom": { "fillOpacity": 15, "lineWidth": 2 } }
-      }
+        "defaults": {
+          "custom": { "fillOpacity": 15, "lineWidth": 2 }
+        }
+      },
+      "id": 21
     },
     {
       "title": "Kernel Execution Rate",
@@ -381,20 +464,23 @@
       "gridPos": { "h": 7, "w": 8, "x": 16, "y": 30 },
       "targets": [
         {
-          "expr": "sum(rate(kernel_executions_total{service_name=~\"$service\"}[5m])) by (kernel_status)",
-          "legendFormat": "{{kernel_status}}"
+          "expr": "sum by (tau_runtime_outcome) (rate(tau_runtime_operations_total{app=~\"$app\",service_name=~\"$service\",tau_runtime_operation=~\"evaluate|render\",tau_runtime_outcome=~\"succeeded|issue|failed|timed-out|terminated|discarded\"}[5m]))",
+          "legendFormat": "{{tau_runtime_outcome}}"
         }
       ],
       "fieldConfig": {
-        "defaults": { "custom": { "fillOpacity": 15, "lineWidth": 2 } }
-      }
+        "defaults": {
+          "custom": { "fillOpacity": 15, "lineWidth": 2 }
+        }
+      },
+      "id": 22
     },
-
     {
       "type": "row",
       "title": "Process & Infrastructure",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 37 },
-      "collapsed": false
+      "collapsed": false,
+      "id": 23
     },
     {
       "title": "Heap Memory",
@@ -403,32 +489,38 @@
       "gridPos": { "h": 7, "w": 8, "x": 0, "y": 38 },
       "targets": [
         {
-          "expr": "sum(v8js_memory_heap_used{service_name=~\"$service\"})",
+          "expr": "sum(v8js_memory_heap_used{app=~\"$app\",service_name=~\"$service\"})",
           "legendFormat": "heap used"
         },
         {
-          "expr": "sum(v8js_memory_heap_limit{service_name=~\"$service\"})",
+          "expr": "sum(v8js_memory_heap_limit{app=~\"$app\",service_name=~\"$service\"})",
           "legendFormat": "heap limit"
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "bytes", "custom": { "fillOpacity": 15, "lineWidth": 2 } }
-      }
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "fillOpacity": 15, "lineWidth": 2 }
+        }
+      },
+      "id": 24
     },
     {
-      "title": "DB Query Latency (p95)",
-      "description": "PostgreSQL and Redis query p95 latency",
+      "title": "Object Storage p95 by Operation",
+      "description": "R2 / MinIO request latency by S3 operation (95th percentile). Detail: the Storage capability dashboard (title link).",
       "type": "timeseries",
       "gridPos": { "h": 7, "w": 8, "x": 8, "y": 38 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(db_client_operation_duration_bucket{service_name=~\"$service\",db_system=\"postgresql\"}[5m])) by (le))",
-          "legendFormat": "PostgreSQL p95"
+          "expr": "histogram_quantile(0.95, sum by (le, tau_storage_operation) (rate(tau_storage_operation_duration_bucket{app=~\"$app\",service_name=~\"$service\"}[5m])))",
+          "legendFormat": "{{tau_storage_operation}}"
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "s", "custom": { "fillOpacity": 10, "lineWidth": 2 } }
-      }
+        "defaults": { "unit": "s" }
+      },
+      "id": 25,
+      "links": [{ "title": "Storage capability", "url": "/d/tau-sync" }]
     },
     {
       "title": "Event Loop Utilization",
@@ -437,16 +529,18 @@
       "gridPos": { "h": 7, "w": 8, "x": 16, "y": 38 },
       "targets": [
         {
-          "expr": "nodejs_eventloop_utilization{service_name=~\"$service\"}",
+          "expr": "nodejs_eventloop_utilization{app=~\"$app\",service_name=~\"$service\"}",
           "legendFormat": "utilization"
         },
         {
-          "expr": "nodejs_eventloop_delay_p99{service_name=~\"$service\"}",
+          "expr": "nodejs_eventloop_delay_p99{app=~\"$app\",service_name=~\"$service\"}",
           "legendFormat": "p99 delay"
         }
       ],
       "fieldConfig": {
-        "defaults": { "custom": { "fillOpacity": 15, "lineWidth": 2 } },
+        "defaults": {
+          "custom": { "fillOpacity": 15, "lineWidth": 2 }
+        },
         "overrides": [
           {
             "matcher": { "id": "byName", "options": "p99 delay" },
@@ -456,9 +550,9 @@
             ]
           }
         ]
-      }
+      },
+      "id": 26
     },
-
     {
       "title": "Logs",
       "type": "row",
@@ -470,7 +564,12 @@
           "type": "logs",
           "gridPos": { "h": 8, "w": 24, "x": 0, "y": 46 },
           "datasource": { "type": "loki", "uid": "loki" },
-          "targets": [{ "expr": "{service_name=~\"$service\"} |= \"level\" | json | level = \"error\"", "refId": "A" }],
+          "targets": [
+            {
+              "expr": "{service_name=~\"$service\"} | detected_level=~\"error|fatal|critical\"",
+              "refId": "A"
+            }
+          ],
           "options": {
             "showTime": true,
             "showLabels": true,
@@ -479,16 +578,25 @@
             "prettifyLogMessage": false,
             "enableLogDetails": true,
             "sortOrder": "Descending"
-          }
+          },
+          "id": 28
         },
         {
           "title": "Recent Traces",
           "type": "traces",
           "gridPos": { "h": 8, "w": 24, "x": 0, "y": 54 },
           "datasource": { "type": "tempo", "uid": "tempo" },
-          "targets": [{ "query": "{resource.service.name=~\"$service\"}", "refId": "A", "queryType": "traceqlSearch" }]
+          "targets": [
+            {
+              "query": "{resource.service.name=~\"$service\"}",
+              "refId": "A",
+              "queryType": "traceqlSearch"
+            }
+          ],
+          "id": 29
         }
-      ]
+      ],
+      "id": 27
     }
   ],
   "schemaVersion": 39

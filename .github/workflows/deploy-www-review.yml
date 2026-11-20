@@ -1,0 +1,152 @@
+# Builds the marketing site (`apps/www`) in GitHub Actions and publishes it to
+# the separate taucad-marketing-review Netlify site, which the UI's marketing
+# edge function proxies on staging (`MARKETING_ORIGIN` in tau-cloud).
+#
+# `staging.yml` → `deploy-www-staging` calls this workflow on a push to `main` that
+# affects `www` since its last staging deploy, once the same checks as the
+# staging UI pass. Netlify does not build the site from Git (`deploy_mode =
+# "ci"` in tau-cloud's `marketing-review.tf`). Each run publishes to the site's
+# `staging` alias, a draft deploy that costs no Netlify credits, and only when
+# the built site differs from what that alias already serves.
+#
+# The build matches `apps/www/netlify.toml`: launch metadata on, canonical
+# origin https://tau.new.
+#
+# Production: `release-build.yml` (and `deploy-production.yml` for a ui
+# redeploy) call this at a `ui@*` tag with `alias: prod`, in the `production`
+# environment, publishing the `prod` alias that prod's `MARKETING_ORIGIN`
+# names (https://prod--taucad-marketing-review.netlify.app). A draft alias too,
+# so it costs no credits; it skips the staging-only supersede/compare/record steps.
+#
+# Manual redeploy: `gh workflow run deploy-www-review.yml` from `main`.
+# Website rollback of the desktop installer catalog: the same command with
+# `-f installer_catalog=false` republishes the page with its catalog-free ZIP
+# downloads, without touching the published catalog; dispatch again without
+# the input to restore it.
+
+name: Deploy marketing review site to Netlify
+
+on:
+  workflow_call:
+    inputs:
+      alias:
+        description: Netlify alias to publish (staging, or prod at a ui@* tag)
+        type: string
+        default: staging
+  workflow_dispatch:
+    inputs:
+      alias:
+        description: Netlify alias to publish (prod only runs at a ui@* tag)
+        type: choice
+        options: [staging, prod]
+        default: staging
+      installer_catalog:
+        description: Read the published desktop installer catalog (false is the website rollback)
+        type: boolean
+        default: true
+
+# `actions: read` lets the deploy see whether a newer run already deployed.
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deploy:
+    if: ${{ github.repository == 'taucad/tau' }}
+    name: Deploy marketing review site
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: ${{ inputs.alias == 'prod' && 'production' || 'staging' }}
+    concurrency:
+      group: deploy-www-review-${{ inputs.alias || 'staging' }}
+      cancel-in-progress: false
+    env:
+      # Job scope, so Netlify's own rebuild inside `netlify deploy` keeps the flag too.
+      # Only an explicit `installer_catalog=false` dispatch turns it off. A `staging.yml` call has no such input,
+      # even when `staging.yml` itself was dispatched, so it formats as '' and keeps the catalog.
+      WWW_INSTALLER_CATALOG: ${{ format('{0}', inputs.installer_catalog) == 'false' && 'false' || 'true' }}
+      # Consented page counts go to the app site's first-party collector on the same hostname
+      # (`apps/ui/netlify/edge-functions/marketing-events.ts`), never to PostHog directly.
+      WWW_ANALYTICS_ENDPOINT: /api/marketing-events
+      NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+      SITE_ID: 17066c91-5b08-4cc0-b45c-32b0ea08b4e9
+      ALIAS: ${{ inputs.alias || 'staging' }}
+      URL: https://${{ inputs.alias || 'staging' }}--taucad-marketing-review.netlify.app
+    steps:
+      - name: Require the Netlify token
+        run: |
+          if [ -z "$NETLIFY_AUTH_TOKEN" ]; then
+            echo "::error::NETLIFY_AUTH_TOKEN is not set on the $ALIAS deploy's environment. Set netlify_auth_token_staging on tau-cloud's tau-repo HCP workspace and apply it."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+
+      # Each push to `main` runs on its own, so an older run can reach this queue
+      # after a newer one has deployed; it must not put its commit back.
+      - name: Skip a staging deploy a newer commit has superseded
+        id: superseded
+        if: env.ALIAS == 'staging'
+        uses: ./.github/actions/staging-deploy-superseded
+        with:
+          job-name: Deploy marketing review site
+          github-token: ${{ github.token }}
+
+      # Match the established UI adapter/CLI path workaround: both the build and
+      # deploy resolve the same function directory without omitting the server build.
+      - name: Point the Netlify CLI package path at the marketing functions
+        working-directory: apps/www
+        run: mkdir -p apps/www && ln -sfn ../../.netlify apps/www/.netlify
+
+      # Most pushes mark www affected without changing a published byte, so the
+      # job first builds the site as the production context does
+      # (`apps/www/netlify.toml`) and skips publishing output the `staging` alias
+      # already serves. `netlify deploy` reuses this build from the Nx cache.
+      - name: Build the marketing site
+        id: build
+        if: steps.superseded.outputs.superseded != 'true'
+        env:
+          NODE_OPTIONS: --import tsx
+          NX_PREFER_NODE_STRIP_TYPES: 'true'
+          WWW_LAUNCH: 'true'
+          WWW_ORIGIN: https://tau.new
+        run: pnpm nx build www
+
+      - name: Compare the marketing build with staging
+        id: content
+        if: steps.build.outcome == 'success' && env.ALIAS == 'staging'
+        uses: ./.github/actions/netlify-staging-content
+        with:
+          site-id: ${{ env.SITE_ID }}
+          path: apps/www/build
+
+      # The `staging` alias is a draft deploy, which costs no Netlify credits.
+      # The UI's marketing edge function proxies to it (`MARKETING_ORIGIN` in
+      # tau-cloud is https://staging--taucad-marketing-review.netlify.app).
+      - name: Build and deploy with the Netlify CLI
+        if: steps.superseded.outputs.superseded != 'true' && steps.content.outputs.unchanged != 'true'
+        working-directory: apps/www
+        env:
+          MESSAGE: ${{ github.workflow }} ${{ github.ref_name }} ${{ github.sha }} [${{ env.ALIAS }}] content:${{ steps.content.outputs.hash }}
+        run: |
+          "$GITHUB_WORKSPACE/scripts/node_modules/.bin/netlify" deploy \
+            --alias "$ALIAS" --context production --filter @taucad/www \
+            --site "$SITE_ID" --message "$MESSAGE"
+
+      # The plan of the next push to `main` diffs `www` against this commit.
+      - name: Record this staging deploy
+        if: steps.superseded.outputs.superseded != 'true' && env.ALIAS == 'staging'
+        uses: ./.github/actions/staging-deploy-history
+        with:
+          mode: record
+          app: www
+
+      - name: Check the site answers
+        if: steps.superseded.outputs.superseded != 'true'
+        run: curl --fail --silent --show-error --location --retry 5 --retry-delay 10 --output /dev/null "$URL"

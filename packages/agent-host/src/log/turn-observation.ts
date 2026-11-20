@@ -1,0 +1,679 @@
+import { isPersonsMessage } from '#log/event-types.js';
+import type {
+  AgentLogEvent,
+  CompactionTrace,
+  JsonValue,
+  ProviderMessage,
+  RowKey,
+  RunFailureDetail,
+} from '#log/event-types.js';
+import type { EventLogBatch } from '#log/event-log-appender.js';
+import { snapshotKernel } from '#log/snapshot-kernel.js';
+
+/*
+ * Tau's own turn facts for agent observability (T05), read from committed rows.
+ *
+ * Native `pi.ai.request` spans say what a model request did. They cannot say
+ * what a turn did: which tools ran and how each settled, whether history was
+ * compacted, how long an approval held the run, or how the run ended. Those
+ * are facts the host has already committed to the chat's log, so this reads
+ * them from there rather than from live callbacks, and the answer is the same
+ * on every device and every replay.
+ *
+ * It is a pure fold over rows. It is never on the execution path, writes
+ * nothing, and holds nothing between calls. By default it carries identities,
+ * names, counts and times only, never message content, so its output is safe
+ * for every purpose that admits summaries. Asked for content (LW6), it also
+ * carries this turn's message, the final reply, each tool's arguments and
+ * result and the changed paths, which the delivery projection writes only
+ * under the content grant. The one exception is a `test_model`
+ * call's check (T12), whose revision and requirement keys name files so the
+ * delivery projection can write a digest of what was checked; it never writes
+ * the keys themselves. Destination envelopes, scope and
+ * retention belong to the delivery projection (T09); this is its input.
+ */
+
+/** How a run or a tool call ended, in the evidence contract's vocabulary. @public */
+export type ObservedOutcome = 'completed' | 'cancelled' | 'failed' | 'abandoned' | 'unknown';
+
+/** A committed row's identity, with the chat it belongs to. @public */
+export type ObservedSource = Readonly<{ chatId: string; leaderEpoch: string; sequence: number }>;
+
+/** A CAD check's decided status, in the evidence contract's vocabulary: only `passed` and `failed` are decided. @public */
+export type ObservedCheckResult = 'passed' | 'failed' | 'inconclusive' | 'unsupported' | 'not-run';
+
+/**
+ * What a `test_model` call's output says it checked (T12). The revision and requirement keys name files: they let
+ * the delivery projection write a digest of what was checked, and nothing else reads them.
+ * @public
+ */
+export type ObservedCheck = Readonly<{
+  result: ObservedCheckResult;
+  /** Every evaluated source closure's entry and file digests, as sorted `entry\u0000path=digest` keys; empty when unnamed. */
+  revision: readonly string[];
+  /** The observed requirements as sorted `file#ordinal` keys, plus `#omitted:<n>` when the output left some out. */
+  requirements: readonly string[];
+}>;
+
+/** One tool call the run dispatched, as its committed rows record it. @public */
+export type ObservedToolCall = Readonly<{
+  call: string;
+  toolName: string;
+  /** `unknown` while no output row landed; a missing result is never read as a failure. */
+  outcome: ObservedOutcome;
+  input: ObservedSource;
+  output: ObservedSource | undefined;
+  /** When the input and the output rows were recorded; `settledAt` is absent with `output`. */
+  startedAt: number;
+  settledAt: number | undefined;
+  /** The generation invocation that issued it: the run's last one prepared before its input row. */
+  modelCall: string | undefined;
+  /** A settled `test_model` call's check, when its output records one. */
+  check?: ObservedCheck | undefined;
+  /** The call's arguments as its input row recorded them; only when content was asked for. */
+  arguments?: JsonValue | undefined;
+  /** The call's first committed result; only when content was asked for and its output landed. */
+  result?: JsonValue | undefined;
+}>;
+
+/** What a run's rows say in words, read only when content was asked for (LW6). @public */
+export type ObservedContent = Readonly<{
+  /** This turn's message from the person: never a Tau-internal user message, nor an earlier turn's. */
+  prompt: JsonValue | undefined;
+  /** The run's last assistant message that has text: its reply. */
+  reply: JsonValue | undefined;
+  /** The paths the run's revision changed. */
+  changedPaths: readonly string[];
+}>;
+
+/** How a chat's rows are read. @public */
+export type ObserveTurnsOptions = Readonly<{
+  /** Also read what the rows say in words: off by default, so a summary reader never holds content. */
+  content?: boolean | undefined;
+}>;
+
+/** One gateway invocation the run prepared, and what the gateway answered for it. @public */
+export type ObservedInvocation = Readonly<{
+  attemptId: string;
+  purpose: 'generation' | 'compaction';
+  modelId: string;
+  binding: 'pending' | 'terminal' | 'unavailable' | undefined;
+  settlement: 'settled' | 'released' | 'absorbed' | 'voided' | undefined;
+  prepared: ObservedSource;
+}>;
+
+/** One committed change to provider history that the model did not write. @public */
+export type ObservedTransformation = Readonly<{
+  operation: 'compact' | 'trim';
+  lane: CompactionTrace['lane'] | undefined;
+  tier: CompactionTrace['tier'] | undefined;
+  tokensBefore: number | undefined;
+  tokensAfter: number | undefined;
+  omitted: number;
+  source: ObservedSource;
+}>;
+
+/** A phase the run spent time in, between two committed rows. `end` is absent while it is open. @public */
+export type ObservedInterval = Readonly<{
+  phase: 'admission' | 'tool' | 'approval';
+  start: number;
+  end: number | undefined;
+}>;
+
+/** Everything one run's committed rows say about it. @public */
+export type TurnObservation = Readonly<{
+  chatId: string;
+  runId: string;
+  /** The person's turn the run answered, when its admission row names one. */
+  turnId: string | undefined;
+  termination: ObservedOutcome;
+  /** Whether the run's turn wrote a revision, conflicted, or neither has been recorded yet. */
+  revision: 'written' | 'unchanged' | 'conflicted' | 'failed' | undefined;
+  invocations: readonly ObservedInvocation[];
+  tools: readonly ObservedToolCall[];
+  transformations: readonly ObservedTransformation[];
+  intervals: readonly ObservedInterval[];
+  /**
+   * The row that recorded the run's ending, and when; absent while the run has none. A failed ending that recorded a
+   * code carries it in `failure`, with the code a `RUN_ABANDONED` ending wrapped (its `details.code`) in `wrapped`.
+   */
+  ending:
+    | Readonly<{
+        source: ObservedSource;
+        at: number;
+        failure?: Readonly<{ code: string; wrapped: string | undefined }> | undefined;
+      }>
+    | undefined;
+  /** The revision the run's turn wrote, when it wrote one. */
+  finalRevision?: string | undefined;
+  /** The kernel the run targets, from the snapshot its turn committed (LW17); absent when it names none. */
+  kernel?: string | undefined;
+  /** How many files that revision changed. */
+  filesChanged?: number;
+  /** How many Tau runs of the chat came before this one in its rows. */
+  priorTurns?: number;
+  /** The run's message, reply and changed paths; only when content was asked for. */
+  content?: ObservedContent | undefined;
+  /** Newest time any fact landed. A heartbeat is not a fact, so it never moves this. */
+  lastFactAt: number;
+  /** Every row the observation was built from, once each, in log order. */
+  sources: readonly ObservedSource[];
+}>;
+
+const terminalStates = new Set(['completed', 'failed', 'cancelled']);
+
+const isExternalAgentTurn = (message: ProviderMessage): boolean =>
+  message.role === 'user' && message.metadata?.tauInternal?.['kind'] === 'external-agent';
+
+const isObject = (value: JsonValue | undefined): value is Readonly<Record<string, JsonValue>> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const checkResults = new Set<string>(['passed', 'failed', 'inconclusive', 'unsupported', 'not-run']);
+
+/**
+ * A run without a qualified status decides only by its tests: any failure fails, only all passing passes.
+ *
+ * @param statuses - Each observed test's status, a skip read as not run.
+ * @param timedOut - Whether the run's budget expired.
+ * @returns The run's decided or undecided result.
+ */
+const resultOfTests = (statuses: readonly string[], timedOut: boolean): ObservedCheckResult => {
+  if (statuses.includes('failed')) {
+    return 'failed';
+  }
+  if (statuses.length === 0) {
+    return timedOut ? 'inconclusive' : 'not-run';
+  }
+  if (!timedOut && statuses.every((status) => status === 'passed')) {
+    return 'passed';
+  }
+  if (timedOut || statuses.includes('inconclusive')) {
+    return 'inconclusive';
+  }
+  return statuses.includes('unsupported') ? 'unsupported' : 'not-run';
+};
+
+/**
+ * The check a `test_model` output records.
+ *
+ * @param content - The output row's recorded content.
+ * @returns The check, or `undefined` when the output records none Tau can read.
+ */
+const checkOf = (content: JsonValue): ObservedCheck | undefined => {
+  if (!isObject(content) || !Array.isArray(content['tests'])) {
+    return undefined;
+  }
+  const tests = (content['tests'] as readonly JsonValue[]).filter((test) => isObject(test));
+  const requirements = tests.flatMap((test) => {
+    const file = test['targetFile'];
+    const ordinal = test['ordinal'] ?? test['id'];
+    return typeof file === 'string' && (typeof ordinal === 'number' || typeof ordinal === 'string')
+      ? [`${file}#${ordinal}`]
+      : [];
+  });
+  const omitted = content['omittedTests'];
+  if (typeof omitted === 'number' && omitted > 0) {
+    requirements.push(`#omitted:${omitted}`);
+  }
+  const revisions = Array.isArray(content['sourceRevisions']) ? content['sourceRevisions'] : [];
+  const revision = (revisions as readonly JsonValue[])
+    .filter((closure) => isObject(closure))
+    .flatMap((closure) => {
+      const { entry, files } = closure;
+      return typeof entry === 'string' && isObject(files)
+        ? Object.entries(files).flatMap(([path, digest]) =>
+            typeof digest === 'string' ? [`${entry}\u0000${path}=${digest}`] : [],
+          )
+        : [];
+    });
+  const status = content['runStatus'];
+  return {
+    result:
+      typeof status === 'string' && checkResults.has(status)
+        ? (status as ObservedCheckResult)
+        : resultOfTests(
+            tests.map((test) => {
+              const { status: testStatus } = test;
+              return testStatus === 'skipped' ? 'not-run' : typeof testStatus === 'string' ? testStatus : 'unknown';
+            }),
+            content['timeout'] !== undefined,
+          ),
+    revision: [...new Set(revision)].toSorted(),
+    requirements: [...new Set(requirements)].toSorted(),
+  };
+};
+
+/** The code a failed run's ending row recorded, never its message. */
+type ObservedFailure = NonNullable<NonNullable<TurnObservation['ending']>['failure']>;
+
+/**
+ * The code a failed ending row recorded, and the code it wrapped. A row without a code (a host-level throw, or an
+ * older log) records none.
+ *
+ * @param detail - The ending row's failure detail.
+ * @returns The codes, or `undefined`.
+ */
+const failureOf = (detail: RunFailureDetail | undefined): ObservedFailure | undefined => {
+  if (detail?.code === undefined) {
+    return undefined;
+  }
+  const wrapped = detail.details?.['code'];
+  return { code: detail.code, wrapped: typeof wrapped === 'string' && wrapped !== '' ? wrapped : undefined };
+};
+
+const rowKeyOf = (event: RowKey): string => `${event.leaderEpoch}\u0000${event.sequence}`;
+
+type RunDraft = {
+  chatId: string;
+  runId: string;
+  turnId: string | undefined;
+  external: boolean;
+  /** Terminal state per attempt, with the row that recorded it; the highest attempt's wins. */
+  terminal: Map<
+    number,
+    Readonly<{ outcome: ObservedOutcome; source: ObservedSource; at: number; failure: ObservedFailure | undefined }>
+  >;
+  revision: TurnObservation['revision'];
+  invocations: Map<string, ObservedInvocation>;
+  /** The generation invocation prepared last; a tool call that follows it is its output. */
+  lastGeneration: string | undefined;
+  tools: Map<string, ObservedToolCall>;
+  toolStarted: Map<string, number>;
+  transformations: ObservedTransformation[];
+  intervals: ObservedInterval[];
+  openAdmission: number | undefined;
+  openApprovals: Map<string, number>;
+  lastFactAt: number;
+  sources: ObservedSource[];
+  finalRevision: string | undefined;
+  kernel: string | undefined;
+  changedPaths: readonly string[];
+  prompt: JsonValue | undefined;
+  reply: JsonValue | undefined;
+  /** Each tool call's arguments and first result, by call id; filled only when content was asked for. */
+  toolContent: Map<string, { arguments: JsonValue; result?: JsonValue }>;
+};
+
+const draftFor = (runs: Map<string, RunDraft>, chatId: string, runId: string): RunDraft => {
+  let draft = runs.get(runId);
+  if (draft === undefined) {
+    draft = {
+      chatId,
+      runId,
+      turnId: undefined,
+      external: false,
+      terminal: new Map(),
+      revision: undefined,
+      invocations: new Map(),
+      lastGeneration: undefined,
+      tools: new Map(),
+      toolStarted: new Map(),
+      transformations: [],
+      intervals: [],
+      openAdmission: undefined,
+      openApprovals: new Map(),
+      lastFactAt: 0,
+      sources: [],
+      finalRevision: undefined,
+      kernel: undefined,
+      changedPaths: [],
+      prompt: undefined,
+      reply: undefined,
+      toolContent: new Map(),
+    };
+    runs.set(runId, draft);
+  }
+  return draft;
+};
+
+const transformationOf = ({
+  operation,
+  details,
+  omitted,
+  source,
+}: Readonly<{
+  operation: ObservedTransformation['operation'];
+  details: CompactionTrace | undefined;
+  omitted: number;
+  source: ObservedSource;
+}>): ObservedTransformation => ({
+  operation,
+  lane: details?.lane,
+  tier: details?.tier,
+  tokensBefore: details?.tokensBefore,
+  tokensAfter: details?.tokensAfter,
+  omitted,
+  source,
+});
+
+const hasText = (value: JsonValue): boolean =>
+  (typeof value === 'string' && value.length > 0) ||
+  (Array.isArray(value) &&
+    (value as readonly JsonValue[]).some(
+      (block) => isObject(block) && block['type'] === 'text' && typeof block['text'] === 'string',
+    ));
+
+/** What one appended message says in words: the person's message, a reply, a tool's arguments or its first result. */
+const readContent = (draft: RunDraft, message: ProviderMessage): void => {
+  switch (message.role) {
+    case 'user': {
+      if (isPersonsMessage(message)) {
+        draft.prompt ??= message.content;
+      }
+      break;
+    }
+    case 'assistant': {
+      if (hasText(message.content)) {
+        draft.reply = message.content;
+      }
+      break;
+    }
+    case 'tool-input': {
+      if (!draft.toolContent.has(message.toolCallId)) {
+        draft.toolContent.set(message.toolCallId, { arguments: message.content });
+      }
+      break;
+    }
+    case 'tool-output': {
+      const held = draft.toolContent.get(message.toolCallId);
+      if (held !== undefined && !('result' in held)) {
+        held.result = message.content;
+      }
+      break;
+    }
+  }
+};
+
+/* eslint-disable complexity -- One exhaustive switch over the committed vocabulary reads better than a dispatch table. */
+const fold = (
+  draft: RunDraft,
+  event: AgentLogEvent,
+  fact: Readonly<{ at: number; source: ObservedSource; content: boolean }>,
+): void => {
+  const { at, source, content } = fact;
+  switch (event.type) {
+    case 'run.lifecycle': {
+      const attempt = event.attempt ?? 1;
+      if (event.state === 'admitted') {
+        draft.openAdmission ??= at;
+      } else if (event.state === 'running' && draft.openAdmission !== undefined) {
+        draft.intervals.push({ phase: 'admission', start: draft.openAdmission, end: at });
+        draft.openAdmission = undefined;
+      } else if (terminalStates.has(event.state)) {
+        draft.terminal.set(attempt, {
+          outcome: event.state as ObservedOutcome,
+          source,
+          at,
+          failure: event.state === 'failed' ? failureOf(event.detail) : undefined,
+        });
+      }
+      break;
+    }
+    case 'turn.history-projection-committed': {
+      draft.turnId ??= event.message.id;
+      draft.external ||= isExternalAgentTurn(event.message);
+      draft.kernel ??= snapshotKernel(event.context.snapshot);
+      if (content && isPersonsMessage(event.message)) {
+        draft.prompt ??= event.message.content;
+      }
+      break;
+    }
+    case 'message.appended': {
+      const { message } = event;
+      draft.external ||= isExternalAgentTurn(message);
+      if (content) {
+        readContent(draft, message);
+      }
+      if (message.role === 'tool-input' && !draft.tools.has(message.toolCallId)) {
+        draft.tools.set(message.toolCallId, {
+          call: message.toolCallId,
+          toolName: message.toolName,
+          outcome: 'unknown',
+          input: source,
+          output: undefined,
+          startedAt: at,
+          settledAt: undefined,
+          modelCall: draft.lastGeneration,
+        });
+        draft.toolStarted.set(message.toolCallId, at);
+      } else if (message.role === 'tool-output') {
+        const input = draft.tools.get(message.toolCallId);
+        /* An output is a committed result; the first one landed is the call's. */
+        if (input !== undefined && input.output === undefined) {
+          const check = message.toolName === 'test_model' && !message.isError ? checkOf(message.content) : undefined;
+          draft.tools.set(message.toolCallId, {
+            ...input,
+            outcome: message.isError ? 'failed' : 'completed',
+            output: source,
+            settledAt: at,
+            ...(check === undefined ? {} : { check }),
+          });
+          const started = draft.toolStarted.get(message.toolCallId);
+          if (started !== undefined) {
+            draft.intervals.push({ phase: 'tool', start: started, end: at });
+          }
+        }
+      }
+      break;
+    }
+    case 'interrupt.recorded': {
+      if (event.phase === 'requested' && !draft.openApprovals.has(event.interruptId)) {
+        draft.openApprovals.set(event.interruptId, at);
+      } else if (event.phase === 'resolved') {
+        const start = draft.openApprovals.get(event.interruptId);
+        if (start !== undefined) {
+          draft.intervals.push({ phase: 'approval', start, end: at });
+          draft.openApprovals.delete(event.interruptId);
+        }
+      }
+      break;
+    }
+    case 'history.compacted': {
+      draft.transformations.push(
+        transformationOf({
+          operation: 'compact',
+          details: event.details,
+          omitted: event.evictedMessageIds.length,
+          source,
+        }),
+      );
+      break;
+    }
+    case 'message.envelope-replaced': {
+      if (event.details !== undefined) {
+        draft.transformations.push(transformationOf({ operation: 'trim', details: event.details, omitted: 0, source }));
+      }
+      break;
+    }
+    case 'model.invocation-prepared': {
+      if (event.purpose === 'generation') {
+        draft.lastGeneration = event.attemptId;
+      }
+      if (!draft.invocations.has(event.attemptId)) {
+        draft.invocations.set(event.attemptId, {
+          attemptId: event.attemptId,
+          purpose: event.purpose,
+          modelId: event.modelId,
+          binding: undefined,
+          settlement: undefined,
+          prepared: source,
+        });
+      }
+      break;
+    }
+    case 'model.invocation-bound': {
+      const invocation = draft.invocations.get(event.attemptId);
+      if (invocation !== undefined) {
+        draft.invocations.set(event.attemptId, { ...invocation, binding: event.status });
+      }
+      break;
+    }
+    case 'model.invocation-settled': {
+      const invocation = draft.invocations.get(event.attemptId);
+      if (invocation !== undefined && invocation.settlement === undefined) {
+        draft.invocations.set(event.attemptId, { ...invocation, settlement: event.outcome });
+      }
+      break;
+    }
+    case 'turn.finalized': {
+      draft.turnId ??= event.turnId;
+      draft.revision = event.revisionId === undefined ? 'unchanged' : 'written';
+      draft.finalRevision = event.revisionId;
+      draft.changedPaths = event.changedPaths;
+      break;
+    }
+    case 'turn.conflicted': {
+      draft.revision = 'conflicted';
+      break;
+    }
+    case 'turn.failed': {
+      draft.revision ??= 'failed';
+      break;
+    }
+    default: {
+      break;
+    }
+  }
+};
+/* eslint-enable complexity -- End the exhaustive fold. */
+
+const settle = (draft: RunDraft, priorTurns: number, content: boolean): TurnObservation => {
+  const attempts = [...draft.terminal.keys()].toSorted((left, right) => left - right);
+  const last = attempts.at(-1);
+  const open: ObservedInterval[] = [...draft.openApprovals.values()].map((start) => ({
+    phase: 'approval',
+    start,
+    end: undefined,
+  }));
+  if (draft.openAdmission !== undefined) {
+    open.unshift({ phase: 'admission', start: draft.openAdmission, end: undefined });
+  }
+  const intervals = [...draft.intervals, ...open];
+  const ending = last === undefined ? undefined : draft.terminal.get(last);
+  return {
+    chatId: draft.chatId,
+    runId: draft.runId,
+    turnId: draft.turnId,
+    termination: ending?.outcome ?? 'unknown',
+    revision: draft.revision,
+    invocations: [...draft.invocations.values()],
+    tools: [...draft.tools.values()].map((tool) => {
+      const held = content ? draft.toolContent.get(tool.call) : undefined;
+      return held === undefined
+        ? tool
+        : { ...tool, arguments: held.arguments, ...('result' in held ? { result: held.result } : {}) };
+    }),
+    transformations: draft.transformations,
+    intervals,
+    ending:
+      ending === undefined
+        ? undefined
+        : {
+            source: ending.source,
+            at: ending.at,
+            ...(ending.failure === undefined ? {} : { failure: ending.failure }),
+          },
+    ...(draft.finalRevision === undefined ? {} : { finalRevision: draft.finalRevision }),
+    ...(draft.kernel === undefined ? {} : { kernel: draft.kernel }),
+    filesChanged: draft.changedPaths.length,
+    priorTurns,
+    ...(content ? { content: { prompt: draft.prompt, reply: draft.reply, changedPaths: draft.changedPaths } } : {}),
+    lastFactAt: draft.lastFactAt,
+    sources: draft.sources,
+  };
+};
+
+/**
+ * Fold one chat's committed rows into one observation per Tau run.
+ *
+ * - A row is read once by its key, however many segments or replicas carry it.
+ * - A heartbeat is ignored: it is liveness, not a fact, and moves no clock.
+ * - A tool call or invocation is identified by its own id, so a resumed attempt
+ *   that re-reads it does not count it twice.
+ * - The highest attempt's terminal row is the run's ending; a run with none is
+ *   `unknown`, as is a tool call with no committed output.
+ * - An external agent's run is left out entirely (ACP exclusion).
+ *
+ * - Content is read only when asked for: the person's message (never a
+ *   Tau-internal one), the last assistant message with text, each tool's
+ *   arguments and first result, and the changed paths.
+ *
+ * @param chatId - The chat the rows belong to.
+ * @param rows - The chat's rows in log order.
+ * @param options - Whether to read content as well.
+ * @returns One observation per Tau run, in the order each run first appears.
+ * @public
+ */
+export const observeTurns = (
+  chatId: string,
+  rows: readonly AgentLogEvent[],
+  options: ObserveTurnsOptions = {},
+): TurnObservation[] => {
+  const content = options.content === true;
+  const seen = new Set<string>();
+  const runs = new Map<string, RunDraft>();
+  for (const event of rows) {
+    const key = rowKeyOf(event);
+    if (event.type === 'run.heartbeat' || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    const at = Date.parse(event.recordedAt);
+    const draft = draftFor(runs, chatId, event.runId);
+    const source = { chatId, leaderEpoch: event.leaderEpoch, sequence: event.sequence };
+    draft.sources.push(source);
+    if (Number.isFinite(at)) {
+      draft.lastFactAt = Math.max(draft.lastFactAt, at);
+    }
+    fold(draft, event, { at: Number.isFinite(at) ? at : draft.lastFactAt, source, content });
+  }
+  return [...runs.values()].filter((draft) => !draft.external).map((draft, index) => settle(draft, index, content));
+};
+
+/** A chat's own turns, and which leader epochs this device held while writing them. @public */
+export type OwnTurns = Readonly<{
+  runs: TurnObservation[];
+  /** Whether this device led the term: true for every term its own rows name. */
+  ownsEpoch: (leaderEpoch: string) => boolean;
+}>;
+
+/** How a host reads its own rows of a chat, one bounded page at a time (`TauAgentHost.readEvents`). @public */
+export type OwnRowsRead = (
+  input: Readonly<{ chatId: string; cursor: number; limit: number; maxBytes?: number | undefined }>,
+) => Promise<EventLogBatch>;
+
+const ownPageLimit = 256;
+const ownPageBytes = 4 * 1024 * 1024;
+
+/**
+ * Read every one of this device's own rows of a chat and observe its turns.
+ *
+ * Own rows are what this device wrote (XD1), so every term they name is one it
+ * led: it reports those facts, and another device reports its own. Nothing is
+ * read from another device's segment.
+ *
+ * @param read - The host's own-row read.
+ * @param chatId - The chat.
+ * @param options - Whether to read content as well.
+ * @returns Its turns and the epochs this device led.
+ * @public
+ */
+export const observeOwnTurns = async (
+  read: OwnRowsRead,
+  chatId: string,
+  options: ObserveTurnsOptions = {},
+): Promise<OwnTurns> => {
+  const rows: AgentLogEvent[] = [];
+  let cursor = 0;
+  for (;;) {
+    // oxlint-disable-next-line no-await-in-loop -- each page starts where the one before it ended.
+    const batch = await read({ chatId, cursor, limit: ownPageLimit, maxBytes: ownPageBytes });
+    rows.push(...batch.events);
+    if (batch.events.length === 0 || batch.nextCursor >= batch.endCursor) {
+      break;
+    }
+    cursor = batch.nextCursor;
+  }
+  const epochs = new Set(rows.map((row) => row.leaderEpoch));
+  return { runs: observeTurns(chatId, rows, options), ownsEpoch: (leaderEpoch) => epochs.has(leaderEpoch) };
+};

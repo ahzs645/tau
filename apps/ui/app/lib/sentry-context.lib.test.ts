@@ -1,0 +1,160 @@
+// @vitest-environment jsdom
+/* eslint-disable @typescript-eslint/naming-convention -- Sentry tag and context names are wire names. */
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ErrorEvent } from '@sentry/react';
+
+const environment = vi.hoisted(() => ({ TAU_DEPLOY_CONTEXT: 'deploy-preview' as string | undefined }));
+vi.mock('#environment.config.js', () => ({ ENV: environment }));
+vi.mock('#lib/build-identity.js', () => ({ readBuildId: () => 1_792_730_113_029 }));
+const device = vi.hoisted(() => ({ constrained: true }));
+vi.mock('@taucad/ui-core/lib/device-memory-class', () => ({ isMemoryConstrainedDevice: () => device.constrained }));
+type Counts = { readonly liveProjectCount: number; readonly chatCount: number };
+const counts = vi.hoisted((): { value: Counts | undefined } => ({ value: { liveProjectCount: 2, chatCount: 5 } }));
+vi.mock('#lib/memory-kill-signal.js', () => ({ readDocumentSessionCounts: () => counts.value }));
+
+const {
+  applyTauEventContext,
+  onRoutePublished,
+  publishRoute,
+  readRouteId,
+  readRoutePattern,
+  routePathInstrumentation,
+  setReportedUserId,
+} = await import('#lib/sentry-context.lib.js');
+const { resetMemorySampler, setKernelHeapReader, setLiveCountsReader, takeMemorySample } =
+  await import('@taucad/ui-core/lib/memory-sampler');
+
+/** The routes as React Router's `HydratedRouter` hands them to a route instrumentation: id and relative path. */
+const routes: ReadonlyArray<{ id: string; path: string | undefined; index?: boolean }> = [
+  { id: 'root', path: '' },
+  { id: 'routes/w.$workspace', path: 'w/:workspace' },
+  { id: 'routes/w.$workspace.$project', path: ':project' },
+  { id: 'routes/_index', path: undefined, index: true },
+  { id: '../../app/routes/projects_', path: 'projects' },
+];
+for (const route of routes) {
+  routePathInstrumentation.route?.({ ...route, index: route.index, instrument: () => undefined });
+}
+
+afterEach(() => {
+  resetMemorySampler();
+  publishRoute([]);
+  setReportedUserId(undefined);
+  environment.TAU_DEPLOY_CONTEXT = 'deploy-preview';
+});
+
+const publishRouter = (ids: readonly string[]): void => {
+  publishRoute(ids);
+};
+
+const event = (patch: Partial<ErrorEvent> = {}): ErrorEvent => ({ type: undefined, ...patch });
+
+describe('applyTauEventContext', () => {
+  it('should tag the route, device class, build, deploy context and deployment ceiling', () => {
+    publishRouter(['root', 'routes/w.$workspace', 'routes/w.$workspace.$project']);
+
+    expect(applyTauEventContext(event()).tags).toStrictEqual({
+      route: 'routes/w.$workspace.$project',
+      'route.pattern': '/w/:workspace/:project',
+      device_class: 'constrained',
+      build_id: '1792730113029',
+      deploy_context: 'deploy-preview',
+      /* Unit tests build for the `cloud` ceiling. */
+      deployment_ceiling: 'cloud',
+    });
+  });
+
+  it('should tag a desktop route with its web id, without the out-of-tree prefix', () => {
+    publishRouter(['root', '../../app/routes/projects_']);
+
+    expect(readRouteId()).toBe('routes/projects_');
+  });
+
+  it('should name the pattern of the matched routes as React Router joins it, `/` for the index', () => {
+    publishRouter(['root', 'routes/_index']);
+    expect(readRoutePattern()).toBe('/');
+    publishRouter(['root', '../../app/routes/projects_']);
+    expect(readRoutePattern()).toBe('/projects');
+  });
+
+  it('should tell a listener each time the matched route changes, and stop once it unsubscribes', () => {
+    const listener = vi.fn<() => void>();
+    const unsubscribe = onRoutePublished(listener);
+
+    publishRouter(['root', 'routes/w.$workspace', 'routes/w.$workspace.$project']);
+    publishRouter(['root', 'routes/w.$workspace', 'routes/w.$workspace.$project']);
+    publishRouter(['root', 'routes/_index']);
+    unsubscribe();
+    publishRouter(['root', '../../app/routes/projects_']);
+
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it('should leave a value it cannot read absent rather than guess, and keep the tags an event has', () => {
+    environment.TAU_DEPLOY_CONTEXT = undefined;
+    device.constrained = false;
+
+    const { tags } = applyTauEventContext(event({ tags: { device_class: 'from-event', e2e_run: 'e2e-1' } }));
+
+    expect(tags).toStrictEqual({
+      device_class: 'from-event',
+      build_id: '1792730113029',
+      deployment_ceiling: 'cloud',
+      e2e_run: 'e2e-1',
+    });
+    expect(readRouteId()).toBeUndefined();
+    device.constrained = true;
+  });
+
+  it('should add tau.device and tau.session beside the contexts the SDK set, without tau.memory', () => {
+    const { contexts } = applyTauEventContext(event({ contexts: { browser: { name: 'Chrome' } } }));
+
+    expect(contexts?.['browser']).toStrictEqual({ name: 'Chrome' });
+    expect(contexts?.['tau.device']).toMatchObject({
+      hardwareConcurrency: navigator.hardwareConcurrency,
+      viewport: `${String(globalThis.innerWidth)}x${String(globalThis.innerHeight)}`,
+    });
+    expect(contexts?.['tau.session']).toMatchObject({ liveProjectCount: 2, chatCount: 5, visibility: 'visible' });
+    expect(contexts?.['tau.session']?.['uptimeSeconds']).toEqual(expect.any(Number));
+    expect(contexts).not.toHaveProperty('tau.memory');
+  });
+
+  it('should leave session counts absent before the reporter has any', () => {
+    counts.value = undefined;
+
+    expect(applyTauEventContext(event()).contexts?.['tau.session']).not.toHaveProperty('chatCount');
+    counts.value = { liveProjectCount: 2, chatCount: 5 };
+  });
+
+  it('should carry the memory sample and high-water WASM total once a sample has been taken', () => {
+    setKernelHeapReader(() => ({ bytesByKernelId: { 'kernel-a': 9000 }, source: 'recycle-hook' }));
+    setLiveCountsReader(() => ({ projects: 1, workers: 2 }));
+    takeMemorySample();
+
+    expect(applyTauEventContext(event()).contexts?.['tau.memory']).toMatchObject({
+      wasmHeapBytes: { 'kernel-a': 9000 },
+      heapSource: 'recycle-hook',
+      highWaterWasmBytes: 9000,
+      liveProjects: 1,
+      liveWorkers: 2,
+    });
+  });
+
+  it('should report the sample\u2019s age rather than its raw timestamp, and never the raw `at`', () => {
+    setLiveCountsReader(() => ({ projects: 1 }));
+    takeMemorySample();
+
+    const memory = applyTauEventContext(event()).contexts?.['tau.memory'];
+
+    expect(memory?.['sampleAgeSeconds']).toEqual(expect.any(Number));
+    expect(memory).not.toHaveProperty('at');
+  });
+
+  it('should carry the opaque user id while one is set, and nothing once it is cleared', () => {
+    setReportedUserId('usr_opaque123');
+    expect(applyTauEventContext(event()).user).toStrictEqual({ id: 'usr_opaque123' });
+
+    setReportedUserId(undefined);
+    expect(applyTauEventContext(event())).not.toHaveProperty('user');
+  });
+});

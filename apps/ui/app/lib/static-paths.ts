@@ -1,67 +1,46 @@
-import { glob, readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { createGetUrl, getSlugs } from 'fumadocs-core/source';
-
-const getDocumentUrl = createGetUrl('/docs');
-
-/** Repo root for `apps/ui` (directory containing `content/docs`). */
-export function getUiRootDirectory(): string {
-  return join(dirname(fileURLToPath(import.meta.url)), '../..');
-}
-
-const docsContentRoot = join(getUiRootDirectory(), 'content/docs');
+// oxlint-disable-next-line eslint/no-restricted-imports -- `react-router.config.ts` imports this module before app aliases are installed.
+import { staticShellPrerenderPaths } from './route-classes.js';
 
 /**
- * Root-level `/<model>` playground pages, prerendered only on the GitHub
- * Pages gallery build (the `:model` route in `routes.ts` exists only there).
- * Mirrors the visible-project filter in `routes/playground/projects.ts`.
+ * Public, crawlable paths. These are the only entries `sitemap.xml` advertises.
  */
-async function listPlaygroundModelPaths(): Promise<string[]> {
-  if (process.env['GITHUB_PAGES'] !== 'true') {
-    return [];
-  }
-
-  const projectsRoot = join(getUiRootDirectory(), 'app/routes/playground/projects');
-  const modelPaths: string[] = [];
-  for await (const entry of glob('*/project.json', { cwd: projectsRoot })) {
-    const metadata = JSON.parse(await readFile(join(projectsRoot, entry), 'utf8')) as { hidden?: boolean };
-    if (metadata.hidden === true) {
-      continue;
-    }
-    modelPaths.push(`/${dirname(entry)}`);
-  }
-
-  return modelPaths.sort((left, right) => left.localeCompare(right));
+function listPublicStaticPaths(): string[] {
+  return ['/manifest.webmanifest', '/robots.txt', '/sitemap.xml'];
 }
 
 /**
- * Canonical list of paths prerendered at build time and/or listed in
- * `sitemap.xml`. Keep in sync with {@link react-router.config.ts} `prerender.paths`.
+ * Account routes prerendered as a neutral document so a cold offline start has
+ * HTML to boot (B5 R2). They carry `noindex, nofollow` route meta and are
+ * deliberately absent from {@link listSitemapPaths}: prerendering is a build
+ * artefact, not a statement that the route is public content.
  */
-export async function listStaticPrerenderPaths(): Promise<string[]> {
-  const documentPages: string[] = [];
-  for await (const entry of glob('**/*.mdx', { cwd: docsContentRoot })) {
-    documentPages.push(getDocumentUrl(getSlugs(entry)));
-  }
+const offlineShellPaths = ['/usage'];
 
-  return [
-    '/',
-    '/playground',
-    ...(await listPlaygroundModelPaths()),
-    '/manifest.webmanifest',
-    '/robots.txt',
-    '/sitemap.xml',
-    '/llms.txt',
-    '/llms-full.txt',
-    ...documentPages,
-    '/legal',
-    '/legal/terms',
-    '/legal/privacy',
-    '/legal/cookies',
-    '/legal/subprocessors',
-    '/legal/acceptable-use',
-  ];
+/** Paths the sitemap advertises. */
+export function listSitemapPaths(): string[] {
+  return listPublicStaticPaths();
 }
 
-export { docsContentRoot, getDocumentUrl };
+/**
+ * Paths the React Router build prerenders to static HTML: the public files, the offline shell, and one document per
+ * static-shell route class (`route-classes.ts`), which the CDN serves for every URL of its class.
+ */
+export function listStaticPrerenderPaths(): string[] {
+  return [...listPublicStaticPaths(), ...offlineShellPaths, ...staticShellPrerenderPaths()];
+}
+
+/** The neutral prerendered documents the offline shell worker may cache. */
+export function listOfflineShellPaths(): readonly string[] {
+  return offlineShellPaths;
+}
+
+/**
+ * Whether a pathname is served by the offline shell.
+ *
+ * @param pathname - URL pathname, with or without a trailing slash.
+ * @returns `true` when the offline shell owns this document.
+ */
+export function isOfflineShellPath(pathname: string): boolean {
+  const normalized = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+  return offlineShellPaths.includes(normalized);
+}

@@ -1,0 +1,71 @@
+---
+title: Agent Plugin
+description: Install the Tau plugin in Codex, Claude Code or Claude Desktop, and see what each host shows.
+docType: reference
+icon: 'lucide:puzzle text-purple'
+# Raised 500 -> 600 on 2026-10-19: three hosts' install and check lines.
+wordBudgetOverride: 600
+---
+
+# Agent Plugin
+
+The Tau plugin, `@taucad/agent-plugin`, gives the coding agent you already use Tau's CAD tools and skills. They evaluate a model, run its GeoSpec tests, take screenshots (of a saved [workbench](./workbench-records) view too), export files, arrange the workbench and show the model in the Tau viewer.
+
+It needs Node.js 24 or later, and starts your installed Tau CLI or fetches the matching release on first use:
+
+```bash
+npm install -g @taucad/cli@beta
+```
+
+## Install
+
+- Claude Code 2.1.292 or later, one step: `claude plugin install tau --marketplace taucad/marketplace`. Older Claude Code: `claude plugin marketplace add taucad/marketplace`, then `claude plugin install tau@taucad`.
+- Codex: `codex plugin marketplace add taucad/marketplace`, then `codex plugin add tau@taucad`.
+- Claude Desktop: `npm install -g @taucad/agent-plugin@beta`, then add its launcher to `claude_desktop_config.json`.
+
+Name the project folder in the launcher's arguments:
+
+```json
+{
+  "mcpServers": {
+    "tau": {
+      "command": "node",
+      "args": ["/path/to/node_modules/@taucad/agent-plugin/dist/launch.mjs", "--project", "/path/to/project"]
+    }
+  }
+}
+```
+
+Start a new thread after installing; only it has the tools. The plugin is in `taucad/marketplace`, not the Anthropic or OpenAI directories.
+
+## Check
+
+- Claude Code: `claude plugin list` shows `tau@taucad` enabled.
+- Codex: `codex plugin list --marketplace taucad` shows `tau@taucad  installed, enabled`.
+- In the project, `node <plugin folder>/dist/doctor.mjs` checks the launcher and CLI.
+
+Troubleshooting, kernel choice and what to tell the user are in the [agent guide](https://taucad.dev/llms.txt).
+
+## What each host shows
+
+`show_model` opens the viewer in the form the host supports:
+
+- Codex desktop: a Tau tab in the thread, Tau in the sidebar, and Open with Tau for files.
+- Claude Desktop: an inline card with Add to chat and Open full view.
+- Claude Code and Codex CLI: a link to the viewer on `127.0.0.1`; screenshots stay inline.
+
+The tab, full view and browser page add Share, Export, a workbench toggle, grid, section, measure and fit. Add to chat gives the agent the card's model or a right-clicked part; the browser page copies it instead.
+
+A tab or full view follows each model the agent shows and lets it select parts; a shown source redraws on each edit to its file or parameters. `view_state` reports the model, selected and hidden parts, camera and playback, plus an image with `capture`. `pose_model` plays, pauses, seeks or resets an animation or sets joints, answering every coordinate. `show_model` also opens STEP, STL, 3MF and OBJ files.
+
+The **workbench** lists parts, parameters, the selected part's properties and display switches. A parameter change saves and redraws; a drag previews live and saves on release. The agent uses the same values through `get_parameters` and `apply_parameter_operation`. Tau saves the camera and hidden parts to reopen the view.
+
+The viewer makes no network request: models reach it in compressed chunks through a page-only tool, so large meshes load without dropping the connection. The browser link answers only on your machine, with a session token.
+
+## Printing
+
+Start the agent with `TAU_HOST_MACHINES=true` to use the machines you set up in Tau, in a Tau project folder (`tau.json`). The agent can request a job; nothing starts until you approve it in Tau's Print pane. One Tau app uses your machines at a time, so quit the desktop app first.
+
+## Where files go
+
+Exports land in `.tau/artifacts/`, workbench changes in `.tau/workbench/`; a viewed model stays in server memory. Screenshots stay in a temporary folder the server removes.

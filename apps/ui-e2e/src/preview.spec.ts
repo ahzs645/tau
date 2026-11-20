@@ -1,52 +1,73 @@
-import { test, expect } from '@playwright/test';
+import { describe, expect, test } from 'vitest';
+import { page as selectors } from 'vitest/browser';
+import * as target from '#support/external-target.js';
+import { waitForRenderedGeometry } from '#support/headless-capture.js';
 
-test.describe('Build Preview', () => {
-  test('renders a 3D model for the Hollow Box project', async ({ page }) => {
-    await page.goto('/projects/proj_hollow_box/preview');
+type RenderedModel = Readonly<{
+  components: number;
+  meshes: number;
+  /** The union of every component's triangle bounds, in metres. */
+  size: readonly number[];
+}>;
 
-    const canvas = page.getByRole('img', { name: /3d model preview/i });
-    await expect(canvas).toBeVisible({ timeout: 45_000 });
+const seedExample = async (locator: string): Promise<string> => {
+  await target.navigate(`/__e2e/example-fixture?locator=${locator}`);
+  await target.expectUrl(/\/w\/[^/]+\/[^/?]+(?:\?.*)?$/u, 60_000);
+  return new URL(await target.currentUrl()).pathname;
+};
 
-    await expect(page.getByRole('alert')).not.toBeVisible();
-
-    /* Assert real geometry was emitted via the `TAU_DEBUG`-gated
-     * bbox-viewer rather than pixel-matching the WebGL canvas — screenshot
-     * baselines of WebGL output are flaky across GPU/driver/headless modes
-     * and don't catch empty-geometry regressions. */
-    const bboxViewer = page.getByTestId('bbox-viewer');
-    await expect(bboxViewer).toBeVisible({ timeout: 60_000 });
-
-    const sizeText = (await page.getByTestId('bbox-size').textContent()) ?? '';
-    const sizeMatch = /\[\s*([\d+.-]+)\s*,\s*([\d+.-]+)\s*,\s*([\d+.-]+)\s*]/.exec(sizeText);
-    expect(sizeMatch, `bbox-size should match "[x, y, z]" but got "${sizeText}"`).not.toBeNull();
-    const dims = sizeMatch!.slice(1, 4).map(Number);
-    for (const [axis, value] of (['X', 'Y', 'Z'] as const).map((a, i) => [a, dims[i] ?? Number.NaN] as const)) {
-      expect(Number.isFinite(value) && value > 0, `bbox ${axis} size must be > 0, got ${value}`).toBe(true);
+const readRenderedModel = async (): Promise<RenderedModel> =>
+  target.evaluate(() => {
+    const bridge = globalThis.__TAU_SECTION_VIEW_TEST__;
+    const components = bridge?.getModelComponents() ?? [];
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    let meshes = 0;
+    for (const { id } of components) {
+      meshes += bridge?.getRenderedModelComponentState(id).meshCount ?? 0;
+      const bounds = bridge?.getRenderedModelComponentSurfaceBounds(id);
+      for (const axis of [0, 1, 2] as const) {
+        min[axis] = Math.min(min[axis]!, bounds?.min[axis] ?? Infinity);
+        max[axis] = Math.max(max[axis]!, bounds?.max[axis] ?? -Infinity);
+      }
     }
-
-    const positiveInt = async (testId: string): Promise<number> => {
-      const text = (await page.getByTestId(testId).textContent()) ?? '0';
-      return Number.parseInt(text, 10);
-    };
-    expect(await positiveInt('count-meshes')).toBeGreaterThan(0);
-    expect(await positiveInt('count-vertices')).toBeGreaterThan(0);
-    expect(await positiveInt('count-triangles')).toBeGreaterThan(0);
+    return { components: components.length, meshes, size: max.map((value, axis) => value - min[axis]!) };
   });
 
-  test('shows loading state before model is ready', async ({ page }) => {
-    await page.goto('/projects/proj_hollow_box/preview');
+describe('Build Preview', () => {
+  test('renders a 3D model for the Hollow Box project', async () => {
+    const projectPath = await seedExample('replicad.hollow-box');
+    await target.navigate(`${projectPath}/preview`);
 
-    const loading = page.getByRole('status', { name: /loading preview/i });
-    const canvas = page.getByRole('img', { name: /3d model preview/i });
+    await target.expectVisible(selectors.getByTestId('cad-viewer-canvas-region'), 45_000);
+    await waitForRenderedGeometry('gltf');
+    // Dockview keeps empty assertive live regions mounted; an error alert says something.
+    await target.expectCount(selectors.getByRole('alert').filter({ hasText: /\S/u }), 0);
+    await target.expectVisible(selectors.getByRole('heading', { level: 1, name: 'Hollow Box' }));
 
-    // One of these must be visible immediately after navigation
-    await expect(loading.or(canvas)).toBeVisible({ timeout: 10_000 });
+    const model = await readRenderedModel();
+    expect(model.components).toBeGreaterThan(0);
+    expect(model.meshes).toBeGreaterThan(0);
+    // The example's defaults: 150 × 100 × 50 mm.
+    const size = model.size.toSorted((a, b) => a - b);
+    for (const [index, expected] of [0.05, 0.1, 0.15].entries()) {
+      expect(size[index], `sorted model size ${JSON.stringify(size)}`).toBeCloseTo(expected, 3);
+    }
   });
 
-  test('displays an error for a non-existent project', async ({ page }) => {
-    await page.goto('/projects/proj_does_not_exist/preview');
+  test('shows loading state before model is ready', async () => {
+    const projectPath = await seedExample('replicad.hollow-box');
+    await target.navigate(`${projectPath}/preview`);
+    const loading = selectors.getByRole('status', { name: /loading preview/i });
+    const canvas = selectors.getByTestId('cad-viewer-canvas-region');
+    await target.expectVisible(loading.or(canvas));
+  });
 
-    const alert = page.getByRole('alert', { name: /preview error/i });
-    await expect(alert).toBeVisible({ timeout: 45_000 });
+  test('displays Project Not Found for a non-existent project', async () => {
+    const projectPath = await seedExample('replicad.hollow-box');
+    const workspacePath = projectPath.slice(0, projectPath.lastIndexOf('/'));
+    await target.navigate(`${workspacePath}/does-not-exist/preview`);
+    await target.expectVisible(selectors.getByText('Project Not Found', { exact: true }), 45_000);
+    await target.expectHidden(selectors.getByTestId('cad-viewer-canvas-region'));
   });
 });

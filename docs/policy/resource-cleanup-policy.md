@@ -3,7 +3,7 @@ title: 'Resource Cleanup Policy'
 description: 'Disposable interface, semantic vocabulary (close/terminate/stop), DisposableStore, toDisposable, and cleanup naming conventions.'
 status: active
 created: '2026-03-10'
-updated: '2026-03-10'
+updated: '2026-09-30'
 related:
   - docs/policy/library-api-policy.md
 ---
@@ -14,7 +14,7 @@ Conventions for resource lifecycle management, cleanup naming, and bulk disposal
 
 ## Rationale
 
-A universal `Disposable` interface enables bulk cleanup via `DisposableStore` and future TC39 `using` declarations. Semantic names (`close`, `terminate`, `stop`) align with Web APIs and improve discoverability. Avoiding `cleanup` as a method name prevents ambiguity with `dispose` and matches industry conventions (Monaco, Three.js, TC39).
+A universal `Disposable` interface enables bulk cleanup via `DisposableStore` and future TC39 `using` declarations. Semantic names (`close`, `terminate`, `stop`) align with Web APIs and improve discoverability. Avoiding `cleanup` as a method name prevents ambiguity with `dispose` and matches industry conventions (VS Code, Three.js, TC39).
 
 For the core API design rules that reference these conventions, see [Library API Policy](library-api-policy.md). For stability annotations and deprecation of cleanup APIs, see [API Evolution Policy](api-evolution-policy.md). For stability annotations and deprecation of cleanup APIs, see [API Evolution Policy](api-evolution-policy.md).
 
@@ -22,7 +22,7 @@ For the core API design rules that reference these conventions, see [Library API
 
 Every object that holds resources must implement the `Disposable` interface so it can participate in bulk cleanup. Semantic method names (`close`, `terminate`, `stop`) coexist as the discoverable, domain-specific API; `dispose()` is the universal protocol that enables infrastructure-level patterns like `DisposableStore` and TC39's `using` declarations.
 
-This design follows the convergent pattern of TC39 Explicit Resource Management (`Symbol.dispose`, `DisposableStack`), .NET Framework Design Guidelines (`IDisposable` + domain aliases), and VSCode/Monaco (`IDisposable`, `toDisposable`, `DisposableStore`).
+This design follows the convergent pattern of TC39 Explicit Resource Management (`Symbol.dispose`, `DisposableStack`), .NET Framework Design Guidelines (`IDisposable` + domain aliases), and VS Code (`IDisposable`, `toDisposable`, `DisposableStore`).
 
 Define in `libs/types`:
 
@@ -38,13 +38,13 @@ Every object that needs cleanup implements `Disposable`. This is the single requ
 
 Semantic names provide discoverability and describe **what** the cleanup does. They are the primary API consumers call directly. The `dispose()` method delegates to the semantic method (or vice versa when `dispose` is itself the natural term).
 
-| Term                | Scope                                                         | Web/TC39 alignment                                    |
-| ------------------- | ------------------------------------------------------------- | ----------------------------------------------------- |
-| `dispose()`         | General resource release (the default and universal protocol) | TC39 `Symbol.dispose`, Monaco `IDisposable`, Three.js |
-| `close()`           | Connections, transports, streams                              | `WebSocket.close()`, `MessagePort.close()`            |
-| `terminate()`       | Workers and processes                                         | `Worker.terminate()`                                  |
-| `stop()`            | Running computations, actors                                  | XState `actor.stop()`, AI SDK `chat.stop()`           |
-| Return `() => void` | Subscriptions and one-time registrations                      | React `useEffect`, RxJS                               |
+| Term                | Scope                                                         | Web/TC39 alignment                                     |
+| ------------------- | ------------------------------------------------------------- | ------------------------------------------------------ |
+| `dispose()`         | General resource release (the default and universal protocol) | TC39 `Symbol.dispose`, VS Code `IDisposable`, Three.js |
+| `close()`           | Connections, transports, streams                              | `WebSocket.close()`, `MessagePort.close()`             |
+| `terminate()`       | Workers and processes                                         | `Worker.terminate()`                                   |
+| `stop()`            | Running computations, actors                                  | XState `actor.stop()`, AI SDK `chat.stop()`            |
+| Return `() => void` | Subscriptions and one-time registrations                      | React `useEffect`, RxJS                                |
 
 `**dispose` is the default.\*\* When none of the specific terms (`close`, `terminate`, `stop`) apply, `dispose` is both the semantic name and the protocol method.
 
@@ -268,8 +268,8 @@ Lifecycle hooks called by the framework follow the `on*` prefix convention ([Lib
 ```typescript
 // CORRECT: follows on* convention
 type KernelDefinition = {
-  onInitialize(input, runtime): Promise<Context>;
-  onCreateGeometry(input, runtime, context): Promise<Result>;
+  initialize(options, services): Promise<Context>;
+  evaluate(input, services, context): Promise<Result>;
   onDispose?(context): Promise<void>;
 };
 
@@ -314,22 +314,18 @@ type MachineContext = {
 
 ## 10. The `cleanup` Term
 
-**Do not use `cleanup` as a method name for resource release.** It is not aligned with any standard (TC39, Web APIs, Monaco, Three.js) and creates ambiguity with `dispose`.
+**Do not use `cleanup` as a method name for resource release.** It is not aligned with any standard (TC39, Web APIs, VS Code, Three.js) and creates ambiguity with `dispose`.
 
 Permitted uses of `cleanup`:
 
 - **Domain-specific maintenance** that is not lifecycle teardown: `cleanupOldCacheEntries()`, `cleanupStaleSessions()`. These are operational housekeeping, not resource disposal.
 - **Internal implementation detail** inside a function body (local variable name in a `finally` block) where no public API is exposed.
 
-Migrate existing `cleanup` methods:
+The v2 plugin contract uses `onDispose` for kernel, bundler, and transcoder hooks. The framework calls each hook during disposal; a bundler's hook must not be skipped. Runtime-owned objects expose `dispose()` (or their semantic close/terminate method), independently of plugin hook naming. The current worker protocol still carries an internal `cleanup` command during graceful shutdown; that command is not an author hook and should not be exposed as one.
 
 - `KernelDefinition.cleanup?()` → `KernelDefinition.onDispose?()`
 - `BundlerDefinition.cleanup?()` → `BundlerDefinition.onDispose?()`
-- `KernelWorker.cleanup()` → `KernelWorker.dispose()`
-- `KernelWorker.onCleanup()` → `KernelWorker.onDispose()`
-- `RuntimeWorkerClient.cleanup()` → `RuntimeWorkerClient.dispose()`
-- `ErrorTrap.cleanup` → `ErrorTrap.dispose`
-- `EngineConnection.cleanup()` → `EngineConnection.dispose()`
+- `TranscoderDefinition.cleanup?()` → `TranscoderDefinition.onDispose?()`
 
 ## 11. Async Dispose
 

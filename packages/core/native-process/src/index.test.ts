@@ -1,0 +1,1515 @@
+// @vitest-environment node
+/* oxlint-disable no-await-in-loop -- native process cases are isolated and cleaned up sequentially. */
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import type { readFile, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { PassThrough } from 'node:stream';
+import { dirname, join } from 'node:path';
+
+import type { getDefaultWritePaths } from '@anthropic-ai/sandbox-runtime';
+import { createMockFileSystem, createMockLogger } from '@taucad/runtime-testing';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  createWorkspaceMirror,
+  NativeProcessSession,
+  NativeRuntimeUnavailableError,
+  nativeSandboxPolicy,
+  installNativeRuntimeVerifier,
+  installNativeWorkerLauncher,
+  NativeWorkerReportedError,
+  processEnvironment,
+  startNativeWorker,
+  terminateProcessTree,
+} from '#index.js';
+import type { NativeRuntimeVerifier, NativeWorkerLaunch } from '#index.js';
+
+const fsOverrides = vi.hoisted(() => ({
+  readFile: undefined as undefined | (() => Promise<Uint8Array<ArrayBuffer>>),
+  unlink: undefined as undefined | (() => Promise<void>),
+}));
+/**
+ * The sandbox runtime is replaced by a controllable double: its default wrap runs the
+ * quoted command unsandboxed so lifecycle cases stay portable, while a wrap failure proves
+ * the fail-closed seam. It answers in the runtime's own shape, so the link refusal is added
+ * as in production: on Linux a stand-in for `bwrap` checks that the seccomp program arrived
+ * on descriptor 3 and runs the command; on macOS the profile is a real `(allow default)`
+ * Seatbelt one plus the refusal. Initialization knobs are exercised in `native-sandbox.test.ts`;
+ * real containment in `native-sandbox.integration.test.ts`.
+ */
+const sandbox = vi.hoisted(() => ({
+  supported: true,
+  dependencyErrors: [] as string[],
+  initialize: vi.fn(async () => undefined),
+  reset: vi.fn(async () => undefined),
+  wrap: vi.fn<(command: string, ...rest: unknown[]) => void>(),
+  wrapFailure: undefined as unknown,
+  /* The process the double's vector starts; `undefined` is the default stand-in. */
+  launcher: undefined as string | undefined,
+}));
+const shellQuote = (value: string): string => `'${value.replaceAll("'", `'"'"'`)}'`;
+let bwrapStandIn: string | undefined;
+/** A stand-in for `bwrap` that refuses to run without the link-refusing program on descriptor 3. */
+const bwrapStandInPath = (): string => {
+  if (bwrapStandIn === undefined) {
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), 'tau-bwrap-stand-in-')));
+    bwrapStandIn = join(directory, 'sh');
+    writeFileSync(
+      bwrapStandIn,
+      [
+        '#!/bin/sh',
+        `case "$2" in 'bwrap --seccomp 3 '*) ;; *) echo 'no link-refusing seccomp program' >&2; exit 97 ;; esac`,
+        'size=$(wc -c <&3)',
+        `if [ "$size" -eq 0 ] || [ $((size % 8)) -ne 0 ]; then echo "bad seccomp program: $size bytes" >&2; exit 98; fi`,
+        `eval "set -- \${2#bwrap --seccomp 3 }"`,
+        'exec /bin/sh -c "$1"',
+        '',
+      ].join('\n'),
+    );
+    chmodSync(bwrapStandIn, 0o700);
+  }
+  return bwrapStandIn;
+};
+vi.mock('@anthropic-ai/sandbox-runtime', async (importActual) => ({
+  // The default write roots stay real: the profile's deny list is derived from them.
+  ...(await importActual<{ getDefaultWritePaths: typeof getDefaultWritePaths }>()),
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- mirrors the runtime's exported class.
+  SandboxManager: {
+    isSupportedPlatform: () => sandbox.supported,
+    checkDependenciesAsync: async () => ({ errors: sandbox.dependencyErrors, warnings: [] }),
+    initialize: sandbox.initialize,
+    reset: sandbox.reset,
+    wrapWithSandboxArgv: async (command: string, ...rest: unknown[]) => {
+      sandbox.wrap(command, ...rest);
+      if (sandbox.wrapFailure !== undefined) {
+        // oxlint-disable-next-line typescript/only-throw-error -- launchers can reject with bare strings.
+        throw sandbox.wrapFailure;
+      }
+      if (process.platform === 'darwin') {
+        const profile = shellQuote('(version 1)\n(allow default)');
+        return {
+          argv: [
+            sandbox.launcher ?? '/bin/sh',
+            '-c',
+            `env /usr/bin/sandbox-exec -p ${profile} /bin/sh -c ${shellQuote(command)}`,
+          ],
+          env: process.env,
+        };
+      }
+      return { argv: [sandbox.launcher ?? bwrapStandInPath(), '-c', `bwrap ${shellQuote(command)}`], env: process.env };
+    },
+  },
+}));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<{ readFile: typeof readFile; unlink: typeof unlink }>();
+  return {
+    ...actual,
+    readFile: async (...arguments_: Parameters<typeof actual.readFile>) =>
+      fsOverrides.readFile ? fsOverrides.readFile() : actual.readFile(...arguments_),
+    unlink: async (...arguments_: Parameters<typeof actual.unlink>) =>
+      fsOverrides.unlink ? fsOverrides.unlink() : actual.unlink(...arguments_),
+  };
+});
+
+type Issue = { readonly message: string };
+const roots: string[] = [];
+const hash = (value: string): string => createHash('sha256').update(value).digest('hex');
+const ready = `process.stdout.write('{"protocolVersion":1,"type":"ready"}\\n');`;
+const keepAlive = `setInterval(()=>{},1000);`;
+
+const fixture = (workerBody = `${ready}${keepAlive}`, requestTimeout = 2000, maxProtocolLineBytes?: number) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'tau-native-session-test-')));
+  roots.push(root);
+  const workspacePath = join(root, 'workspace');
+  const artifactPath = join(root, 'artifacts');
+  mkdirSync(workspacePath);
+  mkdirSync(artifactPath);
+  const executablePath = join(root, 'native-worker');
+  const workerPath = join(root, 'worker.cjs');
+  const resourcePath = join(root, 'resource');
+  const executableBody = `#!/bin/sh\nexec "${process.execPath}" "$@"\n`;
+  writeFileSync(executablePath, executableBody);
+  chmodSync(executablePath, 0o700);
+  writeFileSync(workerPath, workerBody);
+  writeFileSync(resourcePath, 'resource');
+  const logger = createMockLogger();
+  const options = {
+    executablePath,
+    executableSha256: hash(executableBody),
+    arguments: [workerPath],
+    runtimePath: root,
+    workspacePath,
+    artifactPath,
+    resources: [{ path: resourcePath, sha256: hash('resource'), label: 'support resource' }],
+    protocolVersion: 1,
+    parseReady: (value: unknown) => {
+      const record = value as Record<string, unknown>;
+      if (record['protocolVersion'] !== 1 || record['type'] !== 'ready') {
+        throw new Error('bad ready');
+      }
+    },
+    parseResponse: (value: unknown) => {
+      const record = value as Record<string, unknown>;
+      if (record['protocolVersion'] !== 1 || typeof record['requestId'] !== 'string') {
+        throw new Error('bad response');
+      }
+      if ('issues' in record) {
+        return { requestId: record['requestId'], issues: record['issues'] as Issue[] };
+      }
+      return { requestId: record['requestId'], result: record['result'] };
+    },
+    requestTimeout,
+    maxArtifactBytes: 32,
+    maxProtocolLineBytes,
+    logger,
+    sessionName: 'Test native',
+    executableName: 'test executable',
+    shutdown: {
+      method: 'shutdown',
+      parseResult: (value: unknown) => {
+        if ((value as { shutdown?: unknown }).shutdown !== true) {
+          throw new Error('bad shutdown');
+        }
+        return value;
+      },
+    },
+  };
+  return { root, artifactPath, logger, options, session: new NativeProcessSession<Issue>(options) };
+};
+
+const request = async <T>(
+  session: NativeProcessSession<Issue>,
+  options: {
+    readonly signal?: AbortSignal;
+    readonly parseResult?: (value: unknown) => T;
+    readonly events?: {
+      readonly parseEvent: (value: unknown) => { readonly stage: string };
+      readonly onEvent: (event: { readonly stage: string }) => void;
+    };
+    readonly cancelMethod?: string;
+  } = {},
+): Promise<T> =>
+  session.request({
+    method: 'work',
+    params: {},
+    signal: options.signal ?? new AbortController().signal,
+    parseResult: options.parseResult ?? ((value) => value as T),
+    ...(options.events ? { events: options.events } : {}),
+    ...(options.cancelMethod === undefined ? {} : { cancelMethod: options.cancelMethod }),
+  });
+
+const respondingWorker = (response: string): string => `${ready}
+const readline=require('node:readline').createInterface({input:process.stdin});
+readline.on('line',(line)=>{const request=JSON.parse(line);const result=${response};process.stdout.write(JSON.stringify(result)+'\\n');if(request.method==='shutdown')setTimeout(()=>process.exit(0),5)});
+${keepAlive}`;
+const privateSession = (session: NativeProcessSession<Issue>) =>
+  session as unknown as {
+    child?: ChildProcessWithoutNullStreams;
+    pending: Map<string, unknown>;
+    onStdout: (chunk: Uint8Array<ArrayBuffer>) => void;
+  };
+const delay = async (milliseconds: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+const fakeChild = (overrides: { readonly exitCode?: number; readonly pid?: number } = {}) => {
+  // oxlint-disable-next-line unicorn/prefer-event-target -- ChildProcess is an EventEmitter.
+  const child = new EventEmitter() as ChildProcessWithoutNullStreams;
+  Object.assign(child, {
+    exitCode: overrides.exitCode ?? null,
+    signalCode: null,
+    pid: 'pid' in overrides ? overrides.pid : 999_999,
+    kill: vi.fn(),
+  });
+  return child;
+};
+const withPlatform = async (platform: NodeJS.Platform, callback: () => Promise<void>): Promise<void> => {
+  const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  Object.defineProperty(process, 'platform', { ...descriptor, value: platform });
+  try {
+    await callback();
+  } finally {
+    Object.defineProperty(process, 'platform', descriptor);
+  }
+};
+
+afterEach(() => {
+  fsOverrides.readFile = undefined;
+  fsOverrides.unlink = undefined;
+  sandbox.supported = true;
+  sandbox.dependencyErrors = [];
+  sandbox.wrapFailure = undefined;
+  sandbox.wrap.mockClear();
+  sandbox.initialize.mockClear();
+  sandbox.reset.mockClear();
+  vi.restoreAllMocks();
+  for (const root of roots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+describe('NativeProcessSession', () => {
+  it('should accept a response above the default limit when the session allows it', async () => {
+    const value = fixture(
+      respondingWorker(`{protocolVersion:1,requestId:request.requestId,result:{value:'x'.repeat(1_048_577)}}`),
+      2000,
+      2 * 1024 * 1024,
+    );
+    try {
+      await expect(request(value.session)).resolves.toEqual({ value: 'x'.repeat(1_048_577) });
+    } finally {
+      await value.session.cleanup();
+    }
+  });
+
+  it('should reject invalid protocol byte limits before launching a worker', () => {
+    const value = fixture();
+    for (const maxProtocolLineBytes of [0, -1, 1.5, Number.NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => new NativeProcessSession({ ...value.options, maxProtocolLineBytes })).toThrow(
+        new TypeError('maxProtocolLineBytes must be a positive safe integer.'),
+      );
+    }
+  });
+
+  it('should reject oversized complete frames and unfinished tails after another frame', async () => {
+    for (const maximum of [undefined, 256]) {
+      const limit = maximum ?? 1_048_576;
+      for (const suffix of ['\n', '']) {
+        const value = fixture(undefined, 2000, maximum);
+        const operation = request(value.session, {
+          events: { parseEvent: (event) => event as { stage: string }, onEvent: () => undefined },
+        });
+        const assertion = expect(operation).rejects.toThrow(/oversized protocol frame/);
+        try {
+          const internals = privateSession(value.session);
+          while (internals.pending.size === 0) {
+            await delay(1);
+          }
+          const frame = JSON.stringify({
+            protocolVersion: 1,
+            type: 'event',
+            requestId: [...internals.pending.keys()][0],
+            sequence: 1,
+            event: { stage: 'coarse' },
+          });
+          internals.onStdout(Buffer.from(`${frame}\n${'x'.repeat(limit + 1)}${suffix}`));
+          await assertion;
+        } finally {
+          await value.session.cleanup();
+        }
+      }
+    }
+  });
+
+  it('should take a large frame delivered in many small chunks in linear time', { timeout: 10_000 }, async () => {
+    /* Answers only its shutdown, so the frame under test is the one this case feeds. */
+    const value = fixture(
+      `${ready}
+const readline=require('node:readline').createInterface({input:process.stdin});
+readline.on('line',(line)=>{const request=JSON.parse(line);if(request.method==='shutdown'){process.stdout.write(JSON.stringify({protocolVersion:1,requestId:request.requestId,result:{shutdown:true}})+'\\n');setTimeout(()=>process.exit(0),5)}});
+${keepAlive}`,
+      30_000,
+    );
+    const operation = request<{ readonly value: string }>(value.session);
+    try {
+      const internals = privateSession(value.session);
+      while (internals.pending.size === 0) {
+        await delay(1);
+      }
+      const payload = 'é'.repeat(200_000);
+      const frame = Buffer.from(
+        `${JSON.stringify({ protocolVersion: 1, requestId: [...internals.pending.keys()][0], result: { value: payload } })}\n`,
+      );
+      /* Re-measuring the whole unfinished tail on every chunk made this quadratic: minutes for 400 KB rather than well under a second. */
+      for (let offset = 0; offset < frame.byteLength; offset += 1) {
+        internals.onStdout(frame.subarray(offset, offset + 1) as Uint8Array<ArrayBuffer>);
+      }
+      await expect(operation).resolves.toEqual({ value: payload });
+    } finally {
+      await value.session.cleanup();
+    }
+  });
+
+  it('delivers validated request events in sequence without settling the terminal response', async () => {
+    const worker = `${ready}
+const readline=require('node:readline').createInterface({input:process.stdin});
+readline.on('line',(line)=>{const request=JSON.parse(line);if(request.method==='shutdown'){process.stdout.write(JSON.stringify({protocolVersion:1,requestId:request.requestId,result:{shutdown:true}})+'\\n');return}process.stdout.write(JSON.stringify({protocolVersion:1,type:'event',requestId:request.requestId,sequence:1,event:{stage:'coarse'}})+'\\n');setTimeout(()=>{process.stdout.write(JSON.stringify({protocolVersion:1,type:'event',requestId:request.requestId,sequence:2,event:{stage:'fine'}})+'\\n');process.stdout.write(JSON.stringify({protocolVersion:1,requestId:request.requestId,result:{done:true}})+'\\n')},5)});
+${keepAlive}`;
+    const value = fixture(worker);
+    const events: string[] = [];
+    let settled = false;
+    const operation = request<{ readonly done: boolean }>(value.session, {
+      events: {
+        parseEvent: (event) => {
+          const { stage } = event as { readonly stage?: unknown };
+          if (typeof stage !== 'string') {
+            throw new TypeError('bad event');
+          }
+          return { stage };
+        },
+        onEvent: ({ stage }) => {
+          expect(settled).toBe(false);
+          events.push(stage);
+        },
+      },
+    });
+    await expect(operation).resolves.toEqual({ done: true });
+    settled = true;
+    expect(events).toEqual(['coarse', 'fine']);
+    await value.session.cleanup();
+  });
+
+  it('rejects malformed, unknown, out-of-order, and post-terminal event frames', async () => {
+    const cases = [
+      `{protocolVersion:1,type:'event',requestId:request.requestId,sequence:1}`,
+      `{protocolVersion:1,type:'event',requestId:'unknown',sequence:1,event:{stage:'x'}}`,
+      `{protocolVersion:1,type:'event',requestId:request.requestId,sequence:2,event:{stage:'x'}}`,
+    ] as const;
+    for (const eventExpression of cases) {
+      const value = fixture(
+        `${ready}process.stdin.once('data',(line)=>{const request=JSON.parse(line);process.stdout.write(JSON.stringify(${eventExpression})+'\\n')});${keepAlive}`,
+      );
+      const operation = request(value.session, {
+        events: { parseEvent: (event) => event as { stage: string }, onEvent: () => undefined },
+      });
+      await expect(operation).rejects.toThrow(/event frame|event for an unknown request|event sequence/);
+      await value.session.cleanup();
+    }
+
+    const postTerminal = fixture(
+      `${ready}process.stdin.once('data',(line)=>{const request=JSON.parse(line);const response=JSON.stringify({protocolVersion:1,requestId:request.requestId,result:{}})+'\\n';const event=JSON.stringify({protocolVersion:1,type:'event',requestId:request.requestId,sequence:1,event:{stage:'late'}})+'\\n';process.stdout.write(response+event)});${keepAlive}`,
+    );
+    await expect(
+      request(postTerminal.session, {
+        events: { parseEvent: (event) => event as { stage: string }, onEvent: () => undefined },
+      }),
+    ).resolves.toEqual({});
+    await delay(10);
+    expect(postTerminal.session.isGenerationValid(1)).toBe(false);
+    await postTerminal.session.cleanup();
+  });
+
+  it('rejects event payloads that fail the request schema or exceed the protocol frame maximum', async () => {
+    const invalid = fixture(
+      `${ready}process.stdin.once('data',(line)=>{const request=JSON.parse(line);process.stdout.write(JSON.stringify({protocolVersion:1,type:'event',requestId:request.requestId,sequence:1,event:{stage:42}})+'\\n')});${keepAlive}`,
+    );
+    await expect(
+      request(invalid.session, {
+        events: {
+          parseEvent: () => {
+            throw new Error('bad stage');
+          },
+          onEvent: () => undefined,
+        },
+      }),
+    ).rejects.toThrow(/event payload failed validation/);
+    await invalid.session.cleanup();
+
+    const oversized = fixture(
+      `${ready}process.stdin.once('data',(line)=>{const request=JSON.parse(line);process.stdout.write(JSON.stringify({protocolVersion:1,type:'event',requestId:request.requestId,sequence:1,event:{stage:'x'.repeat(1_048_577)}})+'\\n')});${keepAlive}`,
+    );
+    await expect(
+      request(oversized.session, {
+        events: { parseEvent: (event) => event as { stage: string }, onEvent: () => undefined },
+      }),
+    ).rejects.toThrow(/oversized protocol frame/);
+    await oversized.session.cleanup();
+  });
+
+  it('rejects duplicate versions, absent subscriptions, throwing callbacks, and async callbacks', async () => {
+    const cases = [
+      {
+        frame: `{protocolVersion:2,type:'event',requestId:request.requestId,sequence:1,event:{stage:'x'}}`,
+        events: { parseEvent: (event: unknown) => event as { stage: string }, onEvent: () => undefined },
+        message: /invalid event frame/,
+      },
+      {
+        frame: `{protocolVersion:1,type:'event',requestId:request.requestId,sequence:1,event:{stage:'x'}}`,
+        events: undefined,
+        message: /without an event subscription/,
+      },
+      {
+        frame: `{protocolVersion:1,type:'event',requestId:request.requestId,sequence:1,event:{stage:'x'}}`,
+        events: {
+          parseEvent: (event: unknown) => event as { stage: string },
+          onEvent: () => {
+            throw new Error('consumer failed');
+          },
+        },
+        message: /event payload failed validation or delivery/,
+      },
+      {
+        frame: `{protocolVersion:1,type:'event',requestId:request.requestId,sequence:1,event:{stage:'x'}}`,
+        events: {
+          parseEvent: (event: unknown) => event as { stage: string },
+          onEvent: (async () => {
+            await Promise.resolve();
+          }) as unknown as () => void,
+        },
+        message: /event payload failed validation or delivery/,
+      },
+    ] as const;
+    for (const testCase of cases) {
+      const value = fixture(
+        `${ready}process.stdin.once('data',(line)=>{const request=JSON.parse(line);process.stdout.write(JSON.stringify(${testCase.frame})+'\\n')});${keepAlive}`,
+      );
+      await expect(request(value.session, testCase.events ? { events: testCase.events } : {})).rejects.toThrow(
+        testCase.message,
+      );
+      await value.session.cleanup();
+    }
+
+    const duplicate = fixture(
+      `${ready}process.stdin.once('data',(line)=>{const request=JSON.parse(line);const frame=JSON.stringify({protocolVersion:1,type:'event',requestId:request.requestId,sequence:1,event:{stage:'x'}})+'\\n';process.stdout.write(frame+frame)});${keepAlive}`,
+    );
+    await expect(
+      request(duplicate.session, {
+        events: { parseEvent: (event) => event as { stage: string }, onEvent: () => undefined },
+      }),
+    ).rejects.toThrow(/event sequence 1; expected 2/);
+    await duplicate.session.cleanup();
+  });
+
+  it('stops event delivery and clears request state on abort', async () => {
+    const worker = `${ready}
+const readline=require('node:readline').createInterface({input:process.stdin});
+readline.on('line',(line)=>{const request=JSON.parse(line);let sequence=0;setInterval(()=>process.stdout.write(JSON.stringify({protocolVersion:1,type:'event',requestId:request.requestId,sequence:++sequence,event:{stage:String(sequence)}})+'\\n'),2)});
+${keepAlive}`;
+    const value = fixture(worker);
+    const controller = new AbortController();
+    const events: string[] = [];
+    const operation = request(value.session, {
+      signal: controller.signal,
+      events: {
+        parseEvent: (event) => event as { stage: string },
+        onEvent: ({ stage }) => {
+          events.push(stage);
+          controller.abort(new Error('stop events'));
+        },
+      },
+    });
+
+    await expect(operation).rejects.toThrow(/stop events/);
+    await delay(20);
+    expect(events).toEqual(['1']);
+    expect(privateSession(value.session).pending.size).toBe(0);
+    await value.session.cleanup();
+  });
+
+  it('validates closure, resources, runtime confinement, and generation state', async () => {
+    const absent = fixture();
+    expect(absent.session.isGenerationValid(0)).toBe(false);
+    await absent.session.recycle();
+    await absent.session.cleanup();
+    await absent.session.cleanup();
+    await expect(request(absent.session)).rejects.toThrow(/closed/);
+
+    for (const [field, message] of [
+      ['executableSha256', 'executable'],
+      ['resources', 'support resource'],
+      ['runtimePath', 'is outside the native runtime root'],
+    ] as const) {
+      const value = fixture();
+      const options =
+        field === 'resources'
+          ? { ...value.options, resources: [{ ...value.options.resources[0]!, sha256: '0'.repeat(64) }] }
+          : field === 'runtimePath'
+            ? { ...value.options, runtimePath: join(value.root, 'workspace') }
+            : { ...value.options, executableSha256: '0'.repeat(64) };
+      const session = new NativeProcessSession<Issue>(options);
+      await expect(request(session)).rejects.toThrow(new RegExp(message));
+      expect(sandbox.wrap).not.toHaveBeenCalled();
+      await session.cleanup();
+    }
+  });
+
+  it('verifies one signed runtime payload once per process, not once per session', async () => {
+    const value = fixture(respondingWorker(`({protocolVersion:1,requestId:request.requestId,result:{}})`));
+    await request(value.session);
+    await value.session.cleanup();
+    /* D24: the payload is verified where it becomes trusted — once, for the whole process. A second
+     * session over the same signed root starts without re-hashing it, which is observable here as a
+     * post-verification edit that no longer fails the second session. */
+    writeFileSync(value.options.resources[0]!.path, 'tampered');
+    const second = new NativeProcessSession<Issue>(value.options);
+    await expect(request(second)).resolves.toBeDefined();
+    await second.cleanup();
+
+    const fresh = fixture(respondingWorker(`({protocolVersion:1,requestId:request.requestId,result:{}})`));
+    writeFileSync(fresh.options.resources[0]!.path, 'tampered');
+    const unverified = new NativeProcessSession<Issue>(fresh.options);
+    await expect(request(unverified)).rejects.toThrow(/support resource/);
+    await unverified.cleanup();
+  });
+
+  it('should stop the sandbox runtime only when the last started session is cleaned up', async () => {
+    // The Linux runtime's network bridge child holds the event loop open until reset, so a
+    // one-shot host would never exit after its last native worker stopped.
+    const first = fixture(respondingWorker(`{protocolVersion:1,requestId:request.requestId,result:{value:'a'}}`));
+    const second = fixture(respondingWorker(`{protocolVersion:1,requestId:request.requestId,result:{value:'b'}}`));
+    await expect(request(first.session)).resolves.toEqual({ value: 'a' });
+    await expect(request(second.session)).resolves.toEqual({ value: 'b' });
+
+    await first.session.cleanup();
+    expect(sandbox.reset).not.toHaveBeenCalled();
+    await second.session.cleanup();
+    expect(sandbox.reset).toHaveBeenCalledOnce();
+    await second.session.cleanup();
+    expect(sandbox.reset).toHaveBeenCalledOnce();
+
+    sandbox.initialize.mockClear();
+    const third = fixture(respondingWorker(`{protocolVersion:1,requestId:request.requestId,result:{value:'c'}}`));
+    try {
+      await expect(request(third.session)).resolves.toEqual({ value: 'c' });
+      expect(sandbox.initialize).toHaveBeenCalledOnce();
+    } finally {
+      await third.session.cleanup();
+    }
+    expect(sandbox.reset).toHaveBeenCalledTimes(2);
+  });
+
+  it('should hand the whole launch to an installed launcher, and neither verify, lease nor wrap here', async () => {
+    const value = fixture(
+      respondingWorker(`{protocolVersion:1,requestId:request.requestId,result:{value:'brokered'}}`),
+    );
+    const launches: NativeWorkerLaunch[] = [];
+    installNativeWorkerLauncher(async (launch) => {
+      launches.push(launch);
+      return startNativeWorker(launch);
+    });
+    try {
+      await expect(request(value.session)).resolves.toEqual({ value: 'brokered' });
+      expect(launches).toEqual([
+        {
+          executablePath: value.options.executablePath,
+          executableSha256: value.options.executableSha256,
+          executableName: 'test executable',
+          arguments: value.options.arguments,
+          runtimePath: value.root,
+          resources: value.options.resources,
+          workspacePath: value.options.workspacePath,
+          artifactPath: value.artifactPath,
+          commandId: 'Test native#1',
+        },
+      ]);
+    } finally {
+      installNativeWorkerLauncher(undefined);
+      await value.session.cleanup();
+    }
+    /* The worker's own lease ended with it; the session took none, so its cleanup stops nothing twice. */
+    await vi.waitFor(() => {
+      expect(sandbox.reset).toHaveBeenCalledOnce();
+    });
+  });
+
+  it('should fail the request with the refusal of the launcher, starting nothing', async () => {
+    const value = fixture();
+    installNativeWorkerLauncher(async () => {
+      throw new Error('Refused: the runtime root is not a sealed closure.');
+    });
+    try {
+      await expect(request(value.session)).rejects.toThrow('Refused: the runtime root is not a sealed closure.');
+      expect(sandbox.wrap).not.toHaveBeenCalled();
+    } finally {
+      installNativeWorkerLauncher(undefined);
+      await value.session.cleanup();
+    }
+  });
+
+  it('should verify digests before startNativeWorker wraps anything, and hold the sandbox until the worker ends', async () => {
+    const value = fixture();
+    const launch = {
+      ...value.options,
+      commandId: 'broker#1',
+    } satisfies NativeWorkerLaunch;
+
+    await expect(startNativeWorker({ ...launch, executableSha256: hash('tampered') })).rejects.toThrow(
+      'test executable failed its SHA-256 integrity check.',
+    );
+    await expect(
+      startNativeWorker({ ...launch, resources: [{ path: '/etc/hosts', sha256: hash(''), label: 'escaped' }] }),
+    ).rejects.toThrow('escaped is outside the native runtime root.');
+    expect(sandbox.wrap).not.toHaveBeenCalled();
+
+    const worker = await startNativeWorker(launch);
+    const firstLine = await new Promise<string>((resolve) => {
+      worker.stdout.once('data', (chunk: Uint8Array<ArrayBuffer>) => {
+        resolve(Buffer.from(chunk).toString('utf8'));
+      });
+    });
+    expect(firstLine).toBe('{"protocolVersion":1,"type":"ready"}\n');
+    expect(sandbox.reset).not.toHaveBeenCalled();
+    await worker.terminate();
+    await expect(worker.ended).resolves.toEqual({ signal: 'SIGTERM' });
+    await vi.waitFor(() => {
+      expect(sandbox.reset).toHaveBeenCalledOnce();
+    });
+  });
+
+  it('should hash again after a failed verification instead of failing every later launch', async () => {
+    const value = fixture();
+    const launch = { ...value.options, commandId: 'broker#1' } satisfies NativeWorkerLaunch;
+    const [resource] = value.options.resources;
+    const sealing = `${resource!.path}.sealing`;
+    /* The closure is still being sealed: its resource is not in place yet. */
+    renameSync(resource!.path, sealing);
+    await expect(startNativeWorker(launch)).rejects.toThrow(/ENOENT/u);
+    renameSync(sealing, resource!.path);
+
+    const worker = await startNativeWorker(launch);
+    await worker.terminate();
+    await expect(worker.ended).resolves.toEqual({ signal: 'SIGTERM' });
+  });
+
+  it('should grant the sandbox root instead of the requested paths, which a requester may have redirected', async () => {
+    const value = fixture();
+    const sandboxRoot = realpathSync(mkdtempSync(join(tmpdir(), 'tau-native-broker-root-')));
+    const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), 'tau-native-elsewhere-')));
+    roots.push(sandboxRoot, elsewhere);
+    const workspacePath = join(sandboxRoot, 'workspace');
+    const artifactPath = join(sandboxRoot, 'artifacts');
+    mkdirSync(workspacePath);
+    /* What the broker checked was a directory; by the spawn it points outside. */
+    symlinkSync(elsewhere, artifactPath);
+
+    const worker = await startNativeWorker({
+      ...value.options,
+      workspacePath,
+      artifactPath,
+      sandboxRoot,
+      commandId: 'broker#2',
+    });
+    await worker.terminate();
+
+    const policy = sandbox.wrap.mock.calls[0]![2] as ReturnType<typeof nativeSandboxPolicy>;
+    expect(policy.filesystem.allowWrite).toEqual([sandboxRoot]);
+    expect(policy.filesystem.allowRead).not.toContain(elsewhere);
+    expect(sandbox.wrap.mock.calls[0]![0]).toContain(`TMPDIR='${sandboxRoot}'`);
+  });
+
+  it('should not take a sandbox lease when cleanup lands while resources are being verified', async () => {
+    const closing = fixture(respondingWorker(`{protocolVersion:1,requestId:request.requestId,result:{value:'a'}}`));
+    const pending = request(closing.session);
+    // Let the queued start reach its resource hashing before the session closes.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    await closing.session.cleanup();
+    await expect(pending).rejects.toThrow(/session is closed/);
+
+    const next = fixture(respondingWorker(`{protocolVersion:1,requestId:request.requestId,result:{value:'b'}}`));
+    await expect(request(next.session)).resolves.toEqual({ value: 'b' });
+    await next.session.cleanup();
+    expect(sandbox.reset).toHaveBeenCalledOnce();
+  });
+
+  it('should refuse to spawn the worker when the sandbox cannot wrap it', async () => {
+    for (const failure of [new Error('profile rejected'), 'launcher exited']) {
+      const value = fixture(
+        `require('node:fs').writeFileSync(process.argv[1] + '.started', '');${ready}${keepAlive}`,
+        1500,
+      );
+      sandbox.wrapFailure = failure;
+      const rejection = request(value.session);
+      await expect(rejection).rejects.toBeInstanceOf(NativeRuntimeUnavailableError);
+      await expect(rejection).rejects.toThrow(/profile rejected|launcher exited/);
+      expect(existsSync(`${value.options.arguments[0]}.started`)).toBe(false);
+      expect(privateSession(value.session).child).toBeUndefined();
+      expect(value.session.generation).toBe(0);
+      // The next request retries the sandbox instead of remembering the failure.
+      sandbox.wrapFailure = undefined;
+      await expect(request(value.session)).rejects.toThrow(/timed out/);
+      expect(existsSync(`${value.options.arguments[0]}.started`)).toBe(true);
+      await value.session.cleanup();
+    }
+  }, 15_000);
+
+  it('should wrap only host-owned quoted arguments with the fixed capability profile', async () => {
+    const value = fixture(respondingWorker(`({protocolVersion:1,requestId:request.requestId,result:{}})`));
+    await request(value.session);
+    const [command, shell, policy, signal, workingDirectory, attribution] = sandbox.wrap.mock.calls[0]!;
+    const artifact = `'${value.options.artifactPath}'`;
+    expect(command).toBe(
+      `TMPDIR=${artifact} TEMP=${artifact} TMP=${artifact} exec '${value.options.executablePath}' '${value.options.arguments[0]}'`,
+    );
+    expect(shell).toBe('/bin/sh');
+    expect(signal).toBeUndefined();
+    expect(workingDirectory).toBe(value.options.workspacePath);
+    expect(attribution).toEqual({ commandId: 'Test native#1' });
+    expect(policy).toEqual(
+      nativeSandboxPolicy({
+        readablePaths: [value.root, value.options.workspacePath],
+        writablePath: value.artifactPath,
+      }),
+    );
+    await value.session.cleanup();
+  });
+
+  it('serializes chunked requests, validates results, redacts stderr, and shuts down gracefully', async () => {
+    const worker = `${ready}
+const readline=require('node:readline').createInterface({input:process.stdin});let active=false;
+readline.on('line',(line)=>{const request=JSON.parse(line);if(active)process.exit(9);active=true;process.stderr.write(process.cwd()+'\\n');const frame=JSON.stringify({protocolVersion:1,requestId:request.requestId,result:request.method==='shutdown'?{shutdown:true}:{value:request.requestId}})+'\\n';process.stdout.write(Buffer.from(frame).subarray(0,3));setTimeout(()=>{process.stdout.write(Buffer.from(frame).subarray(3));active=false;if(request.method==='shutdown')process.exit(0)},2)});`;
+    const value = fixture(worker);
+    const [first, second] = await Promise.all([
+      request<{ value: string }>(value.session),
+      request<{ value: string }>(value.session),
+    ]);
+    expect(first.value).toBe('1:1');
+    expect(second.value).toBe('1:2');
+    expect(value.session.isGenerationValid(1)).toBe(true);
+    expect(value.logger.debug).toHaveBeenCalledWith(expect.stringContaining('<private>'));
+    await expect(
+      request(value.session, {
+        parseResult: () => {
+          throw new Error('invalid result');
+        },
+      }),
+    ).rejects.toThrow(/failed validation/);
+    await value.session.cleanup();
+    expect(value.session.isGenerationValid(1)).toBe(false);
+
+    const noShutdown = fixture(respondingWorker(`({protocolVersion:1,requestId:request.requestId,result:{}})`));
+    const session = new NativeProcessSession<Issue>({ ...noShutdown.options, shutdown: undefined });
+    await request(session);
+    await session.cleanup();
+  });
+
+  it('rejects malformed handshakes, frames, response ids, issue responses, and early exits', async () => {
+    const cases = [
+      [`process.stdout.write('{}\\n');${keepAlive}`, /invalid handshake/],
+      [`${ready}process.stdin.once('data',()=>process.stdout.write('not-json\\n'));${keepAlive}`, /malformed JSON/],
+      [`${ready}process.stdin.once('data',()=>process.stdout.write('x'.repeat(1_048_577)));${keepAlive}`, /oversized/],
+      [
+        `${ready}process.stdin.once('data',()=>process.stdout.write('x'.repeat(1_048_577)+'\\n'));${keepAlive}`,
+        /oversized/,
+      ],
+      [respondingWorker(`({protocolVersion:2,requestId:request.requestId,result:{}})`), /invalid response/],
+      [respondingWorker(`({protocolVersion:1,requestId:'unknown',result:{}})`), /unknown response/],
+      [
+        respondingWorker(`({protocolVersion:1,requestId:request.requestId,issues:[{message:'worker failure'}]})`),
+        /reported/,
+      ],
+      ['process.exit(7);', /exited/],
+    ] as const;
+    for (const [body, message] of cases) {
+      const value = fixture(body);
+      const operation = request(value.session);
+      if (message.source === 'reported') {
+        await expect(operation).rejects.toBeInstanceOf(NativeWorkerReportedError);
+      }
+      if (message.source !== 'reported') {
+        await expect(operation).rejects.toThrow(message);
+      }
+      await value.session.cleanup();
+    }
+    const duplicate = fixture(
+      `${ready}process.stdin.once('data',(line)=>{const request=JSON.parse(line);const frame=JSON.stringify({protocolVersion:1,requestId:request.requestId,result:{}})+'\\n';process.stdout.write(frame+frame)});${keepAlive}`,
+    );
+    await expect(request(duplicate.session)).resolves.toEqual({});
+    await delay(10);
+    expect(duplicate.session.isGenerationValid(1)).toBe(false);
+    await duplicate.session.cleanup();
+  }, 15_000);
+
+  it('should re-verify the runtime when the worker exits before its handshake and name what differs', async () => {
+    const verifier = vi.fn<NativeRuntimeVerifier>(async () => ({
+      files: ['lib/a.pyc', 'lib/b.pyc', 'lib/c.pyc', 'lib/d.pyc', 'lib/e.pyc', 'lib/f.pyc'],
+      remedy: 'Run the repair.',
+    }));
+    installNativeRuntimeVerifier(verifier);
+    try {
+      const damaged = fixture('process.exit(7);');
+      await expect(request(damaged.session)).rejects.toThrow(
+        `Test native exited (7) before it was ready, and re-verifying its runtime at ${damaged.options.runtimePath} found files that differ from their receipt: lib/a.pyc, lib/b.pyc, lib/c.pyc, lib/d.pyc, lib/e.pyc and 1 more. Run the repair.`,
+      );
+      expect(verifier).toHaveBeenCalledWith(damaged.options.runtimePath, expect.any(AbortSignal));
+      await damaged.session.cleanup();
+
+      // Nothing found: the exit stands as it was.
+      verifier.mockResolvedValueOnce(undefined);
+      const intact = fixture('process.exit(7);');
+      await expect(request(intact.session)).rejects.toThrow(/^Test native exited \(7\)\.$/u);
+      await intact.session.cleanup();
+
+      // An exit after the handshake is not evidence about the runtime.
+      verifier.mockClear();
+      const later = fixture(`${ready}process.stdin.once('data',()=>process.exit(3));${keepAlive}`);
+      await expect(request(later.session)).rejects.toThrow(/^Test native exited \(3\)\.$/u);
+      expect(verifier).not.toHaveBeenCalled();
+      await later.session.cleanup();
+    } finally {
+      installNativeRuntimeVerifier(undefined);
+    }
+  });
+
+  it('cancels cooperatively when a request names a cancel method, and kills when it cannot', async () => {
+    // The worker answers the cancel notification itself; the process is never recycled.
+    const cooperative = fixture(`${ready}
+const readline=require('node:readline').createInterface({input:process.stdin});
+let pending;
+readline.on('line',(line)=>{
+ const frame=JSON.parse(line);
+ if(frame.method==='cancel'){
+  process.stdout.write(JSON.stringify({protocolVersion:1,requestId:pending,issues:[{message:'cancelled'}]})+'\\n');
+  return;
+ }
+ pending=frame.requestId;
+});
+${keepAlive}`);
+    const controller = new AbortController();
+    const operation = request(cooperative.session, { signal: controller.signal, cancelMethod: 'cancel' });
+    while (privateSession(cooperative.session).pending.size === 0) {
+      await delay(2);
+    }
+    const { generation } = cooperative.session;
+    const { child } = privateSession(cooperative.session);
+    controller.abort(new Error('user edited again'));
+    await expect(operation).rejects.toThrow(NativeWorkerReportedError);
+    expect(cooperative.session.generation).toBe(generation);
+    expect(privateSession(cooperative.session).child).toBe(child);
+    // The same worker still serves the next request, so its resident prefix survives.
+    const next = request(cooperative.session, { cancelMethod: 'cancel' });
+    await vi.waitFor(() => {
+      expect(privateSession(cooperative.session).pending.size).toBe(1);
+    });
+    expect(privateSession(cooperative.session).child).toBe(child);
+    // Observe the rejection before cleanup settles it, or the settled promise reports as unhandled.
+    const nextRejection = expect(next).rejects.toThrow();
+    await cooperative.session.cleanup();
+    await nextRejection;
+
+    // Kill remains the fallback when the worker's input is gone.
+    const unwritable = fixture(`${ready}${keepAlive}`);
+    const killController = new AbortController();
+    const killed = request(unwritable.session, { signal: killController.signal, cancelMethod: 'cancel' });
+    while (privateSession(unwritable.session).pending.size === 0) {
+      await delay(2);
+    }
+    privateSession(unwritable.session).child!.stdin.end();
+    killController.abort(new Error('deadline'));
+    await expect(killed).rejects.toThrow(/deadline/);
+    await unwritable.session.cleanup();
+  });
+
+  it('should allow a request without a deadline and still cancel it', async () => {
+    const value = fixture(respondingWorker('({protocolVersion:1,requestId:request.requestId,result:{ok:true}})'), 0);
+    try {
+      await expect(request(value.session)).resolves.toEqual({ ok: true });
+    } finally {
+      await value.session.cleanup();
+    }
+    const waiting = fixture(`${ready}${keepAlive}`, 0);
+    const controller = new AbortController();
+    const pending = request(waiting.session, { signal: controller.signal });
+    const rejected = expect(pending).rejects.toThrow('stop large render');
+    while (privateSession(waiting.session).pending.size === 0) {
+      await delay(2);
+    }
+    controller.abort(new Error('stop large render'));
+    try {
+      await rejected;
+    } finally {
+      await waiting.session.cleanup();
+    }
+  });
+
+  it('bounds the queue and handles abort, timeout, spawn, and write failures', async () => {
+    const stalled = fixture(`${ready}${keepAlive}`, 5000);
+    const operations = Array.from({ length: 16 }, async () => request(stalled.session));
+    await expect(request(stalled.session)).rejects.toThrow(/queue exceeds/);
+    await stalled.session.cleanup();
+    await Promise.allSettled(operations);
+
+    const sending = fixture(`${ready}${keepAlive}`);
+    const sendController = new AbortController();
+    Object.defineProperty(sendController.signal, 'reason', { value: undefined });
+    const sendOperation = request(sending.session, { signal: sendController.signal });
+    while (privateSession(sending.session).pending.size === 0) {
+      await delay(2);
+    }
+    sendController.abort();
+    await expect(sendOperation).rejects.toThrow();
+    await sending.session.cleanup();
+
+    const starting = fixture(`setTimeout(()=>{${ready}},1000);${keepAlive}`);
+    const startController = new AbortController();
+    const startOperation = request(starting.session, { signal: startController.signal });
+    while (!privateSession(starting.session).child) {
+      await delay(2);
+    }
+    startController.abort(new Error('explicit abort'));
+    await expect(startOperation).rejects.toThrow(/explicit abort/);
+    await starting.session.cleanup();
+    const timedOut = fixture(`${ready}${keepAlive}`, 1000);
+    await expect(request(timedOut.session)).rejects.toThrow(/request timed out/);
+    await timedOut.session.cleanup();
+    const handshakeTimeout = fixture(keepAlive, 20);
+    await expect(request(handshakeTimeout.session)).rejects.toThrow(/handshake timed out/);
+    await handshakeTimeout.session.cleanup();
+    const writable = fixture(respondingWorker(`({protocolVersion:1,requestId:request.requestId,result:{}})`));
+    await request(writable.session);
+    const writableChild = privateSession(writable.session).child!;
+    writableChild.stdin.end();
+    await new Promise<void>((resolve) => {
+      writableChild.stdin.once('finish', resolve);
+    });
+    await expect(request(writable.session)).rejects.toThrow(/not writable/);
+    await writable.session.cleanup();
+
+    const spawnFailure = fixture();
+    chmodSync(spawnFailure.options.executablePath, 0o600);
+    await expect(request(spawnFailure.session)).rejects.toThrow();
+    await spawnFailure.session.cleanup();
+
+    const missingLauncher = fixture();
+    sandbox.launcher = join(missingLauncher.root, 'missing-sandbox-launcher');
+    await expect(request(missingLauncher.session)).rejects.toThrow(/ENOENT/);
+    sandbox.launcher = undefined;
+    await missingLauncher.session.cleanup();
+
+    const writeFailure = fixture(respondingWorker(`({protocolVersion:1,requestId:request.requestId,result:{}})`));
+    await request(writeFailure.session);
+    const child = privateSession(writeFailure.session).child!;
+    child.stdin.write = ((_chunk: unknown, _encoding: unknown, callback: (error: Error) => void) => {
+      callback(new Error('write failed'));
+      return false;
+    }) as typeof child.stdin.write;
+    await expect(request(writeFailure.session)).rejects.toThrow(/write failed/);
+    await writeFailure.session.cleanup();
+  }, 15_000);
+
+  it('confines, validates, consumes, and removes private artifacts', async () => {
+    const value = fixture();
+    await expect(
+      value.session.readArtifact({ artifactPath: join(value.root, 'outside'), byteLength: 0 }),
+    ).rejects.toThrow(/outside/);
+    await expect(
+      value.session.readArtifact({ artifactPath: join(value.artifactPath, 'missing'), byteLength: 0 }),
+    ).rejects.toThrow();
+    const target = join(value.artifactPath, 'target');
+    const link = join(value.artifactPath, 'link');
+    writeFileSync(target, 'data');
+    symlinkSync(target, link);
+    await expect(value.session.readArtifact({ artifactPath: link, byteLength: 4 })).rejects.toThrow(/invalid artifact/);
+    await expect(value.session.readArtifact({ artifactPath: target, byteLength: 3 })).rejects.toThrow(/invalid size/);
+    fsOverrides.readFile = async () => new TextEncoder().encode('changed');
+    await expect(value.session.readArtifact({ artifactPath: target, byteLength: 4 })).rejects.toThrow(/changed while/);
+    fsOverrides.readFile = undefined;
+    writeFileSync(target, 'data');
+    fsOverrides.unlink = async () => {
+      throw new Error('already gone');
+    };
+    await expect(value.session.readArtifact({ artifactPath: target, byteLength: 4 })).resolves.toEqual(
+      new Uint8Array([100, 97, 116, 97]),
+    );
+    fsOverrides.unlink = undefined;
+    unlinkSync(target);
+    await value.session.cleanup();
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'should kill a worker still inside a request when its host process exits',
+    async () => {
+      const value = fixture(
+        `${ready}require('node:fs').writeFileSync(require('node:path').join(process.env.TMPDIR,'pid'),String(process.pid));${keepAlive}`,
+        30_000,
+      );
+      const operation = request(value.session);
+      const settled = expect(operation).rejects.toBeInstanceOf(Error);
+      const pidPath = join(value.artifactPath, 'pid');
+      try {
+        while (!existsSync(pidPath)) {
+          await delay(5);
+        }
+        const pid = Number(readFileSync(pidPath, 'utf8'));
+        const alive = (): boolean => {
+          try {
+            process.kill(pid, 0);
+            return true;
+          } catch {
+            return false;
+          }
+        };
+        expect(alive()).toBe(true);
+        /* Only synchronous work runs in `'exit'`, so this is all the host gets to do before it is gone. */
+        const exitHooks = process.listeners('exit').filter((listener) => listener.name === 'killLiveProcessGroups');
+        expect(exitHooks).toHaveLength(1);
+        exitHooks[0]!(0);
+        await settled;
+        while (alive()) {
+          await delay(5);
+        }
+      } finally {
+        await value.session.cleanup();
+      }
+    },
+    10_000,
+  );
+
+  it('should hand back the bytes it read without copying them a second time', async () => {
+    const value = fixture();
+    const target = join(value.artifactPath, 'mesh');
+    writeFileSync(target, 'mesh');
+    const read = new TextEncoder().encode('mesh');
+    fsOverrides.readFile = async () => read;
+    try {
+      const bytes = await value.session.readArtifact({ artifactPath: target, byteLength: 4 });
+      /* A 1 GiB artifact otherwise peaks at 2 GiB in the utility while the copy is made. */
+      expect(bytes.buffer).toBe(read.buffer);
+      expect(bytes).toEqual(new Uint8Array([109, 101, 115, 104]));
+    } finally {
+      fsOverrides.readFile = undefined;
+      await value.session.cleanup();
+    }
+  });
+
+  it('terminates POSIX and Windows process trees and provides a minimal environment', async () => {
+    await terminateProcessTree(fakeChild({ exitCode: 0 }));
+    await terminateProcessTree(fakeChild({ pid: undefined }));
+    const kill = vi.spyOn(process, 'kill');
+    kill.mockImplementationOnce(() => {
+      throw new Error('already exited');
+    });
+    await terminateProcessTree(fakeChild());
+    const hard = fakeChild();
+    kill.mockReturnValueOnce(true).mockImplementationOnce(() => {
+      throw new Error('gone');
+    });
+    await terminateProcessTree(hard);
+    const exiting = fakeChild();
+    kill.mockImplementationOnce(() => {
+      setTimeout(() => exiting.emit('exit'), 0);
+      return true;
+    });
+    await terminateProcessTree(exiting);
+    const stoppedDuringGrace = fakeChild();
+    kill.mockImplementationOnce(() => {
+      Object.assign(stoppedDuringGrace, { exitCode: 0 });
+      return true;
+    });
+    await terminateProcessTree(stoppedDuringGrace);
+    kill.mockRestore();
+    await withPlatform('win32', async () => {
+      const previous = process.env['SystemRoot'];
+      delete process.env['SystemRoot'];
+      const direct = fakeChild();
+      await terminateProcessTree(direct);
+      expect(direct.kill).toHaveBeenCalledWith('SIGKILL');
+      expect(processEnvironment('/tmp')).not.toHaveProperty('SystemRoot');
+      const systemRoot = realpathSync(mkdtempSync(join(tmpdir(), 'tau-taskkill-test-')));
+      roots.push(systemRoot);
+      const taskkill = join(systemRoot, 'System32', 'taskkill.exe');
+      mkdirSync(dirname(taskkill), { recursive: true });
+      writeFileSync(taskkill, '#!/bin/sh\nexit 0\n');
+      chmodSync(taskkill, 0o700);
+      process.env['SystemRoot'] = systemRoot;
+      expect(processEnvironment('/tmp')).toHaveProperty('SystemRoot', systemRoot);
+      await terminateProcessTree(fakeChild());
+      unlinkSync(taskkill);
+      const fallback = fakeChild();
+      await terminateProcessTree(fallback);
+      expect(fallback.kill).toHaveBeenCalledWith('SIGKILL');
+      if (previous === undefined) {
+        delete process.env['SystemRoot'];
+      }
+      if (previous !== undefined) {
+        process.env['SystemRoot'] = previous;
+      }
+    });
+    const environment = processEnvironment('/artifacts');
+    expect(environment['LANG']).toBe('C.UTF-8');
+    expect(environment['TMPDIR']).toBe('/artifacts');
+    expect(environment['HOME']).toBe('/artifacts');
+    expect(environment['PATH']).toBe('/usr/bin:/bin');
+    await withPlatform('win32', async () => {
+      expect(processEnvironment('/artifacts')).not.toHaveProperty('PATH');
+    });
+  });
+});
+
+const mebibyte = 1024 * 1024;
+
+/** A worker that touches `bytes` more memory on each `touch` request and answers every request at once. */
+const touchingWorker = `${ready}
+const kept=[];
+const readline=require('node:readline').createInterface({input:process.stdin});
+readline.on('line',(line)=>{
+ const request=JSON.parse(line);
+ if(request.method==='touch'){kept.push(Buffer.alloc(request.params.bytes,1));}
+ process.stdout.write(JSON.stringify({protocolVersion:1,requestId:request.requestId,result:request.method==='shutdown'?{shutdown:true}:{}})+'\\n');
+ if(request.method==='shutdown')setTimeout(()=>process.exit(0),5);
+});
+${keepAlive}`;
+
+/** A brokered worker whose pipes this test drives and whose sample it controls. */
+const brokeredWorker = (sampleResident?: () => Promise<number | undefined>) => {
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const ended = Promise.withResolvers<{ readonly exitCode?: number }>();
+  stdin.on('data', (chunk: Uint8Array<ArrayBuffer>) => {
+    for (const line of Buffer.from(chunk)
+      .toString('utf8')
+      .split('\n')
+      .filter((part) => part.length > 0)) {
+      const frame = JSON.parse(line) as { readonly requestId: string; readonly method: string };
+      stdout.write(
+        `${JSON.stringify({ protocolVersion: 1, requestId: frame.requestId, result: frame.method === 'shutdown' ? { shutdown: true } : {} })}\n`,
+      );
+    }
+  });
+  const worker = {
+    stdin,
+    stdout,
+    stderr,
+    ended: ended.promise,
+    terminate: async () => {
+      ended.resolve({ exitCode: 0 });
+      await ended.promise;
+    },
+    ...(sampleResident === undefined ? {} : { sampleResident }),
+  };
+  return {
+    worker,
+    launch: async () => {
+      queueMicrotask(() => {
+        stdout.write('{"protocolVersion":1,"type":"ready"}\n');
+      });
+      return worker;
+    },
+  };
+};
+
+describe('NativeProcessSession.sampleResident', () => {
+  afterEach(() => {
+    installNativeWorkerLauncher(undefined);
+  });
+
+  it.runIf(process.platform === 'linux')(
+    "should sample the worker tree's resident set after every request, the first included",
+    async () => {
+      const value = fixture(touchingWorker, 10_000);
+      const touched = 96 * mebibyte;
+      try {
+        await expect(value.session.sampleResident()).resolves.toBeUndefined();
+        await value.session.request({
+          method: 'idle',
+          params: {},
+          parseResult: (result) => result,
+          signal: new AbortController().signal,
+        });
+        const baseline = await value.session.sampleResident();
+        expect(baseline).toBeGreaterThan(0);
+        await value.session.request({
+          method: 'touch',
+          params: { bytes: touched },
+          parseResult: (result) => result,
+          signal: new AbortController().signal,
+        });
+        const sample = await value.session.sampleResident();
+        const expected = baseline! + touched;
+        expect(Math.abs(sample! - expected)).toBeLessThanOrEqual(expected * 0.25);
+      } finally {
+        await value.session.cleanup();
+      }
+      await expect(value.session.sampleResident()).resolves.toBeUndefined();
+    },
+    20_000,
+  );
+
+  it('should resolve undefined for a sample that crosses a recycle', async () => {
+    const read = Promise.withResolvers<number | undefined>();
+    const broker = brokeredWorker(async () => read.promise);
+    installNativeWorkerLauncher(broker.launch);
+    const value = fixture();
+    try {
+      await request(value.session);
+      const sample = value.session.sampleResident();
+      await value.session.recycle();
+      read.resolve(64 * mebibyte);
+      await expect(sample).resolves.toBeUndefined();
+    } finally {
+      await value.session.cleanup();
+    }
+  });
+
+  it('should answer the live generation, and undefined for a worker without a reader, a failed or invalid read', async () => {
+    const reads = vi.fn<() => Promise<number | undefined>>();
+    const broker = brokeredWorker(reads);
+    installNativeWorkerLauncher(broker.launch);
+    const value = fixture();
+    try {
+      await request(value.session);
+      reads.mockResolvedValueOnce(64 * mebibyte);
+      await expect(value.session.sampleResident()).resolves.toBe(64 * mebibyte);
+      reads.mockRejectedValueOnce(new Error('EACCES'));
+      await expect(value.session.sampleResident()).resolves.toBeUndefined();
+      for (const invalid of [-1, 1.5, Number.NaN, undefined]) {
+        reads.mockResolvedValueOnce(invalid);
+        await expect(value.session.sampleResident()).resolves.toBeUndefined();
+      }
+    } finally {
+      await value.session.cleanup();
+    }
+    expect(reads).toHaveBeenCalledTimes(6);
+    await expect(value.session.sampleResident()).resolves.toBeUndefined();
+
+    installNativeWorkerLauncher(brokeredWorker().launch);
+    const unread = fixture();
+    try {
+      await request(unread.session);
+      await expect(unread.session.sampleResident()).resolves.toBeUndefined();
+    } finally {
+      await unread.session.cleanup();
+    }
+  });
+
+  it('should give no reader to a worker spawned off Linux, and none once the worker has exited', async () => {
+    const value = fixture();
+    const launch = { ...value.options, commandId: 'platform#1' } satisfies NativeWorkerLaunch;
+    for (const platform of ['darwin', 'win32'] as const) {
+      await withPlatform(platform, async () => {
+        const worker = await startNativeWorker(launch).catch(() => undefined);
+        expect(worker?.sampleResident).toBeUndefined();
+        await worker?.terminate();
+      });
+    }
+    if (process.platform === 'linux') {
+      const worker = await startNativeWorker(launch);
+      await worker.terminate();
+      await worker.ended;
+      await expect(worker.sampleResident?.()).resolves.toBeUndefined();
+    }
+  });
+
+  // T35 (B19, PR-1c): no native runtime starts on Windows, so the child heap source there is `none`, never a reading
+  // of some other process: the launch refuses before the sandbox wraps anything, and the session samples nothing.
+  it('should spawn nothing on Windows and sample undefined, so the heap source there is none', async () => {
+    const value = fixture();
+    try {
+      await withPlatform('win32', async () => {
+        await expect(startNativeWorker({ ...value.options, commandId: 'win32#1' })).rejects.toBeInstanceOf(
+          NativeRuntimeUnavailableError,
+        );
+        await expect(request(value.session)).rejects.toThrow('Windows is not yet a supported native runtime platform');
+        await expect(value.session.sampleResident()).resolves.toBeUndefined();
+      });
+      expect(sandbox.wrap).not.toHaveBeenCalled();
+    } finally {
+      await value.session.cleanup();
+    }
+    await expect(value.session.sampleResident()).resolves.toBeUndefined();
+  });
+});
+
+/** Wire a mocked filesystem's batched listing from a directory-to-names description. */
+const mockListing = (
+  filesystem: ReturnType<typeof createMockFileSystem>,
+  names: (directory: string) => string[],
+  stat: (path: string) => { type: 'dir' | 'file'; size: number; mtimeMs: number },
+): void => {
+  filesystem.mocks.readdirStat.mockImplementation(async (directory: string) =>
+    names(directory).map((name) => {
+      const path = directory === '' ? name : `${directory}/${name}`;
+      const entry = stat(path);
+      return entry.type === 'dir' ? { ...entry, path, name } : { ...entry, path, name, contentKind: 'binary' };
+    }),
+  );
+};
+
+describe('createWorkspaceMirror', () => {
+  it('excludes only exact rooted paths before stat or read, preserving nested assets and context', async () => {
+    const filesystem = createMockFileSystem({ readFileResult: 'x' });
+    mockListing(
+      filesystem,
+      (directory) => (directory === '' ? ['thumbnail.webp', 'nested', 'tau.json', 'package.json'] : ['thumbnail.webp']),
+      (path) => (path === 'nested' ? { type: 'dir', size: 0, mtimeMs: 0 } : { type: 'file', size: 1, mtimeMs: 0 }),
+    );
+    const options = { temporaryPrefix: 'tau-mirror-test-', displayName: 'Test', excludedPaths: ['thumbnail.webp'] };
+    const mirror = await createWorkspaceMirror(options);
+    try {
+      await expect(mirror.sync(filesystem)).resolves.toEqual(['nested/thumbnail.webp', 'package.json', 'tau.json']);
+      expect(filesystem.mocks.readFile.mock.calls).toEqual([
+        ['nested/thumbnail.webp', undefined],
+        ['package.json', undefined],
+        ['tau.json', undefined],
+      ]);
+    } finally {
+      await mirror.cleanup();
+    }
+  });
+
+  it.each(['readdirStat', 'readFile'] as const)('propagates unrelated %s failures', async (operation) => {
+    const filesystem = createMockFileSystem({ readFileResult: 'x' });
+    mockListing(
+      filesystem,
+      () => ['main.cs'],
+      () => ({ type: 'file', size: 1, mtimeMs: 0 }),
+    );
+    const error = new Error('Workspace unavailable');
+    filesystem.mocks[operation].mockRejectedValue(error);
+    const mirror = await createWorkspaceMirror({ temporaryPrefix: 'tau-mirror-test-', displayName: 'Test' });
+    try {
+      await expect(mirror.sync(filesystem)).rejects.toBe(error);
+    } finally {
+      await mirror.cleanup();
+    }
+  });
+
+  it('projects sorted files, skips exclusions, updates, deletes, and cleans up', async () => {
+    const exitListeners = process.listenerCount('exit');
+    const interruptListeners = process.listenerCount('SIGINT');
+    const terminateListeners = process.listenerCount('SIGTERM');
+    const files = new Map([
+      ['main.cs', new TextEncoder().encode('one')],
+      ['nested/helper.cs', new TextEncoder().encode('helper')],
+      ['nested/data.dll', new TextEncoder().encode('excluded')],
+    ]);
+    const mtimes = new Map([...files.keys()].map((path) => [path, 1000]));
+    const filesystem = createMockFileSystem({ readFileResult: (path) => files.get(path)! });
+    mockListing(
+      filesystem,
+      (directory) =>
+        directory === ''
+          ? ['node_modules', 'nested', 'main.cs']
+          : directory === 'nested'
+            ? ['helper.cs', 'data.dll']
+            : [],
+      (path) =>
+        path === 'nested' || path === 'node_modules'
+          ? { type: 'dir', size: 0, mtimeMs: 0 }
+          : { type: 'file', size: files.get(path)!.byteLength, mtimeMs: mtimes.get(path)! },
+    );
+    const mirror = await createWorkspaceMirror({
+      temporaryPrefix: 'tau-mirror-test-',
+      displayName: 'Test',
+      excludedFileSuffixes: ['.dll'],
+    });
+    expect(process.listenerCount('exit')).toBe(exitListeners + 1);
+    expect(process.listenerCount('SIGINT')).toBe(interruptListeners + 1);
+    expect(process.listenerCount('SIGTERM')).toBe(terminateListeners + 1);
+    roots.push(mirror.rootPath);
+    await expect(mirror.sync(filesystem)).resolves.toEqual(['main.cs', 'nested/helper.cs']);
+    // D6: one listing call per directory, and every mirrored file read exactly once.
+    expect(filesystem.mocks.readdirStat.mock.calls.map((call) => String(call[0]))).toEqual(['', 'nested']);
+    expect(filesystem.mocks.lstat).not.toHaveBeenCalled();
+    expect(filesystem.mocks.readFile).toHaveBeenCalledTimes(2);
+
+    filesystem.mocks.readFile.mockClear();
+    await expect(mirror.sync(filesystem)).resolves.toEqual(['main.cs', 'nested/helper.cs']);
+    // An unchanged workspace reads no file bytes at all.
+    expect(filesystem.mocks.readFile).not.toHaveBeenCalled();
+
+    /* Racily clean: main.cs is stamped in the millisecond the last sync ran, so its stat cannot
+     * prove it unchanged — it is read again even though size and mtime repeat. helper.cs is older
+     * than that sync and stays trusted. */
+    files.set('main.cs', new TextEncoder().encode('ONE'));
+    mtimes.set('main.cs', Date.now());
+    await expect(mirror.sync(filesystem)).resolves.toEqual(['main.cs', 'nested/helper.cs']);
+    expect(filesystem.mocks.readFile.mock.calls.map((call) => String(call[0]))).toEqual(['main.cs']);
+    expect(readFileSync(join(mirror.workspacePath, 'main.cs'), 'utf8')).toBe('ONE');
+
+    files.set('main.cs', new TextEncoder().encode('two'));
+    mtimes.set('main.cs', 2000);
+    files.delete('nested/helper.cs');
+    mockListing(
+      filesystem,
+      (directory) => (directory === '' ? ['main.cs'] : []),
+      (path) => ({ type: 'file', size: files.get(path)!.byteLength, mtimeMs: mtimes.get(path)! }),
+    );
+    await expect(mirror.sync(filesystem)).resolves.toEqual(['main.cs']);
+    expect(readFileSync(join(mirror.workspacePath, 'main.cs'), 'utf8')).toBe('two');
+    await mirror.cleanup();
+    expect(existsSync(mirror.rootPath)).toBe(false);
+    expect(process.listenerCount('exit')).toBe(exitListeners);
+    expect(process.listenerCount('SIGINT')).toBe(interruptListeners);
+    expect(process.listenerCount('SIGTERM')).toBe(terminateListeners);
+  });
+
+  it('walks the workspace once per runtime operation', async () => {
+    const filesystem = createMockFileSystem({ readFileResult: () => new TextEncoder().encode('one') });
+    mockListing(
+      filesystem,
+      () => ['main.cs'],
+      () => ({ type: 'file', size: 3, mtimeMs: 1000 }),
+    );
+    const mirror = await createWorkspaceMirror({ temporaryPrefix: 'tau-mirror-test-', displayName: 'Test' });
+    roots.push(mirror.rootPath);
+    try {
+      await mirror.sync(filesystem, undefined, 1);
+      await mirror.sync(filesystem, undefined, 1);
+      expect(filesystem.mocks.readdirStat).toHaveBeenCalledOnce();
+
+      await mirror.sync(filesystem, undefined, 2);
+      await mirror.sync(filesystem);
+      expect(filesystem.mocks.readdirStat).toHaveBeenCalledTimes(3);
+    } finally {
+      await mirror.cleanup();
+    }
+  });
+
+  it('takes bytes the runtime already read from its content cache', async () => {
+    const filesystem = createMockFileSystem({ readFileResult: () => new TextEncoder().encode('from disk') });
+    mockListing(
+      filesystem,
+      (directory) => (directory === '' ? ['main.cs', 'notes.md'] : []),
+      () => ({ type: 'file', size: 9, mtimeMs: 0 }),
+    );
+    const mirror = await createWorkspaceMirror({ temporaryPrefix: 'tau-mirror-test-', displayName: 'Test' });
+    roots.push(mirror.rootPath);
+    try {
+      await mirror.sync(
+        filesystem,
+        new Map<string, Uint8Array<ArrayBuffer> | string>([
+          ['main.cs', 'in memory'],
+          // Shorter than the stat says: the cache entry is stale, so the file is read instead.
+          ['notes.md', new Uint8Array(3)],
+        ]),
+      );
+      expect(filesystem.mocks.readFile.mock.calls.map((call) => String(call[0]))).toEqual(['notes.md']);
+      expect(readFileSync(join(mirror.workspacePath, 'main.cs'), 'utf8')).toBe('in memory');
+      expect(readFileSync(join(mirror.workspacePath, 'notes.md'), 'utf8')).toBe('from disk');
+    } finally {
+      await mirror.cleanup();
+    }
+  });
+
+  it('rejects case collisions and concurrent changes', async () => {
+    const collision = createMockFileSystem({ readFileResult: 'x' });
+    mockListing(
+      collision,
+      () => ['A.cs', 'a.cs'],
+      () => ({ type: 'file', size: 1, mtimeMs: 0 }),
+    );
+    const collisionMirror = await createWorkspaceMirror({ temporaryPrefix: 'tau-mirror-test-', displayName: 'Test' });
+    roots.push(collisionMirror.rootPath);
+    await expect(collisionMirror.sync(collision)).rejects.toThrow(/case-colliding/);
+
+    const changed = createMockFileSystem({ readFileResult: 'xx' });
+    mockListing(
+      changed,
+      () => ['main.cs'],
+      () => ({ type: 'file', size: 1, mtimeMs: 0 }),
+    );
+    const mirror = await createWorkspaceMirror({ temporaryPrefix: 'tau-mirror-test-', displayName: 'Test' });
+    roots.push(mirror.rootPath);
+    await expect(mirror.sync(changed)).rejects.toThrow(/changed while mirroring/);
+    await mirror.cleanup();
+  });
+});
+/* oxlint-enable no-await-in-loop */

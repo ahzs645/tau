@@ -1,0 +1,207 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { VersioningType } from '@nestjs/common';
+import type { ConfigService } from '@nestjs/config';
+import { Reflector } from '@nestjs/core';
+import { FastifyAdapter } from '@nestjs/platform-fastify';
+import type { NestFastifyApplication } from '@nestjs/platform-fastify';
+import { Test } from '@nestjs/testing';
+import { describe, expect, it, vi } from 'vitest';
+import { mock } from 'vitest-mock-extended';
+import { wireModelEstimatesSchema } from '@taucad/billing';
+import {
+  billableModelRouteIds,
+  BillingAccountClosureService,
+  BillingController,
+  BillingEstimatesService,
+  BillingPaymentsService,
+  BillingService,
+  BillingUsageService,
+  CodeOwnedBillableModelQualificationResolver,
+  composeTariff,
+  parseCommercialOverlay,
+  registerBillableModelMeterContracts,
+} from '@taucad/api-billing';
+import type { BillableModelProviderAdapter, BillingPolicyService } from '@taucad/api-billing';
+import { AuthGuard, SessionResolver } from '@taucad/api-auth';
+import { fakeSessionResolver } from '@taucad/api-auth/testing';
+import type { FakeSessionLookup } from '@taucad/api-auth/testing';
+import { HttpExceptionFilter } from '#filters/http-exception.filter.js';
+import type { Environment } from '@taucad/api-core';
+
+const instant = new Date('2026-09-12T12:00:00.000Z');
+const owner = {
+  id: 'owner-a',
+  name: 'Owner',
+  email: 'owner@test.invalid',
+  emailVerified: true,
+  createdAt: instant,
+  updatedAt: instant,
+  image: null,
+};
+const session = {
+  id: 'session',
+  userId: owner.id,
+  token: 'test-session',
+  expiresAt: new Date('2027-01-01T00:00:00.000Z'),
+  createdAt: instant,
+  updatedAt: instant,
+  ipAddress: null,
+  userAgent: null,
+};
+
+/* The real resolver against mocked transports: the estimate must come from the
+ * admission path's own qualification, not a parallel pricing formula. */
+const resolver = new CodeOwnedBillableModelQualificationResolver({
+  adapters: new Map(billableModelRouteIds.map((routeId) => [routeId, mock<BillableModelProviderAdapter>()])),
+  executionTimeout: 30_000,
+});
+
+/* The tariff `pnpm db:migrate` would publish for development, composed the same way it is. */
+const overlayPath = resolve(import.meta.dirname, '../../../../../infra/billing/development.commercial.json');
+const developmentPolicy = () => {
+  const { policy, contentHash } = composeTariff({
+    overlay: parseCommercialOverlay(readFileSync(overlayPath, 'utf8'), 'development'),
+  });
+  return { policyId: 'policy-a', activationId: 'activation-a', policy, contentHash, selectedAt: instant };
+};
+
+const harness = (environment = 'development') => {
+  registerBillableModelMeterContracts();
+  const policyService = mock<BillingPolicyService>();
+  policyService.selectEffectivePolicy.mockResolvedValue(developmentPolicy());
+  const config = mock<ConfigService<Environment, true>>();
+  config.get.mockReturnValue(environment);
+  return { policyService, service: new BillingEstimatesService(resolver, policyService, config) };
+};
+
+describe('BillingEstimatesService', () => {
+  it('publishes the hold admission would authorize for a representative turn', async () => {
+    const estimates = wireModelEstimatesSchema.parse(
+      await harness().service.getModelEstimates({ authUserId: owner.id }),
+    );
+
+    expect(estimates.environment).toBe('development');
+    expect(estimates.ownerId).toBe(owner.id);
+    /* W1's reported number for a 120 KB body at 16,384 output on the base tariff.
+     * The whole-context reserve held 42,445,000 atoms for the same turn. */
+    expect(estimates.routes).toContainEqual({
+      routeId: 'openai-gpt-6-astra',
+      modelId: 'gpt-6-astra',
+      typicalHoldAtoms: '3084332',
+      minimumHoldAtoms: '1133877',
+      tier: 'base',
+    });
+    expect(estimates.routes).toContainEqual({
+      routeId: 'openai-gpt-5.6-sol',
+      modelId: 'gpt-5.6-sol',
+      typicalHoldAtoms: '1233733',
+      minimumHoldAtoms: '453551',
+      tier: 'base',
+    });
+    expect(estimates.routes).toContainEqual({
+      routeId: 'openai-gpt-5.6-luna',
+      modelId: 'gpt-5.6-luna',
+      typicalHoldAtoms: '65947',
+      minimumHoldAtoms: '26938',
+      tier: 'base',
+    });
+    expect(estimates.routes).toContainEqual({
+      routeId: 'google-gemini-4-hydrogen',
+      modelId: 'gemini-4-hydrogen',
+      typicalHoldAtoms: '414212',
+      minimumHoldAtoms: '168512',
+      tier: 'base',
+    });
+  });
+
+  /* The floor a client refuses against. The live probe's own Astra turn (a 22-character
+   * prompt at the same 16,384 output) authorized 1,134,234 atoms — above this floor and
+   * far below the representative hold, which is exactly why refusing on the
+   * representative hold denied turns the ledger would have admitted. */
+  it('publishes a minimum hold no admissible turn on the route can go below', async () => {
+    const estimates = await harness().service.getModelEstimates({ authUserId: owner.id });
+
+    expect(estimates.routes.every((route) => BigInt(route.minimumHoldAtoms) > 0n)).toBe(true);
+    expect(estimates.routes.every((route) => BigInt(route.minimumHoldAtoms) < BigInt(route.typicalHoldAtoms))).toBe(
+      true,
+    );
+    const astra = estimates.routes.find((route) => route.routeId === 'openai-gpt-6-astra');
+    expect(BigInt(astra!.minimumHoldAtoms)).toBeLessThan(1_134_234n);
+  });
+
+  it('covers every funded route across all three provider wires at a proved tier', async () => {
+    const estimates = await harness().service.getModelEstimates({ authUserId: owner.id });
+
+    expect(estimates.routes.map((route) => route.routeId)).toStrictEqual([...billableModelRouteIds]);
+    /* A 120 KB body proves the premium threshold unreachable on every tiered route except
+     * Haiku 5.5, whose 100K-token threshold the body's worst-case bound can cross. */
+    expect(estimates.routes.filter((route) => route.tier !== 'base').map((route) => route.routeId)).toStrictEqual([
+      'anthropic-claude-haiku-5.5',
+    ]);
+    expect(estimates.routes.every((route) => BigInt(route.typicalHoldAtoms) > 0n)).toBe(true);
+  });
+
+  it('reads the effective policy once rather than per route', async () => {
+    const { policyService, service } = harness();
+
+    await service.getModelEstimates({ authUserId: owner.id });
+    await service.getModelEstimates({ authUserId: owner.id });
+
+    expect(policyService.selectEffectivePolicy).toHaveBeenCalledTimes(2);
+    expect(policyService.selectEffectivePolicy).toHaveBeenCalledWith({
+      environment: 'development',
+      replica: { schemaVersion: 1, meterContractIds: expect.any(Array) as string[] },
+    });
+  });
+
+  it('refuses to report against an unconfigured billing environment', async () => {
+    await expect(harness('not-an-environment').service.getModelEstimates({ authUserId: owner.id })).rejects.toThrow(
+      'Billing reporting is unavailable',
+    );
+  });
+});
+
+describe('GET /v1/billing/model-estimates', () => {
+  it('authenticates before estimating and binds the session owner', async () => {
+    const estimates = mock<BillingEstimatesService>();
+    const getSession = vi.fn<FakeSessionLookup>();
+    getSession.mockResolvedValue(null);
+    estimates.getModelEstimates.mockResolvedValue({ environment: 'development', ownerId: owner.id, routes: [] });
+    const module = await Test.createTestingModule({
+      controllers: [BillingController],
+      providers: [
+        Reflector,
+        AuthGuard,
+        { provide: SessionResolver, useValue: fakeSessionResolver(getSession) },
+        { provide: BillingService, useValue: mock<BillingService>() },
+        { provide: BillingUsageService, useValue: mock<BillingUsageService>() },
+        { provide: BillingPaymentsService, useValue: mock<BillingPaymentsService>() },
+        { provide: BillingAccountClosureService, useValue: mock<BillingAccountClosureService>() },
+        { provide: BillingEstimatesService, useValue: estimates },
+      ],
+    }).compile();
+    const app = module.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+    app.useGlobalFilters(new HttpExceptionFilter());
+    app.enableVersioning({ type: VersioningType.URI });
+    try {
+      await app.init();
+      const unauthorized = await app.inject({ method: 'GET', url: '/v1/billing/model-estimates' });
+      expect(unauthorized.statusCode).toBe(401);
+      expect(estimates.getModelEstimates).not.toHaveBeenCalled();
+
+      getSession.mockResolvedValue({ user: owner, session });
+      const response = await app.inject({ method: 'GET', url: '/v1/billing/model-estimates' });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['cache-control']).toBe('private, no-store');
+      expect(estimates.getModelEstimates).toHaveBeenCalledWith({ authUserId: owner.id });
+      expect(wireModelEstimatesSchema.parse(response.json())).toStrictEqual({
+        environment: 'development',
+        ownerId: owner.id,
+        routes: [],
+      });
+    } finally {
+      await app.close();
+    }
+  });
+});

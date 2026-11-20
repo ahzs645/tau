@@ -1,11 +1,22 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import type { OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
 import type { FastifyInstance } from 'fastify';
+import type { IncomingMessage } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
+import { SessionResolver } from '@taucad/api-auth';
+import { httpBodyLimit } from '@taucad/api-core/constants/http-body';
 import { KernelsService } from '#api/kernels/kernels.service.js';
-import { DevWebSocketService } from '#api/websocket/dev-websocket.service.js';
-import { Span } from '#telemetry/tracer.service.js';
+import { ZooTokenService } from '#api/kernels/zoo-token.service.js';
+import { httpHeader } from '@taucad/api-core/constants/http-header';
+import { zooCloseCodes } from '@taucad/api-billing';
+import type { CommercialEntitlementsService } from '@taucad/api-projects/entitlements/commercial-entitlements';
+import { commercialEntitlementsKey } from '@taucad/api-projects/entitlements/commercial-entitlements';
+import { absorbSocketErrors, DevWebSocketService, trackSocket, UpgradeRouter } from '@taucad/api-lifecycle';
+import { MetricsService } from '@taucad/api-observability/metrics';
+import type { WsUpgradeRejection } from '@taucad/api-observability/metrics';
+import { Span } from '@taucad/api-observability';
+import { ShutdownService } from '@taucad/api-lifecycle/shutdown';
 
 const zooWebSocketPath = '/v1/kernels/zoo';
 
@@ -15,9 +26,12 @@ const zooWebSocketPath = '/v1/kernels/zoo';
  * In development: Uses the shared DevWebSocketService on port+1 because
  * vite-plugin-node doesn't support WebSocket connections.
  *
- * In production: Uses the ws library with manual upgrade handling on the
- * main HTTP server. This approach avoids conflicts with Socket.IO which
- * also needs to handle WebSocket upgrades for other paths.
+ * In production: Uses the ws library behind the API's `UpgradeRouter` on the
+ * main HTTP server.
+ *
+ * Every connection is session-authenticated before the service refuses it
+ * (B7 R3/S6): hosted Zoo is disabled, so no upstream socket and no billing
+ * read happen on this path.
  */
 @Injectable()
 export class KernelsGateway implements OnModuleInit, OnModuleDestroy {
@@ -26,17 +40,57 @@ export class KernelsGateway implements OnModuleInit, OnModuleDestroy {
   public constructor(
     private readonly kernelsService: KernelsService,
     private readonly devWebSocketService: DevWebSocketService,
+    @Inject(SessionResolver) private readonly sessions: SessionResolver,
+    @Inject(commercialEntitlementsKey) private readonly entitlements: CommercialEntitlementsService,
+    private readonly zooTokens: ZooTokenService,
     @Inject(HttpAdapterHost) private readonly httpAdapterHost: HttpAdapterHost,
+    // oxlint-disable-next-line new-cap -- NestJS decorator
+    @Optional() private readonly upgradeRouter: UpgradeRouter = new UpgradeRouter(),
+    // oxlint-disable-next-line new-cap -- NestJS decorator
+    @Optional() private readonly shutdown: ShutdownService = new ShutdownService(),
+    // oxlint-disable-next-line new-cap -- NestJS decorator
+    @Optional() private readonly metrics: MetricsService = new MetricsService(),
   ) {}
+
+  /**
+   * Handle Zoo API proxy connections: authenticate, then hand the socket to
+   * the disabled service, which closes it. Rejections close with the typed
+   * code the runtime's Zoo transport understands (S49).
+   */
+  @Span()
+  public async handleZooProxy(
+    socket: WebSocket,
+    queryParameters: URLSearchParams,
+    request: IncomingMessage,
+  ): Promise<void> {
+    trackSocket(this.metrics, 'kernels', socket);
+    const verdict = await this.authorizeZooConnection(request);
+    if (!verdict.ok) {
+      this.metrics.wsUpgradeRejections.add(1, {
+        'ws.gateway': 'kernels',
+        reason: verdict.rejection,
+      } satisfies WsUpgradeRejection);
+      this.logger.warn(`Zoo proxy connection rejected (${verdict.code}): ${verdict.reason}`);
+      socket.close(verdict.code, verdict.reason);
+      return;
+    }
+
+    this.logger.debug(`Client connected to Zoo proxy (user: ${verdict.userId})`);
+    this.kernelsService.createZooProxy(socket, queryParameters, verdict.userId);
+
+    socket.on('close', () => {
+      this.logger.debug('Client disconnected from Zoo proxy');
+    });
+  }
 
   /**
    * Start the WebSocket server when the module initializes.
    */
-  public onModuleInit(): void {
+  public async onModuleInit(): Promise<void> {
     // Use import.meta.env.DEV to detect Vite dev mode
     // vite-plugin-node doesn't support WebSockets, so we use a standalone server in dev
     if (import.meta.env.DEV) {
-      this.initDevWebSocket();
+      await this.initDevWebSocket();
     } else {
       this.initFastifyWebSocket();
     }
@@ -52,55 +106,94 @@ export class KernelsGateway implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Handle Zoo API proxy connections.
+   * Session (or Zoo-scoped token) and commercial-entitlement gate. Self-host composition grants the
+   * operator-owned capability without creating a billing account.
    */
-  @Span()
-  private handleZooProxy(socket: WebSocket, queryParameters: URLSearchParams): void {
-    this.logger.debug('Client connected to Zoo proxy');
-    this.kernelsService.createZooProxy(socket, queryParameters);
-
-    socket.on('close', () => {
-      this.logger.debug('Client disconnected from Zoo proxy');
-    });
+  private async authorizeZooConnection(request: IncomingMessage): Promise<
+    | { ok: true; userId: string }
+    | {
+        ok: false;
+        code: number;
+        reason: string;
+        /** `ws.upgrade.rejections` reason; kept apart from the client-facing `reason` text. */
+        rejection: WsUpgradeRejection['reason'];
+      }
+  > {
+    try {
+      /* A host that runs project code presents a Zoo-scoped token instead of
+       * the session; one that does not verify is refused, never retried as a
+       * session, so a forged token cannot ride along with a cookie. */
+      const zooToken = request.headers[httpHeader.tauZooToken];
+      const resolution =
+        typeof zooToken === 'string'
+          ? undefined
+          : await this.sessions.resolve({ headers: request.headers, method: 'GET', authoritative: true });
+      const userId = typeof zooToken === 'string' ? this.zooTokens.verify(zooToken) : resolution?.user?.id;
+      if (userId === undefined) {
+        return {
+          ok: false,
+          code: zooCloseCodes.unauthenticated,
+          reason: 'UNAUTHENTICATED',
+          rejection: 'unauthenticated',
+        };
+      }
+      const entitlements = await this.entitlements.getEntitlements(userId);
+      if (!entitlements.canUseProKernels) {
+        return { ok: false, code: zooCloseCodes.proRequired, reason: 'PRO_REQUIRED', rejection: 'forbidden' };
+      }
+      return { ok: true, userId };
+    } catch (error) {
+      // Fail closed: an auth/entitlement outage must not open an unmetered proxy.
+      this.logger.error(`Zoo proxy authorization failed: ${String(error)}`);
+      return { ok: false, code: zooCloseCodes.unauthenticated, reason: 'AUTH_ERROR', rejection: 'auth_error' };
+    }
   }
 
   /**
    * Initialize WebSocket handler for development mode.
    * Uses the shared DevWebSocketService.
    */
-  private initDevWebSocket(): void {
+  private async initDevWebSocket(): Promise<void> {
     this.devWebSocketService.registerPathHandler(zooWebSocketPath, (socket, request) => {
       const url = new URL(request.url ?? '/', `http://localhost:${this.devWebSocketService.getPort()}`);
-      this.handleZooProxy(socket, url.searchParams);
+      void this.handleZooProxy(socket, url.searchParams, request);
     });
+
+    await this.devWebSocketService.ensureStarted();
 
     const wsPort = this.devWebSocketService.getPort();
     this.logger.log(`Zoo proxy available at ws://localhost:${wsPort}${zooWebSocketPath} (dev mode)`);
   }
 
   /**
-   * Initialize WebSocket routes for production.
-   * Uses the ws library directly with manual upgrade handling.
-   * This avoids conflicts with Socket.IO which also needs to handle upgrade events.
+   * Initialize WebSocket routes for production. Clients close 1012 (Service
+   * Restart) the moment the process begins to stop.
    */
   private initFastifyWebSocket(): void {
     const fastify = this.httpAdapterHost.httpAdapter.getInstance<FastifyInstance>();
-    const httpServer = fastify.server;
-    const wss = new WebSocketServer({ noServer: true });
+    // `ws` otherwise accepts 100 MiB per message; the HTTP body limit is the API's bound for one client payload.
+    const wss = new WebSocketServer({ noServer: true, maxPayload: httpBodyLimit });
 
-    // Handle WebSocket upgrades manually for the Zoo proxy path
-    // Socket.IO will handle other paths (like /v1/chat/rpc)
-    httpServer.on('upgrade', (request, socket, head) => {
-      const { pathname } = new URL(request.url ?? '/', `http://${request.headers.host}`);
-
-      if (pathname === zooWebSocketPath) {
+    this.upgradeRouter.route(fastify.server, {
+      gateway: 'kernels',
+      matches: (pathname) => pathname === zooWebSocketPath,
+      handle: (request, socket, head) => {
         wss.handleUpgrade(request, socket, head, (ws) => {
+          absorbSocketErrors(ws);
           const url = new URL(request.url ?? '/', `http://${request.headers.host}`);
-          this.handleZooProxy(ws, url.searchParams);
+          void this.handleZooProxy(ws, url.searchParams, request);
         });
-      }
-      // Don't call socket.destroy() for other paths - let Socket.IO handle them
+      },
     });
+    this.shutdown.signal.addEventListener(
+      'abort',
+      () => {
+        for (const client of wss.clients) {
+          client.close(1012, 'service restart');
+        }
+      },
+      { once: true },
+    );
 
     this.logger.log(`Zoo WebSocket proxy registered at ${zooWebSocketPath} (production mode)`);
   }

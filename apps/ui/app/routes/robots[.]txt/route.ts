@@ -18,6 +18,8 @@ Disallow: /auth/
 Disallow: /projects
 Disallow: /projects/
 Disallow: /projects_
+Disallow: /w
+Disallow: /w/
 Disallow: /files
 Disallow: /settings_
 Disallow: /usage
