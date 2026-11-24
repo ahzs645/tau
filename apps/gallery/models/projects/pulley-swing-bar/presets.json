@@ -1,0 +1,7 @@
+[
+  {
+    "name": "Guided slider with keyed shaft",
+    "description": "A 32 mm stroke at top dead centre with the guide sleeve and motor keyseat enabled.",
+    "parameters": { "crankRadius": 16, "crankAngle": 90, "includeGuide": true, "includeKeyway": true }
+  }
+]

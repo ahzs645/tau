@@ -1,0 +1,10 @@
+{
+  "title": "Pulley Swing Bar",
+  "entry": "main.occt.ts",
+  "runtimeKernel": "opencascade",
+  "description": "Adjust the crank radius to change the steel bar’s travel. The connecting link sizes itself to keep the slider clear of the pulley through a full turn.",
+  "category": "Mechanical",
+  "tags": ["pulley", "slider-crank", "linkage"],
+  "sourceUrl": "https://github.com/ahzs645/tau/tree/main/apps/gallery/models/projects/pulley-swing-bar",
+  "image": "poster.webp"
+}

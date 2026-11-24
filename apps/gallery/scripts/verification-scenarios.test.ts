@@ -7,7 +7,7 @@ describe('public gallery verification coverage', () => {
     const entries = await readNodeCatalog();
     const catalogue = entries.filter(({ project }) => !project.hidden);
     const variants = catalogue.flatMap(({ project }) => project.variants.map((variant) => ({ project, variant })));
-    expect(variants).toHaveLength(30);
+    expect(variants).toHaveLength(31);
     for (const { project, variant } of variants) {
       expect(verificationScenarios(project, variant, false)).toEqual([{ name: 'defaults' }]);
     }
@@ -17,7 +17,7 @@ describe('public gallery verification coverage', () => {
   it('should exercise every authored public preset on its default variant without duplicating special cases', async () => {
     const entries = await readNodeCatalog();
     const catalogue = entries.filter(({ project }) => !project.hidden);
-    expect(catalogue.flatMap(({ project }) => project.presets)).toHaveLength(50);
+    expect(catalogue.flatMap(({ project }) => project.presets)).toHaveLength(51);
     for (const { project } of catalogue) {
       for (const variant of project.variants) {
         const scenarios = verificationScenarios(project, variant, true);
@@ -42,7 +42,7 @@ describe('public gallery verification coverage', () => {
     }
   });
 
-  it('should require all 93 public cases and 378 positive export requests for the full command', async () => {
+  it('should require all 95 public cases and 386 positive export requests for the full command', async () => {
     const entries = await readNodeCatalog();
     const catalogue = entries.filter(({ project }) => !project.hidden);
     const cases = catalogue.flatMap(({ project }) =>
@@ -51,7 +51,7 @@ describe('public gallery verification coverage', () => {
       ),
     );
     const staticCount = catalogue.filter(({ project }) => project.mode === 'static').length;
-    expect(cases.length + staticCount).toBe(93);
+    expect(cases.length + staticCount).toBe(95);
     const rejections = cases.filter(({ scenario }) => scenario.expectedError !== undefined);
     expect(rejections.map(({ project, scenario }) => `${project.id}/${scenario.name}`).sort()).toEqual([
       'bottle-separator/bed-too-small',
@@ -64,12 +64,12 @@ describe('public gallery verification coverage', () => {
     );
     expect(keyguardRejection?.scenario.parameters?.['generate']).toBe('keyguard frame');
     expect(keyguardRejection?.scenario.parameters?.['have_a_keyguard_frame']).toBe('no');
-    expect(cases.filter(({ scenario }) => scenario.expectedError === undefined)).toHaveLength(89);
+    expect(cases.filter(({ scenario }) => scenario.expectedError === undefined)).toHaveLength(91);
     expect(staticCount).toBe(1);
     const exports = cases
       .filter(({ scenario }) => scenario.expectedError === undefined)
       .flatMap(({ variant }) => variant.exportFormats);
-    expect(exports).toHaveLength(378);
+    expect(exports).toHaveLength(386);
     expect(
       Object.fromEntries(
         ['glb', 'stl', 'step', '3mf', 'obj'].map((format) => [
@@ -78,10 +78,10 @@ describe('public gallery verification coverage', () => {
         ]),
       ),
     ).toEqual({
-      glb: 89,
-      stl: 80,
-      step: 80,
-      '3mf': 74,
+      glb: 91,
+      stl: 82,
+      step: 82,
+      '3mf': 76,
       // eslint-disable-next-line id-denylist -- Wavefront OBJ is a public export format key.
       obj: 55,
     });
