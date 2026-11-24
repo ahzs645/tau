@@ -6,7 +6,7 @@ import { loadNodeProjectFiles, readNodeCatalog } from '#scripts/catalog-node.js'
 import { parseProjectDefinition } from '#catalog/schema.js';
 
 describe('gallery migration inventory', () => {
-  it('should preserve all twenty public IDs and keep Wham hidden', async () => {
+  it('should preserve the public project IDs and keep Wham hidden', async () => {
     const catalogue = await readNodeCatalog();
     expect(
       catalogue
@@ -29,6 +29,7 @@ describe('gallery migration inventory', () => {
       'periodic-table',
       'pet-bottle-opener',
       'pre-chamber-nozzle-insert',
+      'pulley-swing-bar',
       'replicad-tray',
       'saboteur-card-holder',
       'stamp',
@@ -37,7 +38,7 @@ describe('gallery migration inventory', () => {
     ]);
     expect(catalogue.find(({ project }) => project.id === 'wham')?.project.hidden).toBe(true);
     expect(catalogue.filter(({ project }) => !project.hidden).flatMap(({ project }) => project.variants)).toHaveLength(
-      30,
+      31,
     );
   });
 

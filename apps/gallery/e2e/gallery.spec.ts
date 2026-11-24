@@ -19,7 +19,7 @@ test('static routes, searchable catalogue and legacy model links', async ({ page
   const response = await page.goto('/');
   expect(response?.headers()['cross-origin-opener-policy']).toBeUndefined();
   expect(await page.evaluate(() => globalThis.crossOriginIsolated)).toBe(false);
-  await expect(page.getByRole('link', { name: /^Open /u })).toHaveCount(20);
+  await expect(page.getByRole('link', { name: /^Open /u })).toHaveCount(21);
   await page.screenshot({ path: testInfo.outputPath('gallery-desktop.png'), fullPage: true });
   await page.getByRole('searchbox', { name: 'Search gallery' }).fill('bottle separator');
   await expect(page.getByRole('link', { name: /^Open /u })).toHaveCount(1);
@@ -28,7 +28,7 @@ test('static routes, searchable catalogue and legacy model links', async ({ page
   const metadata = await request.get('/build-meta.json');
   expect(metadata.ok()).toBe(true);
   const build: unknown = await metadata.json();
-  expect(build).toMatchObject({ application: '@taucad/gallery', publicProjects: 20 });
+  expect(build).toMatchObject({ application: '@taucad/gallery', publicProjects: 21 });
   const cname = await request.get('/CNAME');
   const hostname = await cname.text();
   expect(hostname.trim()).toBe('3dd.ahmadjalil.com');

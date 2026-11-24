@@ -1,6 +1,6 @@
 # Gallery verification
 
-The catalogue is shared by the browser loader, static route builder, source archives and this Node harness. It contains 20 public examples, 30 executable model variants and one static scene; the preserved Wham project remains hidden. Binary assets are loaded as bytes, and shared BOSL2 sources are mounted at their original relative paths. Preserved SCAD variants explicitly select the pinned classic OpenSCAD engine using `runtimeKernel: "openscad"`; public `openscad` variant IDs stay unchanged. OpenRSCAD requires an explicit selection and is never an error fallback.
+The catalogue is shared by the browser loader, static route builder, source archives and this Node harness. It contains 21 public examples, 31 executable model variants and one static scene; the preserved Wham project remains hidden. Binary assets are loaded as bytes, and shared BOSL2 sources are mounted at their original relative paths. Preserved SCAD variants explicitly select the pinned classic OpenSCAD engine using `runtimeKernel: "openscad"`; public `openscad` variant IDs stay unchanged. OpenRSCAD requires an explicit selection and is never an error fallback.
 
 From the workspace root, run the complete geometry and export matrix:
 
@@ -26,28 +26,28 @@ With `--all-exports --regressions --write-glb --variant-timeout=1200000`, no pro
 
 | Evidence                                    |                                            Expected count |
 | ------------------------------------------- | --------------------------------------------------------: |
-| Public projects                             |                                                        20 |
-| Projects with executable sources            |                                                        19 |
-| Executable variants                         |                30: 16 OpenSCAD, 8 OpenCASCADE, 6 Replicad |
+| Public projects                             |                                                        21 |
+| Projects with executable sources            |                                                        20 |
+| Executable variants                         |                31: 16 OpenSCAD, 9 OpenCASCADE, 6 Replicad |
 | Static scenes                               |                                    1: atmospheric sampler |
-| Default cases                               |                               31: 30 executable, 1 static |
+| Default cases                               |                               32: 31 executable, 1 static |
 | Additional stamp component cases            |                                                         2 |
 | Additional PET opener preset cases          |                                                         7 |
-| Additional presets from other projects      |                                                        39 |
+| Additional presets from other projects      |                                                        40 |
 | Additional bottle preset/fit combinations   |                                    8: 4 presets at 2 fits |
 | Additional bottle part/bed cases            |                                                         4 |
 | Expected bottle input rejections            |                                                         2 |
-| Total case rows                             |                                                        93 |
-| Rows with measured geometry                 |                               90: 89 executable, 1 static |
-| Export-format attempts                      |                                                       378 |
+| Total case rows                             |                                                        95 |
+| Rows with measured geometry                 |                               92: 91 executable, 1 static |
+| Export-format attempts                      |                                                       386 |
 | Default cross-variant comparisons           | 11: 10 passing comparisons, 1 documented stamp difference |
 | Bottle printability cases / compiled claims |                                                   12 / 24 |
 
-The 378 export attempts comprise 89 GLB, 80 STL, 80 STEP, 74 3MF and 55 OBJ conversions. These are format requests, not output-file counts: a format can return multiple part files. Explicit curated format allowlists are retained. Three cases require specific input rejections: the two bottle cases and the inherited keyguard `New set 2` preset included in the 39 other-project preset rows. Successful expected-rejection cases contain no geometry or exports. A render failure or timeout can reduce the number of reached exports and leave fewer scenario rows; neither counts as passing coverage.
+The 386 export attempts comprise 91 GLB, 82 STL, 82 STEP, 76 3MF and 55 OBJ conversions. These are format requests, not output-file counts: a format can return multiple part files. Explicit curated format allowlists are retained. Three cases require specific input rejections: the two bottle cases and the inherited keyguard `New set 2` preset included in the 40 other-project preset rows. Successful expected-rejection cases contain no geometry or exports. A render failure or timeout can reduce the number of reached exports and leave fewer scenario rows; neither counts as passing coverage.
 
-The preserved Wham source remains hidden and is excluded from the public matrix, including explicit `--project=wham` requests. The command exercises every one of the 50 authored public preset definitions on its declared default variant. Each preset replaces overrides over the source defaults, matching the UI. The 4 bottle presets receive their existing two fit cases instead of duplicate ordinary preset cases; the other 46 presets, including all 7 PET opener presets, each receive one case. Keyguard `New set 2` requests a frame while explicitly disabling its frame flag. The original source and original engine produce an empty result for that exact preset; the matrix now requires the precise actionable assertion documented in its [source notes](../models/projects/keyguard-with-raised-tabs/SOURCE.md), retaining every saved value. Its separate native integration control enables only that flag and requires a real frame and STL. No other saved preset is expected to fail. Stamp artwork uses the preserved binary files; upload replacement also has dedicated runtime and browser tests.
+The preserved Wham source remains hidden and is excluded from the public matrix, including explicit `--project=wham` requests. The command exercises every one of the 51 authored public preset definitions on its declared default variant. Each preset replaces overrides over the source defaults, matching the UI. The 4 bottle presets receive their existing two fit cases instead of duplicate ordinary preset cases; the other 47 presets, including all 7 PET opener presets, each receive one case. Keyguard `New set 2` requests a frame while explicitly disabling its frame flag. The original source and original engine produce an empty result for that exact preset; the matrix now requires the precise actionable assertion documented in its [source notes](../models/projects/keyguard-with-raised-tabs/SOURCE.md), retaining every saved value. Its separate native integration control enables only that flag and requires a real frame and STL. No other saved preset is expected to fail. Stamp artwork uses the preserved binary files; upload replacement also has dedicated runtime and browser tests.
 
-With `--write-glb`, the 89 successful executable geometry cases retain 178 files in total: one preview and one exported GLB each. The static source is measured directly and is not duplicated into the artifact directory. Other formats are validated but their bytes are retained only with `--write-artifacts`. Artifact references in the matrix report are repository-relative.
+With `--write-glb`, the 91 successful executable geometry cases retain 182 files in total: one preview and one exported GLB each. The static source is measured directly and is not duplicated into the artifact directory. Other formats are validated but their bytes are retained only with `--write-artifacts`. Artifact references in the matrix report are repository-relative.
 
 The absolute twenty-minute child cap covers the entire variant, including all its scenarios, exports and validation; for example, the bottle variant has 15 cases and up to 65 format requests, the periodic-table variant has 14 cases and up to 70 requests, and the keyguard variant has 11 cases and up to 50 requests. The dense SCAD lamp requires four cases and twenty exports. Hosted run [44656896671](https://github.com/ahzs645/tau/actions/runs/44656896671) spent 417 seconds in that child before its four STEP validations failed at JavaScript's single-string size limit. The reader now decodes incrementally. Run [44662411916](https://github.com/ahzs645/tau/actions/runs/44662411916) subsequently passed the default and first preset STEP files, but the two denser files exceeded the old single-set entity tracker. The four native outputs measured 641,106,167, 704,900,535, 942,270,551 and 1,247,634,180 bytes. Exact paged membership replaces that tracker; the complete current-revision run must establish that all four pass.
 
